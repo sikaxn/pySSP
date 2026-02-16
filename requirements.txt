@@ -1,0 +1,5 @@
+PyQt5>=5.15
+pygame-ce>=2.5
+numpy>=1.26
+sounddevice>=0.4.7
+pytest>=8.0

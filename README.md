@@ -4,6 +4,8 @@ PyQt5 recreation of the Sports Sounds Pro interface and core page/button workflo
 
 This is an experiment. At this moment it is not good for production use.
 
+Python SSP is an independent project and has no affiliation with, endorsement by, or connection to the official Sports Sounds Pro.
+
 ![](images/main%20window.png)
 
 ## Run

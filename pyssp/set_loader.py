@@ -85,6 +85,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             custom_color = parse_delphi_color(section.get(f"co{i}", "").strip())
             activity_code = section.get(f"activity{i}", "").strip()
             played = _is_played_activity(activity_code)
+            volume_override_pct = _parse_volume_pct(section.get(f"v{i}", "").strip())
             marker = False
 
             if caption.endswith("%%"):

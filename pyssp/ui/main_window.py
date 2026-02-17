@@ -6,10 +6,11 @@ import random
 import configparser
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QTextDocument
+from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
     QColorDialog,
@@ -18,12 +19,15 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QComboBox,
+    QLineEdit,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QProgressBar,
     QInputDialog,
@@ -99,6 +103,185 @@ class SoundButton(QPushButton):
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMinimumSize(0, 0)
         self.setStyleSheet("font-size: 10pt; font-weight: bold;")
+
+
+class ToolListWindow(QDialog):
+    def __init__(
+        self,
+        title: str,
+        parent=None,
+        double_click_action: str = "goto",
+        show_play_button: bool = True,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(980, 640)
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
+
+        self._goto_handler: Optional[Callable[[dict], None]] = None
+        self._play_handler: Optional[Callable[[dict], None]] = None
+        self._export_handler: Optional[Callable[[str], None]] = None
+        self._print_handler: Optional[Callable[[], None]] = None
+        self._refresh_handler: Optional[Callable[[str], None]] = None
+        self._double_click_action = "play" if double_click_action == "play" else "goto"
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("Order"))
+        self.order_combo = QComboBox()
+        self.order_combo.setVisible(False)
+        top_row.addWidget(self.order_combo)
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setVisible(False)
+        top_row.addWidget(self.refresh_btn)
+        top_row.addStretch(1)
+        root.addLayout(top_row)
+
+        self.results_list = QListWidget()
+        self.results_list.itemActivated.connect(self._on_item_activated)
+        root.addWidget(self.results_list, 1)
+
+        self.status_label = QLabel("")
+        root.addWidget(self.status_label)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.goto_btn = QPushButton("Go To Selected")
+        self.play_btn = QPushButton("Play")
+        self.export_excel_btn = QPushButton("Export Excel")
+        self.export_csv_btn = QPushButton("Export CSV")
+        self.print_btn = QPushButton("Print")
+        self.close_btn = QPushButton("Close")
+        button_row.addWidget(self.goto_btn)
+        if show_play_button:
+            button_row.addWidget(self.play_btn)
+        else:
+            self.play_btn.setVisible(False)
+        button_row.addWidget(self.export_excel_btn)
+        button_row.addWidget(self.export_csv_btn)
+        button_row.addWidget(self.print_btn)
+        button_row.addWidget(self.close_btn)
+        root.addLayout(button_row)
+
+        self.goto_btn.clicked.connect(self.go_to_selected)
+        self.play_btn.clicked.connect(self.play_selected)
+        self.export_excel_btn.clicked.connect(lambda: self._export("excel"))
+        self.export_csv_btn.clicked.connect(lambda: self._export("csv"))
+        self.print_btn.clicked.connect(self._print)
+        self.close_btn.clicked.connect(self.close)
+
+    def set_handlers(
+        self,
+        goto_handler: Callable[[dict], None],
+        play_handler: Optional[Callable[[dict], None]],
+        export_handler: Callable[[str], None],
+        print_handler: Callable[[], None],
+    ) -> None:
+        self._goto_handler = goto_handler
+        self._play_handler = play_handler
+        self._export_handler = export_handler
+        self._print_handler = print_handler
+
+    def enable_order_controls(self, options: List[str], refresh_handler: Callable[[str], None]) -> None:
+        self.order_combo.clear()
+        self.order_combo.addItems(options)
+        self.order_combo.setVisible(True)
+        self.refresh_btn.setVisible(True)
+        self._refresh_handler = refresh_handler
+        self.order_combo.currentTextChanged.connect(self._refresh_from_order)
+        self.refresh_btn.clicked.connect(self._refresh_from_order)
+
+    def current_order(self) -> str:
+        return self.order_combo.currentText().strip()
+
+    def set_items(self, lines: List[str], matches: Optional[List[Optional[dict]]] = None, status: str = "") -> None:
+        self.results_list.clear()
+        for i, line in enumerate(lines):
+            item = QListWidgetItem(line)
+            if matches and i < len(matches):
+                item.setData(Qt.UserRole, matches[i])
+            self.results_list.addItem(item)
+        self.status_label.setText(status)
+
+    def go_to_selected(self) -> None:
+        if self._goto_handler is None:
+            return
+        match = self._selected_match()
+        if match is None:
+            return
+        self._goto_handler(match)
+
+    def play_selected(self) -> None:
+        if self._play_handler is None:
+            return
+        match = self._selected_match()
+        if match is None:
+            return
+        self._play_handler(match)
+
+    def _export(self, export_format: str) -> None:
+        if self._export_handler is None:
+            return
+        self._export_handler(export_format)
+
+    def _print(self) -> None:
+        if self._print_handler is None:
+            return
+        self._print_handler()
+
+    def _refresh_from_order(self, _value: str = "") -> None:
+        if self._refresh_handler is None:
+            return
+        self._refresh_handler(self.current_order())
+
+    def _on_item_activated(self, _item) -> None:
+        if self._double_click_action == "play":
+            self.play_selected()
+            return
+        self.go_to_selected()
+
+    def _selected_match(self) -> Optional[dict]:
+        item = self.results_list.currentItem()
+        if item is None:
+            return None
+        match = item.data(Qt.UserRole)
+        if not isinstance(match, dict):
+            return None
+        return match
+
+
+class TextFileViewerWindow(QDialog):
+    def __init__(self, title: str, body_label: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(900, 620)
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        root.addWidget(QLabel(body_label))
+
+        self.viewer = QPlainTextEdit()
+        self.viewer.setReadOnly(True)
+        self.viewer.setLineWrapMode(QPlainTextEdit.NoWrap)
+        root.addWidget(self.viewer, 1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        button_row.addWidget(close_btn)
+        root.addLayout(button_row)
+
+    def set_text(self, text: str) -> None:
+        self.viewer.setPlainText(text)
 
 
 class MainWindow(QMainWindow):
@@ -182,6 +365,13 @@ class MainWindow(QMainWindow):
         self._copied_slot_buffer: Optional[SoundButtonData] = None
         self._search_window: Optional[SearchWindow] = None
         self._dsp_window: Optional[DSPWindow] = None
+        self._tool_windows: Dict[str, ToolListWindow] = {}
+        self._tool_window_matches: Dict[str, List[dict]] = {}
+        self._export_buttons_window: Optional[QDialog] = None
+        self._export_dir_edit: Optional[QLineEdit] = None
+        self._export_format_combo: Optional[QComboBox] = None
+        self._about_window: Optional[TextFileViewerWindow] = None
+        self._help_window: Optional[TextFileViewerWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
         self._flash_slot_until = 0.0
@@ -280,12 +470,515 @@ class MainWindow(QMainWindow):
         self.addAction(search_action)
 
         tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction(QAction("Tools Item", self))
+        duplicate_check_action = QAction("Duplicate Check", self)
+        duplicate_check_action.triggered.connect(self._run_duplicate_check)
+        tools_menu.addAction(duplicate_check_action)
+
+        verify_sound_buttons_action = QAction("Verify Sound Buttons", self)
+        verify_sound_buttons_action.triggered.connect(self._run_verify_sound_buttons)
+        tools_menu.addAction(verify_sound_buttons_action)
+
+        tools_menu.addSeparator()
+
+        page_library_path_action = QAction("Display Page Library Folder Path", self)
+        page_library_path_action.triggered.connect(self._show_page_library_folder_path)
+        tools_menu.addAction(page_library_path_action)
+
+        set_file_path_action = QAction("Display .set File and Path", self)
+        set_file_path_action.triggered.connect(self._show_set_file_and_path)
+        tools_menu.addAction(set_file_path_action)
+
+        tools_menu.addSeparator()
+
+        export_excel_action = QAction("Export Page and Sound Buttons to Excel", self)
+        export_excel_action.triggered.connect(self._export_page_and_sound_buttons_to_excel)
+        tools_menu.addAction(export_excel_action)
+
+        list_sound_buttons_action = QAction("List Sound Buttons", self)
+        list_sound_buttons_action.triggered.connect(self._list_sound_buttons)
+        tools_menu.addAction(list_sound_buttons_action)
 
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)
         log_menu.addAction(view_log_action)
+
+        help_menu = self.menuBar().addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._open_about_window)
+        help_menu.addAction(about_action)
+
+        help_action = QAction("Help", self)
+        help_action.triggered.connect(self._open_help_window)
+        help_menu.addAction(help_action)
+
+    def _project_root_path(self) -> str:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _load_project_text_file(self, filename: str) -> str:
+        file_path = os.path.join(self._project_root_path(), filename)
+        if not os.path.exists(file_path):
+            return f"{filename} not found at:\n{file_path}"
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except UnicodeDecodeError:
+            with open(file_path, "r", encoding="latin1", errors="replace") as fh:
+                return fh.read()
+        except Exception as exc:
+            return f"Could not read {filename}:\n{exc}"
+
+    def _open_about_window(self) -> None:
+        if self._about_window is None:
+            self._about_window = TextFileViewerWindow(
+                title="About",
+                body_label="License",
+                parent=self,
+            )
+            self._about_window.destroyed.connect(lambda _=None: self._clear_about_window_ref())
+        license_text = self._load_project_text_file("LICENSE")
+        disclaimer = (
+            "Python SSP is an independent project and has no affiliation with, "
+            "endorsement by, or connection to the official Sports Sounds Pro.\n\n"
+        )
+        self._about_window.set_text(disclaimer + license_text)
+        self._about_window.show()
+        self._about_window.raise_()
+        self._about_window.activateWindow()
+
+    def _open_help_window(self) -> None:
+        if self._help_window is None:
+            self._help_window = TextFileViewerWindow(
+                title="Help",
+                body_label="README.md",
+                parent=self,
+            )
+            self._help_window.destroyed.connect(lambda _=None: self._clear_help_window_ref())
+        self._help_window.set_text(self._load_project_text_file("README.md"))
+        self._help_window.show()
+        self._help_window.raise_()
+        self._help_window.activateWindow()
+
+    def _clear_about_window_ref(self) -> None:
+        self._about_window = None
+
+    def _clear_help_window_ref(self) -> None:
+        self._help_window = None
+
+    def _sports_sounds_pro_folder(self) -> str:
+        default_path = r"C:\SportsSoundsPro"
+        if os.path.isdir(default_path):
+            return default_path
+        if self.current_set_path:
+            return os.path.dirname(self.current_set_path)
+        return os.path.join(os.path.expanduser("~"), "SportsSoundsPro")
+
+    def _page_library_folder_path(self) -> str:
+        return os.path.join(self._sports_sounds_pro_folder(), "PageLib")
+
+    def _page_display_name(self, group: str, page_index: int) -> str:
+        page_name = self.page_names[group][page_index].strip()
+        if page_name:
+            return f"{group}{page_index + 1} ({page_name})"
+        return f"{group}{page_index + 1}"
+
+    def _iter_all_sound_button_entries(self, include_cue: bool = True) -> List[dict]:
+        entries: List[dict] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
+                    entries.append(
+                        {
+                            "group": group,
+                            "page": page_index,
+                            "slot": slot_index,
+                            "title": title,
+                            "file_path": slot.file_path,
+                            "location": self._page_display_name(group, page_index),
+                        }
+                    )
+        if include_cue:
+            for slot_index, slot in enumerate(self.cue_page):
+                if not slot.assigned or slot.marker:
+                    continue
+                title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
+                entries.append(
+                    {
+                        "group": "Q",
+                        "page": 0,
+                        "slot": slot_index,
+                        "title": title,
+                        "file_path": slot.file_path,
+                        "location": "Cue Page",
+                    }
+                )
+        return entries
+
+    def _print_lines(self, title: str, lines: List[str]) -> None:
+        text = "\n".join(lines).strip() or "(no items)"
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setDocName(title)
+        dialog = QPrintDialog(printer, self)
+        dialog.setWindowTitle(f"Print - {title}")
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        doc = QTextDocument()
+        doc.setPlainText(text)
+        doc.print_(printer)
+
+    def _open_tool_window(
+        self,
+        key: str,
+        title: str,
+        double_click_action: str,
+        show_play_button: bool,
+    ) -> ToolListWindow:
+        window = self._tool_windows.get(key)
+        if window is not None:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            return window
+        window = ToolListWindow(
+            title=title,
+            parent=self,
+            double_click_action=double_click_action,
+            show_play_button=show_play_button,
+        )
+        window.destroyed.connect(
+            lambda _=None, k=key: (self._tool_windows.pop(k, None), self._tool_window_matches.pop(k, None))
+        )
+        self._tool_windows[key] = window
+        return window
+
+    def _tool_match_to_line(self, match: dict) -> str:
+        return (
+            f"{match['location']} - Button {int(match['slot']) + 1}: "
+            f"{match['title']} | {match['file_path']}"
+        )
+
+    def _tool_export_matches(self, key: str, export_format: str, base_name: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        if not matches:
+            QMessageBox.information(self, "Export", "No rows to export.")
+            return
+        export_format = "excel" if export_format == "excel" else "csv"
+        ext = ".xls" if export_format == "excel" else ".csv"
+        start_dir = self.settings.last_save_dir or self.settings.last_open_dir or self._sports_sounds_pro_folder()
+        initial_path = os.path.join(start_dir, f"{base_name}{ext}")
+        file_filter = "Excel (*.xls)" if export_format == "excel" else "CSV (*.csv)"
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export", initial_path, f"{file_filter};;All Files (*.*)")
+        if not file_path:
+            return
+        if not file_path.lower().endswith(ext):
+            file_path = f"{file_path}{ext}"
+        header = "Page,Button Number,Sound Button Name,File Path"
+        try:
+            self._write_csv_rows(file_path, header, matches)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not export file:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Export Complete", f"Exported:\n{file_path}")
+
+    def _print_tool_window(self, key: str, title: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        lines = [self._tool_match_to_line(match) for match in matches]
+        if not lines:
+            lines = ["(no items)"]
+        self._print_lines(title, lines)
+
+    def _write_csv_rows(self, file_path: str, header: str, matches: List[dict]) -> None:
+        def _csv_cell(value: str) -> str:
+            cell = (value or "").replace("\r", " ").replace("\n", " ")
+            cell = cell.replace('"', '""')
+            return f'"{cell}"'
+
+        lines = [header]
+        for match in matches:
+            lines.append(
+                ",".join(
+                    [
+                        _csv_cell(str(match["location"])),
+                        _csv_cell(str(int(match["slot"]) + 1)),
+                        _csv_cell(str(match["title"])),
+                        _csv_cell(str(match["file_path"])),
+                    ]
+                )
+            )
+        with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write("\r\n".join(lines))
+
+    def _run_duplicate_check(self) -> None:
+        entries = self._iter_all_sound_button_entries(include_cue=True)
+        by_path: Dict[str, List[dict]] = {}
+        for entry in entries:
+            file_path = str(entry["file_path"]).strip()
+            if not file_path:
+                continue
+            key = os.path.normcase(os.path.abspath(file_path))
+            by_path.setdefault(key, []).append(entry)
+
+        duplicate_groups = [group for group in by_path.values() if len(group) > 1]
+        duplicate_groups.sort(key=lambda group: str(group[0]["file_path"]).casefold())
+        matches: List[dict] = []
+        for group in duplicate_groups:
+            duplicate_count = len(group)
+            for entry in group:
+                item = dict(entry)
+                item["title"] = f"{entry['title']} (duplicate x{duplicate_count})"
+                matches.append(item)
+
+        window = self._open_tool_window(
+            key="duplicate_check",
+            title="Duplicate Check",
+            double_click_action="goto",
+            show_play_button=False,
+        )
+        window.set_handlers(
+            goto_handler=self._go_to_found_match,
+            play_handler=None,
+            export_handler=lambda fmt: self._tool_export_matches("duplicate_check", fmt, "DuplicateCheck"),
+            print_handler=lambda: self._print_tool_window("duplicate_check", "Duplicate Check"),
+        )
+        lines = [self._tool_match_to_line(match) for match in matches]
+        status = f"{len(matches)} duplicate button(s) found."
+        if not lines:
+            status = "No duplicate sound buttons found."
+        self._tool_window_matches["duplicate_check"] = matches
+        window.set_items(lines, matches=matches, status=status)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _run_verify_sound_buttons(self) -> None:
+        matches: List[dict] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if os.path.exists(slot.file_path):
+                        continue
+                    title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
+                    matches.append(
+                        {
+                            "group": group,
+                            "page": page_index,
+                            "slot": slot_index,
+                            "title": title,
+                            "file_path": slot.file_path,
+                            "location": self._page_display_name(group, page_index),
+                        }
+                    )
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            if os.path.exists(slot.file_path):
+                continue
+            title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
+            matches.append(
+                {
+                    "group": "Q",
+                    "page": 0,
+                    "slot": slot_index,
+                    "title": title,
+                    "file_path": slot.file_path,
+                    "location": "Cue Page",
+                }
+            )
+
+        self._refresh_sound_grid()
+        window = self._open_tool_window(
+            key="verify_sound_buttons",
+            title="Verify Sound Buttons",
+            double_click_action="goto",
+            show_play_button=False,
+        )
+        window.set_handlers(
+            goto_handler=self._go_to_found_match,
+            play_handler=None,
+            export_handler=lambda fmt: self._tool_export_matches("verify_sound_buttons", fmt, "VerifySoundButtons"),
+            print_handler=lambda: self._print_tool_window("verify_sound_buttons", "Verify Sound Buttons"),
+        )
+        lines = [self._tool_match_to_line(match) for match in matches]
+        status = f"{len(matches)} invalid button(s) found."
+        if not lines:
+            status = "No invalid sound button paths found."
+        self._tool_window_matches["verify_sound_buttons"] = matches
+        window.set_items(lines, matches=matches, status=status)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _show_page_library_folder_path(self) -> None:
+        path = self._page_library_folder_path()
+        box = QMessageBox(self)
+        box.setWindowTitle("Page Library Folder Path")
+        box.setText(f"Sports Sounds Pro Page Library folder:\n{path}")
+        open_btn = box.addButton("Open Folder", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
+        box.exec_()
+        if box.clickedButton() == open_btn:
+            self._open_directory(path)
+
+    def _show_set_file_and_path(self) -> None:
+        if self.current_set_path:
+            path = os.path.dirname(self.current_set_path)
+            text = f"Current .set file:\n{self.current_set_path}"
+        else:
+            path = self.settings.last_open_dir or self._sports_sounds_pro_folder()
+            text = "No .set file is currently loaded."
+        box = QMessageBox(self)
+        box.setWindowTitle("Display .set File and Path")
+        box.setText(text)
+        open_btn = box.addButton("Open Folder", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
+        box.exec_()
+        if box.clickedButton() == open_btn:
+            self._open_directory(path)
+
+    def _export_page_and_sound_buttons_to_excel(self) -> None:
+        if self._export_buttons_window is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Export Page and Sound Buttons")
+            dialog.resize(700, 190)
+            dialog.setModal(False)
+            dialog.setWindowModality(Qt.NonModal)
+            root = QVBoxLayout(dialog)
+            root.setContentsMargins(10, 10, 10, 10)
+            root.setSpacing(8)
+
+            dir_row = QHBoxLayout()
+            dir_row.addWidget(QLabel("Directory"))
+            self._export_dir_edit = QLineEdit(self._sports_sounds_pro_folder())
+            dir_row.addWidget(self._export_dir_edit, 1)
+            browse_btn = QPushButton("Browse")
+            dir_row.addWidget(browse_btn)
+            root.addLayout(dir_row)
+
+            format_row = QHBoxLayout()
+            format_row.addWidget(QLabel("Format"))
+            self._export_format_combo = QComboBox()
+            self._export_format_combo.addItems(["Excel (.xls)", "CSV (.csv)"])
+            format_row.addWidget(self._export_format_combo)
+            format_row.addStretch(1)
+            root.addLayout(format_row)
+
+            button_row = QHBoxLayout()
+            button_row.addStretch(1)
+            export_btn = QPushButton("Export")
+            close_btn = QPushButton("Close")
+            button_row.addWidget(export_btn)
+            button_row.addWidget(close_btn)
+            root.addLayout(button_row)
+
+            browse_btn.clicked.connect(self._browse_export_directory)
+            export_btn.clicked.connect(self._run_export_buttons_from_window)
+            close_btn.clicked.connect(dialog.close)
+            dialog.destroyed.connect(lambda _=None: self._clear_export_window_ref())
+            self._export_buttons_window = dialog
+        self._export_buttons_window.show()
+        self._export_buttons_window.raise_()
+        self._export_buttons_window.activateWindow()
+
+    def _list_sound_buttons(self) -> None:
+        window = self._open_tool_window(
+            key="list_sound_buttons",
+            title="List Sound Buttons",
+            double_click_action="play",
+            show_play_button=True,
+        )
+        if not window.order_combo.isVisible():
+            window.enable_order_controls(
+                options=["Group/Page sequence", "Sound Button sequence"],
+                refresh_handler=self._refresh_list_sound_buttons_window,
+            )
+        window.set_handlers(
+            goto_handler=self._go_to_found_match,
+            play_handler=self._play_found_match,
+            export_handler=lambda fmt: self._tool_export_matches("list_sound_buttons", fmt, "ListSoundButtons"),
+            print_handler=lambda: self._print_tool_window("list_sound_buttons", "List Sound Buttons"),
+        )
+        if not window.current_order():
+            window.order_combo.setCurrentIndex(0)
+        self._refresh_list_sound_buttons_window(window.current_order())
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _refresh_list_sound_buttons_window(self, selected_order: str) -> None:
+        matches: List[dict] = self._iter_all_sound_button_entries(include_cue=True)
+        if selected_order == "Sound Button sequence":
+            matches.sort(
+                key=lambda entry: (
+                    str(entry["title"]).casefold(),
+                    str(entry["file_path"]).casefold(),
+                    str(entry["location"]).casefold(),
+                    int(entry["slot"]),
+                )
+            )
+        window = self._tool_windows.get("list_sound_buttons")
+        if window is None:
+            return
+        self._tool_window_matches["list_sound_buttons"] = matches
+        lines = [self._tool_match_to_line(entry) for entry in matches]
+        status = f"{len(matches)} sound button(s)."
+        if not lines:
+            status = "No sound buttons assigned."
+        window.set_items(lines, matches=matches, status=status)
+
+    def _browse_export_directory(self) -> None:
+        if self._export_dir_edit is None:
+            return
+        start_dir = self._export_dir_edit.text().strip() or self._sports_sounds_pro_folder()
+        directory = QFileDialog.getExistingDirectory(self, "Select Export Directory", start_dir)
+        if not directory:
+            return
+        self._export_dir_edit.setText(directory)
+
+    def _run_export_buttons_from_window(self) -> None:
+        if self._export_dir_edit is None or self._export_format_combo is None:
+            return
+        export_dir = self._export_dir_edit.text().strip() or self._sports_sounds_pro_folder()
+        os.makedirs(export_dir, exist_ok=True)
+        selected = self._export_format_combo.currentText().strip().lower()
+        extension = ".xls" if selected.startswith("excel") else ".csv"
+        export_path = os.path.join(export_dir, f"SSPExportToExcel{extension}")
+        matches = self._iter_all_sound_button_entries(include_cue=True)
+        try:
+            self._write_csv_rows(export_path, "Page,Button Number,Sound Button Name,File Path", matches)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not export file:\n{exc}")
+            return
+        self.settings.last_save_dir = export_dir
+        self._save_settings()
+        box = QMessageBox(self)
+        box.setWindowTitle("Export Complete")
+        box.setText(f"Exported:\n{export_path}")
+        open_btn = box.addButton("Open Folder", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
+        box.exec_()
+        if box.clickedButton() == open_btn:
+            self._open_directory(export_dir)
+
+    def _clear_export_window_ref(self) -> None:
+        self._export_buttons_window = None
+        self._export_dir_edit = None
+        self._export_format_combo = None
+
+    def _open_directory(self, path: str) -> None:
+        if not path:
+            return
+        os.makedirs(path, exist_ok=True)
+        try:
+            os.startfile(path)  # type: ignore[attr-defined]
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -415,7 +1108,7 @@ class MainWindow(QMainWindow):
                 btn.setCheckable(True)
                 btn.clicked.connect(self._toggle_loop)
             elif text == "Rapid Fire":
-                btn.setCheckable(True)
+                btn.clicked.connect(self._on_rapid_fire_clicked)
             elif text == "Reset Page":
                 btn.clicked.connect(self._reset_current_page_state)
             elif text == "Talk":
@@ -1537,7 +2230,6 @@ class MainWindow(QMainWindow):
         if self.player.state() == ExternalMediaPlayer.StoppedState:
             last_playing = self.current_playing
             playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-            rapid_fire = bool(self.control_buttons.get("Rapid Fire") and self.control_buttons["Rapid Fire"].isChecked())
             manual_stop = self._manual_stop_requested
             should_loop = self.loop_enabled and last_playing is not None and not manual_stop and not playlist_enabled
             self._manual_stop_requested = False
@@ -1565,16 +2257,6 @@ class MainWindow(QMainWindow):
                 return
             if playlist_enabled and last_playing is not None:
                 if manual_stop:
-                    self.current_playing = None
-                    self._last_ui_position_ms = -1
-                    self.elapsed_time.setText("00:00")
-                    self.remaining_time.setText("00:00")
-                    self.progress_label.setText("0%")
-                    self.seek_slider.setValue(0)
-                    self._update_now_playing_label("")
-                    self._refresh_sound_grid()
-                    return
-                if rapid_fire:
                     self.current_playing = None
                     self._last_ui_position_ms = -1
                     self.elapsed_time.setText("00:00")
@@ -1701,7 +2383,11 @@ class MainWindow(QMainWindow):
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }
-        has_next = self._next_unplayed_slot_on_current_page() is not None
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if playlist_enabled:
+            has_next = self._has_next_playlist_slot()
+        else:
+            has_next = self._next_unplayed_slot_on_current_page() is not None
         next_btn.setEnabled(is_playing and has_next)
 
     def _cue_slot(self, slot: SoundButtonData) -> None:
@@ -1861,9 +2547,6 @@ class MainWindow(QMainWindow):
         if not self.current_playing:
             return
         if not self.page_playlist_enabled[self.current_group][self.current_page]:
-            return
-        rapid_fire = bool(self.control_buttons.get("Rapid Fire") and self.control_buttons["Rapid Fire"].isChecked())
-        if rapid_fire:
             return
         if self.player.state() != ExternalMediaPlayer.PlayingState:
             return
@@ -2276,11 +2959,41 @@ class MainWindow(QMainWindow):
         self.player_b.stop()
 
     def _play_next(self) -> None:
-        next_slot = self._next_unplayed_slot_on_current_page()
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if playlist_enabled:
+            next_slot = self._next_playlist_slot()
+        else:
+            next_slot = self._next_unplayed_slot_on_current_page()
         if next_slot is None:
             self._update_next_button_enabled()
             return
         self._play_slot(next_slot)
+
+    def _has_next_playlist_slot(self) -> bool:
+        page = self._current_page_slots()
+        if not page:
+            return False
+        valid_slots = [
+            idx
+            for idx, slot in enumerate(page)
+            if slot.assigned and not slot.marker and not slot.locked and not slot.missing
+        ]
+        if not valid_slots:
+            return False
+        unplayed_slots = [idx for idx in valid_slots if not page[idx].played]
+        if self.page_shuffle_enabled[self.current_group][self.current_page]:
+            if unplayed_slots:
+                return True
+            return self.loop_enabled and bool(valid_slots)
+        start = 0
+        if self.current_playlist_start is not None:
+            start = self.current_playlist_start
+        if self.current_playing and self.current_playing[0] == self._view_group_key():
+            start = self.current_playing[2] + 1
+        for idx in range(start, SLOTS_PER_PAGE):
+            if idx in unplayed_slots:
+                return True
+        return self.loop_enabled and bool(valid_slots)
 
     def _next_unplayed_slot_on_current_page(self) -> Optional[int]:
         page = self._current_page_slots()
@@ -2357,6 +3070,23 @@ class MainWindow(QMainWindow):
                 if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
                     return idx
         return None
+
+    def _random_unplayed_slot_on_current_page(self) -> Optional[int]:
+        page = self._current_page_slots()
+        candidates = [
+            idx
+            for idx, slot in enumerate(page)
+            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
+        ]
+        if not candidates:
+            return None
+        return random.choice(candidates)
+
+    def _on_rapid_fire_clicked(self, _checked: bool = False) -> None:
+        slot_index = self._random_unplayed_slot_on_current_page()
+        if slot_index is None:
+            return
+        self._play_slot(slot_index)
 
     def _toggle_loop(self, checked: bool) -> None:
         self.loop_enabled = checked
@@ -2713,16 +3443,6 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _handle_space_bar_action(self) -> None:
-        rapid_fire = bool(self.control_buttons.get("Rapid Fire") and self.control_buttons["Rapid Fire"].isChecked())
-        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-        if rapid_fire and playlist_enabled:
-            if self.player.state() == ExternalMediaPlayer.PlayingState:
-                self.player.stop()
-            else:
-                next_slot = self._next_playlist_slot()
-                if next_slot is not None:
-                    self._play_slot(next_slot)
-            return
         self._stop_playback()
         return
 

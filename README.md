@@ -1,5 +1,7 @@
 # pySSP
 
+![](logo.png)
+
 PyQt5 recreation of the Sports Sounds Pro interface and core page/button workflow.
 
 This is an experiment. At this moment it is not good for production use.

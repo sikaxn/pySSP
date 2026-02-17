@@ -149,6 +149,14 @@ class SoundButton(QPushButton):
             return
         event.ignore()
 
+    def enterEvent(self, event) -> None:
+        self._host._on_sound_button_hover(self.slot_index)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._host._on_sound_button_hover(None)
+        super().leaveEvent(event)
+
 
 class GroupButton(QPushButton):
     def __init__(self, group: str, host: "MainWindow"):
@@ -415,9 +423,11 @@ class MainWindow(QMainWindow):
         self.page_status = QLabel("")
         self.now_playing_label = QLabel("")
         self.drag_mode_banner = QLabel("")
-        self.total_time = QLabel("00:00")
-        self.elapsed_time = QLabel("00:00")
-        self.remaining_time = QLabel("00:00")
+        self.status_totals_label = QLabel("")
+        self.status_hover_label = QLabel("Button: -")
+        self.total_time = QLabel("00:00:00")
+        self.elapsed_time = QLabel("00:00:00")
+        self.remaining_time = QLabel("00:00:00")
         self.progress_label = QLabel("0%")
         self.left_meter = QProgressBar()
         self.right_meter = QProgressBar()
@@ -454,6 +464,8 @@ class MainWindow(QMainWindow):
         self._flash_slot_until = 0.0
 
         self._build_ui()
+        self.statusBar().addWidget(self.status_hover_label, 1)
+        self.statusBar().addPermanentWidget(self.status_totals_label)
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
@@ -465,6 +477,8 @@ class MainWindow(QMainWindow):
         self._update_page_status()
         self._update_now_playing_label("")
         self._refresh_window_title()
+        self._update_status_totals()
+        self._on_sound_button_hover(None)
 
         self.meter_timer = QTimer(self)
         self.meter_timer.timeout.connect(self._tick_meter)
@@ -1820,6 +1834,7 @@ class MainWindow(QMainWindow):
                 "padding:4px;"
                 "}"
             )
+        self._update_status_totals()
 
     def _set_dirty(self, dirty: bool = True) -> None:
         if self._dirty == dirty:
@@ -1833,6 +1848,26 @@ class MainWindow(QMainWindow):
         if self._dirty:
             title = f"{title} *"
         self.setWindowTitle(title)
+
+    def _update_status_totals(self) -> None:
+        total_buttons = 0
+        total_ms = 0
+        for slot in self._current_page_slots():
+            if slot.assigned and not slot.marker:
+                total_buttons += 1
+                total_ms += max(0, int(slot.duration_ms))
+        self.status_totals_label.setText(f"{total_buttons} button ({format_set_time(total_ms)})")
+
+    def _on_sound_button_hover(self, slot_index: Optional[int]) -> None:
+        if slot_index is None:
+            self.status_hover_label.setText("Button: -")
+            return
+        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+            self.status_hover_label.setText("Button: -")
+            return
+        group = self._view_group_key()
+        group_text = group if group == "Q" else group.upper()
+        self.status_hover_label.setText(f"Button: {group_text}-{self.current_page + 1}-{slot_index + 1}")
 
     def _log_file_path(self) -> str:
         appdata = os.getenv("APPDATA")
@@ -2469,9 +2504,9 @@ class MainWindow(QMainWindow):
         self._last_ui_position_ms = -1
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
-        self.total_time.setText("00:00")
-        self.elapsed_time.setText("00:00")
-        self.remaining_time.setText("00:00")
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
         self.progress_label.setText("0%")
         self._manual_stop_requested = False
         self._cancel_fade_for_player(self.player)
@@ -2642,12 +2677,13 @@ class MainWindow(QMainWindow):
     def _on_position_changed(self, pos: int) -> None:
         if not self._is_scrubbing:
             self.seek_slider.setValue(pos)
-        if self._last_ui_position_ms >= 0 and abs(pos - self._last_ui_position_ms) < 90:
+        # Keep transport updates smooth without redrawing excessively.
+        if self._last_ui_position_ms >= 0 and abs(pos - self._last_ui_position_ms) < 25:
             return
         self._last_ui_position_ms = pos
-        self.elapsed_time.setText(format_time(pos))
+        self.elapsed_time.setText(format_clock_time(pos))
         remaining = max(0, self.current_duration_ms - pos)
-        self.remaining_time.setText(format_time(remaining))
+        self.remaining_time.setText(format_clock_time(remaining))
         progress = 0 if self.current_duration_ms == 0 else int((pos / self.current_duration_ms) * 100)
         self.progress_label.setText(f"{progress}%")
 
@@ -2655,7 +2691,7 @@ class MainWindow(QMainWindow):
         self.current_duration_ms = duration
         self._last_ui_position_ms = -1
         self.seek_slider.setRange(0, duration)
-        self.total_time.setText(format_time(duration))
+        self.total_time.setText(format_clock_time(duration))
         if self.current_playing:
             group, page_index, slot_index = self.current_playing
             if group == "Q":
@@ -2691,8 +2727,8 @@ class MainWindow(QMainWindow):
             if self._pending_start_request is not None:
                 self.current_playing = None
                 self._last_ui_position_ms = -1
-                self.elapsed_time.setText("00:00")
-                self.remaining_time.setText("00:00")
+                self.elapsed_time.setText("00:00:00")
+                self.remaining_time.setText("00:00:00")
                 self.progress_label.setText("0%")
                 self.seek_slider.setValue(0)
                 self._update_now_playing_label("")
@@ -2702,8 +2738,8 @@ class MainWindow(QMainWindow):
                 if manual_stop:
                     self.current_playing = None
                     self._last_ui_position_ms = -1
-                    self.elapsed_time.setText("00:00")
-                    self.remaining_time.setText("00:00")
+                    self.elapsed_time.setText("00:00:00")
+                    self.remaining_time.setText("00:00:00")
                     self.progress_label.setText("0%")
                     self.seek_slider.setValue(0)
                     self._update_now_playing_label("")
@@ -2717,8 +2753,8 @@ class MainWindow(QMainWindow):
             self._auto_transition_track = None
             self._auto_transition_done = False
             self._last_ui_position_ms = -1
-            self.elapsed_time.setText("00:00")
-            self.remaining_time.setText("00:00")
+            self.elapsed_time.setText("00:00:00")
+            self.remaining_time.setText("00:00:00")
             self.progress_label.setText("0%")
             self._refresh_sound_grid()
             self.seek_slider.setValue(0)
@@ -3526,9 +3562,9 @@ class MainWindow(QMainWindow):
         self.current_duration_ms = 0
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
-        self.total_time.setText("00:00")
-        self.elapsed_time.setText("00:00")
-        self.remaining_time.setText("00:00")
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
         self.progress_label.setText("0%")
         self._update_now_playing_label("")
         self._refresh_sound_grid()
@@ -3582,9 +3618,9 @@ class MainWindow(QMainWindow):
             self.current_playlist_start = None
             self.current_duration_ms = 0
             self._last_ui_position_ms = -1
-            self.total_time.setText("00:00")
-            self.elapsed_time.setText("00:00")
-            self.remaining_time.setText("00:00")
+            self.total_time.setText("00:00:00")
+            self.elapsed_time.setText("00:00:00")
+            self.remaining_time.setText("00:00:00")
             self.progress_label.setText("0%")
             self.seek_slider.setValue(0)
             self._vu_levels = [0.0, 0.0]
@@ -3611,9 +3647,9 @@ class MainWindow(QMainWindow):
         self.current_playlist_start = None
         self.current_duration_ms = 0
         self._last_ui_position_ms = -1
-        self.total_time.setText("00:00")
-        self.elapsed_time.setText("00:00")
-        self.remaining_time.setText("00:00")
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
         self.progress_label.setText("0%")
         self.seek_slider.setValue(0)
         self._vu_levels = [0.0, 0.0]
@@ -3820,9 +3856,9 @@ class MainWindow(QMainWindow):
 
     def _on_seek_value_changed(self, value: int) -> None:
         if self._is_scrubbing:
-            self.elapsed_time.setText(format_time(value))
+            self.elapsed_time.setText(format_clock_time(value))
             remaining = max(0, self.current_duration_ms - value)
-            self.remaining_time.setText(format_time(remaining))
+            self.remaining_time.setText(format_clock_time(remaining))
             progress = 0 if self.current_duration_ms == 0 else int((value / self.current_duration_ms) * 100)
             self.progress_label.setText(f"{progress}%")
 
@@ -3878,9 +3914,9 @@ class MainWindow(QMainWindow):
         self.current_playing = None
         self.current_playlist_start = None
         self.current_duration_ms = 0
-        self.total_time.setText("00:00")
-        self.elapsed_time.setText("00:00")
-        self.remaining_time.setText("00:00")
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
         self.progress_label.setText("0%")
         self._refresh_group_buttons()
         self._sync_playlist_shuffle_buttons()
@@ -4041,9 +4077,9 @@ class MainWindow(QMainWindow):
             self.current_page = 0
         self.current_playing = None
         self.current_duration_ms = 0
-        self.total_time.setText("00:00")
-        self.elapsed_time.setText("00:00")
-        self.remaining_time.setText("00:00")
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
         self.progress_label.setText("0%")
         self.seek_slider.setValue(0)
         self.seek_slider.setRange(0, 0)
@@ -4217,6 +4253,16 @@ def format_time(ms: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def format_clock_time(ms: int) -> str:
+    # Display transport using timecode-style frames.
+    fps = 30
+    total_ms = max(0, ms)
+    total_seconds, remainder_ms = divmod(total_ms, 1000)
+    minutes, seconds = divmod(total_seconds, 60)
+    frames = min(fps - 1, int((remainder_ms / 1000.0) * fps))
+    return f"{minutes:02d}:{seconds:02d}:{frames:02d}"
+
+
 def format_set_time(ms: int) -> str:
     total_seconds = max(0, ms // 1000)
     hours, rem = divmod(total_seconds, 3600)
@@ -4249,3 +4295,5 @@ def elide_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 3] + "..."
+
+

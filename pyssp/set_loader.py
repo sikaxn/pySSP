@@ -26,6 +26,8 @@ class SetSlotData:
     activity_code: str = ""
     marker: bool = False
     volume_override_pct: Optional[int] = None
+    cue_start_ms: Optional[int] = None
+    cue_end_ms: Optional[int] = None
 
 
 @dataclass
@@ -87,6 +89,11 @@ def load_set_file(file_path: str) -> SetLoadResult:
             activity_code = section.get(f"activity{i}", "").strip()
             played = _is_played_activity(activity_code)
             volume_override_pct = _parse_volume_pct(section.get(f"v{i}", "").strip())
+            cue_start_ms, cue_end_ms = _parse_cue_points(
+                section.get(f"cs{i}", "").strip(),
+                section.get(f"ce{i}", "").strip(),
+                duration,
+            )
             marker = False
 
             if caption.endswith("%%"):
@@ -114,6 +121,8 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 activity_code=activity_code,
                 marker=marker,
                 volume_override_pct=volume_override_pct,
+                cue_start_ms=cue_start_ms,
+                cue_end_ms=cue_end_ms,
             )
             loaded_slots += 1
 
@@ -221,3 +230,45 @@ def _parse_volume_pct(value: str) -> Optional[int]:
     except ValueError:
         return None
     return max(0, min(100, parsed))
+
+
+def _parse_cue_points(start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
+    start_raw = _parse_non_negative_int(start_value)
+    end_raw = _parse_non_negative_int(end_value)
+    if start_raw is None and end_raw is None:
+        return None, None
+
+    start_ms = start_raw
+    end_ms = end_raw
+    if duration_ms > 0 and end_raw is not None and end_raw > max(duration_ms * 2, 600000):
+        scale = duration_ms / float(end_raw)
+        if start_raw is not None:
+            start_ms = int(round(start_raw * scale))
+        end_ms = duration_ms
+
+    if start_ms is not None:
+        start_ms = max(0, start_ms)
+    if end_ms is not None:
+        end_ms = max(0, end_ms)
+
+    if duration_ms > 0:
+        if start_ms is not None:
+            start_ms = min(duration_ms, start_ms)
+        if end_ms is not None:
+            end_ms = min(duration_ms, end_ms)
+
+    if start_ms is not None and end_ms is not None and end_ms < start_ms:
+        end_ms = start_ms
+    return start_ms, end_ms
+
+
+def _parse_non_negative_int(value: str) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed

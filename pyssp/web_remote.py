@@ -104,7 +104,8 @@ class WebRemoteServer:
     .status{font-size:12px;color:var(--muted)}
     .mono{font-family:Consolas,Menlo,monospace}
     .group-list,.page-list{display:grid;grid-template-columns:repeat(6,1fr);gap:4px}
-    .group-list button,.page-list button{height:28px;padding:0;font-size:12px}
+    .group-list button{height:28px;padding:0;font-size:12px}
+    .page-list button{height:48px;padding:2px 4px;font-size:11px;line-height:1.15}
     .group-list button.active,.page-list button.active{outline:2px solid #1f4f66}
     .btn-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
     .btn-grid button{height:62px;padding:4px;font-size:11px;line-height:1.2;color:#111;overflow:hidden}
@@ -172,6 +173,7 @@ class WebRemoteServer:
   const groups = ['A','B','C','D','E','F','G','H','I','J'];
   let selectedGroup = 'A';
   let selectedPage = 1;
+  let pageMeta = [];
 
   function setStatus(text){ document.getElementById('lastStatus').textContent = text; }
 
@@ -186,6 +188,21 @@ class WebRemoteServer:
     }catch(err){ setStatus('Error: ' + err); }
   }
 
+  function escapeHtml(value){
+    return String(value ?? '').replace(/[&<>"']/g, function(ch){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+    });
+  }
+
+  function idealTextColor(hex){
+    if(!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)){ return '#111'; }
+    const r = parseInt(hex.slice(1,3), 16);
+    const g = parseInt(hex.slice(3,5), 16);
+    const b = parseInt(hex.slice(5,7), 16);
+    const yiq = ((r*299)+(g*587)+(b*114))/1000;
+    return yiq >= 140 ? '#111' : '#fff';
+  }
+
   function renderGroups(){
     const root = document.getElementById('groups');
     root.innerHTML = groups.map(g =>
@@ -195,11 +212,15 @@ class WebRemoteServer:
 
   function renderPages(){
     const root = document.getElementById('pages');
-    const pageButtons = [];
-    for(let p=1;p<=18;p++){
-      pageButtons.push(`<button class="small ${p===selectedPage?'active':''}" onclick="selectPage(${p})">${p}</button>`);
-    }
-    root.innerHTML = pageButtons.join('');
+    const source = pageMeta.length ? pageMeta : Array.from({length:18}, (_, i) => ({page:i+1,page_name:'',page_color:null}));
+    root.innerHTML = source.map(info => {
+      const p = Number(info.page || 0);
+      const color = info.page_color || '';
+      const style = color ? `background:${color};color:${idealTextColor(color)};` : '';
+      const pageName = (info.page_name || '').trim();
+      const label = pageName ? `${p}<br>${escapeHtml(pageName)}` : `${p}`;
+      return `<button class="${p===selectedPage?'active':''}" style="${style}" onclick="selectPage(${p})" title="${escapeHtml(pageName || ('Page ' + p))}">${label}</button>`;
+    }).join('');
   }
 
   function buttonClass(button){
@@ -215,8 +236,14 @@ class WebRemoteServer:
   function renderButtons(buttons){
     const root = document.getElementById('buttons');
     root.innerHTML = (buttons || []).map(b => {
-      const title = b.title && b.title.trim() ? b.title : ('Button ' + b.button);
-      return `<button class="${buttonClass(b)}" onclick="playButton('${b.button_id}')">${b.button}<br>${title}</button>`;
+      let title = '';
+      if(b.marker){
+        title = (b.marker_text && b.marker_text.trim()) ? b.marker_text : (b.title || '').trim();
+      }else{
+        title = (b.title && b.title.trim()) ? b.title : ('Button ' + b.button);
+      }
+      const safeTitle = escapeHtml(title);
+      return `<button class="${buttonClass(b)}" onclick="playButton('${b.button_id}')">${b.button}<br>${safeTitle}</button>`;
     }).join('');
   }
 
@@ -283,9 +310,21 @@ class WebRemoteServer:
     renderButtons(payload.result?.buttons || []);
   }
 
+  async function refreshPageMeta(){
+    const res = await fetch('/api/query/pagegroup/' + selectedGroup.toLowerCase());
+    const payload = await res.json();
+    if(!payload.ok){
+      setStatus('Error: ' + (payload.error?.message || 'pagegroup query failed'));
+      return;
+    }
+    pageMeta = payload.result?.pages || [];
+    renderPages();
+  }
+
   async function refreshAll(updateSelection=true){
     try{
       await refreshState(updateSelection);
+      await refreshPageMeta();
       await refreshPageButtons();
       setStatus('State refreshed');
     }catch(err){

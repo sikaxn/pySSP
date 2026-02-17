@@ -74,3 +74,59 @@ def test_load_set_volume_override(tmp_path):
     result = load_set_file(str(set_path))
     assert result.pages["A"][0][0].volume_override_pct == 67
     assert result.pages["A"][0][1].volume_override_pct is None
+
+
+def test_load_set_cue_points_in_ms(tmp_path):
+    set_path = tmp_path / "cue_ms.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "t1=03:20",
+                "cs1=12000",
+                "ce1=30000",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.cue_start_ms == 12000
+    assert slot.cue_end_ms == 30000
+
+
+def test_load_set_cue_points_scaled_from_large_values(tmp_path):
+    set_path = tmp_path / "cue_scaled.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "t1=04:00",
+                "cs1=600000",
+                "ce1=24000000",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.cue_start_ms == 6000
+    assert slot.cue_end_ms == 240000

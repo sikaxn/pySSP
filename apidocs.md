@@ -82,9 +82,11 @@ Mode values: `enable`, `disable`, `toggle`
   - Example: `/api/query/button/a-1-1`
 - `GET /api/query/pagegroup/<group>`
   - Example: `/api/query/pagegroup/a`
+  - Each page entry includes `page_name` and `page_color`.
 - `GET /api/query/page/<group>-<page>`
   - Example: `/api/query/page/a-1`
-  - Includes `buttons` array with each button state (assigned/locked/marker/missing/played/is_playing/title).
+  - Includes page metadata (`page_name`, `page_color`) and `buttons` array with each button state (assigned/locked/marker/missing/played/is_playing/title).
+  - Marker buttons include `marker_text` so the web remote can display place marker text.
 
 ## ID Format
 

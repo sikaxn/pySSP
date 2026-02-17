@@ -107,6 +107,14 @@ def _dedupe(values: List[str]) -> List[str]:
     return result
 
 
+def get_media_ssp_units(file_path: str) -> Tuple[int, int]:
+    _ensure_decoder()
+    sound = pygame.mixer.Sound(file_path)
+    raw_units = len(sound.get_raw())
+    duration_ms = int(max(0.0, float(sound.get_length())) * 1000.0)
+    return duration_ms, max(0, int(raw_units))
+
+
 class ExternalMediaPlayer(QObject):
     StoppedState = 0
     PlayingState = 1

@@ -44,11 +44,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from pyssp.audio_engine import ExternalMediaPlayer, list_output_devices, set_output_device
+from pyssp.audio_engine import ExternalMediaPlayer, get_media_ssp_units, list_output_devices, set_output_device
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, load_settings, save_settings
 from pyssp.ui.dsp_window import DSPWindow
+from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.search_window import SearchWindow
@@ -70,6 +71,8 @@ COLORS = {
     "locked": "#F2D74A",
     "marker": "#111111",
     "copied": "#2E65FF",
+    "cue_indicator": "#61D6FF",
+    "volume_indicator": "#FFD45A",
 }
 
 
@@ -88,6 +91,8 @@ class SoundButtonData:
     copied_to_cue: bool = False
     load_failed: bool = False
     volume_override_pct: Optional[int] = None
+    cue_start_ms: Optional[int] = None
+    cue_end_ms: Optional[int] = None
 
     @property
     def assigned(self) -> bool:
@@ -102,7 +107,13 @@ class SoundButtonData:
             return ""
         if not self.assigned:
             return ""
-        suffix = " V" if self.volume_override_pct is not None else ""
+        parts: List[str] = []
+        if self.volume_override_pct is not None:
+            parts.append("V")
+        has_cue = (self.cue_end_ms is not None) or ((self.cue_start_ms is not None) and int(self.cue_start_ms) > 0)
+        if has_cue:
+            parts.append("C")
+        suffix = f" {' '.join(parts)}" if parts else ""
         return f"{elide_text(self.title, 26)}\n{format_time(self.duration_ms)}{suffix}"
 
 
@@ -481,6 +492,7 @@ class MainWindow(QMainWindow):
         self._player_started_map: Dict[int, float] = {}
         self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
+        self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
         self._track_started_at = 0.0
         self._ignore_state_changes = 0
@@ -1626,6 +1638,8 @@ class MainWindow(QMainWindow):
                     copied_to_cue=slot.copied_to_cue,
                     load_failed=slot.load_failed,
                     volume_override_pct=slot.volume_override_pct,
+                    cue_start_ms=slot.cue_start_ms,
+                    cue_end_ms=slot.cue_end_ms,
                 )
                 for slot in source_page
             ],
@@ -1653,6 +1667,8 @@ class MainWindow(QMainWindow):
                 copied_to_cue=slot.copied_to_cue,
                 load_failed=slot.load_failed,
                 volume_override_pct=slot.volume_override_pct,
+                cue_start_ms=slot.cue_start_ms,
+                cue_end_ms=slot.cue_end_ms,
             )
             for slot in self._copied_page_buffer["slots"]
         ]
@@ -1768,6 +1784,11 @@ class MainWindow(QMainWindow):
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
                 lines.append(f"ci{slot_index}=Y")
+            cue_start, cue_end = self._cue_fields_for_set(slot)
+            if cue_start is not None:
+                lines.append(f"cs{slot_index}={cue_start}")
+            if cue_end is not None:
+                lines.append(f"ce{slot_index}={cue_end}")
         lines.append("")
         payload = "\r\n".join(lines)
         with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
@@ -1820,6 +1841,11 @@ class MainWindow(QMainWindow):
             duration = parse_time_string_to_ms(section.get(f"t{i}", "").strip())
             color = parse_delphi_color(section.get(f"co{i}", "").strip())
             volume_override_pct = self._parse_volume_override_pct(section.get(f"v{i}", "").strip())
+            cue_start_ms, cue_end_ms = self._parse_cue_points(
+                section.get(f"cs{i}", "").strip(),
+                section.get(f"ce{i}", "").strip(),
+                duration,
+            )
             played = activity_code == "2"
             copied = section.get(f"ci{i}", "").strip().upper() == "Y"
             slots[i - 1] = SoundButtonData(
@@ -1833,6 +1859,8 @@ class MainWindow(QMainWindow):
                 marker=marker,
                 copied_to_cue=copied,
                 volume_override_pct=volume_override_pct,
+                cue_start_ms=cue_start_ms,
+                cue_end_ms=cue_end_ms,
             )
         return {
             "page_name": page_name,
@@ -1853,16 +1881,35 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
-                vol_icon = " V" if slot.volume_override_pct is not None else ""
-                button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{vol_icon}")
+                has_cue = self._slot_has_custom_cue(slot)
+                parts: List[str] = []
+                if slot.volume_override_pct is not None:
+                    parts.append("V")
+                if has_cue:
+                    parts.append("C")
+                suffix = f" {' '.join(parts)}" if parts else ""
+                button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{suffix}")
                 button.setToolTip(slot.notes.strip())
             color = self._slot_color(slot, i)
             text_color = "white" if color in {COLORS["marker"], COLORS["missing"], COLORS["copied"]} else "black"
             has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
-            if has_volume_override:
+            has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
+            if has_volume_override and has_cue:
                 background = (
                     "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 #FFD45A, stop:1 #FFD45A)"
+                    f"stop:0 {color}, stop:0.74 {color}, "
+                    f"stop:0.75 {COLORS['cue_indicator']}, stop:0.87 {COLORS['cue_indicator']}, "
+                    f"stop:0.88 {COLORS['volume_indicator']}, stop:1 {COLORS['volume_indicator']})"
+                )
+            elif has_volume_override:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {COLORS['volume_indicator']}, stop:1 {COLORS['volume_indicator']})"
+                )
+            elif has_cue:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {COLORS['cue_indicator']}, stop:1 {COLORS['cue_indicator']})"
                 )
             else:
                 background = color
@@ -2048,6 +2095,8 @@ class MainWindow(QMainWindow):
         cue_it_action.setEnabled(slot.assigned and not self.cue_mode)
         edit_action = menu.addAction("Edit Sound Button")
         edit_action.setEnabled(page_created)
+        cue_points_action = menu.addAction("Set Cue Points...")
+        cue_points_action.setEnabled(slot.assigned)
         copy_action = menu.addAction("Copy Sound Button")
         copy_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
         paste_action = menu.addAction("Paste")
@@ -2067,6 +2116,8 @@ class MainWindow(QMainWindow):
             self._cue_slot(slot)
         elif selected == edit_action:
             self._edit_sound_button(slot_index)
+        elif selected == cue_points_action:
+            self._edit_slot_cue_points(slot_index)
         elif selected == copy_action:
             self._copied_slot_buffer = self._clone_slot(slot)
         elif selected == paste_action:
@@ -2304,6 +2355,8 @@ class MainWindow(QMainWindow):
             copied_to_cue=slot.copied_to_cue,
             load_failed=slot.load_failed,
             volume_override_pct=slot.volume_override_pct,
+            cue_start_ms=slot.cue_start_ms,
+            cue_end_ms=slot.cue_end_ms,
         )
 
     def _edit_sound_button(self, slot_index: int) -> None:
@@ -2327,6 +2380,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             QMessageBox.information(self, "Edit Sound Button", "File is required.")
             return
+        previous_file_path = slot.file_path
         self.settings.last_sound_dir = os.path.dirname(file_path)
         self._save_settings()
         slot.file_path = file_path
@@ -2337,8 +2391,35 @@ class MainWindow(QMainWindow):
         slot.activity_code = "8"
         slot.load_failed = False
         slot.volume_override_pct = volume_override_pct
+        if previous_file_path != file_path:
+            slot.cue_start_ms = None
+            slot.cue_end_ms = None
         self._set_dirty(True)
         self._refresh_page_list()
+        self._refresh_sound_grid()
+
+    def _edit_slot_cue_points(self, slot_index: int) -> None:
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.locked:
+            QMessageBox.information(self, "Locked", "This sound button is locked.")
+            return
+        if not slot.assigned or slot.marker:
+            return
+        dialog = CuePointDialog(
+            file_path=slot.file_path,
+            title=slot.title,
+            cue_start_ms=slot.cue_start_ms,
+            cue_end_ms=slot.cue_end_ms,
+            stop_host_playback=self._hard_stop_all,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        cue_start_ms, cue_end_ms = dialog.values()
+        slot.cue_start_ms = cue_start_ms
+        slot.cue_end_ms = cue_end_ms
+        self._set_dirty(True)
         self._refresh_sound_grid()
 
     def _is_page_created(self, group: str, page_index: int) -> bool:
@@ -2381,6 +2462,8 @@ class MainWindow(QMainWindow):
         slot.played = False
         slot.activity_code = "8"
         slot.load_failed = False
+        slot.cue_start_ms = None
+        slot.cue_end_ms = None
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -2404,6 +2487,137 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
         return max(0, min(100, parsed))
+
+    def _parse_cue_points(self, start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
+        start_raw = self._parse_non_negative_int(start_value)
+        end_raw = self._parse_non_negative_int(end_value)
+        if start_raw is None and end_raw is None:
+            return None, None
+
+        start_ms = start_raw
+        end_ms = end_raw
+        if duration_ms > 0 and end_raw is not None and end_raw > max(duration_ms * 2, 600000):
+            scale = duration_ms / float(end_raw)
+            if start_raw is not None:
+                start_ms = int(round(start_raw * scale))
+            end_ms = duration_ms
+
+        if start_ms is not None:
+            start_ms = max(0, start_ms)
+        if end_ms is not None:
+            end_ms = max(0, end_ms)
+
+        if duration_ms > 0:
+            if start_ms is not None:
+                start_ms = min(duration_ms, start_ms)
+            if end_ms is not None:
+                end_ms = min(duration_ms, end_ms)
+        if start_ms is not None and end_ms is not None and end_ms < start_ms:
+            end_ms = start_ms
+        return start_ms, end_ms
+
+    def _parse_non_negative_int(self, value: str) -> Optional[int]:
+        if not value:
+            return None
+        try:
+            parsed = int(value)
+        except ValueError:
+            return None
+        if parsed < 0:
+            return None
+        return parsed
+
+    def _normalized_slot_cues(self, slot: SoundButtonData, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
+        start_ms = slot.cue_start_ms
+        end_ms = slot.cue_end_ms
+        if start_ms is not None:
+            start_ms = max(0, int(start_ms))
+        if end_ms is not None:
+            end_ms = max(0, int(end_ms))
+        if duration_ms > 0:
+            if start_ms is not None:
+                start_ms = min(duration_ms, start_ms)
+            if end_ms is not None:
+                end_ms = min(duration_ms, end_ms)
+        if start_ms is not None and end_ms is not None and end_ms < start_ms:
+            end_ms = start_ms
+        if start_ms == 0 and end_ms is None:
+            start_ms = None
+        return start_ms, end_ms
+
+    def _slot_has_custom_cue(self, slot: SoundButtonData) -> bool:
+        start_ms, end_ms = self._normalized_slot_cues(slot, max(0, int(slot.duration_ms)))
+        return (end_ms is not None) or (start_ms is not None and start_ms > 0)
+
+    def _slot_ssp_unit_scale(self, slot: SoundButtonData) -> Optional[Tuple[int, int]]:
+        file_path = (slot.file_path or "").strip()
+        if not file_path:
+            return None
+        cached = self._ssp_unit_cache.get(file_path)
+        if cached is not None:
+            return cached
+        try:
+            duration_ms, total_units = get_media_ssp_units(file_path)
+        except Exception:
+            return None
+        if duration_ms <= 0 or total_units <= 0:
+            return None
+        self._ssp_unit_cache[file_path] = (duration_ms, total_units)
+        return self._ssp_unit_cache[file_path]
+
+    def _cue_fields_for_set(self, slot: SoundButtonData) -> tuple[Optional[int], Optional[int]]:
+        start_ms, end_ms = self._normalized_slot_cues(slot, max(0, int(slot.duration_ms)))
+        if start_ms is None and end_ms is None:
+            return None, None
+        cue_start = start_ms
+        cue_end = end_ms
+        scale = self._slot_ssp_unit_scale(slot)
+        if scale is not None:
+            duration_ms, total_units = scale
+            if cue_start is not None:
+                cue_start = int(round((cue_start / float(duration_ms)) * total_units))
+            if cue_end is not None:
+                cue_end = int(round((cue_end / float(duration_ms)) * total_units))
+        else:
+            fallback_units_per_ms = 176.4
+            if cue_start is not None:
+                cue_start = int(round(cue_start * fallback_units_per_ms))
+            if cue_end is not None:
+                cue_end = int(round(cue_end * fallback_units_per_ms))
+        return cue_start, cue_end
+
+    def _cue_start_for_playback(self, slot: SoundButtonData, duration_ms: int) -> int:
+        start_ms, _ = self._normalized_slot_cues(slot, duration_ms)
+        return 0 if start_ms is None else max(0, int(start_ms))
+
+    def _cue_end_for_playback(self, slot: SoundButtonData, duration_ms: int) -> Optional[int]:
+        _, end_ms = self._normalized_slot_cues(slot, duration_ms)
+        return None if end_ms is None else max(0, int(end_ms))
+
+    def _seek_player_to_slot_start_cue(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
+        start_ms = self._cue_start_for_playback(slot, max(0, int(player.duration())))
+        if start_ms > 0:
+            player.setPosition(start_ms)
+
+    def _enforce_cue_end_limits(self) -> None:
+        for player in [self.player, self.player_b, *list(self._multi_players)]:
+            if player.state() != ExternalMediaPlayer.PlayingState:
+                continue
+            slot_key = self._player_slot_key_map.get(id(player))
+            if slot_key is None:
+                continue
+            slot = self._slot_for_key(slot_key)
+            if slot is None:
+                continue
+            end_ms = self._cue_end_for_playback(slot, max(0, int(player.duration())))
+            if end_ms is None:
+                continue
+            if player.position() < end_ms:
+                continue
+            if player is self.player:
+                player.stop()
+            else:
+                self._stop_single_player(player)
 
     def _open_playback_volume_dialog(self, slot: SoundButtonData) -> None:
         if not slot.assigned or slot.marker:
@@ -2586,6 +2800,7 @@ class MainWindow(QMainWindow):
             else:
                 self._player_b_slot_volume_pct = slot_pct
             target_volume = self._effective_slot_target_volume(slot_pct)
+            self._seek_player_to_slot_start_cue(new_player, slot)
             new_player.setVolume(0)
             new_player.play()
             self._set_player_slot_key(new_player, playing_key)
@@ -2607,6 +2822,7 @@ class MainWindow(QMainWindow):
                 return
             self._player_slot_volume_pct = slot_pct
             target_volume = self._effective_slot_target_volume(slot_pct)
+            self._seek_player_to_slot_start_cue(self.player, slot)
             if fade_in_on:
                 self.player.setVolume(0)
                 self.player.play()
@@ -2635,6 +2851,7 @@ class MainWindow(QMainWindow):
                 return
             self._set_player_slot_pct(extra_player, slot_pct)
             target_volume = self._effective_slot_target_volume(slot_pct)
+            self._seek_player_to_slot_start_cue(extra_player, slot)
             fade_in_on = self._is_fade_in_enabled()
             if fade_in_on and self.fade_in_sec > 0:
                 extra_player.setVolume(0)
@@ -2830,6 +3047,7 @@ class MainWindow(QMainWindow):
 
     def _tick_meter(self) -> None:
         self._prune_multi_players()
+        self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
             self._clear_player_slot_key(self.player_b)
         self._try_auto_fade_transition()
@@ -2980,6 +3198,8 @@ class MainWindow(QMainWindow):
                     activity_code=slot.activity_code,
                     copied_to_cue=True,
                     volume_override_pct=slot.volume_override_pct,
+                    cue_start_ms=slot.cue_start_ms,
+                    cue_end_ms=slot.cue_end_ms,
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)
@@ -3422,6 +3642,12 @@ class MainWindow(QMainWindow):
         played = sum(1 for slot in page if slot.assigned and not slot.marker and slot.played)
         playable = sum(1 for slot in page if slot.assigned and not slot.marker and not slot.locked and not slot.missing)
         if group == "Q":
+            page_name = "Cue Page"
+            page_color = None
+        else:
+            page_name = self.page_names[group][page_index].strip()
+            page_color = self.page_colors[group][page_index]
+        if group == "Q":
             playlist_enabled = False
             shuffle_enabled = False
         else:
@@ -3430,6 +3656,8 @@ class MainWindow(QMainWindow):
         return {
             "group": group,
             "page": page_index + 1,
+            "page_name": page_name,
+            "page_color": page_color,
             "assigned_count": assigned,
             "played_count": played,
             "playable_count": playable,
@@ -3443,13 +3671,21 @@ class MainWindow(QMainWindow):
         output: List[dict] = []
         for idx, slot in enumerate(page):
             key = (group, page_index, idx)
+            marker_text = slot.title.strip() if slot.marker else ""
+            if slot.marker:
+                display_title = marker_text
+            elif slot.assigned:
+                display_title = self._build_now_playing_text(slot)
+            else:
+                display_title = ""
             output.append(
                 {
                     "button_id": self._format_button_key(key).lower(),
                     "button": idx + 1,
                     "row": (idx // GRID_COLS) + 1,
                     "col": (idx % GRID_COLS) + 1,
-                    "title": self._build_now_playing_text(slot) if slot.assigned else "",
+                    "title": display_title,
+                    "marker_text": marker_text,
                     "assigned": slot.assigned,
                     "locked": slot.locked,
                     "marker": slot.marker,
@@ -4621,6 +4857,11 @@ class MainWindow(QMainWindow):
                         lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
                         if slot.copied_to_cue:
                             lines.append(f"ci{slot_index}=Y")
+                        cue_start, cue_end = self._cue_fields_for_set(slot)
+                        if cue_start is not None:
+                            lines.append(f"cs{slot_index}={cue_start}")
+                        if cue_end is not None:
+                            lines.append(f"ce{slot_index}={cue_end}")
                     lines.append("")
 
             lines.extend(
@@ -4685,6 +4926,8 @@ class MainWindow(QMainWindow):
                         marker=src.marker,
                         copied_to_cue=src.copied_to_cue,
                         volume_override_pct=src.volume_override_pct,
+                        cue_start_ms=src.cue_start_ms,
+                        cue_end_ms=src.cue_end_ms,
                     )
 
         self.current_set_path = file_path

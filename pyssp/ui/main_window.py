@@ -425,6 +425,7 @@ class MainWindow(QMainWindow):
         self.drag_mode_banner = QLabel("")
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
+        self.status_now_playing_label = QLabel("Now Playing: -")
         self.total_time = QLabel("00:00:00")
         self.elapsed_time = QLabel("00:00:00")
         self.remaining_time = QLabel("00:00:00")
@@ -464,7 +465,8 @@ class MainWindow(QMainWindow):
         self._flash_slot_until = 0.0
 
         self._build_ui()
-        self.statusBar().addWidget(self.status_hover_label, 1)
+        self.statusBar().addWidget(self.status_hover_label)
+        self.statusBar().addWidget(self.status_now_playing_label, 1)
         self.statusBar().addPermanentWidget(self.status_totals_label)
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
@@ -479,6 +481,7 @@ class MainWindow(QMainWindow):
         self._refresh_window_title()
         self._update_status_totals()
         self._on_sound_button_hover(None)
+        self._update_status_now_playing()
 
         self.meter_timer = QTimer(self)
         self.meter_timer.timeout.connect(self._tick_meter)
@@ -1869,6 +1872,19 @@ class MainWindow(QMainWindow):
         group_text = group if group == "Q" else group.upper()
         self.status_hover_label.setText(f"Button: {group_text}-{self.current_page + 1}-{slot_index + 1}")
 
+    def _format_button_key(self, slot_key: Tuple[str, int, int]) -> str:
+        group, page_index, slot_index = slot_key
+        group_text = group if group == "Q" else group.upper()
+        return f"{group_text}-{page_index + 1}-{slot_index + 1}"
+
+    def _update_status_now_playing(self) -> None:
+        if not self._active_playing_keys:
+            self.status_now_playing_label.setText("Now Playing: -")
+            return
+        ordered = sorted(self._active_playing_keys, key=lambda item: (item[0], item[1], item[2]))
+        values = ", ".join(self._format_button_key(key) for key in ordered)
+        self.status_now_playing_label.setText(f"Now Playing: {values}")
+
     def _log_file_path(self) -> str:
         appdata = os.getenv("APPDATA")
         base = appdata if appdata else os.path.expanduser("~")
@@ -3001,16 +3017,19 @@ class MainWindow(QMainWindow):
             self._active_playing_keys.discard(old_key)
         self._player_slot_key_map[pid] = slot_key
         self._active_playing_keys.add(slot_key)
+        self._update_status_now_playing()
 
     def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
         pid = id(player)
         key = self._player_slot_key_map.pop(pid, None)
         if key is not None:
             self._active_playing_keys.discard(key)
+        self._update_status_now_playing()
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
         self._active_playing_keys.clear()
+        self._update_status_now_playing()
 
     def _is_multi_play_enabled(self) -> bool:
         btn = self.control_buttons.get("Multi-Play")

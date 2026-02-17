@@ -51,6 +51,8 @@ class OptionsDialog(QDialog):
         search_double_click_action: str,
         audio_output_device: str,
         available_audio_devices: List[str],
+        max_multi_play_songs: int,
+        multi_play_limit_action: str,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -101,6 +103,14 @@ class OptionsDialog(QDialog):
                 fade_in_sec=fade_in_sec,
                 cross_fade_sec=cross_fade_sec,
                 fade_out_sec=fade_out_sec,
+            ),
+        )
+        self._add_page(
+            "Playback",
+            self.style().standardIcon(QStyle.SP_MediaPlay),
+            self._build_playback_page(
+                max_multi_play_songs=max_multi_play_songs,
+                multi_play_limit_action=multi_play_limit_action,
             ),
         )
         self._add_page(
@@ -239,6 +249,32 @@ class OptionsDialog(QDialog):
         form.addRow("Fade Out Seconds:", self.fade_out_spin)
         return page
 
+    def _build_playback_page(self, max_multi_play_songs: int, multi_play_limit_action: str) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        form = QFormLayout()
+        self.max_multi_play_spin = QSpinBox()
+        self.max_multi_play_spin.setRange(1, 32)
+        self.max_multi_play_spin.setValue(max(1, min(32, int(max_multi_play_songs))))
+        form.addRow("Max Multi-Play Songs:", self.max_multi_play_spin)
+        layout.addLayout(form)
+
+        limit_group = QGroupBox("When max songs is reached during Multi-Play:")
+        limit_layout = QVBoxLayout(limit_group)
+        self.multi_play_disallow_radio = QRadioButton("Disallow more play")
+        self.multi_play_stop_oldest_radio = QRadioButton("Stop the oldest")
+        if multi_play_limit_action == "disallow_more_play":
+            self.multi_play_disallow_radio.setChecked(True)
+        else:
+            self.multi_play_stop_oldest_radio.setChecked(True)
+        limit_layout.addWidget(self.multi_play_disallow_radio)
+        limit_layout.addWidget(self.multi_play_stop_oldest_radio)
+        layout.addWidget(limit_group)
+
+        layout.addStretch(1)
+        return page
+
     def _build_audio_device_page(self, audio_output_device: str, available_audio_devices: List[str]) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -308,6 +344,14 @@ class OptionsDialog(QDialog):
 
     def selected_audio_output_device(self) -> str:
         return str(self.audio_device_combo.currentData() or "")
+
+    def selected_max_multi_play_songs(self) -> int:
+        return max(1, min(32, int(self.max_multi_play_spin.value())))
+
+    def selected_multi_play_limit_action(self) -> str:
+        if self.multi_play_disallow_radio.isChecked():
+            return "disallow_more_play"
+        return "stop_oldest"
 
     def _populate_audio_devices(self, devices: List[str], selected_device: str) -> None:
         self.audio_device_combo.clear()

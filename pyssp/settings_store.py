@@ -35,6 +35,8 @@ class AppSettings:
     click_playing_action: str = "play_it_again"
     search_double_click_action: str = "find_highlight"
     audio_output_device: str = ""
+    max_multi_play_songs: int = 5
+    multi_play_limit_action: str = "stop_oldest"
 
 
 def get_settings_path() -> Path:
@@ -88,6 +90,8 @@ def save_settings(settings: AppSettings) -> None:
         "click_playing_action": settings.click_playing_action,
         "search_double_click_action": settings.search_double_click_action,
         "audio_output_device": settings.audio_output_device,
+        "max_multi_play_songs": str(settings.max_multi_play_songs),
+        "multi_play_limit_action": settings.multi_play_limit_action,
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -112,6 +116,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     search_double_click_action = str(section.get("search_double_click_action", "find_highlight")).strip().lower()
     if search_double_click_action not in {"find_highlight", "play_highlight"}:
         search_double_click_action = "find_highlight"
+    max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
+    multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
+    if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
+        multi_play_limit_action = "stop_oldest"
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -138,6 +146,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         click_playing_action=click_playing_action,
         search_double_click_action=search_double_click_action,
         audio_output_device=str(section.get("audio_output_device", "")),
+        max_multi_play_songs=max_multi_play_songs,
+        multi_play_limit_action=multi_play_limit_action,
     )
 
 

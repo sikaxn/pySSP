@@ -8,11 +8,12 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QEvent, QSize, QTimer, Qt
-from PyQt5.QtGui import QColor, QTextDocument
+from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData
+from PyQt5.QtGui import QColor, QTextDocument, QDrag
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
+    QApplication,
     QColorDialog,
     QDialog,
     QFileDialog,
@@ -100,13 +101,75 @@ class SoundButtonData:
 
 
 class SoundButton(QPushButton):
-    def __init__(self, slot_index: int):
+    def __init__(self, slot_index: int, host: "MainWindow"):
         super().__init__("")
+        self._host = host
         self.slot_index = slot_index
+        self._drag_start_pos = None
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMinimumSize(0, 0)
         self.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        self.setAcceptDrops(True)
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (
+            self._drag_start_pos is not None
+            and (event.buttons() & Qt.LeftButton)
+            and self._host._is_button_drag_enabled()
+        ):
+            if (event.pos() - self._drag_start_pos).manhattanLength() >= QApplication.startDragDistance():
+                self._host._start_sound_button_drag(self.slot_index)
+                self._drag_start_pos = None
+                return
+        super().mouseMoveEvent(event)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event) -> None:
+        if not self._host._can_accept_sound_button_drop(event.mimeData()):
+            event.ignore()
+            return
+        if self._host._handle_sound_button_drop(self.slot_index, event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+
+class GroupButton(QPushButton):
+    def __init__(self, group: str, host: "MainWindow"):
+        super().__init__(group)
+        self.group = group
+        self._host = host
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()):
+            self._host._handle_drag_over_group(self.group)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()):
+            self._host._handle_drag_over_group(self.group)
+            event.acceptProposedAction()
+            return
+        event.ignore()
 
 class ToolListWindow(QDialog):
     def __init__(
@@ -329,6 +392,8 @@ class MainWindow(QMainWindow):
         self.click_playing_action = self.settings.click_playing_action
         self.search_double_click_action = self.settings.search_double_click_action
         self.audio_output_device = self.settings.audio_output_device
+        self.max_multi_play_songs = self.settings.max_multi_play_songs
+        self.multi_play_limit_action = self.settings.multi_play_limit_action
 
         set_output_device(self.audio_output_device)
         self._init_audio_players()
@@ -349,6 +414,7 @@ class MainWindow(QMainWindow):
         self.group_status = QLabel("")
         self.page_status = QLabel("")
         self.now_playing_label = QLabel("")
+        self.drag_mode_banner = QLabel("")
         self.total_time = QLabel("00:00")
         self.elapsed_time = QLabel("00:00")
         self.remaining_time = QLabel("00:00")
@@ -363,6 +429,12 @@ class MainWindow(QMainWindow):
         self._last_ui_position_ms = -1
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
+        self._multi_players: List[ExternalMediaPlayer] = []
+        self._player_slot_pct_map: Dict[int, int] = {}
+        self._player_started_map: Dict[int, float] = {}
+        self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
+        self._active_playing_keys: set[Tuple[str, int, int]] = set()
+        self._drag_source_key: Optional[Tuple[str, int, int]] = None
         self._track_started_at = 0.0
         self._ignore_state_changes = 0
         self._dirty = False
@@ -415,6 +487,8 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._update_button_drag_control_state()
+        self._update_button_drag_visual_state()
         self._restore_last_set_on_startup()
         if self.reset_all_on_startup:
             self._reset_all_played_state()
@@ -425,15 +499,28 @@ class MainWindow(QMainWindow):
 
         root = QWidget()
         self.setCentralWidget(root)
-        root_layout = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(8, 8, 8, 8)
         root_layout.setSpacing(8)
+
+        self.drag_mode_banner.setVisible(False)
+        self.drag_mode_banner.setWordWrap(True)
+        self.drag_mode_banner.setStyleSheet(
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.drag_mode_banner)
+
+        body_layout = QHBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(8)
+        root_layout.addLayout(body_layout, 1)
 
         left_panel = self._build_left_panel()
         right_panel = self._build_right_panel()
 
-        root_layout.addWidget(left_panel, 1)
-        root_layout.addWidget(right_panel, 5)
+        body_layout.addWidget(left_panel, 1)
+        body_layout.addWidget(right_panel, 5)
 
     def _init_audio_players(self) -> None:
         self.player = ExternalMediaPlayer(self)
@@ -998,7 +1085,7 @@ class MainWindow(QMainWindow):
         group_grid.setVerticalSpacing(2)
 
         for i, group in enumerate(GROUPS):
-            button = QPushButton(group)
+            button = GroupButton(group, self)
             button.setMinimumSize(40, 40)
             button.setStyleSheet("font-size: 18pt; font-weight: bold;")
             button.clicked.connect(lambda _=False, g=group: self._select_group(g))
@@ -1016,6 +1103,8 @@ class MainWindow(QMainWindow):
         self.page_list.currentRowChanged.connect(self._select_page)
         self.page_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.page_list.customContextMenuRequested.connect(self._show_page_menu)
+        self.page_list.setAcceptDrops(True)
+        self.page_list.viewport().setAcceptDrops(True)
         self.page_list.viewport().installEventFilter(self)
         layout.addWidget(self.page_list, 1)
         return panel
@@ -1038,8 +1127,8 @@ class MainWindow(QMainWindow):
         for row in range(GRID_ROWS):
             for col in range(GRID_COLS):
                 idx = row * GRID_COLS + col
-                button = SoundButton(idx)
-                button.clicked.connect(lambda _=False, slot=idx: self._play_slot(slot))
+                button = SoundButton(idx, self)
+                button.clicked.connect(lambda _=False, slot=idx: self._on_sound_button_clicked(slot))
                 button.setContextMenuPolicy(Qt.CustomContextMenu)
                 button.customContextMenuRequested.connect(
                     lambda pos, slot=idx: self._show_slot_menu(slot, pos)
@@ -1068,6 +1157,7 @@ class MainWindow(QMainWindow):
 
         controls = [
             "Cue", "Multi-Play", "DSP",
+            "Go To Playing",
             "Loop", "Next", "Button Drag", "Pause",
             "Rapid Fire", "Shuffle", "Reset Page", "STOP",
             "Talk", "Play List", "Search",
@@ -1075,6 +1165,7 @@ class MainWindow(QMainWindow):
         positions = {
             "Cue": (0, 0, 1, 1),
             "Multi-Play": (0, 1, 1, 1),
+            "Go To Playing": (0, 2, 1, 1),
             "DSP": (0, 3, 1, 1),
             "Loop": (1, 0, 1, 1),
             "Next": (1, 1, 1, 1),
@@ -1113,6 +1204,12 @@ class MainWindow(QMainWindow):
             elif text == "Loop":
                 btn.setCheckable(True)
                 btn.clicked.connect(self._toggle_loop)
+            elif text == "Multi-Play":
+                btn.setCheckable(True)
+                btn.clicked.connect(self._toggle_multi_play_mode)
+            elif text == "Button Drag":
+                btn.setCheckable(True)
+                btn.clicked.connect(self._toggle_button_drag_mode)
             elif text == "Rapid Fire":
                 btn.clicked.connect(self._on_rapid_fire_clicked)
             elif text == "Reset Page":
@@ -1131,7 +1228,9 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(self._open_find_dialog)
             elif text == "DSP":
                 btn.clicked.connect(self._open_dsp_window)
-            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire"}:
+            elif text == "Go To Playing":
+                btn.clicked.connect(self._go_to_current_playing_page)
+            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag"}:
                 self.control_buttons[text] = btn
             row, col, row_span, col_span = positions[text]
             ctl_grid.addWidget(btn, row, col, row_span, col_span)
@@ -1783,7 +1882,7 @@ class MainWindow(QMainWindow):
             return COLORS["locked"]
         if slot.missing or slot.load_failed:
             return COLORS["missing"]
-        if self.current_playing == playing_key:
+        if playing_key in self._active_playing_keys:
             return COLORS["playing"]
         if slot.played:
             return COLORS["played"]
@@ -1802,7 +1901,7 @@ class MainWindow(QMainWindow):
         page = self._current_page_slots()
         slot = page[slot_index]
         page_created = self._is_page_created(self.current_group, self.current_page)
-        if self.current_playing == (self._view_group_key(), self.current_page, slot_index):
+        if (self._view_group_key(), self.current_page, slot_index) in self._active_playing_keys:
             self._open_playback_volume_dialog(slot)
             return
 
@@ -1912,6 +2011,154 @@ class MainWindow(QMainWindow):
 
         self._refresh_page_list()
         self._refresh_sound_grid()
+
+    def _is_button_drag_enabled(self) -> bool:
+        btn = self.control_buttons.get("Button Drag")
+        return bool(btn and btn.isChecked())
+
+    def _toggle_button_drag_mode(self, checked: bool) -> None:
+        btn = self.control_buttons.get("Button Drag")
+        if btn:
+            btn.setChecked(checked)
+        if checked and self._is_playback_in_progress():
+            if btn:
+                btn.setChecked(False)
+            self._update_button_drag_visual_state()
+            return
+        if not checked:
+            self._drag_source_key = None
+        self._update_button_drag_visual_state()
+
+    def _on_sound_button_clicked(self, slot_index: int) -> None:
+        if not self._is_button_drag_enabled():
+            self._play_slot(slot_index)
+            return
+        # In drag mode, click does not play; dragging handles move operations.
+        return
+
+    def _can_accept_sound_button_drop(self, mime_data: QMimeData) -> bool:
+        return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-slot")
+
+    def _build_drag_mime(self, slot_key: Tuple[str, int, int]) -> QMimeData:
+        mime = QMimeData()
+        mime.setData(
+            "application/x-pyssp-slot",
+            f"{slot_key[0]}|{slot_key[1]}|{slot_key[2]}".encode("utf-8"),
+        )
+        return mime
+
+    def _parse_drag_mime(self, mime_data: QMimeData) -> Optional[Tuple[str, int, int]]:
+        if not mime_data.hasFormat("application/x-pyssp-slot"):
+            return None
+        raw = bytes(mime_data.data("application/x-pyssp-slot")).decode("utf-8", errors="ignore")
+        parts = raw.split("|")
+        if len(parts) != 3:
+            return None
+        group = parts[0].strip().upper()
+        if group not in GROUPS:
+            return None
+        try:
+            page = int(parts[1])
+            slot = int(parts[2])
+        except ValueError:
+            return None
+        if page < 0 or page >= PAGE_COUNT or slot < 0 or slot >= SLOTS_PER_PAGE:
+            return None
+        return (group, page, slot)
+
+    def _start_sound_button_drag(self, slot_index: int) -> None:
+        if not self._is_button_drag_enabled() or self.cue_mode:
+            return
+        source_key = (self.current_group, self.current_page, slot_index)
+        if not self._is_page_created(source_key[0], source_key[1]):
+            return
+        source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
+        if source_key in self._active_playing_keys:
+            QMessageBox.information(self, "Button Drag", "Cannot drag a currently playing button.")
+            return
+        if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
+            return
+        drag = QDrag(self.sound_buttons[slot_index])
+        drag.setMimeData(self._build_drag_mime(source_key))
+        drag.setPixmap(self.sound_buttons[slot_index].grab())
+        drag.setHotSpot(self.sound_buttons[slot_index].rect().center())
+        drag.exec_(Qt.MoveAction)
+
+    def _handle_drag_over_group(self, group: str) -> None:
+        if not self._is_button_drag_enabled() or self.cue_mode:
+            return
+        if group not in GROUPS:
+            return
+        if group == self.current_group:
+            return
+        self._select_group(group)
+
+    def _handle_drag_over_page(self, page_index: int) -> bool:
+        if not self._is_button_drag_enabled() or self.cue_mode:
+            return False
+        if page_index < 0 or page_index >= PAGE_COUNT:
+            return False
+        if not self._is_page_created(self.current_group, page_index):
+            return False
+        if page_index == self.current_page:
+            return True
+        self._select_page(page_index)
+        return True
+
+    def _handle_sound_button_drop(self, dest_slot_index: int, mime_data: QMimeData) -> bool:
+        source_key = self._parse_drag_mime(mime_data)
+        if source_key is None:
+            return False
+        if self.cue_mode:
+            return False
+        dest_key = (self.current_group, self.current_page, dest_slot_index)
+        if dest_key == source_key:
+            return False
+        if not self._is_page_created(dest_key[0], dest_key[1]):
+            QMessageBox.information(self, "Button Drag", "Cannot drag into a blank page.")
+            return False
+        if source_key in self._active_playing_keys or dest_key in self._active_playing_keys:
+            QMessageBox.information(self, "Button Drag", "Cannot drag currently playing buttons.")
+            return False
+
+        source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
+        dest_slot = self.data[dest_key[0]][dest_key[1]][dest_key[2]]
+        if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
+            return False
+        if dest_slot.locked:
+            QMessageBox.information(self, "Button Drag", "Destination button is locked.")
+            return False
+
+        source_clone = self._clone_slot(source_slot)
+        dest_has_content = bool(dest_slot.assigned or dest_slot.title)
+        if not dest_has_content:
+            self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
+            self.data[source_key[0]][source_key[1]][source_key[2]] = SoundButtonData()
+        else:
+            box = QMessageBox(self)
+            box.setWindowTitle("Button Drag")
+            box.setText("Destination has content.")
+            replace_btn = box.addButton("Replace", QMessageBox.AcceptRole)
+            swap_btn = box.addButton("Swap", QMessageBox.ActionRole)
+            cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec_()
+            clicked = box.clickedButton()
+            if clicked == cancel_btn or clicked is None:
+                return False
+            if clicked == replace_btn:
+                self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
+                self.data[source_key[0]][source_key[1]][source_key[2]] = SoundButtonData()
+            elif clicked == swap_btn:
+                dest_clone = self._clone_slot(dest_slot)
+                self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
+                self.data[source_key[0]][source_key[1]][source_key[2]] = dest_clone
+            else:
+                return False
+
+        self._set_dirty(True)
+        self._refresh_page_list()
+        self._refresh_sound_grid()
+        return True
 
     def _insert_place_marker(self, slot_index: int) -> None:
         page = self._current_page_slots()
@@ -2152,6 +2399,9 @@ class MainWindow(QMainWindow):
                 self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
 
     def _play_slot(self, slot_index: int) -> None:
+        if self._is_button_drag_enabled():
+            self.statusBar().showMessage("Playback is not allowed while Button Drag is enabled.", 2500)
+            return
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
@@ -2166,6 +2416,14 @@ class MainWindow(QMainWindow):
 
         group_key = self._view_group_key()
         playing_key = (group_key, self.current_page, slot_index)
+        self._prune_multi_players()
+        if self._is_multi_play_enabled() and playing_key in self._active_playing_keys:
+            self._stop_track_by_slot_key(playing_key)
+            return
+        playlist_enabled_here = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if self._is_multi_play_enabled() and (not playlist_enabled_here) and self._all_active_players():
+            self._play_slot_multi(slot, playing_key)
+            return
         if self.current_playing == playing_key and self.player.state() in {
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
@@ -2179,6 +2437,11 @@ class MainWindow(QMainWindow):
         old_player, new_player = self._select_transition_players()
         any_playing = old_player is not None
         mode = self._current_fade_mode()
+        if self._is_multi_play_enabled():
+            if mode == "cross_fade":
+                mode = "none"
+            elif mode == "fade_out_then_fade_in":
+                mode = "fade_in_only"
         fade_in_on = mode in {"fade_in_only", "fade_out_then_fade_in"}
         fade_out_on = mode in {"fade_out_only", "fade_out_then_fade_in"}
         cross_mode = mode == "cross_fade"
@@ -2229,6 +2492,7 @@ class MainWindow(QMainWindow):
             target_volume = self._effective_slot_target_volume(slot_pct)
             new_player.setVolume(0)
             new_player.play()
+            self._set_player_slot_key(new_player, playing_key)
             fade_seconds = self.cross_fade_sec
             self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
             if old_player is not None:
@@ -2237,6 +2501,7 @@ class MainWindow(QMainWindow):
             if self.player is not new_player:
                 self._swap_primary_secondary_players()
         else:
+            self._clear_all_player_slot_keys()
             self._stop_player_internal(self.player_b)
             self._stop_player_internal(self.player)
             if not self._try_load_media(self.player, slot):
@@ -2249,11 +2514,52 @@ class MainWindow(QMainWindow):
             if fade_in_on:
                 self.player.setVolume(0)
                 self.player.play()
+                self._set_player_slot_key(self.player, playing_key)
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
                 self.player.setVolume(target_volume)
                 self.player.play()
+                self._set_player_slot_key(self.player, playing_key)
 
+        self._refresh_sound_grid()
+        self._update_now_playing_label(self._build_now_playing_text(slot))
+        self._append_play_log(slot.file_path)
+        self._mark_player_started(self.player)
+
+    def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> None:
+        if not self._enforce_multi_play_limit():
+            return
+        extra_player = ExternalMediaPlayer(self)
+        extra_player.setNotifyInterval(90)
+        extra_player.setDSPConfig(self._dsp_config)
+        slot_pct = self._slot_volume_pct(slot)
+        try:
+            if not self._try_load_media(extra_player, slot):
+                extra_player.deleteLater()
+                return
+            self._set_player_slot_pct(extra_player, slot_pct)
+            target_volume = self._effective_slot_target_volume(slot_pct)
+            fade_in_on = self._is_fade_in_enabled()
+            if fade_in_on and self.fade_in_sec > 0:
+                extra_player.setVolume(0)
+            else:
+                extra_player.setVolume(target_volume)
+            extra_player.play()
+            if fade_in_on and self.fade_in_sec > 0:
+                self._start_fade(extra_player, target_volume, self.fade_in_sec, stop_on_complete=False)
+        except Exception:
+            try:
+                extra_player.deleteLater()
+            except Exception:
+                pass
+            return
+        self._multi_players.append(extra_player)
+        self._set_player_slot_key(extra_player, playing_key)
+        self._mark_player_started(extra_player)
+        slot.played = True
+        slot.activity_code = "2"
+        self._set_dirty(True)
+        self.current_playing = playing_key
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
@@ -2364,6 +2670,7 @@ class MainWindow(QMainWindow):
         if self._ignore_state_changes > 0:
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
+            self._clear_player_slot_key(self.player)
             last_playing = self.current_playing
             playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
             manual_stop = self._manual_stop_requested
@@ -2425,6 +2732,9 @@ class MainWindow(QMainWindow):
             self._ignore_state_changes = max(0, self._ignore_state_changes - 1)
 
     def _tick_meter(self) -> None:
+        self._prune_multi_players()
+        if self.player_b.state() == ExternalMediaPlayer.StoppedState:
+            self._clear_player_slot_key(self.player_b)
         self._try_auto_fade_transition()
         self._update_next_button_enabled()
         if self._flash_slot_key and time.monotonic() >= self._flash_slot_until:
@@ -2437,8 +2747,16 @@ class MainWindow(QMainWindow):
         )
         left_a, right_a = self.player.meterLevels()
         left_b, right_b = self.player_b.meterLevels()
-        target_left = min(1.0, max(0.0, left_a + left_b))
-        target_right = min(1.0, max(0.0, right_a + right_b))
+        sum_left = left_a + left_b
+        sum_right = right_a + right_b
+        for extra in self._multi_players:
+            if extra.state() == ExternalMediaPlayer.PlayingState:
+                any_playing = True
+            left_x, right_x = extra.meterLevels()
+            sum_left += left_x
+            sum_right += right_x
+        target_left = min(1.0, max(0.0, sum_left))
+        target_right = min(1.0, max(0.0, sum_right))
         target_left *= 100.0
         target_right *= 100.0
         attack = 0.92
@@ -2525,6 +2843,32 @@ class MainWindow(QMainWindow):
         else:
             has_next = self._next_unplayed_slot_on_current_page() is not None
         next_btn.setEnabled(is_playing and has_next)
+        self._update_button_drag_control_state()
+
+    def _update_button_drag_control_state(self) -> None:
+        drag_btn = self.control_buttons.get("Button Drag")
+        if not drag_btn:
+            return
+        playback_active = self._is_playback_in_progress()
+        if playback_active and drag_btn.isChecked():
+            drag_btn.setChecked(False)
+        drag_btn.setEnabled(not playback_active)
+        self._update_button_drag_visual_state()
+
+    def _update_button_drag_visual_state(self) -> None:
+        enabled = self._is_button_drag_enabled()
+        if enabled:
+            self.drag_mode_banner.setText(
+                "BUTTON DRAG MODE ENABLED: Playback is not allowed. "
+                "Drag a sound button with the mouse, drag over Group/Page targets, then drop on a destination button."
+            )
+            self.drag_mode_banner.setVisible(True)
+            if self.centralWidget() is not None:
+                self.centralWidget().setStyleSheet("background:#FFF9E8;")
+        else:
+            self.drag_mode_banner.setVisible(False)
+            if self.centralWidget() is not None:
+                self.centralWidget().setStyleSheet("")
 
     def _cue_slot(self, slot: SoundButtonData) -> None:
         for i, cue_slot in enumerate(self.cue_page):
@@ -2597,7 +2941,96 @@ class MainWindow(QMainWindow):
     def _slot_pct_for_player(self, player: ExternalMediaPlayer) -> int:
         if player is self.player:
             return self._player_slot_volume_pct
-        return self._player_b_slot_volume_pct
+        if player is self.player_b:
+            return self._player_b_slot_volume_pct
+        return max(0, min(100, int(self._player_slot_pct_map.get(id(player), 75))))
+
+    def _set_player_slot_pct(self, player: ExternalMediaPlayer, slot_pct: int) -> None:
+        slot_pct = max(0, min(100, int(slot_pct)))
+        if player is self.player:
+            self._player_slot_volume_pct = slot_pct
+            return
+        if player is self.player_b:
+            self._player_b_slot_volume_pct = slot_pct
+            return
+        self._player_slot_pct_map[id(player)] = slot_pct
+
+    def _mark_player_started(self, player: ExternalMediaPlayer) -> None:
+        self._player_started_map[id(player)] = time.monotonic()
+
+    def _set_player_slot_key(self, player: ExternalMediaPlayer, slot_key: Tuple[str, int, int]) -> None:
+        pid = id(player)
+        old_key = self._player_slot_key_map.get(pid)
+        if old_key is not None:
+            self._active_playing_keys.discard(old_key)
+        self._player_slot_key_map[pid] = slot_key
+        self._active_playing_keys.add(slot_key)
+
+    def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
+        pid = id(player)
+        key = self._player_slot_key_map.pop(pid, None)
+        if key is not None:
+            self._active_playing_keys.discard(key)
+
+    def _clear_all_player_slot_keys(self) -> None:
+        self._player_slot_key_map.clear()
+        self._active_playing_keys.clear()
+
+    def _is_multi_play_enabled(self) -> bool:
+        btn = self.control_buttons.get("Multi-Play")
+        return bool(btn and btn.isChecked())
+
+    def _all_active_players(self) -> List[ExternalMediaPlayer]:
+        active: List[ExternalMediaPlayer] = []
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                active.append(player)
+        return active
+
+    def _prune_multi_players(self) -> None:
+        remaining: List[ExternalMediaPlayer] = []
+        for player in self._multi_players:
+            if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                remaining.append(player)
+                continue
+            self._clear_player_slot_key(player)
+            self._player_slot_pct_map.pop(id(player), None)
+            self._player_started_map.pop(id(player), None)
+            try:
+                player.deleteLater()
+            except Exception:
+                pass
+        self._multi_players = remaining
+
+    def _enforce_multi_play_limit(self) -> bool:
+        max_allowed = max(1, int(self.max_multi_play_songs))
+        active_players = self._all_active_players()
+        if len(active_players) < max_allowed:
+            return True
+        if self.multi_play_limit_action == "disallow_more_play":
+            QMessageBox.information(
+                self,
+                "Multi-Play Limit",
+                f"Maximum Multi-Play songs reached ({max_allowed}).",
+            )
+            return False
+        oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
+        self._stop_single_player(oldest)
+        self._prune_multi_players()
+        return True
+
+    def _stop_single_player(self, player: ExternalMediaPlayer) -> None:
+        self._cancel_fade_for_player(player)
+        self._stop_player_internal(player)
+        self._clear_player_slot_key(player)
+        self._player_slot_pct_map.pop(id(player), None)
+        self._player_started_map.pop(id(player), None)
+        if player is self.player:
+            self._player_slot_volume_pct = 75
+            if self.current_playing is not None:
+                self.current_playing = None
+        elif player is self.player_b:
+            self._player_b_slot_volume_pct = 75
 
     def _set_player_volume(self, player: ExternalMediaPlayer, volume: int) -> None:
         player.setVolume(max(0, min(100, int(volume))))
@@ -2755,6 +3188,8 @@ class MainWindow(QMainWindow):
             search_double_click_action=self.search_double_click_action,
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
+            max_multi_play_songs=self.max_multi_play_songs,
+            multi_play_limit_action=self.multi_play_limit_action,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -2776,6 +3211,8 @@ class MainWindow(QMainWindow):
         self.reset_all_on_startup = dialog.reset_on_startup_checkbox.isChecked()
         self.click_playing_action = dialog.selected_click_playing_action()
         self.search_double_click_action = dialog.selected_search_double_click_action()
+        self.max_multi_play_songs = dialog.selected_max_multi_play_songs()
+        self.multi_play_limit_action = dialog.selected_multi_play_limit_action()
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
@@ -2789,10 +3226,23 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     def _toggle_pause(self) -> None:
-        if self.player.state() == ExternalMediaPlayer.PlayingState:
-            self.player.pause()
-        elif self.player.state() == ExternalMediaPlayer.PausedState:
-            self.player.play()
+        if self._is_multi_play_enabled():
+            players = self._all_active_players()
+            any_playing = any(p.state() == ExternalMediaPlayer.PlayingState for p in players)
+            any_paused = any(p.state() == ExternalMediaPlayer.PausedState for p in players)
+            if any_playing:
+                for p in players:
+                    if p.state() == ExternalMediaPlayer.PlayingState:
+                        p.pause()
+            elif any_paused:
+                for p in players:
+                    if p.state() == ExternalMediaPlayer.PausedState:
+                        p.play()
+        else:
+            if self.player.state() == ExternalMediaPlayer.PlayingState:
+                self.player.pause()
+            elif self.player.state() == ExternalMediaPlayer.PausedState:
+                self.player.play()
         self._update_pause_button_label()
 
     def _toggle_talk(self, checked: bool) -> None:
@@ -2892,6 +3342,21 @@ class MainWindow(QMainWindow):
     def _play_found_match(self, match: dict) -> None:
         self._focus_found_slot(match, play=True, flash=True)
 
+    def _go_to_current_playing_page(self) -> None:
+        if self.current_playing is None:
+            QMessageBox.information(self, "Go To Playing", "No sound is currently playing.")
+            return
+        group_key, page_index, _slot_index = self.current_playing
+        if group_key == "Q":
+            self._toggle_cue_mode(True)
+            return
+        if group_key not in GROUPS:
+            return
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        self._select_group(group_key)
+        self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
+
     def _find_sound_matches(self, query: str) -> List[dict]:
         terms = [part.casefold() for part in query.split() if part.strip()]
         if not terms:
@@ -2957,6 +3422,8 @@ class MainWindow(QMainWindow):
             self._play_slot(slot)
 
     def _toggle_cross_auto_mode(self, checked: bool) -> None:
+        if checked and self._is_multi_play_enabled():
+            checked = False
         x_btn = self.control_buttons.get("X")
         if x_btn:
             x_btn.setChecked(checked)
@@ -2967,6 +3434,49 @@ class MainWindow(QMainWindow):
                 fade_in_btn.setChecked(False)
             if fade_out_btn:
                 fade_out_btn.setChecked(False)
+
+    def _toggle_multi_play_mode(self, checked: bool) -> None:
+        multi_btn = self.control_buttons.get("Multi-Play")
+        if multi_btn:
+            multi_btn.setChecked(checked)
+        if checked:
+            self.page_playlist_enabled[self.current_group][self.current_page] = False
+            self.page_shuffle_enabled[self.current_group][self.current_page] = False
+            play_btn = self.control_buttons.get("Play List")
+            if play_btn:
+                play_btn.setChecked(False)
+            shuf_btn = self.control_buttons.get("Shuffle")
+            if shuf_btn:
+                shuf_btn.setChecked(False)
+                shuf_btn.setEnabled(False)
+            self.current_playlist_start = None
+            self._set_dirty(True)
+            x_btn = self.control_buttons.get("X")
+            if x_btn:
+                x_btn.setChecked(False)
+            self._sync_playlist_shuffle_buttons()
+
+    def _player_for_slot_key(self, slot_key: Tuple[str, int, int]) -> Optional[ExternalMediaPlayer]:
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if self._player_slot_key_map.get(id(player)) == slot_key:
+                return player
+        return None
+
+    def _stop_track_by_slot_key(self, slot_key: Tuple[str, int, int]) -> bool:
+        player = self._player_for_slot_key(slot_key)
+        if player is None:
+            return False
+        if self._is_fade_out_enabled() and player.state() in {
+            ExternalMediaPlayer.PlayingState,
+            ExternalMediaPlayer.PausedState,
+        }:
+            self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
+        else:
+            self._stop_single_player(player)
+        if self.current_playing == slot_key:
+            self.current_playing = None
+        self._refresh_sound_grid()
+        return True
 
     def _toggle_fade_in_mode(self, checked: bool) -> None:
         fade_in_btn = self.control_buttons.get("Fade In")
@@ -2988,7 +3498,7 @@ class MainWindow(QMainWindow):
 
     def _apply_talk_state_volume(self, fade: bool) -> None:
         fade_seconds = self.talk_fade_sec if fade else 0.0
-        for player in (self.player, self.player_b):
+        for player in [self.player, self.player_b, *self._multi_players]:
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._start_fade(player, target, fade_seconds, stop_on_complete=False)
@@ -2997,12 +3507,16 @@ class MainWindow(QMainWindow):
         self._hard_stop_all()
         old_player = self.player
         old_player_b = self.player_b
+        old_multi_players = list(self._multi_players)
         if not set_output_device(device_name):
             QMessageBox.warning(self, "Audio Device", "Could not switch to selected audio device.")
             return False
+        self._multi_players = []
         try:
             old_player.deleteLater()
             old_player_b.deleteLater()
+            for extra in old_multi_players:
+                extra.deleteLater()
         except Exception:
             pass
         self._init_audio_players()
@@ -3058,6 +3572,7 @@ class MainWindow(QMainWindow):
         self._pending_start_request = None
         self._pending_start_token += 1
         self._auto_transition_done = True
+        active_players = self._all_active_players()
         if self._stop_fade_armed:
             self._stop_fade_armed = False
             self._hard_stop_all()
@@ -3076,18 +3591,20 @@ class MainWindow(QMainWindow):
             self._refresh_sound_grid()
             self._update_now_playing_label("")
             return
-        if self._is_fade_out_enabled() and self.player.state() in {
-            ExternalMediaPlayer.PlayingState,
-            ExternalMediaPlayer.PausedState,
-        }:
+        if self._is_fade_out_enabled() and active_players:
             self._stop_fade_armed = True
-            self._start_fade(self.player, 0, self.fade_out_sec, stop_on_complete=True)
-            if self.player_b.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
-                self._start_fade(self.player_b, 0, self.fade_out_sec, stop_on_complete=True)
+            for player in active_players:
+                self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
             return
         self._stop_fade_armed = False
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_player_slot_keys()
+        for extra in list(self._multi_players):
+            self._stop_single_player(extra)
+        self._prune_multi_players()
+        self._player_started_map.clear()
+        self._player_slot_pct_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
         self.current_playing = None
@@ -3111,6 +3628,12 @@ class MainWindow(QMainWindow):
         self._auto_transition_done = True
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_player_slot_keys()
+        for extra in list(self._multi_players):
+            self._stop_single_player(extra)
+        self._prune_multi_players()
+        self._player_started_map.clear()
+        self._player_slot_pct_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
 
@@ -3274,7 +3797,14 @@ class MainWindow(QMainWindow):
         pause_button = self.control_buttons.get("Pause")
         if not pause_button:
             return
-        if self.player.state() == ExternalMediaPlayer.PausedState:
+        if self._is_multi_play_enabled():
+            players = self._all_active_players()
+            any_playing = any(p.state() == ExternalMediaPlayer.PlayingState for p in players)
+            any_paused = any(p.state() == ExternalMediaPlayer.PausedState for p in players)
+            paused_mode = any_paused and not any_playing
+        else:
+            paused_mode = self.player.state() == ExternalMediaPlayer.PausedState
+        if paused_mode:
             pause_button.setText("Resume")
             pause_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         else:
@@ -3299,6 +3829,9 @@ class MainWindow(QMainWindow):
     def _on_volume_changed(self, value: int) -> None:
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
         self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        for player in self._multi_players:
+            if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                player.setVolume(self._effective_slot_target_volume(self._slot_pct_for_player(player)))
         self.settings.volume = value
 
     def _reset_set_data(self) -> None:
@@ -3331,6 +3864,7 @@ class MainWindow(QMainWindow):
 
     def _new_set(self) -> None:
         self._hard_stop_all()
+        self._drag_source_key = None
         self.current_set_path = ""
         self.settings.last_set_path = ""
         self._reset_set_data()
@@ -3470,6 +4004,7 @@ class MainWindow(QMainWindow):
             return
 
         self._hard_stop_all()
+        self._drag_source_key = None
         self._reset_set_data()
         self.cue_mode = False
         cue_btn = self.control_buttons.get("Cue")
@@ -3567,6 +4102,8 @@ class MainWindow(QMainWindow):
         self.settings.click_playing_action = self.click_playing_action
         self.settings.search_double_click_action = self.search_double_click_action
         self.settings.audio_output_device = self.audio_output_device
+        self.settings.max_multi_play_songs = self.max_multi_play_songs
+        self.settings.multi_play_limit_action = self.multi_play_limit_action
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -3574,8 +4111,24 @@ class MainWindow(QMainWindow):
         self._update_page_list_item_heights()
 
     def eventFilter(self, obj, event) -> bool:
-        if obj is self.page_list.viewport() and event.type() == QEvent.Resize:
-            self._update_page_list_item_heights()
+        if obj is self.page_list.viewport():
+            if event.type() == QEvent.Resize:
+                self._update_page_list_item_heights()
+            elif event.type() == QEvent.DragEnter:
+                if self._can_accept_sound_button_drop(event.mimeData()):
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.DragMove:
+                if self._can_accept_sound_button_drop(event.mimeData()):
+                    item = self.page_list.itemAt(event.pos())
+                    row = self.page_list.row(item) if item is not None else -1
+                    if self._handle_drag_over_page(row):
+                        event.acceptProposedAction()
+                        return True
+            elif event.type() == QEvent.Drop:
+                if self._can_accept_sound_button_drop(event.mimeData()):
+                    event.acceptProposedAction()
+                    return True
         return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event) -> None:
@@ -3642,13 +4195,20 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _is_playback_in_progress(self) -> bool:
-        return self.player.state() in {
+        if self.player.state() in {
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
-        } or self.player_b.state() in {
+        }:
+            return True
+        if self.player_b.state() in {
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
-        }
+        }:
+            return True
+        for extra in self._multi_players:
+            if extra.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                return True
+        return False
 
 
 def format_time(ms: int) -> str:

@@ -79,6 +79,8 @@ class SoundButtonData:
     locked: bool = False
     marker: bool = False
     copied_to_cue: bool = False
+    load_failed: bool = False
+    volume_override_pct: Optional[int] = None
 
     @property
     def assigned(self) -> bool:
@@ -93,7 +95,8 @@ class SoundButtonData:
             return ""
         if not self.assigned:
             return ""
-        return f"{elide_text(self.title, 26)}\n{format_time(self.duration_ms)}"
+        suffix = " V" if self.volume_override_pct is not None else ""
+        return f"{elide_text(self.title, 26)}\n{format_time(self.duration_ms)}{suffix}"
 
 
 class SoundButton(QPushButton):
@@ -358,6 +361,8 @@ class MainWindow(QMainWindow):
         self._is_scrubbing = False
         self._vu_levels = [0.0, 0.0]
         self._last_ui_position_ms = -1
+        self._player_slot_volume_pct = 75
+        self._player_b_slot_volume_pct = 75
         self._track_started_at = 0.0
         self._ignore_state_changes = 0
         self._dirty = False
@@ -379,7 +384,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
-        self.player.setVolume(self.volume_slider.value())
+        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self._refresh_group_buttons()
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -1465,6 +1471,8 @@ class MainWindow(QMainWindow):
                     locked=slot.locked,
                     marker=slot.marker,
                     copied_to_cue=slot.copied_to_cue,
+                    load_failed=slot.load_failed,
+                    volume_override_pct=slot.volume_override_pct,
                 )
                 for slot in source_page
             ],
@@ -1490,6 +1498,8 @@ class MainWindow(QMainWindow):
                 locked=slot.locked,
                 marker=slot.marker,
                 copied_to_cue=slot.copied_to_cue,
+                load_failed=slot.load_failed,
+                volume_override_pct=slot.volume_override_pct,
             )
             for slot in self._copied_page_buffer["slots"]
         ]
@@ -1599,6 +1609,8 @@ class MainWindow(QMainWindow):
             lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
             lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
             lines.append(f"n{slot_index}={title}")
+            if slot.volume_override_pct is not None:
+                lines.append(f"v{slot_index}={max(0, min(100, int(slot.volume_override_pct)))}")
             lines.append(f"activity{slot_index}={'2' if slot.played else '8'}")
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
@@ -1654,6 +1666,7 @@ class MainWindow(QMainWindow):
                 title = os.path.splitext(os.path.basename(path))[0]
             duration = parse_time_string_to_ms(section.get(f"t{i}", "").strip())
             color = parse_delphi_color(section.get(f"co{i}", "").strip())
+            volume_override_pct = self._parse_volume_override_pct(section.get(f"v{i}", "").strip())
             played = activity_code == "2"
             copied = section.get(f"ci{i}", "").strip().upper() == "Y"
             slots[i - 1] = SoundButtonData(
@@ -1666,6 +1679,7 @@ class MainWindow(QMainWindow):
                 activity_code=activity_code or ("2" if played else "8"),
                 marker=marker,
                 copied_to_cue=copied,
+                volume_override_pct=volume_override_pct,
             )
         return {
             "page_name": page_name,
@@ -1686,13 +1700,22 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
-                button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}")
+                vol_icon = " V" if slot.volume_override_pct is not None else ""
+                button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{vol_icon}")
                 button.setToolTip(slot.notes.strip())
             color = self._slot_color(slot, i)
             text_color = "white" if color in {COLORS["marker"], COLORS["missing"], COLORS["copied"]} else "black"
+            has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
+            if has_volume_override:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 #FFD45A, stop:1 #FFD45A)"
+                )
+            else:
+                background = color
             button.setStyleSheet(
                 "QPushButton{"
-                f"background:{color};"
+                f"background:{background};"
                 f"color:{text_color};"
                 "font-size:10pt;font-weight:bold;border:1px solid #94B8BA;"
                 "padding:4px;"
@@ -1758,7 +1781,7 @@ class MainWindow(QMainWindow):
             return COLORS["marker"]
         if slot.locked:
             return COLORS["locked"]
-        if slot.missing:
+        if slot.missing or slot.load_failed:
             return COLORS["missing"]
         if self.current_playing == playing_key:
             return COLORS["playing"]
@@ -1779,6 +1802,9 @@ class MainWindow(QMainWindow):
         page = self._current_page_slots()
         slot = page[slot_index]
         page_created = self._is_page_created(self.current_group, self.current_page)
+        if self.current_playing == (self._view_group_key(), self.current_page, slot_index):
+            self._open_playback_volume_dialog(slot)
+            return
 
         menu = QMenu(self)
         is_unused = (not slot.assigned) and (not slot.marker) and (not slot.title.strip()) and (not slot.notes.strip())
@@ -1941,6 +1967,8 @@ class MainWindow(QMainWindow):
             locked=slot.locked,
             marker=slot.marker,
             copied_to_cue=slot.copied_to_cue,
+            load_failed=slot.load_failed,
+            volume_override_pct=slot.volume_override_pct,
         )
 
     def _edit_sound_button(self, slot_index: int) -> None:
@@ -1954,12 +1982,13 @@ class MainWindow(QMainWindow):
             file_path=slot.file_path,
             caption=slot.title,
             notes=slot.notes,
+            volume_override_pct=slot.volume_override_pct,
             start_dir=start_dir,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
-        file_path, caption, notes = dialog.values()
+        file_path, caption, notes, volume_override_pct = dialog.values()
         if not file_path:
             QMessageBox.information(self, "Edit Sound Button", "File is required.")
             return
@@ -1971,6 +2000,8 @@ class MainWindow(QMainWindow):
         slot.marker = False
         slot.played = False
         slot.activity_code = "8"
+        slot.load_failed = False
+        slot.volume_override_pct = volume_override_pct
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -2014,6 +2045,7 @@ class MainWindow(QMainWindow):
         slot.marker = False
         slot.played = False
         slot.activity_code = "8"
+        slot.load_failed = False
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -2023,6 +2055,101 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing File", f"File not found:\n{slot.file_path}")
         else:
             QMessageBox.information(self, "File Check", "Sound file exists.")
+
+    def _slot_volume_pct(self, slot: SoundButtonData) -> int:
+        if slot.volume_override_pct is None:
+            return 75
+        return max(0, min(100, int(slot.volume_override_pct)))
+
+    def _parse_volume_override_pct(self, value: str) -> Optional[int]:
+        if not value:
+            return None
+        try:
+            parsed = int(value)
+        except ValueError:
+            return None
+        return max(0, min(100, parsed))
+
+    def _open_playback_volume_dialog(self, slot: SoundButtonData) -> None:
+        if not slot.assigned or slot.marker:
+            return
+        original_override = slot.volume_override_pct
+        original_slot_pct = self._slot_volume_pct(slot)
+        is_current_slot = False
+        if self.current_playing is not None:
+            current_group, current_page, current_slot = self.current_playing
+            if current_group == self._view_group_key() and current_page == self.current_page:
+                current_slots = self._current_page_slots()
+                if 0 <= current_slot < len(current_slots) and current_slots[current_slot] is slot:
+                    is_current_slot = True
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Adjust Volume Level")
+        dialog.setModal(True)
+        dialog.resize(420, 150)
+
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        value_label = QLabel("")
+        root.addWidget(value_label)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(original_slot_pct)
+        root.addWidget(slider)
+
+        def _sync_label(value: int) -> None:
+            value_label.setText(f"Playback Volume: {value}%")
+            if is_current_slot:
+                self._player_slot_volume_pct = max(0, min(100, int(value)))
+                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+
+        _sync_label(slider.value())
+        slider.valueChanged.connect(_sync_label)
+
+        button_row = QHBoxLayout()
+        remove_btn = QPushButton("Remove Volume Level")
+        save_btn = QPushButton("Save Volume")
+        cancel_btn = QPushButton("Cancel")
+        button_row.addStretch(1)
+        button_row.addWidget(remove_btn)
+        button_row.addWidget(save_btn)
+        button_row.addWidget(cancel_btn)
+        root.addLayout(button_row)
+        committed = {"value": False}
+
+        def _remove() -> None:
+            slot.volume_override_pct = None
+            if is_current_slot:
+                self._player_slot_volume_pct = 75
+                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            committed["value"] = True
+            dialog.accept()
+
+        def _save() -> None:
+            value = max(0, min(100, slider.value()))
+            slot.volume_override_pct = value
+            if is_current_slot:
+                self._player_slot_volume_pct = value
+                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            committed["value"] = True
+            dialog.accept()
+
+        remove_btn.clicked.connect(_remove)
+        save_btn.clicked.connect(_save)
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec_()
+        if not committed["value"]:
+            slot.volume_override_pct = original_override
+            if is_current_slot:
+                self._player_slot_volume_pct = original_slot_pct
+                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
 
     def _play_slot(self, slot_index: int) -> None:
         page = self._current_page_slots()
@@ -2084,9 +2211,9 @@ class MainWindow(QMainWindow):
         self.remaining_time.setText("00:00")
         self.progress_label.setText("0%")
         self._manual_stop_requested = False
-        target_volume = self._effective_master_volume()
         self._cancel_fade_for_player(self.player)
         self._cancel_fade_for_player(self.player_b)
+        slot_pct = self._slot_volume_pct(slot)
 
         if cross_mode:
             self._stop_player_internal(new_player)
@@ -2095,6 +2222,11 @@ class MainWindow(QMainWindow):
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
                 return
+            if new_player is self.player:
+                self._player_slot_volume_pct = slot_pct
+            else:
+                self._player_b_slot_volume_pct = slot_pct
+            target_volume = self._effective_slot_target_volume(slot_pct)
             new_player.setVolume(0)
             new_player.play()
             fade_seconds = self.cross_fade_sec
@@ -2112,6 +2244,8 @@ class MainWindow(QMainWindow):
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
                 return
+            self._player_slot_volume_pct = slot_pct
+            target_volume = self._effective_slot_target_volume(slot_pct)
             if fade_in_on:
                 self.player.setVolume(0)
                 self.player.play()
@@ -2127,8 +2261,10 @@ class MainWindow(QMainWindow):
     def _try_load_media(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> bool:
         try:
             player.setMedia(slot.file_path, dsp_config=self._dsp_config)
+            slot.load_failed = False
             return True
         except Exception as exc:
+            slot.load_failed = True
             self._stop_player_internal(player)
             title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
             QMessageBox.warning(
@@ -2402,6 +2538,7 @@ class MainWindow(QMainWindow):
                     played=slot.played,
                     activity_code=slot.activity_code,
                     copied_to_cue=True,
+                    volume_override_pct=slot.volume_override_pct,
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)
@@ -2452,6 +2589,15 @@ class MainWindow(QMainWindow):
         if self.talk_active:
             base = int(base * (self.talk_volume_level / 100.0))
         return max(0, min(100, base))
+
+    def _effective_slot_target_volume(self, slot_volume_pct: int) -> int:
+        master = self._effective_master_volume()
+        return max(0, min(100, int(master * (max(0, min(100, slot_volume_pct)) / 100.0))))
+
+    def _slot_pct_for_player(self, player: ExternalMediaPlayer) -> int:
+        if player is self.player:
+            return self._player_slot_volume_pct
+        return self._player_b_slot_volume_pct
 
     def _set_player_volume(self, player: ExternalMediaPlayer, volume: int) -> None:
         player.setVolume(max(0, min(100, int(volume))))
@@ -2579,6 +2725,10 @@ class MainWindow(QMainWindow):
         except TypeError:
             pass
         self.player, self.player_b = self.player_b, self.player
+        self._player_slot_volume_pct, self._player_b_slot_volume_pct = (
+            self._player_b_slot_volume_pct,
+            self._player_slot_volume_pct,
+        )
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
@@ -2837,10 +2987,10 @@ class MainWindow(QMainWindow):
                 x_btn.setChecked(False)
 
     def _apply_talk_state_volume(self, fade: bool) -> None:
-        target = self._effective_master_volume()
         fade_seconds = self.talk_fade_sec if fade else 0.0
         for player in (self.player, self.player_b):
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._start_fade(player, target, fade_seconds, stop_on_complete=False)
 
     def _switch_audio_device(self, device_name: str) -> bool:
@@ -2856,8 +3006,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._init_audio_players()
-        self.player.setVolume(self._effective_master_volume())
-        self.player_b.setVolume(self._effective_master_volume())
+        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self.current_playing = None
         self.current_duration_ms = 0
         self.seek_slider.setRange(0, 0)
@@ -2911,6 +3061,8 @@ class MainWindow(QMainWindow):
         if self._stop_fade_armed:
             self._stop_fade_armed = False
             self._hard_stop_all()
+            self._player_slot_volume_pct = 75
+            self._player_b_slot_volume_pct = 75
             self.current_playing = None
             self.current_playlist_start = None
             self.current_duration_ms = 0
@@ -2936,6 +3088,8 @@ class MainWindow(QMainWindow):
         self._stop_fade_armed = False
         self.player.stop()
         self.player_b.stop()
+        self._player_slot_volume_pct = 75
+        self._player_b_slot_volume_pct = 75
         self.current_playing = None
         self.current_playlist_start = None
         self.current_duration_ms = 0
@@ -2957,6 +3111,8 @@ class MainWindow(QMainWindow):
         self._auto_transition_done = True
         self.player.stop()
         self.player_b.stop()
+        self._player_slot_volume_pct = 75
+        self._player_b_slot_volume_pct = 75
 
     def _play_next(self) -> None:
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
@@ -3141,9 +3297,8 @@ class MainWindow(QMainWindow):
             self.progress_label.setText(f"{progress}%")
 
     def _on_volume_changed(self, value: int) -> None:
-        target = self._effective_master_volume()
-        self.player.setVolume(target)
-        self.player_b.setVolume(target)
+        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self.settings.volume = value
 
     def _reset_set_data(self) -> None:
@@ -3271,6 +3426,8 @@ class MainWindow(QMainWindow):
                         lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
                         lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
                         lines.append(f"n{slot_index}={title}")
+                        if slot.volume_override_pct is not None:
+                            lines.append(f"v{slot_index}={max(0, min(100, int(slot.volume_override_pct)))}")
                         lines.append(f"activity{slot_index}={'2' if slot.played else '8'}")
                         lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
                         if slot.copied_to_cue:
@@ -3337,6 +3494,7 @@ class MainWindow(QMainWindow):
                         activity_code=src.activity_code,
                         marker=src.marker,
                         copied_to_cue=src.copied_to_cue,
+                        volume_override_pct=src.volume_override_pct,
                     )
 
         self.current_set_path = file_path

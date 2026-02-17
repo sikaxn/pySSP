@@ -47,3 +47,30 @@ def test_load_set_activity_marks_played(tmp_path):
     result = load_set_file(str(set_path))
     assert result.pages["A"][0][0].played is True
     assert result.pages["A"][0][1].played is False
+
+
+def test_load_set_volume_override(tmp_path):
+    set_path = tmp_path / "volume.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "v1=67",
+                "c2=Song Two",
+                "s2=C:\\\\Music\\\\song2.mp3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    assert result.pages["A"][0][0].volume_override_pct == 67
+    assert result.pages["A"][0][1].volume_override_pct is None

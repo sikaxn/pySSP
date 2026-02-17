@@ -25,6 +25,7 @@ class SetSlotData:
     played: bool = False
     activity_code: str = ""
     marker: bool = False
+    volume_override_pct: Optional[int] = None
 
 
 @dataclass
@@ -112,6 +113,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 played=played,
                 activity_code=activity_code,
                 marker=marker,
+                volume_override_pct=volume_override_pct,
             )
             loaded_slots += 1
 
@@ -209,3 +211,13 @@ def _is_played_activity(value: str) -> bool:
     # Sports Sounds Pro writes activity codes per slot.
     # In observed .set files, "2" corresponds to a previously played (red) slot.
     return value.strip() == "2"
+
+
+def _parse_volume_pct(value: str) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return max(0, min(100, parsed))

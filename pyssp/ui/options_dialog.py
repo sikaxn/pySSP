@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import List, Optional
+from urllib.parse import urlparse
 
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -53,6 +54,9 @@ class OptionsDialog(QDialog):
         available_audio_devices: List[str],
         max_multi_play_songs: int,
         multi_play_limit_action: str,
+        web_remote_enabled: bool,
+        web_remote_port: int,
+        web_remote_url: str,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -130,6 +134,15 @@ class OptionsDialog(QDialog):
                 talk_blink_button=talk_blink_button,
                 talk_shift_accelerator=talk_shift_accelerator,
                 hotkeys_ignore_talk_level=hotkeys_ignore_talk_level,
+            ),
+        )
+        self._add_page(
+            "Web Remote",
+            self.style().standardIcon(QStyle.SP_BrowserReload),
+            self._build_web_remote_page(
+                web_remote_enabled=web_remote_enabled,
+                web_remote_port=web_remote_port,
+                web_remote_url=web_remote_url,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -331,6 +344,36 @@ class OptionsDialog(QDialog):
         self.hotkeys_ignore_checkbox.setChecked(hotkeys_ignore_talk_level)
         form.addRow("Hot Keys:", self.hotkeys_ignore_checkbox)
         return page
+
+    def _build_web_remote_page(self, web_remote_enabled: bool, web_remote_port: int, web_remote_url: str) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        self.web_remote_enabled_checkbox = QCheckBox("Enable Web Remote (Flask API)")
+        self.web_remote_enabled_checkbox.setChecked(web_remote_enabled)
+        form.addRow("Web Remote:", self.web_remote_enabled_checkbox)
+        self.web_remote_port_spin = QSpinBox()
+        self.web_remote_port_spin.setRange(1, 65535)
+        self.web_remote_port_spin.setValue(max(1, min(65535, int(web_remote_port))))
+        form.addRow("Port:", self.web_remote_port_spin)
+        parsed = urlparse(web_remote_url.strip() or "http://127.0.0.1:5050/")
+        self._web_remote_url_scheme = parsed.scheme or "http"
+        self._web_remote_url_host = parsed.hostname or "127.0.0.1"
+        self.web_remote_url_value = QLabel("")
+        self.web_remote_url_value.setOpenExternalLinks(True)
+        self.web_remote_url_value.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.web_remote_url_value.setWordWrap(True)
+        form.addRow("Open URL:", self.web_remote_url_value)
+        self._set_web_remote_url_label(self._build_web_remote_url_text(self.web_remote_port_spin.value()))
+        self.web_remote_port_spin.valueChanged.connect(
+            lambda value: self._set_web_remote_url_label(self._build_web_remote_url_text(int(value)))
+        )
+        return page
+
+    def _build_web_remote_url_text(self, port: int) -> str:
+        return f"{self._web_remote_url_scheme}://{self._web_remote_url_host}:{port}/"
+
+    def _set_web_remote_url_label(self, url: str) -> None:
+        self.web_remote_url_value.setText(f'<a href="{url}">{url}</a>')
 
     def selected_click_playing_action(self) -> str:
         if self.playing_click_stop_radio.isChecked():

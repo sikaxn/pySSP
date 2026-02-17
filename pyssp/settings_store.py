@@ -37,6 +37,8 @@ class AppSettings:
     audio_output_device: str = ""
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
+    web_remote_enabled: bool = False
+    web_remote_port: int = 5050
 
 
 def get_settings_path() -> Path:
@@ -92,6 +94,8 @@ def save_settings(settings: AppSettings) -> None:
         "audio_output_device": settings.audio_output_device,
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
+        "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
+        "web_remote_port": str(settings.web_remote_port),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -120,6 +124,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
+    web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -148,6 +153,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         audio_output_device=str(section.get("audio_output_device", "")),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,
+        web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
+        web_remote_port=web_remote_port,
     )
 
 

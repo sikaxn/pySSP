@@ -3,12 +3,17 @@ from __future__ import annotations
 import os
 import time
 import random
+import queue
+import socket
+import ipaddress
+import subprocess
+import re
 import configparser
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData
+from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread
 from PyQt5.QtGui import QColor, QTextDocument, QDrag
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
@@ -47,6 +52,7 @@ from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.search_window import SearchWindow
+from pyssp.web_remote import WebRemoteServer
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -358,6 +364,31 @@ class TextFileViewerWindow(QDialog):
         self.viewer.setPlainText(text)
 
 
+class MainThreadExecutor(QObject):
+    _execute = pyqtSignal(object, object)
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._execute.connect(self._on_execute, Qt.QueuedConnection)
+
+    @pyqtSlot(object, object)
+    def _on_execute(self, fn, result_queue) -> None:
+        try:
+            result_queue.put((True, fn()))
+        except Exception as exc:
+            result_queue.put((False, exc))
+
+    def call(self, fn, timeout: float = 8.0):
+        if QThread.currentThread() == self.thread():
+            return fn()
+        result_queue: "queue.Queue[Tuple[bool, object]]" = queue.Queue(maxsize=1)
+        self._execute.emit(fn, result_queue)
+        ok, value = result_queue.get(timeout=timeout)
+        if ok:
+            return value
+        raise value
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -402,6 +433,11 @@ class MainWindow(QMainWindow):
         self.audio_output_device = self.settings.audio_output_device
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
+        self.web_remote_enabled = self.settings.web_remote_enabled
+        self.web_remote_host = "0.0.0.0"
+        self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
+        self._web_remote_server: Optional[WebRemoteServer] = None
+        self._main_thread_executor = MainThreadExecutor(self)
 
         set_output_device(self.audio_output_device)
         self._init_audio_players()
@@ -510,6 +546,7 @@ class MainWindow(QMainWindow):
         if self.reset_all_on_startup:
             self._reset_all_played_state()
             self._refresh_sound_grid()
+        self._apply_web_remote_state()
 
     def _build_ui(self) -> None:
         self._build_menu_bar()
@@ -2468,6 +2505,14 @@ class MainWindow(QMainWindow):
         group_key = self._view_group_key()
         playing_key = (group_key, self.current_page, slot_index)
         self._prune_multi_players()
+        force_single_play = False
+        if (not self._is_multi_play_enabled()) and self._multi_players:
+            # Multi-Play was previously active; a normal click should collapse playback
+            # to the selected track only.
+            force_single_play = True
+            for extra in list(self._multi_players):
+                self._stop_single_player(extra)
+            self._prune_multi_players()
         if self._is_multi_play_enabled() and playing_key in self._active_playing_keys:
             self._stop_track_by_slot_key(playing_key)
             return
@@ -2479,7 +2524,7 @@ class MainWindow(QMainWindow):
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
-            if self.click_playing_action == "stop_it":
+            if self.click_playing_action == "stop_it" and not force_single_play:
                 self._stop_playback()
                 return
         # Invalidate any previously scheduled delayed start to avoid stale restarts.
@@ -3245,6 +3290,9 @@ class MainWindow(QMainWindow):
             available_audio_devices=available_devices,
             max_multi_play_songs=self.max_multi_play_songs,
             multi_play_limit_action=self.multi_play_limit_action,
+            web_remote_enabled=self.web_remote_enabled,
+            web_remote_port=self.web_remote_port,
+            web_remote_url=self._web_remote_open_url(),
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3268,6 +3316,8 @@ class MainWindow(QMainWindow):
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.max_multi_play_songs = dialog.selected_max_multi_play_songs()
         self.multi_play_limit_action = dialog.selected_multi_play_limit_action()
+        self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
+        self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
@@ -3278,7 +3328,557 @@ class MainWindow(QMainWindow):
         self._update_talk_button_visual()
         self._refresh_group_buttons()
         self._refresh_sound_grid()
+        self._apply_web_remote_state()
         self._save_settings()
+
+    def _api_success(self, result: Optional[dict] = None, status: int = 200) -> dict:
+        return {"ok": True, "status": status, "result": result or {}}
+
+    def _api_error(self, code: str, message: str, status: int = 400) -> dict:
+        return {"ok": False, "status": status, "error": {"code": code, "message": message}}
+
+    def _parse_api_mode(self, raw: str) -> Optional[str]:
+        value = str(raw or "").strip().lower()
+        if value in {"enable", "on", "true", "1"}:
+            return "enable"
+        if value in {"disable", "off", "false", "0"}:
+            return "disable"
+        if value in {"toggle", "flip"}:
+            return "toggle"
+        return None
+
+    def _parse_button_id(self, raw: str, require_slot: bool) -> Tuple[Optional[str], Optional[int], Optional[int], Optional[dict]]:
+        parts = [segment for segment in str(raw or "").strip().split("-") if segment]
+        if not parts:
+            return None, None, None, self._api_error("invalid_id", "Missing target id.")
+        if len(parts) > 3:
+            return None, None, None, self._api_error("invalid_id", "Target id can be group, group-page, or group-page-button.")
+
+        group = parts[0].upper()
+        if group not in GROUPS and group != "Q":
+            return None, None, None, self._api_error("invalid_group", f"Unknown group '{parts[0]}'.")
+
+        page_index: Optional[int] = None
+        slot_index: Optional[int] = None
+        if len(parts) >= 2:
+            try:
+                page_number = int(parts[1])
+            except ValueError:
+                return None, None, None, self._api_error("invalid_page", f"Invalid page value '{parts[1]}'.")
+            if group == "Q":
+                if page_number != 1:
+                    return None, None, None, self._api_error("invalid_page", "Cue group only supports page 1.")
+                page_index = 0
+            else:
+                if page_number < 1 or page_number > PAGE_COUNT:
+                    return None, None, None, self._api_error("invalid_page", f"Page must be 1..{PAGE_COUNT}.")
+                page_index = page_number - 1
+        elif group == "Q":
+            page_index = 0
+
+        if len(parts) == 3:
+            try:
+                slot_number = int(parts[2])
+            except ValueError:
+                return None, None, None, self._api_error("invalid_button", f"Invalid button value '{parts[2]}'.")
+            if slot_number < 1 or slot_number > SLOTS_PER_PAGE:
+                return None, None, None, self._api_error("invalid_button", f"Button must be 1..{SLOTS_PER_PAGE}.")
+            slot_index = slot_number - 1
+
+        if require_slot and (page_index is None or slot_index is None):
+            return None, None, None, self._api_error(
+                "invalid_id",
+                "This endpoint requires group-page-button format, e.g. a-1-1.",
+            )
+        return group, page_index, slot_index, None
+
+    def _slot_for_location(self, group: str, page_index: int, slot_index: int) -> SoundButtonData:
+        if group == "Q":
+            return self.cue_page[slot_index]
+        return self.data[group][page_index][slot_index]
+
+    def _api_slot_state(self, group: str, page_index: int, slot_index: int) -> dict:
+        slot = self._slot_for_location(group, page_index, slot_index)
+        key = (group, page_index, slot_index)
+        return {
+            "button_id": self._format_button_key(key).lower(),
+            "group": group,
+            "page": page_index + 1,
+            "button": slot_index + 1,
+            "title": slot.title,
+            "file_path": slot.file_path,
+            "assigned": slot.assigned,
+            "locked": slot.locked,
+            "marker": slot.marker,
+            "missing": slot.missing,
+            "played": slot.played,
+            "highlighted": slot.highlighted,
+            "is_playing": key in self._active_playing_keys,
+        }
+
+    def _api_page_state(self, group: str, page_index: int) -> dict:
+        page = self.cue_page if group == "Q" else self.data[group][page_index]
+        assigned = sum(1 for slot in page if slot.assigned and not slot.marker)
+        played = sum(1 for slot in page if slot.assigned and not slot.marker and slot.played)
+        playable = sum(1 for slot in page if slot.assigned and not slot.marker and not slot.locked and not slot.missing)
+        if group == "Q":
+            playlist_enabled = False
+            shuffle_enabled = False
+        else:
+            playlist_enabled = self.page_playlist_enabled[group][page_index]
+            shuffle_enabled = self.page_shuffle_enabled[group][page_index]
+        return {
+            "group": group,
+            "page": page_index + 1,
+            "assigned_count": assigned,
+            "played_count": played,
+            "playable_count": playable,
+            "playlist_enabled": playlist_enabled,
+            "shuffle_enabled": shuffle_enabled,
+            "is_current": (self._view_group_key() == group and self.current_page == page_index),
+        }
+
+    def _api_page_buttons(self, group: str, page_index: int) -> List[dict]:
+        page = self.cue_page if group == "Q" else self.data[group][page_index]
+        output: List[dict] = []
+        for idx, slot in enumerate(page):
+            key = (group, page_index, idx)
+            output.append(
+                {
+                    "button_id": self._format_button_key(key).lower(),
+                    "button": idx + 1,
+                    "row": (idx // GRID_COLS) + 1,
+                    "col": (idx % GRID_COLS) + 1,
+                    "title": self._build_now_playing_text(slot) if slot.assigned else "",
+                    "assigned": slot.assigned,
+                    "locked": slot.locked,
+                    "marker": slot.marker,
+                    "missing": slot.missing,
+                    "played": slot.played,
+                    "is_playing": key in self._active_playing_keys,
+                }
+            )
+        return output
+
+    def _slot_for_key(self, slot_key: Tuple[str, int, int]) -> Optional[SoundButtonData]:
+        group, page_index, slot_index = slot_key
+        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+            return None
+        if group == "Q":
+            return self.cue_page[slot_index]
+        if group not in self.data:
+            return None
+        if page_index < 0 or page_index >= PAGE_COUNT:
+            return None
+        return self.data[group][page_index][slot_index]
+
+    def _api_player_state_name(self, player: ExternalMediaPlayer) -> str:
+        state = player.state()
+        if state == ExternalMediaPlayer.PlayingState:
+            return "playing"
+        if state == ExternalMediaPlayer.PausedState:
+            return "paused"
+        return "stopped"
+
+    def _api_playing_tracks(self) -> List[dict]:
+        tracks: List[dict] = []
+        for player in [self.player, self.player_b, *self._multi_players]:
+            player_state = player.state()
+            if player_state not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                continue
+            slot_key = self._player_slot_key_map.get(id(player))
+            if slot_key is None:
+                continue
+            slot = self._slot_for_key(slot_key)
+            if slot is None:
+                continue
+            duration_ms = max(0, int(player.duration()))
+            position_ms = max(0, int(player.position()))
+            remaining_ms = max(0, duration_ms - position_ms)
+            tracks.append(
+                {
+                    "button_id": self._format_button_key(slot_key).lower(),
+                    "title": self._build_now_playing_text(slot),
+                    "file_path": slot.file_path,
+                    "group": slot_key[0],
+                    "page": slot_key[1] + 1,
+                    "button": slot_key[2] + 1,
+                    "state": self._api_player_state_name(player),
+                    "position_ms": position_ms,
+                    "duration_ms": duration_ms,
+                    "remaining_ms": remaining_ms,
+                    "position": format_clock_time(position_ms),
+                    "duration": format_clock_time(duration_ms),
+                    "remaining": format_clock_time(remaining_ms),
+                }
+            )
+        tracks.sort(key=lambda item: item["button_id"])
+        return tracks
+
+    def _api_state(self) -> dict:
+        current_group = self._view_group_key()
+        current_page = self.current_page
+        playing_tracks = self._api_playing_tracks()
+        return {
+            "current_group": current_group,
+            "current_page": current_page + 1,
+            "cue_mode": self.cue_mode,
+            "talk_active": self.talk_active,
+            "multi_play_enabled": self._is_multi_play_enabled(),
+            "fade_in_enabled": self._is_fade_in_enabled(),
+            "fade_out_enabled": self._is_fade_out_enabled(),
+            "crossfade_enabled": self._is_cross_fade_enabled(),
+            "playlist_enabled": False if self.cue_mode else self.page_playlist_enabled[self.current_group][self.current_page],
+            "shuffle_enabled": False if self.cue_mode else self.page_shuffle_enabled[self.current_group][self.current_page],
+            "is_playing": bool(self._all_active_players()),
+            "playing_buttons": [self._format_button_key(k).lower() for k in sorted(self._active_playing_keys)],
+            "current_playing": self._format_button_key(self.current_playing).lower() if self.current_playing else None,
+            "playing_tracks": playing_tracks,
+            "web_remote_url": self._web_remote_open_url(),
+        }
+
+    def _resolve_local_ip(self) -> str:
+        candidates: List[str] = []
+
+        # Primary source on Windows/LAN/offline: parse ipconfig output.
+        try:
+            proc = subprocess.run(
+                ["ipconfig"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=2.0,
+                check=False,
+            )
+            text = proc.stdout or ""
+            for line in text.splitlines():
+                if "IPv4" not in line:
+                    continue
+                match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
+                if match:
+                    candidates.append(match.group(1))
+        except Exception:
+            pass
+
+        # Fallback: local resolver, still offline-safe.
+        try:
+            infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+            for info in infos:
+                value = info[4][0]
+                if value:
+                    candidates.append(value)
+        except Exception:
+            pass
+
+        seen = set()
+        filtered: List[str] = []
+        for value in candidates:
+            if value in seen:
+                continue
+            seen.add(value)
+            try:
+                ip = ipaddress.ip_address(value)
+                if not isinstance(ip, ipaddress.IPv4Address):
+                    continue
+                if ip.is_loopback or ip.is_link_local:
+                    continue
+                filtered.append(value)
+            except ValueError:
+                continue
+
+        for value in filtered:
+            try:
+                if ipaddress.ip_address(value).is_private:
+                    return value
+            except ValueError:
+                continue
+        if filtered:
+            return filtered[0]
+        return "127.0.0.1"
+
+    def _web_remote_open_url(self) -> str:
+        host = self._resolve_local_ip()
+        return f"http://{host}:{self.web_remote_port}/"
+
+    def _api_select_location(self, group: str, page_index: Optional[int]) -> None:
+        if group == "Q":
+            if not self.cue_mode:
+                self._toggle_cue_mode(True)
+            self.current_page = 0
+            self._refresh_page_list()
+            self._refresh_sound_grid()
+            self._update_group_status()
+            self._update_page_status()
+            return
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        if self.current_group != group:
+            self._select_group(group)
+        if page_index is not None and self.current_page != page_index:
+            self._select_page(page_index)
+
+    def _reset_current_page_state_no_prompt(self) -> None:
+        page = self._current_page_slots()
+        for slot in page:
+            slot.played = False
+            if slot.assigned:
+                slot.activity_code = "8"
+        self.current_playlist_start = None
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+
+    def _force_stop_playback(self) -> None:
+        self._manual_stop_requested = True
+        self._stop_fade_armed = False
+        self._hard_stop_all()
+        self.current_playing = None
+        self.current_playlist_start = None
+        self.current_duration_ms = 0
+        self._last_ui_position_ms = -1
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
+        self.progress_label.setText("0%")
+        self.seek_slider.setValue(0)
+        self._vu_levels = [0.0, 0.0]
+        self._refresh_sound_grid()
+        self._update_now_playing_label("")
+        self._update_pause_button_label()
+
+    def _apply_web_remote_state(self) -> None:
+        if not self.web_remote_enabled:
+            self._stop_web_remote_service()
+            return
+        if self._web_remote_server is not None and self._web_remote_server.is_running:
+            same_host = self._web_remote_server.host == self.web_remote_host
+            same_port = int(self._web_remote_server.port) == int(self.web_remote_port)
+            if same_host and same_port:
+                return
+            self._stop_web_remote_service()
+        self._start_web_remote_service()
+
+    def _start_web_remote_service(self) -> None:
+        if self._web_remote_server is not None and self._web_remote_server.is_running:
+            return
+        try:
+            self._web_remote_server = WebRemoteServer(
+                dispatch=self._dispatch_web_remote_command_threadsafe,
+                host=self.web_remote_host,
+                port=self.web_remote_port,
+            )
+            self._web_remote_server.start()
+        except Exception as exc:
+            self.web_remote_enabled = False
+            self._web_remote_server = None
+            QMessageBox.warning(self, "Web Remote", f"Could not start Web Remote service:\n{exc}")
+
+    def _stop_web_remote_service(self) -> None:
+        server = self._web_remote_server
+        self._web_remote_server = None
+        if server is None:
+            return
+        try:
+            server.stop()
+        except Exception:
+            pass
+
+    def _dispatch_web_remote_command_threadsafe(self, command: str, params: dict) -> dict:
+        try:
+            return self._main_thread_executor.call(lambda: self._handle_web_remote_command(command, params))
+        except queue.Empty:
+            return self._api_error("timeout", "Timed out waiting for UI thread.", status=504)
+        except Exception as exc:
+            return self._api_error("internal_error", str(exc), status=500)
+
+    def _handle_web_remote_command(self, command: str, params: dict) -> dict:
+        cmd = str(command or "").strip().lower()
+        if cmd == "health":
+            return self._api_success({"service": "web-remote", "state": self._api_state()})
+        if cmd == "query_all":
+            return self._api_success(self._api_state())
+        if cmd == "query_button":
+            group, page_index, slot_index, error = self._parse_button_id(params.get("button_id", ""), require_slot=True)
+            if error:
+                return error
+            return self._api_success(self._api_slot_state(group, page_index, slot_index))
+        if cmd == "query_pagegroup":
+            group = str(params.get("group_id", "")).strip().upper()
+            if group not in GROUPS and group != "Q":
+                return self._api_error("invalid_group", f"Unknown group '{group}'.")
+            if group == "Q":
+                return self._api_success({"group": "Q", "pages": [self._api_page_state("Q", 0)]})
+            pages = [self._api_page_state(group, idx) for idx in range(PAGE_COUNT)]
+            return self._api_success({"group": group, "pages": pages})
+        if cmd == "query_page":
+            group, page_index, _slot_index, error = self._parse_button_id(params.get("page_id", ""), require_slot=False)
+            if error:
+                return error
+            if page_index is None:
+                return self._api_error("invalid_page", "Page query requires group-page format, e.g. a-1.")
+            page = self._api_page_state(group, page_index)
+            page["buttons"] = self._api_page_buttons(group, page_index)
+            return self._api_success(page)
+
+        if cmd == "goto":
+            group, page_index, slot_index, error = self._parse_button_id(params.get("target", ""), require_slot=False)
+            if error:
+                return error
+            self._api_select_location(group, page_index)
+            if slot_index is not None:
+                self.sound_buttons[slot_index].setFocus()
+                self._on_sound_button_hover(slot_index)
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "play":
+            group, page_index, slot_index, error = self._parse_button_id(params.get("button_id", ""), require_slot=True)
+            if error:
+                return error
+            self._api_select_location(group, page_index)
+            slot = self._slot_for_location(group, page_index, slot_index)
+            if slot.locked:
+                return self._api_error("locked", "Button is locked.", status=409)
+            if slot.marker:
+                return self._api_error("marker", "Button is a marker and cannot be played.", status=409)
+            if not slot.assigned:
+                return self._api_error("empty", "Button has no assigned sound.", status=409)
+            if slot.missing:
+                return self._api_error("missing", "Sound file is missing.", status=409)
+            self._play_slot(slot_index)
+            pending = self._pending_start_request == (group, page_index, slot_index)
+            return self._api_success(
+                {
+                    "button": self._api_slot_state(group, page_index, slot_index),
+                    "pending_start": pending,
+                    "state": self._api_state(),
+                }
+            )
+
+        if cmd == "pause":
+            players = self._all_active_players()
+            if not players:
+                return self._api_error("not_playing", "No active playback to pause.", status=409)
+            changed = False
+            for player in players:
+                if player.state() == ExternalMediaPlayer.PlayingState:
+                    player.pause()
+                    changed = True
+            if not changed:
+                return self._api_error("already_paused", "Playback is already paused.", status=409)
+            self._update_pause_button_label()
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "resume":
+            players = self._all_active_players()
+            if not players:
+                return self._api_error("not_paused", "No paused playback to resume.", status=409)
+            changed = False
+            for player in players:
+                if player.state() == ExternalMediaPlayer.PausedState:
+                    player.play()
+                    changed = True
+            if not changed:
+                return self._api_error("already_playing", "Playback is already playing.", status=409)
+            self._update_pause_button_label()
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "stop":
+            self._stop_playback()
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "forcestop":
+            self._force_stop_playback()
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "rapidfire":
+            slot_index = self._random_unplayed_slot_on_current_page()
+            if slot_index is None:
+                return self._api_error("no_candidate", "No unplayed button is available on the current page.", status=409)
+            self._play_slot(slot_index)
+            key = (self._view_group_key(), self.current_page, slot_index)
+            return self._api_success({"button": self._api_slot_state(*key), "state": self._api_state()})
+
+        if cmd == "playnext":
+            if not self._all_active_players():
+                return self._api_error("not_playing", "Cannot play next when nothing is currently playing.", status=409)
+            playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+            if playlist_enabled:
+                next_slot = self._next_playlist_slot()
+            else:
+                next_slot = self._next_unplayed_slot_on_current_page()
+            if next_slot is None:
+                return self._api_error("no_next", "No next track is available (likely all played).", status=409)
+            self._play_slot(next_slot)
+            return self._api_success({"state": self._api_state()})
+
+        if cmd in {"talk", "playlist", "playlist_shuffle", "multiplay"}:
+            mode = self._parse_api_mode(params.get("mode", ""))
+            if mode is None:
+                return self._api_error("invalid_mode", "Mode must be enable, disable, or toggle.")
+            if cmd == "talk":
+                new_value = (not self.talk_active) if mode == "toggle" else (mode == "enable")
+                self._toggle_talk(new_value)
+                return self._api_success({"talk_active": self.talk_active, "state": self._api_state()})
+            if cmd == "playlist":
+                if self.cue_mode and mode == "enable":
+                    return self._api_error("invalid_state", "Playlist cannot be enabled in Cue mode.", status=409)
+                current = self.page_playlist_enabled[self.current_group][self.current_page]
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_playlist_mode(new_value)
+                actual = self.page_playlist_enabled[self.current_group][self.current_page] if not self.cue_mode else False
+                return self._api_success({"playlist_enabled": actual, "state": self._api_state()})
+            if cmd == "playlist_shuffle":
+                if not self.page_playlist_enabled[self.current_group][self.current_page]:
+                    return self._api_error("playlist_required", "Enable playlist mode before shuffle.", status=409)
+                current = self.page_shuffle_enabled[self.current_group][self.current_page]
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_shuffle_mode(new_value)
+                return self._api_success(
+                    {"shuffle_enabled": self.page_shuffle_enabled[self.current_group][self.current_page], "state": self._api_state()}
+                )
+            if cmd == "multiplay":
+                current = self._is_multi_play_enabled()
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_multi_play_mode(new_value)
+                return self._api_success({"multi_play_enabled": self._is_multi_play_enabled(), "state": self._api_state()})
+
+        if cmd == "fade":
+            kind = str(params.get("kind", "")).strip().lower()
+            mode = self._parse_api_mode(params.get("mode", ""))
+            if mode is None:
+                return self._api_error("invalid_mode", "Mode must be enable, disable, or toggle.")
+            if kind == "fadein":
+                current = self._is_fade_in_enabled()
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_fade_in_mode(new_value)
+            elif kind == "fadeout":
+                current = self._is_fade_out_enabled()
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_fade_out_mode(new_value)
+            elif kind == "crossfade":
+                current = self._is_cross_fade_enabled()
+                new_value = (not current) if mode == "toggle" else (mode == "enable")
+                self._toggle_cross_auto_mode(new_value)
+            else:
+                return self._api_error("invalid_fade", "Fade type must be fadein, fadeout, or crossfade.")
+            return self._api_success({"state": self._api_state()})
+
+        if cmd == "resetpage":
+            scope = str(params.get("scope", "")).strip().lower()
+            if scope == "current":
+                self._stop_playback()
+                self._reset_current_page_state_no_prompt()
+                return self._api_success({"state": self._api_state()})
+            if scope == "all":
+                self._stop_playback()
+                self._reset_all_played_state()
+                self.current_playlist_start = None
+                self._set_dirty(True)
+                self._refresh_sound_grid()
+                return self._api_success({"state": self._api_state()})
+            return self._api_error("invalid_scope", "Scope must be current or all.")
+
+        return self._api_error("unknown_command", f"Unknown command '{command}'.", status=404)
 
     def _toggle_pause(self) -> None:
         if self._is_multi_play_enabled():
@@ -4159,6 +4759,8 @@ class MainWindow(QMainWindow):
         self.settings.audio_output_device = self.audio_output_device
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
+        self.settings.web_remote_enabled = self.web_remote_enabled
+        self.settings.web_remote_port = self.web_remote_port
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -4246,6 +4848,7 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
         self._hard_stop_all()
+        self._stop_web_remote_service()
         self._save_settings()
         super().closeEvent(event)
 

@@ -46,3 +46,4 @@ Note: playback uses `pygame.mixer`.
   - Black: place marker
   - Blue: copied to cue
 - Basic playback with elapsed/remaining/total timers
+- Optional Flask-based Web Remote API + browser control page with clickable groups/pages/buttons (configurable port + LAN URL in Options; see `apidocs.md`)

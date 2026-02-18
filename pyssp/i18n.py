@@ -136,6 +136,7 @@ _TRANSLATIONS = {
         "About": "关于",
         "Help": "帮助",
         "Register": "注册",
+        "pySSP is free software. No registration is required.": "这是免费软件，如果你花了钱，请邮件piracy@studenttechsupport.com\n警告各位卖家：你敢拿去卖我就敢把你告到死。咱们走着瞧。",
         "Open Folder": "打开文件夹",
         "Export Complete": "导出完成",
         "Export Failed": "导出失败",

@@ -4011,15 +4011,14 @@ class MainWindow(QMainWindow):
         self._auto_end_fade_track = self.current_playing
         self._auto_end_fade_done = False
         self._track_started_at = time.monotonic()
-        # Clear stale timing from previous track so auto-transition cannot jump immediately.
-        self.current_duration_ms = 0
+        # Clear stale UI timing without wiping duration loaded by setMedia().
         self._last_ui_position_ms = -1
-        self.seek_slider.setRange(0, 0)
-        self.seek_slider.setValue(0)
-        self.total_time.setText("00:00:00")
-        self.elapsed_time.setText("00:00:00")
-        self.remaining_time.setText("00:00:00")
-        self._set_progress_display(0)
+        display_pos = self._transport_display_ms_for_absolute(0)
+        total_ms = self._transport_total_ms()
+        self.seek_slider.setValue(display_pos)
+        self.elapsed_time.setText(format_clock_time(display_pos))
+        self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))
+        self._refresh_main_jog_meta(display_pos, total_ms)
 
     def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> None:
         if not self._enforce_multi_play_limit():

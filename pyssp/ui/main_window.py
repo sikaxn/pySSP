@@ -447,6 +447,31 @@ class MainWindow(QMainWindow):
         self.web_remote_enabled = self.settings.web_remote_enabled
         self.web_remote_host = "0.0.0.0"
         self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
+        self.main_transport_timeline_mode = (
+            self.settings.main_transport_timeline_mode
+            if self.settings.main_transport_timeline_mode in {"cue_region", "audio_file"}
+            else "cue_region"
+        )
+        self.main_jog_outside_cue_action = (
+            self.settings.main_jog_outside_cue_action
+            if self.settings.main_jog_outside_cue_action
+            in {"stop_immediately", "ignore_cue", "next_cue_or_stop", "stop_cue_or_end"}
+            else "stop_immediately"
+        )
+        self.state_colors = {
+            "empty": self.settings.color_empty,
+            "assigned": self.settings.color_unplayed,
+            "highlighted": self.settings.color_highlight,
+            "playing": self.settings.color_playing,
+            "played": self.settings.color_played,
+            "missing": self.settings.color_error,
+            "locked": self.settings.color_lock,
+            "marker": self.settings.color_place_marker,
+            "copied": self.settings.color_copied_to_cue,
+            "cue_indicator": self.settings.color_cue_indicator,
+            "volume_indicator": self.settings.color_volume_indicator,
+        }
+        self.sound_button_text_color = self.settings.sound_button_text_color
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
 
@@ -477,6 +502,9 @@ class MainWindow(QMainWindow):
         self.elapsed_time = QLabel("00:00:00")
         self.remaining_time = QLabel("00:00:00")
         self.progress_label = QLabel("0%")
+        self.jog_in_label = QLabel("In 00:00:00")
+        self.jog_percent_label = QLabel("0%")
+        self.jog_out_label = QLabel("Out 00:00:00")
         self.left_meter = QProgressBar()
         self.right_meter = QProgressBar()
         self.seek_slider = QSlider(Qt.Horizontal)
@@ -491,6 +519,8 @@ class MainWindow(QMainWindow):
         self._player_slot_pct_map: Dict[int, int] = {}
         self._player_started_map: Dict[int, float] = {}
         self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
+        self._player_end_override_ms: Dict[int, int] = {}
+        self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
@@ -1345,20 +1375,15 @@ class MainWindow(QMainWindow):
         meter_row.addLayout(meters, 1)
         right_layout.addLayout(meter_row)
 
-        transport_row = QHBoxLayout()
-        transport_row.addWidget(QLabel("Jog"))
-        self.seek_slider.setRange(0, 0)
-        self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
-        self.seek_slider.sliderReleased.connect(self._on_seek_released)
-        self.seek_slider.valueChanged.connect(self._on_seek_value_changed)
-        transport_row.addWidget(self.seek_slider, 1)
-        transport_row.addWidget(QLabel("Volume"))
+        volume_row = QHBoxLayout()
+        volume_row.addWidget(QLabel("Volume"))
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(90)
         self.volume_slider.setFixedWidth(140)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        transport_row.addWidget(self.volume_slider)
-        right_layout.addLayout(transport_row)
+        volume_row.addWidget(self.volume_slider)
+        volume_row.addStretch(1)
+        right_layout.addLayout(volume_row)
 
         times = QHBoxLayout()
         for title, value in [
@@ -1380,8 +1405,29 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(times)
 
         self.progress_label.setAlignment(Qt.AlignCenter)
-        self.progress_label.setStyleSheet("font-size: 20pt; color: white; background: black;")
+        self.progress_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: white;")
+        self.progress_label.setMinimumHeight(28)
+        self.progress_label.setVisible(True)
         right_layout.addWidget(self.progress_label)
+
+        transport_row = QHBoxLayout()
+        self.seek_slider.setRange(0, 0)
+        self.seek_slider.sliderPressed.connect(self._on_seek_pressed)
+        self.seek_slider.sliderReleased.connect(self._on_seek_released)
+        self.seek_slider.valueChanged.connect(self._on_seek_value_changed)
+        transport_row.addWidget(self.seek_slider, 1)
+        right_layout.addLayout(transport_row)
+
+        jog_meta_row = QHBoxLayout()
+        self.jog_percent_label.setAlignment(Qt.AlignCenter)
+        self.jog_out_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        jog_meta_row.addWidget(self.jog_in_label)
+        jog_meta_row.addStretch(1)
+        jog_meta_row.addWidget(self.jog_percent_label)
+        jog_meta_row.addStretch(1)
+        jog_meta_row.addWidget(self.jog_out_label)
+        right_layout.addLayout(jog_meta_row)
+
         self.now_playing_label.setStyleSheet("font-size: 10pt; color: #101010; background: #EFEFEF;")
         self.now_playing_label.setMinimumHeight(24)
         self.now_playing_label.setText("NOW PLAYING:")
@@ -1891,25 +1937,25 @@ class MainWindow(QMainWindow):
                 button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{suffix}")
                 button.setToolTip(slot.notes.strip())
             color = self._slot_color(slot, i)
-            text_color = "white" if color in {COLORS["marker"], COLORS["missing"], COLORS["copied"]} else "black"
+            text_color = self.sound_button_text_color
             has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
             has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
             if has_volume_override and has_cue:
                 background = (
                     "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
                     f"stop:0 {color}, stop:0.74 {color}, "
-                    f"stop:0.75 {COLORS['cue_indicator']}, stop:0.87 {COLORS['cue_indicator']}, "
-                    f"stop:0.88 {COLORS['volume_indicator']}, stop:1 {COLORS['volume_indicator']})"
+                    f"stop:0.75 {self.state_colors['cue_indicator']}, stop:0.87 {self.state_colors['cue_indicator']}, "
+                    f"stop:0.88 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
                 )
             elif has_volume_override:
                 background = (
                     "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {COLORS['volume_indicator']}, stop:1 {COLORS['volume_indicator']})"
+                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
                 )
             elif has_cue:
                 background = (
                     "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {COLORS['cue_indicator']}, stop:1 {COLORS['cue_indicator']})"
+                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {self.state_colors['cue_indicator']}, stop:1 {self.state_colors['cue_indicator']})"
                 )
             else:
                 background = color
@@ -2012,24 +2058,24 @@ class MainWindow(QMainWindow):
         if slot.marker:
             if slot.custom_color:
                 return slot.custom_color
-            return COLORS["marker"]
+            return self.state_colors["marker"]
         if slot.locked:
-            return COLORS["locked"]
+            return self.state_colors["locked"]
         if slot.missing or slot.load_failed:
-            return COLORS["missing"]
+            return self.state_colors["missing"]
         if playing_key in self._active_playing_keys:
-            return COLORS["playing"]
+            return self.state_colors["playing"]
         if slot.played:
-            return COLORS["played"]
+            return self.state_colors["played"]
         if slot.highlighted:
-            return COLORS["highlighted"]
+            return self.state_colors["highlighted"]
         if slot.copied_to_cue:
-            return COLORS["copied"]
+            return self.state_colors["copied"]
         if slot.assigned:
             if slot.custom_color:
                 return slot.custom_color
-            return COLORS["assigned"]
-        return COLORS["empty"]
+            return self.state_colors["assigned"]
+        return self.state_colors["empty"]
 
     def _show_slot_menu(self, slot_index: int, pos) -> None:
         button = self.sound_buttons[slot_index]
@@ -2594,10 +2640,91 @@ class MainWindow(QMainWindow):
         _, end_ms = self._normalized_slot_cues(slot, duration_ms)
         return None if end_ms is None else max(0, int(end_ms))
 
+    def _main_transport_bounds(self, duration_ms: Optional[int] = None) -> tuple[int, int]:
+        dur = self.current_duration_ms if duration_ms is None else max(0, int(duration_ms))
+        if self.main_transport_timeline_mode == "audio_file":
+            return 0, dur
+        if self.current_playing is None:
+            return 0, dur
+        slot = self._slot_for_key(self.current_playing)
+        if slot is None:
+            return 0, dur
+        low = self._cue_start_for_playback(slot, dur)
+        end = self._cue_end_for_playback(slot, dur)
+        high = dur if end is None else end
+        low = max(0, min(dur, low))
+        high = max(0, min(dur, high))
+        if high < low:
+            high = low
+        return low, high
+
+    def _transport_total_ms(self) -> int:
+        low, high = self._main_transport_bounds()
+        return max(0, high - low)
+
+    def _transport_display_ms_for_absolute(self, absolute_ms: int) -> int:
+        low, high = self._main_transport_bounds()
+        clamped = max(low, min(high, int(absolute_ms)))
+        return max(0, clamped - low)
+
+    def _transport_absolute_ms_for_display(self, display_ms: int) -> int:
+        low, high = self._main_transport_bounds()
+        total = max(0, high - low)
+        rel = max(0, min(total, int(display_ms)))
+        return low + rel
+
+    def _clear_player_cue_behavior_override(self, player: ExternalMediaPlayer) -> None:
+        pid = id(player)
+        self._player_end_override_ms.pop(pid, None)
+        self._player_ignore_cue_end.discard(pid)
+
     def _seek_player_to_slot_start_cue(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
         start_ms = self._cue_start_for_playback(slot, max(0, int(player.duration())))
         if start_ms > 0:
             player.setPosition(start_ms)
+
+    def _apply_main_jog_outside_cue_behavior(self, absolute_pos_ms: int) -> None:
+        self._clear_player_cue_behavior_override(self.player)
+        if self.main_transport_timeline_mode != "audio_file":
+            return
+        if self.current_playing is None:
+            return
+        slot = self._slot_for_key(self.current_playing)
+        if slot is None:
+            return
+        duration_ms = max(0, int(self.player.duration()))
+        cue_start = self._cue_start_for_playback(slot, duration_ms)
+        cue_end = self._cue_end_for_playback(slot, duration_ms)
+        if cue_end is None and cue_start <= 0:
+            return
+        pos = max(0, int(absolute_pos_ms))
+        before_start = pos < cue_start
+        after_stop = (cue_end is not None) and (pos > cue_end)
+        if not (before_start or after_stop):
+            return
+
+        action = self.main_jog_outside_cue_action
+        if action == "stop_immediately":
+            self._stop_playback()
+            return
+        if action == "ignore_cue":
+            self._player_ignore_cue_end.add(id(self.player))
+            return
+        if action == "next_cue_or_stop":
+            if before_start:
+                self._player_end_override_ms[id(self.player)] = cue_start
+            else:
+                self._player_ignore_cue_end.add(id(self.player))
+            return
+        if action == "stop_cue_or_end":
+            if before_start:
+                if cue_end is None:
+                    self._player_ignore_cue_end.add(id(self.player))
+                else:
+                    self._player_end_override_ms[id(self.player)] = cue_end
+            else:
+                self._player_ignore_cue_end.add(id(self.player))
+            return
 
     def _enforce_cue_end_limits(self) -> None:
         for player in [self.player, self.player_b, *list(self._multi_players)]:
@@ -2609,7 +2736,12 @@ class MainWindow(QMainWindow):
             slot = self._slot_for_key(slot_key)
             if slot is None:
                 continue
-            end_ms = self._cue_end_for_playback(slot, max(0, int(player.duration())))
+            pid = id(player)
+            if pid in self._player_ignore_cue_end:
+                continue
+            end_ms = self._player_end_override_ms.get(pid)
+            if end_ms is None:
+                end_ms = self._cue_end_for_playback(slot, max(0, int(player.duration())))
             if end_ms is None:
                 continue
             if player.position() < end_ms:
@@ -2782,7 +2914,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self._manual_stop_requested = False
         self._cancel_fade_for_player(self.player)
         self._cancel_fade_for_player(self.player_b)
@@ -2953,23 +3085,26 @@ class MainWindow(QMainWindow):
         self._play_slot(slot_index)
 
     def _on_position_changed(self, pos: int) -> None:
+        display_pos = self._transport_display_ms_for_absolute(pos)
         if not self._is_scrubbing:
-            self.seek_slider.setValue(pos)
+            self.seek_slider.setValue(display_pos)
         # Keep transport updates smooth without redrawing excessively.
         if self._last_ui_position_ms >= 0 and abs(pos - self._last_ui_position_ms) < 25:
             return
         self._last_ui_position_ms = pos
-        self.elapsed_time.setText(format_clock_time(pos))
-        remaining = max(0, self.current_duration_ms - pos)
+        self.elapsed_time.setText(format_clock_time(display_pos))
+        total_ms = self._transport_total_ms()
+        remaining = max(0, total_ms - display_pos)
         self.remaining_time.setText(format_clock_time(remaining))
-        progress = 0 if self.current_duration_ms == 0 else int((pos / self.current_duration_ms) * 100)
-        self.progress_label.setText(f"{progress}%")
+        progress = 0 if total_ms == 0 else int((display_pos / total_ms) * 100)
+        self._refresh_main_jog_meta(display_pos, total_ms)
 
     def _on_duration_changed(self, duration: int) -> None:
         self.current_duration_ms = duration
         self._last_ui_position_ms = -1
-        self.seek_slider.setRange(0, duration)
-        self.total_time.setText(format_clock_time(duration))
+        total_ms = self._transport_total_ms()
+        self.seek_slider.setRange(0, total_ms)
+        self.total_time.setText(format_clock_time(total_ms))
         if self.current_playing:
             group, page_index, slot_index = self.current_playing
             if group == "Q":
@@ -3007,7 +3142,7 @@ class MainWindow(QMainWindow):
                 self._last_ui_position_ms = -1
                 self.elapsed_time.setText("00:00:00")
                 self.remaining_time.setText("00:00:00")
-                self.progress_label.setText("0%")
+                self._set_progress_display(0)
                 self.seek_slider.setValue(0)
                 self._update_now_playing_label("")
                 self._refresh_sound_grid()
@@ -3018,7 +3153,7 @@ class MainWindow(QMainWindow):
                     self._last_ui_position_ms = -1
                     self.elapsed_time.setText("00:00:00")
                     self.remaining_time.setText("00:00:00")
-                    self.progress_label.setText("0%")
+                    self._set_progress_display(0)
                     self.seek_slider.setValue(0)
                     self._update_now_playing_label("")
                     self._refresh_sound_grid()
@@ -3033,7 +3168,7 @@ class MainWindow(QMainWindow):
             self._last_ui_position_ms = -1
             self.elapsed_time.setText("00:00:00")
             self.remaining_time.setText("00:00:00")
-            self.progress_label.setText("0%")
+            self._set_progress_display(0)
             self._refresh_sound_grid()
             self.seek_slider.setValue(0)
             self._update_now_playing_label("")
@@ -3280,6 +3415,7 @@ class MainWindow(QMainWindow):
         old_key = self._player_slot_key_map.get(pid)
         if old_key is not None:
             self._active_playing_keys.discard(old_key)
+        self._clear_player_cue_behavior_override(player)
         self._player_slot_key_map[pid] = slot_key
         self._active_playing_keys.add(slot_key)
         self._update_status_now_playing()
@@ -3289,11 +3425,14 @@ class MainWindow(QMainWindow):
         key = self._player_slot_key_map.pop(pid, None)
         if key is not None:
             self._active_playing_keys.discard(key)
+        self._clear_player_cue_behavior_override(player)
         self._update_status_now_playing()
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
         self._active_playing_keys.clear()
+        self._player_end_override_ms.clear()
+        self._player_ignore_cue_end.clear()
         self._update_status_now_playing()
 
     def _is_multi_play_enabled(self) -> bool:
@@ -3513,6 +3652,22 @@ class MainWindow(QMainWindow):
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
             web_remote_url=self._web_remote_open_url(),
+            main_transport_timeline_mode=self.main_transport_timeline_mode,
+            main_jog_outside_cue_action=self.main_jog_outside_cue_action,
+            state_colors={
+                "playing": self.state_colors["playing"],
+                "played": self.state_colors["played"],
+                "unplayed": self.state_colors["assigned"],
+                "highlight": self.state_colors["highlighted"],
+                "lock": self.state_colors["locked"],
+                "error": self.state_colors["missing"],
+                "place_marker": self.state_colors["marker"],
+                "empty": self.state_colors["empty"],
+                "copied_to_cue": self.state_colors["copied"],
+                "cue_indicator": self.state_colors["cue_indicator"],
+                "volume_indicator": self.state_colors["volume_indicator"],
+            },
+            sound_button_text_color=self.sound_button_text_color,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3536,6 +3691,24 @@ class MainWindow(QMainWindow):
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.max_multi_play_songs = dialog.selected_max_multi_play_songs()
         self.multi_play_limit_action = dialog.selected_multi_play_limit_action()
+        self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
+        self.main_jog_outside_cue_action = dialog.selected_main_jog_outside_cue_action()
+        selected_colors = dialog.selected_state_colors()
+        self.state_colors["playing"] = selected_colors.get("playing", self.state_colors["playing"])
+        self.state_colors["played"] = selected_colors.get("played", self.state_colors["played"])
+        self.state_colors["assigned"] = selected_colors.get("unplayed", self.state_colors["assigned"])
+        self.state_colors["highlighted"] = selected_colors.get("highlight", self.state_colors["highlighted"])
+        self.state_colors["locked"] = selected_colors.get("lock", self.state_colors["locked"])
+        self.state_colors["missing"] = selected_colors.get("error", self.state_colors["missing"])
+        self.state_colors["marker"] = selected_colors.get("place_marker", self.state_colors["marker"])
+        self.state_colors["empty"] = selected_colors.get("empty", self.state_colors["empty"])
+        self.state_colors["copied"] = selected_colors.get("copied_to_cue", self.state_colors["copied"])
+        self.state_colors["cue_indicator"] = selected_colors.get("cue_indicator", self.state_colors["cue_indicator"])
+        self.state_colors["volume_indicator"] = selected_colors.get(
+            "volume_indicator",
+            self.state_colors["volume_indicator"],
+        )
+        self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
         if self._search_window is not None:
@@ -3546,6 +3719,7 @@ class MainWindow(QMainWindow):
                 self.audio_output_device = selected_device
         self._apply_talk_state_volume(fade=True)
         self._update_talk_button_visual()
+        self._refresh_main_transport_display()
         self._refresh_group_buttons()
         self._refresh_sound_grid()
         self._apply_web_remote_state()
@@ -3875,7 +4049,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self.seek_slider.setValue(0)
         self._vu_levels = [0.0, 0.0]
         self._refresh_sound_grid()
@@ -4420,7 +4594,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self._update_now_playing_label("")
         self._refresh_sound_grid()
         return True
@@ -4476,7 +4650,7 @@ class MainWindow(QMainWindow):
             self.total_time.setText("00:00:00")
             self.elapsed_time.setText("00:00:00")
             self.remaining_time.setText("00:00:00")
-            self.progress_label.setText("0%")
+            self._set_progress_display(0)
             self.seek_slider.setValue(0)
             self._vu_levels = [0.0, 0.0]
             self._refresh_sound_grid()
@@ -4505,7 +4679,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self.seek_slider.setValue(0)
         self._vu_levels = [0.0, 0.0]
         self._refresh_sound_grid()
@@ -4706,16 +4880,124 @@ class MainWindow(QMainWindow):
         self._is_scrubbing = True
 
     def _on_seek_released(self) -> None:
-        self.player.setPosition(self.seek_slider.value())
+        absolute = self._transport_absolute_ms_for_display(self.seek_slider.value())
+        self.player.setPosition(absolute)
+        self._apply_main_jog_outside_cue_behavior(absolute)
         self._is_scrubbing = False
 
     def _on_seek_value_changed(self, value: int) -> None:
         if self._is_scrubbing:
             self.elapsed_time.setText(format_clock_time(value))
-            remaining = max(0, self.current_duration_ms - value)
+            remaining = max(0, self._transport_total_ms() - value)
             self.remaining_time.setText(format_clock_time(remaining))
-            progress = 0 if self.current_duration_ms == 0 else int((value / self.current_duration_ms) * 100)
-            self.progress_label.setText(f"{progress}%")
+            total_ms = self._transport_total_ms()
+            progress = 0 if total_ms == 0 else int((value / total_ms) * 100)
+            self._refresh_main_jog_meta(value, total_ms)
+
+    def _refresh_main_transport_display(self) -> None:
+        total_ms = self._transport_total_ms()
+        self.seek_slider.setRange(0, total_ms)
+        self.total_time.setText(format_clock_time(total_ms))
+        current_abs = 0
+        if self.player is not None:
+            try:
+                current_abs = max(0, int(self.player.position()))
+            except Exception:
+                current_abs = 0
+        display = self._transport_display_ms_for_absolute(current_abs)
+        if not self._is_scrubbing:
+            self.seek_slider.setValue(display)
+        self.elapsed_time.setText(format_clock_time(display))
+        remaining = max(0, total_ms - display)
+        self.remaining_time.setText(format_clock_time(remaining))
+        progress = 0 if total_ms == 0 else int((display / total_ms) * 100)
+        self._refresh_main_jog_meta(display, total_ms)
+
+    def _refresh_main_jog_meta(self, display_ms: int, total_ms: int) -> None:
+        low, high = self._main_transport_bounds()
+        cue_in_ms = low
+        cue_out_ms = high
+        if self.main_transport_timeline_mode == "audio_file":
+            cue_in_ms = 0
+            cue_out_ms = self.current_duration_ms
+            if self.current_playing is not None:
+                slot = self._slot_for_key(self.current_playing)
+                if slot is not None:
+                    cue_in_ms = self._cue_start_for_playback(slot, self.current_duration_ms)
+                    cue_end = self._cue_end_for_playback(slot, self.current_duration_ms)
+                    cue_out_ms = self.current_duration_ms if cue_end is None else cue_end
+        self.jog_in_label.setText(f"In {format_clock_time(cue_in_ms)}")
+        self.jog_out_label.setText(f"Out {format_clock_time(cue_out_ms)}")
+        clamped = max(0, min(total_ms, int(display_ms)))
+        ratio = 0.0 if total_ms == 0 else (clamped / float(total_ms))
+        pct = int(ratio * 100)
+        self.jog_percent_label.setText(f"{pct}%")
+        self._set_progress_display(ratio, cue_in_ms, cue_out_ms)
+
+    def _set_progress_display(
+        self,
+        progress_ratio: float,
+        cue_in_ms: Optional[int] = None,
+        cue_out_ms: Optional[int] = None,
+    ) -> None:
+        fill_stop = max(0.0, min(1.0, float(progress_ratio)))
+        pct = int(fill_stop * 100)
+        base_style_prefix = (
+            "QLabel{"
+            "font-size:12pt;font-weight:bold;color:white;"
+            "border:1px solid #3C4E58;border-radius:4px;padding:2px 8px;"
+        )
+        if self.main_transport_timeline_mode == "audio_file" and self.current_duration_ms > 0:
+            in_ms = 0 if cue_in_ms is None else max(0, min(self.current_duration_ms, int(cue_in_ms)))
+            out_ms = self.current_duration_ms if cue_out_ms is None else max(0, min(self.current_duration_ms, int(cue_out_ms)))
+            if out_ms < in_ms:
+                out_ms = in_ms
+            in_ratio = in_ms / float(self.current_duration_ms)
+            out_ratio = out_ms / float(self.current_duration_ms)
+            eps = 0.001
+            played = max(0.0, min(1.0, fill_stop))
+            if played <= in_ratio:
+                grad = (
+                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                    f"stop:0 #747474, stop:{in_ratio:.4f} #747474, "
+                    f"stop:{min(1.0, in_ratio + eps):.4f} #111111, stop:{out_ratio:.4f} #111111, "
+                    f"stop:{min(1.0, out_ratio + eps):.4f} #747474, stop:1 #747474);"
+                )
+            elif played >= out_ratio:
+                grad = (
+                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                    f"stop:0 #747474, stop:{in_ratio:.4f} #747474, "
+                    f"stop:{min(1.0, in_ratio + eps):.4f} #2ECC40, stop:{out_ratio:.4f} #2ECC40, "
+                    f"stop:{min(1.0, out_ratio + eps):.4f} #747474, stop:1 #747474);"
+                )
+            else:
+                grad = (
+                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                    f"stop:0 #747474, stop:{in_ratio:.4f} #747474, "
+                    f"stop:{min(1.0, in_ratio + eps):.4f} #2ECC40, stop:{played:.4f} #2ECC40, "
+                    f"stop:{min(1.0, played + eps):.4f} #111111, stop:{out_ratio:.4f} #111111, "
+                    f"stop:{min(1.0, out_ratio + eps):.4f} #747474, stop:1 #747474);"
+                )
+            self.progress_label.setStyleSheet(base_style_prefix + grad + "}")
+        else:
+            boundary = min(1.0, fill_stop + 0.002)
+            self.progress_label.setStyleSheet(
+                base_style_prefix
+                + (
+                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                    f"stop:0 #2ECC40, stop:{fill_stop:.4f} #2ECC40, "
+                    f"stop:{boundary:.4f} #111111, stop:1 #111111);"
+                )
+                + "}"
+            )
+        if self.main_transport_timeline_mode == "audio_file":
+            in_ms = 0 if cue_in_ms is None else max(0, int(cue_in_ms))
+            out_ms = self.current_duration_ms if cue_out_ms is None else max(0, int(cue_out_ms))
+            self.progress_label.setText(
+                f"{pct}%   In {format_clock_time(in_ms)}   Out {format_clock_time(out_ms)}"
+            )
+            return
+        self.progress_label.setText(f"{pct}%")
 
     def _on_volume_changed(self, value: int) -> None:
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
@@ -4772,7 +5054,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self._refresh_group_buttons()
         self._sync_playlist_shuffle_buttons()
         self._refresh_page_list()
@@ -4942,7 +5224,7 @@ class MainWindow(QMainWindow):
         self.total_time.setText("00:00:00")
         self.elapsed_time.setText("00:00:00")
         self.remaining_time.setText("00:00:00")
-        self.progress_label.setText("0%")
+        self._set_progress_display(0)
         self.seek_slider.setValue(0)
         self.seek_slider.setRange(0, 0)
         self._vu_levels = [0.0, 0.0]
@@ -5004,6 +5286,20 @@ class MainWindow(QMainWindow):
         self.settings.multi_play_limit_action = self.multi_play_limit_action
         self.settings.web_remote_enabled = self.web_remote_enabled
         self.settings.web_remote_port = self.web_remote_port
+        self.settings.main_transport_timeline_mode = self.main_transport_timeline_mode
+        self.settings.main_jog_outside_cue_action = self.main_jog_outside_cue_action
+        self.settings.color_empty = self.state_colors["empty"]
+        self.settings.color_unplayed = self.state_colors["assigned"]
+        self.settings.color_highlight = self.state_colors["highlighted"]
+        self.settings.color_playing = self.state_colors["playing"]
+        self.settings.color_played = self.state_colors["played"]
+        self.settings.color_error = self.state_colors["missing"]
+        self.settings.color_lock = self.state_colors["locked"]
+        self.settings.color_place_marker = self.state_colors["marker"]
+        self.settings.color_copied_to_cue = self.state_colors["copied"]
+        self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
+        self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
+        self.settings.sound_button_text_color = self.sound_button_text_color
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:

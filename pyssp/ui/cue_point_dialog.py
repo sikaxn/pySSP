@@ -103,6 +103,7 @@ class CuePointDialog(QDialog):
         self._cue_end_ms = cue_end_ms
         self._is_scrubbing = False
         self._mode = "idle"
+        self._timeline_mode = "audio_file"
         self._load_error: Optional[str] = None
         self._stop_host_playback = stop_host_playback
 
@@ -138,6 +139,19 @@ class CuePointDialog(QDialog):
         self.jog_slider.setRange(0, 0)
         self.jog_slider.setValue(0)
         root.addWidget(self.jog_slider)
+        jog_meta = QHBoxLayout()
+        jog_meta.setContentsMargins(0, 0, 0, 0)
+        self.jog_in_label = QLabel("In 00:00:00")
+        self.jog_percent_label = QLabel("0%")
+        self.jog_percent_label.setAlignment(Qt.AlignCenter)
+        self.jog_out_label = QLabel("Out 00:00:00")
+        self.jog_out_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        jog_meta.addWidget(self.jog_in_label)
+        jog_meta.addStretch(1)
+        jog_meta.addWidget(self.jog_percent_label)
+        jog_meta.addStretch(1)
+        jog_meta.addWidget(self.jog_out_label)
+        root.addLayout(jog_meta)
         self.cue_indicator = CueRangeIndicator()
         root.addWidget(self.cue_indicator)
 
@@ -424,8 +438,12 @@ class CuePointDialog(QDialog):
         self.end_tc_edit.blockSignals(False)
 
     def _effective_bounds(self) -> tuple[int, int]:
-        low = 0 if self._cue_start_ms is None else max(0, int(self._cue_start_ms))
-        high = self._duration_ms if self._cue_end_ms is None else max(0, int(self._cue_end_ms))
+        if self._timeline_mode == "audio_file":
+            low = 0
+            high = self._duration_ms
+        else:
+            low = 0 if self._cue_start_ms is None else max(0, int(self._cue_start_ms))
+            high = self._duration_ms if self._cue_end_ms is None else max(0, int(self._cue_end_ms))
         if self._duration_ms > 0:
             low = min(low, self._duration_ms)
             high = min(high, self._duration_ms)
@@ -465,9 +483,23 @@ class CuePointDialog(QDialog):
         self.total_label.setText(f"Total {format_timecode(total)}")
         self.elapsed_label.setText(f"Elapsed {format_timecode(elapsed)}")
         self.remaining_label.setText(f"Remaining {format_timecode(remaining)}")
+        self._refresh_jog_meta(elapsed, total)
 
     def _refresh_cue_indicator(self) -> None:
         self.cue_indicator.set_values(self._duration_ms, self._cue_start_ms, self._cue_end_ms)
+
+    def _refresh_jog_meta(self, elapsed_ms: int, total_ms: int) -> None:
+        in_ms = 0 if self._cue_start_ms is None else max(0, int(self._cue_start_ms))
+        out_ms = self._duration_ms if self._cue_end_ms is None else max(0, int(self._cue_end_ms))
+        if self._duration_ms > 0:
+            in_ms = min(in_ms, self._duration_ms)
+            out_ms = min(out_ms, self._duration_ms)
+        if out_ms < in_ms:
+            out_ms = in_ms
+        self.jog_in_label.setText(f"In {format_timecode(in_ms)}")
+        self.jog_out_label.setText(f"Out {format_timecode(out_ms)}")
+        percent = 0 if total_ms <= 0 else int((max(0, min(total_ms, elapsed_ms)) / float(total_ms)) * 100.0)
+        self.jog_percent_label.setText(f"{percent}%")
 
     def _enforce_end_limit(self) -> None:
         if self._mode != "preview":

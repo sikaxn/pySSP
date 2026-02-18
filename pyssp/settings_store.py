@@ -39,6 +39,20 @@ class AppSettings:
     multi_play_limit_action: str = "stop_oldest"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
+    main_transport_timeline_mode: str = "cue_region"
+    main_jog_outside_cue_action: str = "stop_immediately"
+    color_empty: str = "#0B868A"
+    color_unplayed: str = "#B0B0B0"
+    color_highlight: str = "#A6D8FF"
+    color_playing: str = "#66FF33"
+    color_played: str = "#FF3B30"
+    color_error: str = "#7B3FB3"
+    color_lock: str = "#F2D74A"
+    color_place_marker: str = "#111111"
+    color_copied_to_cue: str = "#2E65FF"
+    color_cue_indicator: str = "#61D6FF"
+    color_volume_indicator: str = "#FFD45A"
+    sound_button_text_color: str = "#000000"
 
 
 def get_settings_path() -> Path:
@@ -96,6 +110,20 @@ def save_settings(settings: AppSettings) -> None:
         "multi_play_limit_action": settings.multi_play_limit_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
+        "main_transport_timeline_mode": settings.main_transport_timeline_mode,
+        "main_jog_outside_cue_action": settings.main_jog_outside_cue_action,
+        "color_empty": settings.color_empty,
+        "color_unplayed": settings.color_unplayed,
+        "color_highlight": settings.color_highlight,
+        "color_playing": settings.color_playing,
+        "color_played": settings.color_played,
+        "color_error": settings.color_error,
+        "color_lock": settings.color_lock,
+        "color_place_marker": settings.color_place_marker,
+        "color_copied_to_cue": settings.color_copied_to_cue,
+        "color_cue_indicator": settings.color_cue_indicator,
+        "color_volume_indicator": settings.color_volume_indicator,
+        "sound_button_text_color": settings.sound_button_text_color,
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -125,6 +153,19 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
+    timeline_mode_raw = str(
+        section.get("main_transport_timeline_mode", section.get("cue_editor_timeline_mode", "cue_region"))
+    ).strip().lower()
+    if timeline_mode_raw not in {"cue_region", "audio_file"}:
+        timeline_mode_raw = "cue_region"
+    outside_action = str(section.get("main_jog_outside_cue_action", "stop_immediately")).strip().lower()
+    if outside_action not in {
+        "stop_immediately",
+        "ignore_cue",
+        "next_cue_or_stop",
+        "stop_cue_or_end",
+    }:
+        outside_action = "stop_immediately"
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -155,6 +196,20 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         multi_play_limit_action=multi_play_limit_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
+        main_transport_timeline_mode=timeline_mode_raw,
+        main_jog_outside_cue_action=outside_action,
+        color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),
+        color_unplayed=_coerce_hex(str(section.get("color_unplayed", "#B0B0B0")), "#B0B0B0"),
+        color_highlight=_coerce_hex(str(section.get("color_highlight", "#A6D8FF")), "#A6D8FF"),
+        color_playing=_coerce_hex(str(section.get("color_playing", "#66FF33")), "#66FF33"),
+        color_played=_coerce_hex(str(section.get("color_played", "#FF3B30")), "#FF3B30"),
+        color_error=_coerce_hex(str(section.get("color_error", "#7B3FB3")), "#7B3FB3"),
+        color_lock=_coerce_hex(str(section.get("color_lock", "#F2D74A")), "#F2D74A"),
+        color_place_marker=_coerce_hex(str(section.get("color_place_marker", "#111111")), "#111111"),
+        color_copied_to_cue=_coerce_hex(str(section.get("color_copied_to_cue", "#2E65FF")), "#2E65FF"),
+        color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
+        color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),
+        sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
     )
 
 

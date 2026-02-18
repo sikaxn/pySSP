@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import QSize, Qt
@@ -31,6 +31,46 @@ from PyQt5.QtWidgets import (
 
 
 class OptionsDialog(QDialog):
+    _DEFAULTS = {
+        "active_group_color": "#EDE8C8",
+        "inactive_group_color": "#ECECEC",
+        "title_char_limit": 26,
+        "show_file_notifications": True,
+        "enter_key_mirrors_space": False,
+        "log_file_enabled": False,
+        "reset_all_on_startup": False,
+        "click_playing_action": "play_it_again",
+        "search_double_click_action": "find_highlight",
+        "fade_in_sec": 1.0,
+        "cross_fade_sec": 1.0,
+        "fade_out_sec": 1.0,
+        "max_multi_play_songs": 5,
+        "multi_play_limit_action": "stop_oldest",
+        "main_transport_timeline_mode": "cue_region",
+        "main_jog_outside_cue_action": "stop_immediately",
+        "talk_volume_level": 30,
+        "talk_fade_sec": 0.5,
+        "talk_blink_button": False,
+        "talk_shift_accelerator": True,
+        "hotkeys_ignore_talk_level": False,
+        "web_remote_enabled": False,
+        "web_remote_port": 5050,
+        "state_colors": {
+            "playing": "#66FF33",
+            "played": "#FF3B30",
+            "unplayed": "#B0B0B0",
+            "highlight": "#A6D8FF",
+            "lock": "#F2D74A",
+            "error": "#7B3FB3",
+            "place_marker": "#111111",
+            "empty": "#0B868A",
+            "copied_to_cue": "#2E65FF",
+            "cue_indicator": "#61D6FF",
+            "volume_indicator": "#FFD45A",
+        },
+        "sound_button_text_color": "#000000",
+    }
+
     def __init__(
         self,
         active_group_color: str,
@@ -57,6 +97,10 @@ class OptionsDialog(QDialog):
         web_remote_enabled: bool,
         web_remote_port: int,
         web_remote_url: str,
+        main_transport_timeline_mode: str,
+        main_jog_outside_cue_action: str,
+        state_colors: Dict[str, str],
+        sound_button_text_color: str,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -66,6 +110,9 @@ class OptionsDialog(QDialog):
 
         self.active_group_color = active_group_color
         self.inactive_group_color = inactive_group_color
+        self.sound_button_text_color = sound_button_text_color
+        self.state_colors = dict(state_colors)
+        self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
 
         root_layout = QVBoxLayout(self)
@@ -115,6 +162,8 @@ class OptionsDialog(QDialog):
             self._build_playback_page(
                 max_multi_play_songs=max_multi_play_songs,
                 multi_play_limit_action=multi_play_limit_action,
+                main_transport_timeline_mode=main_transport_timeline_mode,
+                main_jog_outside_cue_action=main_jog_outside_cue_action,
             ),
         )
         self._add_page(
@@ -149,6 +198,8 @@ class OptionsDialog(QDialog):
         self.page_list.setCurrentRow(0)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.restore_defaults_btn = buttons.addButton("Restore Defaults (This Page)", QDialogButtonBox.ResetRole)
+        self.restore_defaults_btn.clicked.connect(self._restore_defaults_current_page)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
@@ -223,18 +274,53 @@ class OptionsDialog(QDialog):
 
     def _build_color_page(self) -> QWidget:
         page = QWidget()
-        form = QFormLayout(page)
+        layout = QVBoxLayout(page)
 
+        sound_group = QGroupBox("Sound Button States")
+        sound_form = QFormLayout(sound_group)
+        self._add_state_color_row(sound_form, "playing", "Playing")
+        self._add_state_color_row(sound_form, "played", "Played")
+        self._add_state_color_row(sound_form, "unplayed", "Unplayed")
+        self._add_state_color_row(sound_form, "highlight", "Highlight")
+        self._add_state_color_row(sound_form, "lock", "Lock")
+        self._add_state_color_row(sound_form, "error", "Error")
+        self._add_state_color_row(sound_form, "place_marker", "Place Marker")
+        self._add_state_color_row(sound_form, "empty", "Empty")
+        self._add_state_color_row(sound_form, "copied_to_cue", "Copied To Cue")
+        layout.addWidget(sound_group)
+
+        indicator_group = QGroupBox("Indicators")
+        indicator_form = QFormLayout(indicator_group)
+        self._add_state_color_row(indicator_form, "cue_indicator", "Cue Indicator")
+        self._add_state_color_row(indicator_form, "volume_indicator", "Volume Indicator")
+        self.sound_text_color_btn = QPushButton()
+        self.sound_text_color_btn.clicked.connect(self._pick_sound_text_color)
+        self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+        indicator_form.addRow("Sound Button Text:", self.sound_text_color_btn)
+        layout.addWidget(indicator_group)
+
+        group_group = QGroupBox("Group Buttons")
+        group_form = QFormLayout(group_group)
         self.active_color_btn = QPushButton()
         self.active_color_btn.clicked.connect(self._pick_active_color)
         self._refresh_color_button(self.active_color_btn, self.active_group_color)
-        form.addRow("Active Button Color:", self.active_color_btn)
-
+        group_form.addRow("Active Group:", self.active_color_btn)
         self.inactive_color_btn = QPushButton()
         self.inactive_color_btn.clicked.connect(self._pick_inactive_color)
         self._refresh_color_button(self.inactive_color_btn, self.inactive_group_color)
-        form.addRow("Inactive Button Color:", self.inactive_color_btn)
+        group_form.addRow("Inactive Group:", self.inactive_color_btn)
+        layout.addWidget(group_group)
+
+        layout.addStretch(1)
         return page
+
+    def _add_state_color_row(self, form: QFormLayout, key: str, label: str) -> None:
+        value = self.state_colors.get(key, "#FFFFFF")
+        btn = QPushButton()
+        self._refresh_color_button(btn, value)
+        btn.clicked.connect(lambda _=None, k=key, b=btn, t=label: self._pick_state_color(k, b, t))
+        self._state_color_buttons[key] = btn
+        form.addRow(f"{label}:", btn)
 
     def _build_delay_page(self, fade_in_sec: float, cross_fade_sec: float, fade_out_sec: float) -> QWidget:
         page = QWidget()
@@ -262,7 +348,13 @@ class OptionsDialog(QDialog):
         form.addRow("Fade Out Seconds:", self.fade_out_spin)
         return page
 
-    def _build_playback_page(self, max_multi_play_songs: int, multi_play_limit_action: str) -> QWidget:
+    def _build_playback_page(
+        self,
+        max_multi_play_songs: int,
+        multi_play_limit_action: str,
+        main_transport_timeline_mode: str,
+        main_jog_outside_cue_action: str,
+    ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
@@ -284,6 +376,45 @@ class OptionsDialog(QDialog):
         limit_layout.addWidget(self.multi_play_disallow_radio)
         limit_layout.addWidget(self.multi_play_stop_oldest_radio)
         layout.addWidget(limit_group)
+
+        cue_group = QGroupBox("Main Player Timeline / Jog Display:")
+        cue_layout = QVBoxLayout(cue_group)
+        self.cue_timeline_cue_region_radio = QRadioButton("Relative to Cue Set Points")
+        self.cue_timeline_audio_file_radio = QRadioButton("Relative to Actual Audio File")
+        if main_transport_timeline_mode == "audio_file":
+            self.cue_timeline_audio_file_radio.setChecked(True)
+        else:
+            self.cue_timeline_cue_region_radio.setChecked(True)
+        cue_layout.addWidget(self.cue_timeline_cue_region_radio)
+        cue_layout.addWidget(self.cue_timeline_audio_file_radio)
+        layout.addWidget(cue_group)
+
+        self.jog_outside_group = QGroupBox("When jog is outside cue area (Audio File mode):")
+        jog_outside_layout = QVBoxLayout(self.jog_outside_group)
+        self.jog_outside_stop_immediately_radio = QRadioButton("Stop immediately")
+        self.jog_outside_ignore_cue_radio = QRadioButton("Ignore cue and play until end or stopped")
+        self.jog_outside_next_cue_or_stop_radio = QRadioButton(
+            "Play to next cue or stop (before start: stop at start; after stop: play to end)"
+        )
+        self.jog_outside_stop_cue_or_end_radio = QRadioButton(
+            "Play to stop cue (before start: stop at stop cue; after stop: play to end)"
+        )
+        if main_jog_outside_cue_action == "ignore_cue":
+            self.jog_outside_ignore_cue_radio.setChecked(True)
+        elif main_jog_outside_cue_action == "next_cue_or_stop":
+            self.jog_outside_next_cue_or_stop_radio.setChecked(True)
+        elif main_jog_outside_cue_action == "stop_cue_or_end":
+            self.jog_outside_stop_cue_or_end_radio.setChecked(True)
+        else:
+            self.jog_outside_stop_immediately_radio.setChecked(True)
+        jog_outside_layout.addWidget(self.jog_outside_stop_immediately_radio)
+        jog_outside_layout.addWidget(self.jog_outside_ignore_cue_radio)
+        jog_outside_layout.addWidget(self.jog_outside_next_cue_or_stop_radio)
+        jog_outside_layout.addWidget(self.jog_outside_stop_cue_or_end_radio)
+        layout.addWidget(self.jog_outside_group)
+        self.cue_timeline_cue_region_radio.toggled.connect(self._sync_jog_outside_group_enabled)
+        self.cue_timeline_audio_file_radio.toggled.connect(self._sync_jog_outside_group_enabled)
+        self._sync_jog_outside_group_enabled()
 
         layout.addStretch(1)
         return page
@@ -396,6 +527,30 @@ class OptionsDialog(QDialog):
             return "disallow_more_play"
         return "stop_oldest"
 
+    def selected_main_transport_timeline_mode(self) -> str:
+        if self.cue_timeline_audio_file_radio.isChecked():
+            return "audio_file"
+        return "cue_region"
+
+    def selected_main_jog_outside_cue_action(self) -> str:
+        if self.jog_outside_ignore_cue_radio.isChecked():
+            return "ignore_cue"
+        if self.jog_outside_next_cue_or_stop_radio.isChecked():
+            return "next_cue_or_stop"
+        if self.jog_outside_stop_cue_or_end_radio.isChecked():
+            return "stop_cue_or_end"
+        return "stop_immediately"
+
+    def selected_state_colors(self) -> Dict[str, str]:
+        return dict(self.state_colors)
+
+    def selected_sound_button_text_color(self) -> str:
+        return self.sound_button_text_color
+
+    def _sync_jog_outside_group_enabled(self) -> None:
+        enabled = self.cue_timeline_audio_file_radio.isChecked()
+        self.jog_outside_group.setEnabled(enabled)
+
     def _populate_audio_devices(self, devices: List[str], selected_device: str) -> None:
         self.audio_device_combo.clear()
         self.audio_device_combo.addItem("System Default", "")
@@ -444,3 +599,118 @@ class OptionsDialog(QDialog):
         if selected.isValid():
             self.inactive_group_color = selected.name().upper()
             self._refresh_color_button(self.inactive_color_btn, self.inactive_group_color)
+
+    def _pick_state_color(self, key: str, button: QPushButton, label: str) -> None:
+        current = self.state_colors.get(key, "#FFFFFF")
+        selected = QColorDialog.getColor(QColor(current), self, f"{label} Color")
+        if selected.isValid():
+            value = selected.name().upper()
+            self.state_colors[key] = value
+            self._refresh_color_button(button, value)
+
+    def _pick_sound_text_color(self) -> None:
+        selected = QColorDialog.getColor(QColor(self.sound_button_text_color), self, "Sound Button Text Color")
+        if selected.isValid():
+            self.sound_button_text_color = selected.name().upper()
+            self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+
+    def _restore_defaults_current_page(self) -> None:
+        idx = self.page_list.currentRow()
+        if idx == 0:
+            self._restore_general_defaults()
+            return
+        if idx == 1:
+            self._restore_color_defaults()
+            return
+        if idx == 2:
+            self._restore_delay_defaults()
+            return
+        if idx == 3:
+            self._restore_playback_defaults()
+            return
+        if idx == 4:
+            self._restore_audio_device_defaults()
+            return
+        if idx == 5:
+            self._restore_talk_defaults()
+            return
+        if idx == 6:
+            self._restore_web_remote_defaults()
+            return
+
+    def _restore_general_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.title_limit_spin.setValue(int(d["title_char_limit"]))
+        self.notifications_checkbox.setChecked(bool(d["show_file_notifications"]))
+        self.enter_mirror_checkbox.setChecked(bool(d["enter_key_mirrors_space"]))
+        self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
+        self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
+        if d["click_playing_action"] == "stop_it":
+            self.playing_click_stop_radio.setChecked(True)
+        else:
+            self.playing_click_play_again_radio.setChecked(True)
+        if d["search_double_click_action"] == "play_highlight":
+            self.search_dbl_play_radio.setChecked(True)
+        else:
+            self.search_dbl_find_radio.setChecked(True)
+
+    def _restore_color_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.active_group_color = str(d["active_group_color"])
+        self.inactive_group_color = str(d["inactive_group_color"])
+        self._refresh_color_button(self.active_color_btn, self.active_group_color)
+        self._refresh_color_button(self.inactive_color_btn, self.inactive_group_color)
+        for key, value in dict(d["state_colors"]).items():
+            self.state_colors[key] = value
+            btn = self._state_color_buttons.get(key)
+            if btn is not None:
+                self._refresh_color_button(btn, value)
+        self.sound_button_text_color = str(d["sound_button_text_color"])
+        self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+
+    def _restore_delay_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.fade_in_spin.setValue(float(d["fade_in_sec"]))
+        self.cross_fade_spin.setValue(float(d["cross_fade_sec"]))
+        self.fade_out_spin.setValue(float(d["fade_out_sec"]))
+
+    def _restore_playback_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.max_multi_play_spin.setValue(int(d["max_multi_play_songs"]))
+        if d["multi_play_limit_action"] == "disallow_more_play":
+            self.multi_play_disallow_radio.setChecked(True)
+        else:
+            self.multi_play_stop_oldest_radio.setChecked(True)
+        if d["main_transport_timeline_mode"] == "audio_file":
+            self.cue_timeline_audio_file_radio.setChecked(True)
+        else:
+            self.cue_timeline_cue_region_radio.setChecked(True)
+        action = str(d["main_jog_outside_cue_action"])
+        if action == "ignore_cue":
+            self.jog_outside_ignore_cue_radio.setChecked(True)
+        elif action == "next_cue_or_stop":
+            self.jog_outside_next_cue_or_stop_radio.setChecked(True)
+        elif action == "stop_cue_or_end":
+            self.jog_outside_stop_cue_or_end_radio.setChecked(True)
+        else:
+            self.jog_outside_stop_immediately_radio.setChecked(True)
+        self._sync_jog_outside_group_enabled()
+
+    def _restore_audio_device_defaults(self) -> None:
+        for i in range(self.audio_device_combo.count()):
+            if str(self.audio_device_combo.itemData(i) or "") == "":
+                self.audio_device_combo.setCurrentIndex(i)
+                break
+
+    def _restore_talk_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.talk_volume_spin.setValue(int(d["talk_volume_level"]))
+        self.talk_fade_spin.setValue(float(d["talk_fade_sec"]))
+        self.talk_blink_checkbox.setChecked(bool(d["talk_blink_button"]))
+        self.shift_accel_checkbox.setChecked(bool(d["talk_shift_accelerator"]))
+        self.hotkeys_ignore_checkbox.setChecked(bool(d["hotkeys_ignore_talk_level"]))
+
+    def _restore_web_remote_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.web_remote_enabled_checkbox.setChecked(bool(d["web_remote_enabled"]))
+        self.web_remote_port_spin.setValue(int(d["web_remote_port"]))

@@ -634,14 +634,14 @@ class MainWindow(QMainWindow):
         self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
         self.timecode_midi_output_device = self.settings.timecode_midi_output_device or MIDI_OUTPUT_DEVICE_NONE
-        self.timecode_mode = self.settings.timecode_mode or TIMECODE_MODE_ZERO
+        self.timecode_mode = self.settings.timecode_mode or TIMECODE_MODE_FOLLOW
         if self.timecode_mode not in {
             TIMECODE_MODE_ZERO,
             TIMECODE_MODE_FOLLOW,
             TIMECODE_MODE_SYSTEM,
             TIMECODE_MODE_FOLLOW_FREEZE,
         }:
-            self.timecode_mode = TIMECODE_MODE_ZERO
+            self.timecode_mode = TIMECODE_MODE_FOLLOW
         self.timecode_fps = max(1.0, float(self.settings.timecode_fps or 30.0))
         self.timecode_mtc_fps = max(1.0, float(self.settings.timecode_mtc_fps or 30.0))
         self.timecode_mtc_idle_behavior = self.settings.timecode_mtc_idle_behavior or MTC_IDLE_KEEP_STREAM
@@ -660,6 +660,8 @@ class MainWindow(QMainWindow):
             else "cue_region"
         )
         self._timecode_follow_frozen_ms = 0
+        if self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
+            self._timecode_follow_frozen_ms = 0
         self.main_jog_outside_cue_action = (
             self.settings.main_jog_outside_cue_action
             if self.settings.main_jog_outside_cue_action
@@ -937,8 +939,11 @@ class MainWindow(QMainWindow):
         self.timecode_dock = QDockWidget("Timecode", self)
         self.timecode_panel = TimecodePanel(self.timecode_dock)
         self.timecode_dock.setWidget(self.timecode_panel)
+        self.timecode_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+        self.timecode_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable)
         self.timecode_dock.setVisible(bool(self.show_timecode_panel))
         self.addDockWidget(Qt.RightDockWidgetArea, self.timecode_dock)
+        self.timecode_dock.setFloating(True)
         self.timecode_dock.visibilityChanged.connect(self._on_timecode_dock_visibility_changed)
         self.timecode_panel.mode_combo.currentIndexChanged.connect(self._on_timecode_mode_changed)
         mode_idx = self.timecode_panel.mode_combo.findData(self.timecode_mode)
@@ -1225,16 +1230,16 @@ class MainWindow(QMainWindow):
         options_action.triggered.connect(self._open_options_dialog)
         setup_menu.addAction(options_action)
         self._menu_actions["options"] = options_action
-        timecode_settings_action = QAction("Timecode Settings", self)
-        timecode_settings_action.triggered.connect(self._open_timecode_settings)
-        setup_menu.addAction(timecode_settings_action)
-        self._menu_actions["timecode_settings"] = timecode_settings_action
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
         self.addAction(search_action)
         self._menu_actions["search"] = search_action
 
         timecode_menu = self.menuBar().addMenu("Timecode")
+        timecode_settings_action = QAction("Timecode Settings", self)
+        timecode_settings_action.triggered.connect(self._open_timecode_settings)
+        timecode_menu.addAction(timecode_settings_action)
+        self._menu_actions["timecode_settings"] = timecode_settings_action
         timecode_panel_action = QAction("Timecode Panel", self)
         timecode_panel_action.setCheckable(True)
         timecode_panel_action.setChecked(bool(self.show_timecode_panel))
@@ -4505,7 +4510,7 @@ class MainWindow(QMainWindow):
         self.player.stateChanged.connect(self._on_state_changed)
 
     def _open_timecode_settings(self) -> None:
-        self._open_options_dialog(initial_page="Audio Device")
+        self._open_options_dialog(initial_page="Audio Device / Timecode")
 
     def _open_options_dialog(self, initial_page: Optional[str] = None) -> None:
         available_devices = sorted(list_output_devices(), key=lambda v: v.lower())
@@ -4531,6 +4536,7 @@ class MainWindow(QMainWindow):
             available_midi_devices=available_midi_devices,
             timecode_audio_output_device=self.timecode_audio_output_device,
             timecode_midi_output_device=self.timecode_midi_output_device,
+            timecode_mode=self.timecode_mode,
             timecode_fps=self.timecode_fps,
             timecode_mtc_fps=self.timecode_mtc_fps,
             timecode_mtc_idle_behavior=self.timecode_mtc_idle_behavior,
@@ -4593,6 +4599,13 @@ class MainWindow(QMainWindow):
         self.main_jog_outside_cue_action = dialog.selected_main_jog_outside_cue_action()
         self.timecode_audio_output_device = dialog.selected_timecode_audio_output_device()
         self.timecode_midi_output_device = dialog.selected_timecode_midi_output_device()
+        selected_timecode_mode = dialog.selected_timecode_mode()
+        if (
+            selected_timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE
+            and self.timecode_mode != TIMECODE_MODE_FOLLOW_FREEZE
+        ):
+            self._timecode_follow_frozen_ms = self._timecode_current_follow_ms()
+        self.timecode_mode = selected_timecode_mode
         self.timecode_fps = dialog.selected_timecode_fps()
         self.timecode_mtc_fps = dialog.selected_timecode_mtc_fps()
         self.timecode_mtc_idle_behavior = dialog.selected_timecode_mtc_idle_behavior()

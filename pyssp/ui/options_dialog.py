@@ -36,6 +36,10 @@ from pyssp.settings_store import default_quick_action_keys
 from pyssp.timecode import (
     MIDI_OUTPUT_DEVICE_NONE,
     MTC_IDLE_KEEP_STREAM,
+    TIMECODE_MODE_FOLLOW,
+    TIMECODE_MODE_FOLLOW_FREEZE,
+    TIMECODE_MODE_SYSTEM,
+    TIMECODE_MODE_ZERO,
     TIME_CODE_BIT_DEPTHS,
     TIME_CODE_FPS_CHOICES,
     TIME_CODE_MTC_FPS_CHOICES,
@@ -158,6 +162,7 @@ class OptionsDialog(QDialog):
         "web_remote_port": 5050,
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
+        "timecode_mode": TIMECODE_MODE_FOLLOW,
         "timecode_fps": 30.0,
         "timecode_mtc_fps": 30.0,
         "timecode_mtc_idle_behavior": MTC_IDLE_KEEP_STREAM,
@@ -235,6 +240,7 @@ class OptionsDialog(QDialog):
         available_midi_devices: List[tuple[str, str]],
         timecode_audio_output_device: str,
         timecode_midi_output_device: str,
+        timecode_mode: str,
         timecode_fps: float,
         timecode_mtc_fps: float,
         timecode_mtc_idle_behavior: str,
@@ -343,7 +349,7 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
-            "Audio Device",
+            "Audio Device / Timecode",
             self._mono_icon("speaker"),
             self._build_audio_device_page(
                 audio_output_device=audio_output_device,
@@ -351,6 +357,7 @@ class OptionsDialog(QDialog):
                 available_midi_devices=available_midi_devices,
                 timecode_audio_output_device=timecode_audio_output_device,
                 timecode_midi_output_device=timecode_midi_output_device,
+                timecode_mode=timecode_mode,
                 timecode_fps=timecode_fps,
                 timecode_mtc_fps=timecode_mtc_fps,
                 timecode_mtc_idle_behavior=timecode_mtc_idle_behavior,
@@ -787,6 +794,7 @@ class OptionsDialog(QDialog):
         available_midi_devices: List[tuple[str, str]],
         timecode_audio_output_device: str,
         timecode_midi_output_device: str,
+        timecode_mode: str,
         timecode_fps: float,
         timecode_mtc_fps: float,
         timecode_mtc_idle_behavior: str,
@@ -813,6 +821,28 @@ class OptionsDialog(QDialog):
         layout.addWidget(playback_group)
 
         self._populate_audio_devices(available_audio_devices, audio_output_device)
+
+        mode_group = QGroupBox("Timecode Mode")
+        mode_form = QFormLayout(mode_group)
+        self.timecode_mode_combo = QComboBox()
+        self.timecode_mode_combo.addItem("All Zero", TIMECODE_MODE_ZERO)
+        self.timecode_mode_combo.addItem("Follow Media/Audio Player", TIMECODE_MODE_FOLLOW)
+        self.timecode_mode_combo.addItem("System Time", TIMECODE_MODE_SYSTEM)
+        self.timecode_mode_combo.addItem("Pause Sync (Freeze While Playback Continues)", TIMECODE_MODE_FOLLOW_FREEZE)
+        mode_form.addRow("Mode:", self.timecode_mode_combo)
+        layout.addWidget(mode_group)
+
+        timeline_group = QGroupBox("Timecode Display Timeline")
+        timeline_layout = QVBoxLayout(timeline_group)
+        self.timecode_timeline_cue_region_radio = QRadioButton("Relative to Cue Set Points")
+        self.timecode_timeline_audio_file_radio = QRadioButton("Relative to Actual Audio File")
+        if timecode_timeline_mode == "audio_file":
+            self.timecode_timeline_audio_file_radio.setChecked(True)
+        else:
+            self.timecode_timeline_cue_region_radio.setChecked(True)
+        timeline_layout.addWidget(self.timecode_timeline_cue_region_radio)
+        timeline_layout.addWidget(self.timecode_timeline_audio_file_radio)
+        layout.addWidget(timeline_group)
 
         ltc_group = QGroupBox("SMPTE Timecode (LTC)")
         ltc_form = QFormLayout(ltc_group)
@@ -859,19 +889,8 @@ class OptionsDialog(QDialog):
         mtc_form.addRow("Idle Behavior:", self.timecode_mtc_idle_behavior_combo)
         layout.addWidget(mtc_group)
 
-        timeline_group = QGroupBox("Timecode Display Timeline")
-        timeline_layout = QVBoxLayout(timeline_group)
-        self.timecode_timeline_cue_region_radio = QRadioButton("Relative to Cue Set Points")
-        self.timecode_timeline_audio_file_radio = QRadioButton("Relative to Actual Audio File")
-        if timecode_timeline_mode == "audio_file":
-            self.timecode_timeline_audio_file_radio.setChecked(True)
-        else:
-            self.timecode_timeline_cue_region_radio.setChecked(True)
-        timeline_layout.addWidget(self.timecode_timeline_cue_region_radio)
-        timeline_layout.addWidget(self.timecode_timeline_audio_file_radio)
-        layout.addWidget(timeline_group)
-
         self._set_combo_data_or_default(self.timecode_output_combo, timecode_audio_output_device, "none")
+        self._set_combo_data_or_default(self.timecode_mode_combo, timecode_mode, TIMECODE_MODE_FOLLOW)
         self._set_combo_float_or_default(self.timecode_fps_combo, float(timecode_fps), 30.0)
         self._set_combo_float_or_default(self.timecode_mtc_fps_combo, float(timecode_mtc_fps), 30.0)
         self._set_combo_data_or_default(self.timecode_mtc_idle_behavior_combo, timecode_mtc_idle_behavior, "keep_stream")
@@ -982,6 +1001,12 @@ class OptionsDialog(QDialog):
 
     def selected_timecode_midi_output_device(self) -> str:
         return str(self.timecode_midi_output_combo.currentData() or MIDI_OUTPUT_DEVICE_NONE)
+
+    def selected_timecode_mode(self) -> str:
+        value = str(self.timecode_mode_combo.currentData() or TIMECODE_MODE_FOLLOW)
+        if value not in {TIMECODE_MODE_ZERO, TIMECODE_MODE_FOLLOW, TIMECODE_MODE_SYSTEM, TIMECODE_MODE_FOLLOW_FREEZE}:
+            return TIMECODE_MODE_FOLLOW
+        return value
 
     def selected_timecode_fps(self) -> float:
         try:
@@ -1383,6 +1408,11 @@ class OptionsDialog(QDialog):
             self.timecode_output_combo,
             str(d["timecode_audio_output_device"]),
             "none",
+        )
+        self._set_combo_data_or_default(
+            self.timecode_mode_combo,
+            str(d["timecode_mode"]),
+            TIMECODE_MODE_FOLLOW,
         )
         self._set_combo_float_or_default(
             self.timecode_fps_combo,

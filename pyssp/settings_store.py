@@ -60,7 +60,7 @@ class AppSettings:
     web_remote_port: int = 5050
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
-    timecode_mode: str = "zero"
+    timecode_mode: str = "follow_media"
     timecode_fps: float = 30.0
     timecode_mtc_fps: float = 30.0
     timecode_mtc_idle_behavior: str = "keep_stream"
@@ -320,9 +320,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
-    timecode_mode = str(section.get("timecode_mode", "zero")).strip().lower()
+    timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
     if timecode_mode not in {"zero", "follow_media", "system_time", "follow_media_freeze"}:
-        timecode_mode = "zero"
+        timecode_mode = "follow_media"
     timecode_fps = _clamp_float(_get_float(section, "timecode_fps", 30.0), 1.0, 120.0)
     timecode_mtc_fps = _clamp_float(_get_float(section, "timecode_mtc_fps", 30.0), 1.0, 120.0)
     timecode_mtc_idle_behavior = str(section.get("timecode_mtc_idle_behavior", "keep_stream")).strip().lower()

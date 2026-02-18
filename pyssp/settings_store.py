@@ -61,6 +61,7 @@ class AppSettings:
     click_playing_action: str = "play_it_again"
     search_double_click_action: str = "find_highlight"
     set_file_encoding: str = "utf8"
+    ui_language: str = "en"
     audio_output_device: str = ""
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
@@ -212,6 +213,7 @@ def save_settings(settings: AppSettings) -> None:
         "click_playing_action": settings.click_playing_action,
         "search_double_click_action": settings.search_double_click_action,
         "set_file_encoding": settings.set_file_encoding,
+        "ui_language": settings.ui_language,
         "audio_output_device": settings.audio_output_device,
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
@@ -339,6 +341,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
     if set_file_encoding not in {"utf8", "gbk"}:
         set_file_encoding = "utf8"
+    ui_language = str(section.get("ui_language", "en")).strip().lower()
+    if ui_language not in {"en", "zh", "zh_cn", "zh-cn"}:
+        ui_language = "en"
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
@@ -418,6 +423,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         click_playing_action=click_playing_action,
         search_double_click_action=search_double_click_action,
         set_file_encoding=set_file_encoding,
+        ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
         audio_output_device=str(section.get("audio_output_device", "")),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,

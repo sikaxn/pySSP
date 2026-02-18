@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.settings_store import default_quick_action_keys
+from pyssp.i18n import localize_widget_tree, normalize_language, tr
 from pyssp.timecode import (
     MIDI_OUTPUT_DEVICE_NONE,
     MTC_IDLE_KEEP_STREAM,
@@ -148,6 +149,7 @@ class OptionsDialog(QDialog):
         "click_playing_action": "play_it_again",
         "search_double_click_action": "find_highlight",
         "set_file_encoding": "utf8",
+        "ui_language": "en",
         "fade_in_sec": 1.0,
         "cross_fade_sec": 1.0,
         "fade_out_sec": 1.0,
@@ -278,6 +280,7 @@ class OptionsDialog(QDialog):
         sound_button_hotkey_enabled: bool,
         sound_button_hotkey_priority: str,
         sound_button_hotkey_go_to_playing: bool,
+        ui_language: str,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -302,6 +305,7 @@ class OptionsDialog(QDialog):
             sound_button_hotkey_priority if sound_button_hotkey_priority in {"system_first", "sound_button_first"} else "system_first"
         )
         self._sound_button_hotkey_go_to_playing = bool(sound_button_hotkey_go_to_playing)
+        self._ui_language = normalize_language(ui_language)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.state_colors = dict(state_colors)
@@ -335,6 +339,11 @@ class OptionsDialog(QDialog):
                 search_double_click_action=search_double_click_action,
                 set_file_encoding=set_file_encoding,
             ),
+        )
+        self._add_page(
+            "Language",
+            self._mono_icon("earth"),
+            self._build_language_page(self._ui_language),
         )
         self._add_page(
             "Hotkey",
@@ -421,6 +430,7 @@ class OptionsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
         self._validate_hotkey_conflicts()
+        localize_widget_tree(self, self._ui_language)
 
     def _add_page(self, title: str, icon, page: QWidget) -> None:
         self.stack.addWidget(page)
@@ -489,6 +499,13 @@ class OptionsDialog(QDialog):
             p.drawArc(QRectF(7, 11, 8, 8), 35 * 16, 110 * 16)
             p.drawArc(QRectF(5, 9, 12, 12), 35 * 16, 110 * 16)
             p.drawArc(QRectF(3, 7, 16, 16), 35 * 16, 110 * 16)
+        elif kind == "earth":
+            p.drawEllipse(QRectF(3, 3, 16, 16))
+            p.drawArc(QRectF(5, 3, 12, 16), 90 * 16, 180 * 16)
+            p.drawArc(QRectF(5, 3, 12, 16), 270 * 16, 180 * 16)
+            p.drawLine(3, 11, 19, 11)
+            p.drawArc(QRectF(3, 6, 16, 10), 0, 180 * 16)
+            p.drawArc(QRectF(3, 6, 16, 10), 180 * 16, 180 * 16)
 
         p.end()
         return QIcon(pix)
@@ -567,6 +584,23 @@ class OptionsDialog(QDialog):
         search_layout.addWidget(self.search_dbl_play_radio)
         layout.addWidget(search_group)
 
+        layout.addStretch(1)
+        return page
+
+    def _build_language_page(self, ui_language: str) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        self.ui_language_combo = QComboBox()
+        self.ui_language_combo.addItem("English", "en")
+        self.ui_language_combo.addItem("Chinese (Simplified)", "zh_cn")
+        index = self.ui_language_combo.findData(normalize_language(ui_language))
+        self.ui_language_combo.setCurrentIndex(index if index >= 0 else 0)
+        form.addRow("UI Language", self.ui_language_combo)
+        layout.addLayout(form)
+        note = QLabel("App language (requires reopen dialogs/windows to fully refresh).")
+        note.setWordWrap(True)
+        layout.addWidget(note)
         layout.addStretch(1)
         return page
 
@@ -1105,6 +1139,9 @@ class OptionsDialog(QDialog):
             return "gbk"
         return "utf8"
 
+    def selected_ui_language(self) -> str:
+        return normalize_language(str(self.ui_language_combo.currentData() or "en"))
+
     def selected_audio_output_device(self) -> str:
         return str(self.audio_device_combo.currentData() or "")
 
@@ -1260,9 +1297,9 @@ class OptionsDialog(QDialog):
                 break
         self.audio_device_combo.setCurrentIndex(selected_index)
         if devices:
-            self.audio_device_hint.setText(f"Detected {len(devices)} output device(s).")
+            self.audio_device_hint.setText(f"{tr('Detected ')}{len(devices)}{tr(' output device(s).')}")
         else:
-            self.audio_device_hint.setText("No explicit device list detected. System Default will be used.")
+            self.audio_device_hint.setText(tr("No explicit device list detected. System Default will be used."))
 
     def _refresh_audio_devices(self) -> None:
         selected = self.selected_audio_output_device()
@@ -1282,6 +1319,7 @@ class OptionsDialog(QDialog):
         for name in self._available_audio_devices:
             self.timecode_output_combo.addItem(name, name)
         self._set_combo_data_or_default(self.timecode_output_combo, selected_timecode, "none")
+        localize_widget_tree(self, self._ui_language)
 
     def _refresh_color_button(self, button: QPushButton, color_hex: str) -> None:
         button.setText(color_hex)
@@ -1294,27 +1332,27 @@ class OptionsDialog(QDialog):
         )
 
     def _pick_active_color(self) -> None:
-        selected = QColorDialog.getColor(QColor(self.active_group_color), self, "Active Button Color")
+        selected = QColorDialog.getColor(QColor(self.active_group_color), self, tr("Active Button Color"))
         if selected.isValid():
             self.active_group_color = selected.name().upper()
             self._refresh_color_button(self.active_color_btn, self.active_group_color)
 
     def _pick_inactive_color(self) -> None:
-        selected = QColorDialog.getColor(QColor(self.inactive_group_color), self, "Inactive Button Color")
+        selected = QColorDialog.getColor(QColor(self.inactive_group_color), self, tr("Inactive Button Color"))
         if selected.isValid():
             self.inactive_group_color = selected.name().upper()
             self._refresh_color_button(self.inactive_color_btn, self.inactive_group_color)
 
     def _pick_state_color(self, key: str, button: QPushButton, label: str) -> None:
         current = self.state_colors.get(key, "#FFFFFF")
-        selected = QColorDialog.getColor(QColor(current), self, f"{label} Color")
+        selected = QColorDialog.getColor(QColor(current), self, f"{tr(label)} {tr('Color')}")
         if selected.isValid():
             value = selected.name().upper()
             self.state_colors[key] = value
             self._refresh_color_button(button, value)
 
     def _pick_sound_text_color(self) -> None:
-        selected = QColorDialog.getColor(QColor(self.sound_button_text_color), self, "Sound Button Text Color")
+        selected = QColorDialog.getColor(QColor(self.sound_button_text_color), self, tr("Sound Button Text Color"))
         if selected.isValid():
             self.sound_button_text_color = selected.name().upper()
             self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
@@ -1325,26 +1363,35 @@ class OptionsDialog(QDialog):
             self._restore_general_defaults()
             return
         if idx == 1:
-            self._restore_hotkey_defaults()
+            self._restore_language_defaults()
             return
         if idx == 2:
-            self._restore_color_defaults()
+            self._restore_hotkey_defaults()
             return
         if idx == 3:
-            self._restore_delay_defaults()
+            self._restore_color_defaults()
             return
         if idx == 4:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 5:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 6:
-            self._restore_talk_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 7:
+            self._restore_talk_defaults()
+            return
+        if idx == 8:
             self._restore_web_remote_defaults()
             return
+
+    def _restore_language_defaults(self) -> None:
+        d = self._DEFAULTS
+        target = normalize_language(str(d.get("ui_language", "en")))
+        index = self.ui_language_combo.findData(target)
+        self.ui_language_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _restore_general_defaults(self) -> None:
         d = self._DEFAULTS
@@ -1430,9 +1477,9 @@ class OptionsDialog(QDialog):
                     prev_key, prev_slot_index = seen[token]
                     conflict_cells.add((prev_key, prev_slot_index))
                     conflict_cells.add((key, slot_index))
-                    left = f"{self._hotkey_labels.get(prev_key, prev_key)} ({prev_slot_index})"
-                    right = f"{self._hotkey_labels.get(key, key)} ({slot_index})"
-                    conflicts.append(f"{token}: {left} and {right}")
+                    left = f"{tr(self._hotkey_labels.get(prev_key, prev_key))} ({prev_slot_index})"
+                    right = f"{tr(self._hotkey_labels.get(key, key))} ({slot_index})"
+                    conflicts.append(f"{token}: {left} {tr('and')} {right}")
                 else:
                     seen[token] = (key, slot_index)
 
@@ -1448,7 +1495,7 @@ class OptionsDialog(QDialog):
                     prev_key, prev_slot_index = seen[token]
                     conflict_cells.add((prev_key, prev_slot_index))
                     conflicts.append(
-                        f"{token}: {self._describe_conflict_target(prev_key, prev_slot_index)} and Quick Action ({idx + 1})"
+                        f"{token}: {self._describe_conflict_target(prev_key, prev_slot_index)} {tr('and')} {tr('Quick Action')} ({idx + 1})"
                     )
                     quick_conflict_rows.add(idx)
                     if prev_key == "quick_action":
@@ -1480,14 +1527,14 @@ class OptionsDialog(QDialog):
             return
         display = "; ".join(conflicts[:4])
         if len(conflicts) > 4:
-            display += f"; +{len(conflicts) - 4} more"
-        self.hotkey_warning_label.setText(f"Hotkey conflict detected. Fix duplicates before saving. {display}")
+            display += f"; +{len(conflicts) - 4} {tr('more')}"
+        self.hotkey_warning_label.setText(f"{tr('Hotkey conflict detected. Fix duplicates before saving.')} {display}")
         self.hotkey_warning_label.setVisible(True)
 
     def _describe_conflict_target(self, key: str, slot_index: int) -> str:
         if key == "quick_action":
-            return f"Quick Action ({slot_index})"
-        return f"{self._hotkey_labels.get(key, key)} ({slot_index})"
+            return f"{tr('Quick Action')} ({slot_index})"
+        return f"{tr(self._hotkey_labels.get(key, key))} ({slot_index})"
 
     def _restore_delay_defaults(self) -> None:
         d = self._DEFAULTS

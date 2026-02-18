@@ -50,6 +50,7 @@ from pyssp.audio_engine import ExternalMediaPlayer, get_media_ssp_units, list_ou
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, load_settings, save_settings
+from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,
@@ -598,9 +599,11 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._suspend_settings_save = True
-        self.setWindowTitle("Sports Sounds Pro - pySSP")
+        self.setWindowTitle("Python SSP")
         self.resize(1360, 900)
         self.settings: AppSettings = load_settings()
+        self.ui_language = normalize_language(getattr(self.settings, "ui_language", "en"))
+        set_current_language(self.ui_language)
 
         self.current_group = "A"
         self.current_page = 0
@@ -869,6 +872,7 @@ class MainWindow(QMainWindow):
         self._auto_end_fade_done = False
 
         self._build_ui()
+        self._apply_language()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
         self.statusBar().addWidget(self.status_hover_label)
@@ -965,6 +969,21 @@ class MainWindow(QMainWindow):
 
         self._build_timecode_dock()
 
+    def _apply_language(self) -> None:
+        set_current_language(self.ui_language)
+        apply_application_font(QApplication.instance(), self.ui_language)
+        localize_widget_tree(self, self.ui_language)
+        if self._search_window is not None:
+            localize_widget_tree(self._search_window, self.ui_language)
+        if self._dsp_window is not None:
+            localize_widget_tree(self._dsp_window, self.ui_language)
+        for window in self._tool_windows.values():
+            localize_widget_tree(window, self.ui_language)
+        if self._about_window is not None:
+            localize_widget_tree(self._about_window, self.ui_language)
+        if self._help_window is not None:
+            localize_widget_tree(self._help_window, self.ui_language)
+
     def _build_timecode_dock(self) -> None:
         self.timecode_dock = QDockWidget("Timecode", self)
         self.timecode_panel = TimecodePanel(self.timecode_dock)
@@ -1022,7 +1041,7 @@ class MainWindow(QMainWindow):
         show_warning = self._is_multi_play_enabled() and self._is_timecode_output_enabled()
         if show_warning:
             self.timecode_multiplay_banner.setText(
-                "TIMECODE ENABLED: Multi-Play is not designed for timecode. Unexpected behaviour could happen."
+                tr("TIMECODE ENABLED: Multi-Play is not designed for timecode. Unexpected behaviour could happen.")
             )
             self.timecode_multiplay_banner.setVisible(True)
             return
@@ -1229,9 +1248,9 @@ class MainWindow(QMainWindow):
             else:
                 mode_text = "Follow Media/Audio Player (relative to cue set point)"
         self.timecode_status_label.setText(
-            f"LTC: {'Enabled' if ltc_enabled else 'Disabled'} | "
-            f"MTC: {'Enabled' if mtc_enabled else 'Disabled'} | "
-            f"Timecode: {mode_text}"
+            f"{tr('LTC: ')}{tr('Enabled') if ltc_enabled else tr('Disabled')} | "
+            f"{tr('MTC: ')}{tr('Enabled') if mtc_enabled else tr('Disabled')} | "
+            f"{tr('Timecode: ')}{tr(mode_text)}"
         )
 
     def _init_audio_players(self) -> None:
@@ -2460,7 +2479,7 @@ class MainWindow(QMainWindow):
         self.page_list.blockSignals(True)
         self.page_list.clear()
         if self.cue_mode:
-            cue_item = QListWidgetItem("Cue Page")
+            cue_item = QListWidgetItem(tr("Cue Page"))
             cue_item.setTextAlignment(Qt.AlignCenter)
             self.page_list.addItem(cue_item)
             self.page_list.setCurrentRow(0)
@@ -2474,9 +2493,9 @@ class MainWindow(QMainWindow):
             if page_name:
                 text = page_name
             elif has_sound:
-                text = f"Page {self.current_group.lower()} {i + 1}"
+                text = f"{tr('Page ')}{self.current_group.lower()} {i + 1}"
             else:
-                text = "(Blank Page)"
+                text = tr("(Blank Page)")
             item = QListWidgetItem(text)
             item.setTextAlignment(Qt.AlignCenter)
             page_color = self.page_colors[self.current_group][i]
@@ -2978,18 +2997,18 @@ class MainWindow(QMainWindow):
             if slot.assigned and not slot.marker:
                 total_buttons += 1
                 total_ms += max(0, int(slot.duration_ms))
-        self.status_totals_label.setText(f"{total_buttons} button ({format_set_time(total_ms)})")
+        self.status_totals_label.setText(f"{total_buttons} {tr('button')} ({format_set_time(total_ms)})")
 
     def _on_sound_button_hover(self, slot_index: Optional[int]) -> None:
         if slot_index is None:
-            self.status_hover_label.setText("Button: -")
+            self.status_hover_label.setText(tr("Button: -"))
             return
         if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
-            self.status_hover_label.setText("Button: -")
+            self.status_hover_label.setText(tr("Button: -"))
             return
         group = self._view_group_key()
         group_text = group if group == "Q" else group.upper()
-        self.status_hover_label.setText(f"Button: {group_text}-{self.current_page + 1}-{slot_index + 1}")
+        self.status_hover_label.setText(f"{tr('Button: ')}{group_text}-{self.current_page + 1}-{slot_index + 1}")
 
     def _format_button_key(self, slot_key: Tuple[str, int, int]) -> str:
         group, page_index, slot_index = slot_key
@@ -2998,11 +3017,11 @@ class MainWindow(QMainWindow):
 
     def _update_status_now_playing(self) -> None:
         if not self._active_playing_keys:
-            self.status_now_playing_label.setText("Now Playing: -")
+            self.status_now_playing_label.setText(tr("Now Playing: -"))
             return
         ordered = sorted(self._active_playing_keys, key=lambda item: (item[0], item[1], item[2]))
         values = ", ".join(self._format_button_key(key) for key in ordered)
-        self.status_now_playing_label.setText(f"Now Playing: {values}")
+        self.status_now_playing_label.setText(f"{tr('Now Playing: ')}{values}")
 
     def _log_file_path(self) -> str:
         appdata = os.getenv("APPDATA")
@@ -3410,6 +3429,7 @@ class MainWindow(QMainWindow):
             volume_override_pct=slot.volume_override_pct,
             sound_hotkey=slot.sound_hotkey,
             start_dir=start_dir,
+            language=self.ui_language,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3486,6 +3506,7 @@ class MainWindow(QMainWindow):
             cue_start_ms=slot.cue_start_ms,
             cue_end_ms=slot.cue_end_ms,
             stop_host_playback=self._hard_stop_all,
+            language=self.ui_language,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3885,7 +3906,7 @@ class MainWindow(QMainWindow):
     def _play_slot(self, slot_index: int, allow_fade: bool = True) -> None:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
-            self.statusBar().showMessage("Playback is not allowed while Button Drag is enabled.", 2500)
+            self.statusBar().showMessage(tr("Playback is not allowed while Button Drag is enabled."), 2500)
             return
         page = self._current_page_slots()
         slot = page[slot_index]
@@ -4333,25 +4354,25 @@ class MainWindow(QMainWindow):
 
     def _update_group_status(self) -> None:
         if self.cue_mode:
-            self.group_status.setText("Group - Cue")
+            self.group_status.setText(tr("Group - Cue"))
         else:
-            self.group_status.setText(f"Group - {self.current_group}")
+            self.group_status.setText(f"{tr('Group - ')}{self.current_group}")
 
     def _update_page_status(self) -> None:
         if self.cue_mode:
-            self.page_status.setText("Page - Cue")
+            self.page_status.setText(tr("Page - Cue"))
             return
         page_name = self.page_names[self.current_group][self.current_page].strip()
         if page_name:
-            self.page_status.setText(f"Page - {page_name}")
+            self.page_status.setText(f"{tr('Page - ')}{page_name}")
         else:
-            self.page_status.setText(f"Page - {self.current_page + 1}")
+            self.page_status.setText(f"{tr('Page - ')}{self.current_page + 1}")
 
     def _update_now_playing_label(self, text: str) -> None:
         if text:
-            self.now_playing_label.setText(f"NOW PLAYING: {text}")
+            self.now_playing_label.setText(f"{tr('NOW PLAYING: ')}{text}")
         else:
-            self.now_playing_label.setText("NOW PLAYING:")
+            self.now_playing_label.setText(tr("NOW PLAYING:"))
 
     def _build_now_playing_text(self, slot: SoundButtonData) -> str:
         title = slot.title.strip()
@@ -4418,8 +4439,8 @@ class MainWindow(QMainWindow):
         enabled = self._is_button_drag_enabled()
         if enabled:
             self.drag_mode_banner.setText(
-                "BUTTON DRAG MODE ENABLED: Playback is not allowed. "
-                "Drag a sound button with the mouse, drag over Group/Page targets, then drop on a destination button."
+                tr("BUTTON DRAG MODE ENABLED: Playback is not allowed. ")
+                + tr("Drag a sound button with the mouse, drag over Group/Page targets, then drop on a destination button.")
             )
             self.drag_mode_banner.setVisible(True)
             if self.centralWidget() is not None:
@@ -4839,6 +4860,7 @@ class MainWindow(QMainWindow):
             sound_button_hotkey_enabled=self.sound_button_hotkey_enabled,
             sound_button_hotkey_priority=self.sound_button_hotkey_priority,
             sound_button_hotkey_go_to_playing=self.sound_button_hotkey_go_to_playing,
+            ui_language=self.ui_language,
             initial_page=initial_page,
             parent=self,
         )
@@ -4917,6 +4939,10 @@ class MainWindow(QMainWindow):
         self.sound_button_hotkey_enabled = dialog.selected_sound_button_hotkey_enabled()
         self.sound_button_hotkey_priority = dialog.selected_sound_button_hotkey_priority()
         self.sound_button_hotkey_go_to_playing = dialog.selected_sound_button_hotkey_go_to_playing()
+        selected_ui_language = dialog.selected_ui_language()
+        if selected_ui_language != self.ui_language:
+            self.ui_language = selected_ui_language
+            self._apply_language()
         self._apply_hotkeys()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
@@ -5301,7 +5327,7 @@ class MainWindow(QMainWindow):
 
     def _update_web_remote_status_label(self) -> None:
         state = "Enabled" if self.web_remote_enabled else "Disabled"
-        self.web_remote_status_label.setText(f"Web Remote is {state}")
+        self.web_remote_status_label.setText(f"{tr('Web Remote is ')}{tr(state)}")
 
     def _stop_web_remote_service(self) -> None:
         server = self._web_remote_server
@@ -5622,7 +5648,7 @@ class MainWindow(QMainWindow):
 
     def _open_find_dialog(self) -> None:
         if self._search_window is None:
-            self._search_window = SearchWindow(self)
+            self._search_window = SearchWindow(self, language=self.ui_language)
             self._search_window.set_handlers(
                 search_handler=self._find_sound_matches,
                 goto_handler=self._go_to_found_match,
@@ -5640,7 +5666,7 @@ class MainWindow(QMainWindow):
 
     def _open_dsp_window(self) -> None:
         if self._dsp_window is None:
-            self._dsp_window = DSPWindow(self)
+            self._dsp_window = DSPWindow(self, language=self.ui_language)
             self._dsp_window.set_config(self._dsp_config)
             self._dsp_window.configChanged.connect(self._on_dsp_config_changed)
             self._dsp_window.destroyed.connect(lambda _=None: self._clear_dsp_window_ref())
@@ -5889,7 +5915,7 @@ class MainWindow(QMainWindow):
         if not self.talk_active:
             talk_button.setChecked(False)
             talk_button.setStyleSheet("")
-            talk_button.setText("Talk")
+            talk_button.setText(tr("Talk"))
             return
         talk_button.setChecked(True)
         if self.talk_blink_button:
@@ -5908,7 +5934,7 @@ class MainWindow(QMainWindow):
         else:
             talk_button.setProperty("_blink_on", True)
             talk_button.setStyleSheet("background:#F2D74A; font-weight:bold;")
-        talk_button.setText("Talk*")
+        talk_button.setText(tr("Talk*"))
 
     def _stop_playback(self) -> None:
         self._manual_stop_requested = True
@@ -5941,7 +5967,7 @@ class MainWindow(QMainWindow):
         if self.fade_on_stop and self._is_fade_out_enabled() and active_players:
             self._stop_fade_armed = True
             self.statusBar().showMessage(
-                "Stop fade in progress. Click Stop again to force stop (skip fade).",
+                tr("Stop fade in progress. Click Stop again to force stop (skip fade)."),
                 3000,
             )
             for player in active_players:
@@ -6584,6 +6610,7 @@ class MainWindow(QMainWindow):
         self.settings.click_playing_action = self.click_playing_action
         self.settings.search_double_click_action = self.search_double_click_action
         self.settings.set_file_encoding = self.set_file_encoding
+        self.settings.ui_language = self.ui_language
         self.settings.audio_output_device = self.audio_output_device
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action

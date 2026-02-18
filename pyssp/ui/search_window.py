@@ -14,10 +14,11 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+from pyssp.i18n import localize_widget_tree
 
 
 class SearchWindow(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, language: str = "en") -> None:
         super().__init__(parent)
         self.setWindowTitle("Find Sound File")
         self.resize(860, 520)
@@ -65,6 +66,7 @@ class SearchWindow(QDialog):
         self.play_btn.clicked.connect(self.play_selected)
         self.results_list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.close_btn.clicked.connect(self.close)
+        localize_widget_tree(self, language)
 
     def set_handlers(
         self,

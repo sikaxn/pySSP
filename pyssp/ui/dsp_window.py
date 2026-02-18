@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.dsp import DSPConfig
+from pyssp.i18n import localize_widget_tree
 
 
 class DSPWindow(QDialog):
@@ -29,7 +30,7 @@ class DSPWindow(QDialog):
         "Classical": [3, 2, 1, 0, -1, -1, 0, 1, 2, 3],
     }
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, language: str = "en") -> None:
         super().__init__(parent)
         self.setWindowTitle("DSP")
         self.resize(980, 560)
@@ -134,6 +135,7 @@ class DSPWindow(QDialog):
         fx_layout.addWidget(pitch_reset, 2, 3)
 
         root.addWidget(fx_group, 2)
+        localize_widget_tree(self, language)
 
     def _update_reverb_label(self, value: int) -> None:
         self.reverb_value.setText(f"{value / 10.0:.1f} s")

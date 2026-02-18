@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.audio_engine import ExternalMediaPlayer
+from pyssp.i18n import localize_widget_tree
 
 
 class CueRangeIndicator(QWidget):
@@ -86,6 +87,7 @@ class CuePointDialog(QDialog):
         cue_start_ms: Optional[int],
         cue_end_ms: Optional[int],
         stop_host_playback: Optional[Callable[[], None]] = None,
+        language: str = "en",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -238,6 +240,7 @@ class CuePointDialog(QDialog):
         self._apply_jog_bounds()
         self._refresh_transport_times(0)
         self._refresh_transport_buttons()
+        localize_widget_tree(self, language)
 
     def closeEvent(self, event) -> None:
         self._stop_preview_player()

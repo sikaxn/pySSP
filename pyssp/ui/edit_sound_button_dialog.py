@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyssp.i18n import localize_widget_tree
 
 
 class SoundHotkeyEdit(QLineEdit):
@@ -70,6 +71,7 @@ class EditSoundButtonDialog(QDialog):
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         start_dir: str = "",
+        language: str = "en",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -140,6 +142,7 @@ class EditSoundButtonDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        localize_widget_tree(self, language)
 
     def _browse_file(self) -> None:
         start_dir = self._start_dir

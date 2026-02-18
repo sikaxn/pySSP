@@ -803,6 +803,8 @@ class MainWindow(QMainWindow):
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
         self.status_now_playing_label = QLabel("Now Playing: -")
+        self.timecode_status_label = QLabel("")
+        self.web_remote_status_label = QLabel("")
         self.total_time = QLabel("00:00:00")
         self.elapsed_time = QLabel("00:00:00")
         self.remaining_time = QLabel("00:00:00")
@@ -867,8 +869,12 @@ class MainWindow(QMainWindow):
         self._auto_end_fade_done = False
 
         self._build_ui()
+        self._update_timecode_status_label()
+        self._update_web_remote_status_label()
         self.statusBar().addWidget(self.status_hover_label)
         self.statusBar().addWidget(self.status_now_playing_label, 1)
+        self.statusBar().addPermanentWidget(self.timecode_status_label)
+        self.statusBar().addPermanentWidget(self.web_remote_status_label)
         self.statusBar().addPermanentWidget(self.status_totals_label)
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
@@ -1191,6 +1197,7 @@ class MainWindow(QMainWindow):
         self._mtc_sender.request_resync()
 
     def _refresh_timecode_panel(self) -> None:
+        self._update_timecode_status_label()
         if self.timecode_panel is None:
             return
         mode_idx = self.timecode_panel.mode_combo.findData(self.timecode_mode)
@@ -1203,6 +1210,29 @@ class MainWindow(QMainWindow):
             ms_to_timecode_string(output_ms, nominal_fps(self.timecode_fps))
         )
         self.timecode_panel.device_label.setText(self._timecode_device_text())
+
+    def _update_timecode_status_label(self) -> None:
+        ltc_enabled = str(self.timecode_audio_output_device or "none").strip().lower() != "none"
+        mtc_enabled = str(self.timecode_midi_output_device or MIDI_OUTPUT_DEVICE_NONE).strip() != MIDI_OUTPUT_DEVICE_NONE
+        if self.timecode_mode == TIMECODE_MODE_ZERO:
+            mode_text = "All Zero"
+        elif self.timecode_mode == TIMECODE_MODE_SYSTEM:
+            mode_text = "System Time"
+        elif self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
+            if self.main_transport_timeline_mode == "audio_file":
+                mode_text = "Freeze Timecode (relative to actual audio file)"
+            else:
+                mode_text = "Freeze Timecode (relative to cue set point)"
+        else:
+            if self.main_transport_timeline_mode == "audio_file":
+                mode_text = "Follow Media/Audio Player (relative to actual audio file)"
+            else:
+                mode_text = "Follow Media/Audio Player (relative to cue set point)"
+        self.timecode_status_label.setText(
+            f"LTC: {'Enabled' if ltc_enabled else 'Disabled'} | "
+            f"MTC: {'Enabled' if mtc_enabled else 'Disabled'} | "
+            f"Timecode: {mode_text}"
+        )
 
     def _init_audio_players(self) -> None:
         self.player = ExternalMediaPlayer(self)
@@ -1287,6 +1317,10 @@ class MainWindow(QMainWindow):
         verify_sound_buttons_action = QAction("Verify Sound Buttons", self)
         verify_sound_buttons_action.triggered.connect(self._run_verify_sound_buttons)
         tools_menu.addAction(verify_sound_buttons_action)
+
+        disable_playlist_all_pages_action = QAction("Disable Play List on All Pages", self)
+        disable_playlist_all_pages_action.triggered.connect(self._disable_playlist_on_all_pages)
+        tools_menu.addAction(disable_playlist_all_pages_action)
 
         tools_menu.addSeparator()
 
@@ -1858,6 +1892,22 @@ class MainWindow(QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()
+
+    def _disable_playlist_on_all_pages(self) -> None:
+        changed = False
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                if self.page_playlist_enabled[group][page_index] or self.page_shuffle_enabled[group][page_index]:
+                    changed = True
+                self.page_playlist_enabled[group][page_index] = False
+                self.page_shuffle_enabled[group][page_index] = False
+        if not changed:
+            QMessageBox.information(self, "Disable Play List on All Pages", "Play List is already disabled on all pages.")
+            return
+        self.current_playlist_start = None
+        self._set_dirty(True)
+        self._sync_playlist_shuffle_buttons()
+        QMessageBox.information(self, "Disable Play List on All Pages", "Play List has been disabled on all pages.")
 
     def _show_page_library_folder_path(self) -> None:
         path = self._page_library_folder_path()
@@ -5220,14 +5270,17 @@ class MainWindow(QMainWindow):
     def _apply_web_remote_state(self) -> None:
         if not self.web_remote_enabled:
             self._stop_web_remote_service()
+            self._update_web_remote_status_label()
             return
         if self._web_remote_server is not None and self._web_remote_server.is_running:
             same_host = self._web_remote_server.host == self.web_remote_host
             same_port = int(self._web_remote_server.port) == int(self.web_remote_port)
             if same_host and same_port:
+                self._update_web_remote_status_label()
                 return
             self._stop_web_remote_service()
         self._start_web_remote_service()
+        self._update_web_remote_status_label()
 
     def _start_web_remote_service(self) -> None:
         if self._web_remote_server is not None and self._web_remote_server.is_running:
@@ -5239,10 +5292,16 @@ class MainWindow(QMainWindow):
                 port=self.web_remote_port,
             )
             self._web_remote_server.start()
+            self._update_web_remote_status_label()
         except Exception as exc:
             self.web_remote_enabled = False
             self._web_remote_server = None
+            self._update_web_remote_status_label()
             QMessageBox.warning(self, "Web Remote", f"Could not start Web Remote service:\n{exc}")
+
+    def _update_web_remote_status_label(self) -> None:
+        state = "Enabled" if self.web_remote_enabled else "Disabled"
+        self.web_remote_status_label.setText(f"Web Remote is {state}")
 
     def _stop_web_remote_service(self) -> None:
         server = self._web_remote_server

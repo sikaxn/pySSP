@@ -604,7 +604,7 @@ class OptionsDialog(QDialog):
     def _build_quick_action_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.quick_action_enabled_checkbox = QCheckBox("enable quick action key (assign broadcast short key)")
+        self.quick_action_enabled_checkbox = QCheckBox("Enable Quick Action Key (assign broadcast short key)")
         self.quick_action_enabled_checkbox.setChecked(self._quick_action_enabled)
         self.quick_action_enabled_checkbox.toggled.connect(self._validate_hotkey_conflicts)
         layout.addWidget(self.quick_action_enabled_checkbox)

@@ -3878,9 +3878,6 @@ class MainWindow(QMainWindow):
             if self.click_playing_action == "stop_it" and not force_single_play:
                 self._stop_playback()
                 return
-        # Signal timecode immediately on valid play intent (before media load/play).
-        self._timecode_on_playback_start(slot)
-        print(f"[TCDBG] {time.perf_counter():.6f} timecode_intent_start key={playing_key}")
         # Invalidate any previously scheduled delayed start to avoid stale restarts.
         self._pending_start_request = None
         self._pending_start_token += 1
@@ -3914,25 +3911,12 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
 
         self.current_playing = playing_key
-        self._auto_transition_track = self.current_playing
-        self._auto_transition_done = False
-        self._auto_end_fade_track = self.current_playing
-        self._auto_end_fade_done = False
-        self._track_started_at = time.monotonic()
-        # Clear stale timing from previous track so auto-transition cannot jump immediately.
-        self.current_duration_ms = 0
-        self._last_ui_position_ms = -1
-        self.seek_slider.setRange(0, 0)
-        self.seek_slider.setValue(0)
-        self.total_time.setText("00:00:00")
-        self.elapsed_time.setText("00:00:00")
-        self.remaining_time.setText("00:00:00")
-        self._set_progress_display(0)
         self._manual_stop_requested = False
         self._cancel_fade_for_player(self.player)
         self._cancel_fade_for_player(self.player_b)
         slot_pct = self._slot_volume_pct(slot)
 
+        started_playback = False
         if cross_mode:
             self._stop_player_internal(new_player)
             load_t = time.perf_counter()
@@ -3963,6 +3947,7 @@ class MainWindow(QMainWindow):
             new_player.setVolume(0)
             print(f"[TCDBG] {time.perf_counter():.6f} player_play cross key={playing_key}")
             new_player.play()
+            started_playback = True
             self._set_player_slot_key(new_player, playing_key)
             fade_seconds = self.cross_fade_sec
             self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
@@ -4001,18 +3986,40 @@ class MainWindow(QMainWindow):
                 self.player.setVolume(0)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play fade_in key={playing_key}")
                 self.player.play()
+                started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
                 self.player.setVolume(target_volume)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
                 self.player.play()
+                started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
+
+        if started_playback:
+            self._timecode_on_playback_start(slot)
+            self._prepare_transport_for_new_playback()
 
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
         self._mark_player_started(self.player)
+
+    def _prepare_transport_for_new_playback(self) -> None:
+        self._auto_transition_track = self.current_playing
+        self._auto_transition_done = False
+        self._auto_end_fade_track = self.current_playing
+        self._auto_end_fade_done = False
+        self._track_started_at = time.monotonic()
+        # Clear stale timing from previous track so auto-transition cannot jump immediately.
+        self.current_duration_ms = 0
+        self._last_ui_position_ms = -1
+        self.seek_slider.setRange(0, 0)
+        self.seek_slider.setValue(0)
+        self.total_time.setText("00:00:00")
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
+        self._set_progress_display(0)
 
     def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> None:
         if not self._enforce_multi_play_limit():

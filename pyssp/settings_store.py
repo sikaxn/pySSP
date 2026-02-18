@@ -58,6 +58,15 @@ class AppSettings:
     multi_play_limit_action: str = "stop_oldest"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
+    timecode_audio_output_device: str = "none"
+    timecode_midi_output_device: str = "__none__"
+    timecode_mode: str = "zero"
+    timecode_fps: float = 30.0
+    timecode_mtc_fps: float = 30.0
+    timecode_mtc_idle_behavior: str = "keep_stream"
+    timecode_sample_rate: int = 48000
+    timecode_bit_depth: int = 16
+    show_timecode_panel: bool = False
     main_transport_timeline_mode: str = "cue_region"
     main_jog_outside_cue_action: str = "stop_immediately"
     color_empty: str = "#0B868A"
@@ -192,6 +201,15 @@ def save_settings(settings: AppSettings) -> None:
         "multi_play_limit_action": settings.multi_play_limit_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
+        "timecode_audio_output_device": settings.timecode_audio_output_device,
+        "timecode_midi_output_device": settings.timecode_midi_output_device,
+        "timecode_mode": settings.timecode_mode,
+        "timecode_fps": str(settings.timecode_fps),
+        "timecode_mtc_fps": str(settings.timecode_mtc_fps),
+        "timecode_mtc_idle_behavior": settings.timecode_mtc_idle_behavior,
+        "timecode_sample_rate": str(settings.timecode_sample_rate),
+        "timecode_bit_depth": str(settings.timecode_bit_depth),
+        "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
         "main_jog_outside_cue_action": settings.main_jog_outside_cue_action,
         "color_empty": settings.color_empty,
@@ -300,6 +318,22 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
+    timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
+    timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
+    timecode_mode = str(section.get("timecode_mode", "zero")).strip().lower()
+    if timecode_mode not in {"zero", "follow_media", "system_time", "follow_media_freeze"}:
+        timecode_mode = "zero"
+    timecode_fps = _clamp_float(_get_float(section, "timecode_fps", 30.0), 1.0, 120.0)
+    timecode_mtc_fps = _clamp_float(_get_float(section, "timecode_mtc_fps", 30.0), 1.0, 120.0)
+    timecode_mtc_idle_behavior = str(section.get("timecode_mtc_idle_behavior", "keep_stream")).strip().lower()
+    if timecode_mtc_idle_behavior not in {"keep_stream", "allow_dark"}:
+        timecode_mtc_idle_behavior = "keep_stream"
+    timecode_sample_rate = _clamp_int(_get_int(section, "timecode_sample_rate", 48000), 8000, 192000)
+    if timecode_sample_rate not in {44100, 48000, 96000}:
+        timecode_sample_rate = 48000
+    timecode_bit_depth = _clamp_int(_get_int(section, "timecode_bit_depth", 16), 8, 32)
+    if timecode_bit_depth not in {8, 16, 32}:
+        timecode_bit_depth = 16
     timeline_mode_raw = str(
         section.get("main_transport_timeline_mode", section.get("cue_editor_timeline_mode", "cue_region"))
     ).strip().lower()
@@ -355,6 +389,15 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         multi_play_limit_action=multi_play_limit_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
+        timecode_audio_output_device=timecode_audio_output_device,
+        timecode_midi_output_device=timecode_midi_output_device,
+        timecode_mode=timecode_mode,
+        timecode_fps=timecode_fps,
+        timecode_mtc_fps=timecode_mtc_fps,
+        timecode_mtc_idle_behavior=timecode_mtc_idle_behavior,
+        timecode_sample_rate=timecode_sample_rate,
+        timecode_bit_depth=timecode_bit_depth,
+        show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
         main_transport_timeline_mode=timeline_mode_raw,
         main_jog_outside_cue_action=outside_action,
         color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),

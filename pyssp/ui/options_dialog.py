@@ -33,6 +33,14 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.settings_store import default_quick_action_keys
+from pyssp.timecode import (
+    MIDI_OUTPUT_DEVICE_NONE,
+    MTC_IDLE_KEEP_STREAM,
+    TIME_CODE_BIT_DEPTHS,
+    TIME_CODE_FPS_CHOICES,
+    TIME_CODE_MTC_FPS_CHOICES,
+    TIME_CODE_SAMPLE_RATES,
+)
 
 
 class HotkeyCaptureEdit(QLineEdit):
@@ -148,6 +156,14 @@ class OptionsDialog(QDialog):
         "talk_blink_button": False,
         "web_remote_enabled": False,
         "web_remote_port": 5050,
+        "timecode_audio_output_device": "none",
+        "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
+        "timecode_fps": 30.0,
+        "timecode_mtc_fps": 30.0,
+        "timecode_mtc_idle_behavior": MTC_IDLE_KEEP_STREAM,
+        "timecode_sample_rate": 48000,
+        "timecode_bit_depth": 16,
+        "timecode_timeline_mode": "cue_region",
         "state_colors": {
             "playing": "#66FF33",
             "played": "#FF3B30",
@@ -216,6 +232,15 @@ class OptionsDialog(QDialog):
         search_double_click_action: str,
         audio_output_device: str,
         available_audio_devices: List[str],
+        available_midi_devices: List[tuple[str, str]],
+        timecode_audio_output_device: str,
+        timecode_midi_output_device: str,
+        timecode_fps: float,
+        timecode_mtc_fps: float,
+        timecode_mtc_idle_behavior: str,
+        timecode_sample_rate: int,
+        timecode_bit_depth: int,
+        timecode_timeline_mode: str,
         max_multi_play_songs: int,
         multi_play_limit_action: str,
         web_remote_enabled: bool,
@@ -231,6 +256,7 @@ class OptionsDialog(QDialog):
         sound_button_hotkey_enabled: bool,
         sound_button_hotkey_priority: str,
         sound_button_hotkey_go_to_playing: bool,
+        initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -259,6 +285,7 @@ class OptionsDialog(QDialog):
         self.state_colors = dict(state_colors)
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
+        self._available_midi_devices = list(available_midi_devices)
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -321,6 +348,15 @@ class OptionsDialog(QDialog):
             self._build_audio_device_page(
                 audio_output_device=audio_output_device,
                 available_audio_devices=available_audio_devices,
+                available_midi_devices=available_midi_devices,
+                timecode_audio_output_device=timecode_audio_output_device,
+                timecode_midi_output_device=timecode_midi_output_device,
+                timecode_fps=timecode_fps,
+                timecode_mtc_fps=timecode_mtc_fps,
+                timecode_mtc_idle_behavior=timecode_mtc_idle_behavior,
+                timecode_sample_rate=timecode_sample_rate,
+                timecode_bit_depth=timecode_bit_depth,
+                timecode_timeline_mode=timecode_timeline_mode,
             ),
         )
         self._add_page(
@@ -343,7 +379,8 @@ class OptionsDialog(QDialog):
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.page_list.setCurrentRow(0)
+        if not self.select_page(initial_page):
+            self.page_list.setCurrentRow(0)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.ok_button = buttons.button(QDialogButtonBox.Ok)
@@ -358,6 +395,19 @@ class OptionsDialog(QDialog):
         self.stack.addWidget(page)
         item = QListWidgetItem(icon, title)
         self.page_list.addItem(item)
+
+    def select_page(self, title: Optional[str]) -> bool:
+        needle = str(title or "").strip().lower()
+        if not needle:
+            return False
+        for index in range(self.page_list.count()):
+            item = self.page_list.item(index)
+            if item is None:
+                continue
+            if item.text().strip().lower() == needle:
+                self.page_list.setCurrentRow(index)
+                return True
+        return False
 
     def _mono_icon(self, kind: str) -> QIcon:
         size = 22
@@ -730,24 +780,105 @@ class OptionsDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _build_audio_device_page(self, audio_output_device: str, available_audio_devices: List[str]) -> QWidget:
+    def _build_audio_device_page(
+        self,
+        audio_output_device: str,
+        available_audio_devices: List[str],
+        available_midi_devices: List[tuple[str, str]],
+        timecode_audio_output_device: str,
+        timecode_midi_output_device: str,
+        timecode_fps: float,
+        timecode_mtc_fps: float,
+        timecode_mtc_idle_behavior: str,
+        timecode_sample_rate: int,
+        timecode_bit_depth: int,
+        timecode_timeline_mode: str,
+    ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        playback_group = QGroupBox("Audio Playback")
+        playback_layout = QVBoxLayout(playback_group)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Output Device:"))
+        row.addWidget(QLabel("Playback Device:"))
         self.audio_device_combo = QComboBox()
         row.addWidget(self.audio_device_combo, 1)
         self.audio_refresh_button = QPushButton("Refresh")
         self.audio_refresh_button.clicked.connect(self._refresh_audio_devices)
         row.addWidget(self.audio_refresh_button)
-        layout.addLayout(row)
+        playback_layout.addLayout(row)
 
         self.audio_device_hint = QLabel("")
-        layout.addWidget(self.audio_device_hint)
+        playback_layout.addWidget(self.audio_device_hint)
+        layout.addWidget(playback_group)
 
         self._populate_audio_devices(available_audio_devices, audio_output_device)
-        layout.addWidget(QLabel("MIDI and timecode settings will be added to this page later."))
+
+        ltc_group = QGroupBox("SMPTE Timecode (LTC)")
+        ltc_form = QFormLayout(ltc_group)
+        self.timecode_output_combo = QComboBox()
+        self.timecode_output_combo.addItem("Follow playback device setting", "follow_playback")
+        self.timecode_output_combo.addItem("Use system default", "default")
+        self.timecode_output_combo.addItem("None (mute output)", "none")
+        for name in available_audio_devices:
+            self.timecode_output_combo.addItem(name, name)
+        ltc_form.addRow("Output Device:", self.timecode_output_combo)
+
+        self.timecode_fps_combo = QComboBox()
+        for fps in TIME_CODE_FPS_CHOICES:
+            self.timecode_fps_combo.addItem(f"{fps:g} fps", float(fps))
+        ltc_form.addRow("Frame Rate:", self.timecode_fps_combo)
+
+        self.timecode_sample_rate_combo = QComboBox()
+        for sample_rate in TIME_CODE_SAMPLE_RATES:
+            self.timecode_sample_rate_combo.addItem(f"{sample_rate} Hz", int(sample_rate))
+        ltc_form.addRow("Sample Rate:", self.timecode_sample_rate_combo)
+
+        self.timecode_bit_depth_combo = QComboBox()
+        for bit_depth in TIME_CODE_BIT_DEPTHS:
+            self.timecode_bit_depth_combo.addItem(f"{bit_depth}-bit", int(bit_depth))
+        ltc_form.addRow("Bit Depth:", self.timecode_bit_depth_combo)
+        layout.addWidget(ltc_group)
+
+        mtc_group = QGroupBox("MIDI Timecode (MTC)")
+        mtc_form = QFormLayout(mtc_group)
+        self.timecode_midi_output_combo = QComboBox()
+        self.timecode_midi_output_combo.addItem("None (disabled)", MIDI_OUTPUT_DEVICE_NONE)
+        for device_id, device_name in available_midi_devices:
+            self.timecode_midi_output_combo.addItem(device_name, device_id)
+        mtc_form.addRow("MIDI Output Device:", self.timecode_midi_output_combo)
+
+        self.timecode_mtc_fps_combo = QComboBox()
+        for fps in TIME_CODE_MTC_FPS_CHOICES:
+            self.timecode_mtc_fps_combo.addItem(f"{fps:g} fps", float(fps))
+        mtc_form.addRow("Frame Rate:", self.timecode_mtc_fps_combo)
+
+        self.timecode_mtc_idle_behavior_combo = QComboBox()
+        self.timecode_mtc_idle_behavior_combo.addItem("Keep stream alive (no dark)", "keep_stream")
+        self.timecode_mtc_idle_behavior_combo.addItem("Allow dark when idle", "allow_dark")
+        mtc_form.addRow("Idle Behavior:", self.timecode_mtc_idle_behavior_combo)
+        layout.addWidget(mtc_group)
+
+        timeline_group = QGroupBox("Timecode Display Timeline")
+        timeline_layout = QVBoxLayout(timeline_group)
+        self.timecode_timeline_cue_region_radio = QRadioButton("Relative to Cue Set Points")
+        self.timecode_timeline_audio_file_radio = QRadioButton("Relative to Actual Audio File")
+        if timecode_timeline_mode == "audio_file":
+            self.timecode_timeline_audio_file_radio.setChecked(True)
+        else:
+            self.timecode_timeline_cue_region_radio.setChecked(True)
+        timeline_layout.addWidget(self.timecode_timeline_cue_region_radio)
+        timeline_layout.addWidget(self.timecode_timeline_audio_file_radio)
+        layout.addWidget(timeline_group)
+
+        self._set_combo_data_or_default(self.timecode_output_combo, timecode_audio_output_device, "none")
+        self._set_combo_float_or_default(self.timecode_fps_combo, float(timecode_fps), 30.0)
+        self._set_combo_float_or_default(self.timecode_mtc_fps_combo, float(timecode_mtc_fps), 30.0)
+        self._set_combo_data_or_default(self.timecode_mtc_idle_behavior_combo, timecode_mtc_idle_behavior, "keep_stream")
+        self._set_combo_data_or_default(self.timecode_sample_rate_combo, int(timecode_sample_rate), 48000)
+        self._set_combo_data_or_default(self.timecode_bit_depth_combo, int(timecode_bit_depth), 16)
+        self._set_combo_data_or_default(self.timecode_midi_output_combo, timecode_midi_output_device, MIDI_OUTPUT_DEVICE_NONE)
+
         layout.addStretch(1)
         return page
 
@@ -846,6 +977,45 @@ class OptionsDialog(QDialog):
     def selected_audio_output_device(self) -> str:
         return str(self.audio_device_combo.currentData() or "")
 
+    def selected_timecode_audio_output_device(self) -> str:
+        return str(self.timecode_output_combo.currentData() or "none")
+
+    def selected_timecode_midi_output_device(self) -> str:
+        return str(self.timecode_midi_output_combo.currentData() or MIDI_OUTPUT_DEVICE_NONE)
+
+    def selected_timecode_fps(self) -> float:
+        try:
+            return float(self.timecode_fps_combo.currentData())
+        except (TypeError, ValueError):
+            return 30.0
+
+    def selected_timecode_mtc_fps(self) -> float:
+        try:
+            return float(self.timecode_mtc_fps_combo.currentData())
+        except (TypeError, ValueError):
+            return 30.0
+
+    def selected_timecode_mtc_idle_behavior(self) -> str:
+        value = str(self.timecode_mtc_idle_behavior_combo.currentData() or "keep_stream")
+        return value if value in {"keep_stream", "allow_dark"} else "keep_stream"
+
+    def selected_timecode_sample_rate(self) -> int:
+        try:
+            return int(self.timecode_sample_rate_combo.currentData())
+        except (TypeError, ValueError):
+            return 48000
+
+    def selected_timecode_bit_depth(self) -> int:
+        try:
+            return int(self.timecode_bit_depth_combo.currentData())
+        except (TypeError, ValueError):
+            return 16
+
+    def selected_timecode_timeline_mode(self) -> str:
+        if self.timecode_timeline_audio_file_radio.isChecked():
+            return "audio_file"
+        return "cue_region"
+
     def selected_max_multi_play_songs(self) -> int:
         return max(1, min(32, int(self.max_multi_play_spin.value())))
 
@@ -910,6 +1080,37 @@ class OptionsDialog(QDialog):
         enabled = self.cue_timeline_audio_file_radio.isChecked()
         self.jog_outside_group.setEnabled(enabled)
 
+    def _set_combo_data_or_default(self, combo: QComboBox, selected_data, default_data) -> None:
+        index = combo.findData(selected_data)
+        if index < 0:
+            index = combo.findData(default_data)
+        if index < 0:
+            index = 0
+        combo.setCurrentIndex(index)
+
+    def _set_combo_float_or_default(self, combo: QComboBox, selected_value: float, default_value: float) -> None:
+        index = -1
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            try:
+                if abs(float(data) - float(selected_value)) <= 0.002:
+                    index = i
+                    break
+            except (TypeError, ValueError):
+                continue
+        if index < 0:
+            for i in range(combo.count()):
+                data = combo.itemData(i)
+                try:
+                    if abs(float(data) - float(default_value)) <= 0.002:
+                        index = i
+                        break
+                except (TypeError, ValueError):
+                    continue
+        if index < 0:
+            index = 0
+        combo.setCurrentIndex(index)
+
     def _populate_audio_devices(self, devices: List[str], selected_device: str) -> None:
         self.audio_device_combo.clear()
         self.audio_device_combo.addItem("System Default", "")
@@ -928,6 +1129,7 @@ class OptionsDialog(QDialog):
 
     def _refresh_audio_devices(self) -> None:
         selected = self.selected_audio_output_device()
+        selected_timecode = self.selected_timecode_audio_output_device()
         try:
             from pyssp.audio_engine import list_output_devices
 
@@ -936,6 +1138,13 @@ class OptionsDialog(QDialog):
             devices = []
         self._available_audio_devices = list(devices)
         self._populate_audio_devices(self._available_audio_devices, selected)
+        self.timecode_output_combo.clear()
+        self.timecode_output_combo.addItem("Follow playback device setting", "follow_playback")
+        self.timecode_output_combo.addItem("Use system default", "default")
+        self.timecode_output_combo.addItem("None (mute output)", "none")
+        for name in self._available_audio_devices:
+            self.timecode_output_combo.addItem(name, name)
+        self._set_combo_data_or_default(self.timecode_output_combo, selected_timecode, "none")
 
     def _refresh_color_button(self, button: QPushButton, color_hex: str) -> None:
         button.setText(color_hex)
@@ -1168,10 +1377,47 @@ class OptionsDialog(QDialog):
         self._sync_jog_outside_group_enabled()
 
     def _restore_audio_device_defaults(self) -> None:
-        for i in range(self.audio_device_combo.count()):
-            if str(self.audio_device_combo.itemData(i) or "") == "":
-                self.audio_device_combo.setCurrentIndex(i)
-                break
+        d = self._DEFAULTS
+        self._set_combo_data_or_default(self.audio_device_combo, "", "")
+        self._set_combo_data_or_default(
+            self.timecode_output_combo,
+            str(d["timecode_audio_output_device"]),
+            "none",
+        )
+        self._set_combo_float_or_default(
+            self.timecode_fps_combo,
+            float(d["timecode_fps"]),
+            30.0,
+        )
+        self._set_combo_float_or_default(
+            self.timecode_mtc_fps_combo,
+            float(d["timecode_mtc_fps"]),
+            30.0,
+        )
+        self._set_combo_data_or_default(
+            self.timecode_mtc_idle_behavior_combo,
+            str(d["timecode_mtc_idle_behavior"]),
+            "keep_stream",
+        )
+        self._set_combo_data_or_default(
+            self.timecode_midi_output_combo,
+            str(d["timecode_midi_output_device"]),
+            MIDI_OUTPUT_DEVICE_NONE,
+        )
+        self._set_combo_data_or_default(
+            self.timecode_sample_rate_combo,
+            int(d["timecode_sample_rate"]),
+            48000,
+        )
+        self._set_combo_data_or_default(
+            self.timecode_bit_depth_combo,
+            int(d["timecode_bit_depth"]),
+            16,
+        )
+        if str(d["timecode_timeline_mode"]) == "audio_file":
+            self.timecode_timeline_audio_file_radio.setChecked(True)
+        else:
+            self.timecode_timeline_cue_region_radio.setChecked(True)
 
     def _restore_talk_defaults(self) -> None:
         d = self._DEFAULTS

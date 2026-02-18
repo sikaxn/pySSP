@@ -89,6 +89,14 @@ class PySSPInstance extends InstanceBase {
 
 	buildActions() {
 		return {
+			internal_refresh_library: {
+				name: 'Internal - Refresh Presets/Lists',
+				options: [],
+				callback: async () => {
+					await this.refreshLibrary()
+					await this.refreshState()
+				},
+			},
 			player_control: {
 				name: 'Player Control',
 				options: [
@@ -356,6 +364,20 @@ class PySSPInstance extends InstanceBase {
 				],
 				feedbacks: [],
 			}
+		}
+
+		presets.internal_refresh_library = {
+			type: 'button',
+			category: 'Internal',
+			name: 'Refresh Presets/Lists',
+			style: { text: 'Refresh\\nLists', size: '14', color: fg, bgcolor: bg },
+			steps: [
+				{
+					down: [{ actionId: 'internal_refresh_library', options: {} }],
+					up: [],
+				},
+			],
+			feedbacks: [],
 		}
 
 		for (const [group, pages] of Object.entries(this.pagesByGroup)) {

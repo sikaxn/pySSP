@@ -10,6 +10,8 @@ Configuration:
 
 Actions:
 
+- Internal - Refresh Presets/Lists:
+  - Re-queries pySSP pages/buttons and rebuilds dynamic audio/navigation presets
 - Player Control:
   - Pause, Resume, Stop, Force Stop, Play Next, Rapid Fire
   - Talk enable/disable/toggle

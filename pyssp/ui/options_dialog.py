@@ -192,6 +192,9 @@ class OptionsDialog(QDialog):
             "fade_out": ("", ""),
             "mute": ("", ""),
         },
+        "sound_button_hotkey_enabled": False,
+        "sound_button_hotkey_priority": "system_first",
+        "sound_button_hotkey_go_to_playing": False,
     }
 
     def __init__(
@@ -225,6 +228,9 @@ class OptionsDialog(QDialog):
         hotkeys: Dict[str, tuple[str, str]],
         quick_action_enabled: bool,
         quick_action_keys: List[str],
+        sound_button_hotkey_enabled: bool,
+        sound_button_hotkey_priority: str,
+        sound_button_hotkey_go_to_playing: bool,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -243,6 +249,11 @@ class OptionsDialog(QDialog):
         self._quick_action_keys = list(quick_action_keys)[:48]
         if len(self._quick_action_keys) < 48:
             self._quick_action_keys.extend(qa_defaults[len(self._quick_action_keys):48])
+        self._sound_button_hotkey_enabled = bool(sound_button_hotkey_enabled)
+        self._sound_button_hotkey_priority = (
+            sound_button_hotkey_priority if sound_button_hotkey_priority in {"system_first", "sound_button_first"} else "system_first"
+        )
+        self._sound_button_hotkey_go_to_playing = bool(sound_button_hotkey_go_to_playing)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.state_colors = dict(state_colors)
@@ -465,6 +476,7 @@ class OptionsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._build_system_hotkey_tab(), "System Hotkey")
         tabs.addTab(self._build_quick_action_tab(), "Quick Action Key")
+        tabs.addTab(self._build_sound_button_hotkey_tab(), "Sound Button Hot Key")
         layout.addWidget(tabs, 1)
         self.hotkey_warning_label = QLabel("")
         self.hotkey_warning_label.setWordWrap(True)
@@ -492,7 +504,7 @@ class OptionsDialog(QDialog):
     def _build_quick_action_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.quick_action_enabled_checkbox = QCheckBox("Enable Quick Action Key (Assign Broadcast Short Key)")
+        self.quick_action_enabled_checkbox = QCheckBox("enable quick action key (assign broadcast short key)")
         self.quick_action_enabled_checkbox.setChecked(self._quick_action_enabled)
         self.quick_action_enabled_checkbox.toggled.connect(self._validate_hotkey_conflicts)
         layout.addWidget(self.quick_action_enabled_checkbox)
@@ -517,6 +529,34 @@ class OptionsDialog(QDialog):
             form.addRow(f"Button {i + 1}:", row)
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
+        return page
+
+    def _build_sound_button_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.sound_button_hotkey_enabled_checkbox = QCheckBox("Enable Sound Button Hot Key")
+        self.sound_button_hotkey_enabled_checkbox.setChecked(self._sound_button_hotkey_enabled)
+        self.sound_button_hotkey_enabled_checkbox.toggled.connect(self._validate_hotkey_conflicts)
+        layout.addWidget(self.sound_button_hotkey_enabled_checkbox)
+
+        prio_group = QGroupBox("Priority")
+        prio_layout = QVBoxLayout(prio_group)
+        self.sound_hotkey_priority_sound_first_radio = QRadioButton("Sound Button Hot Key has highest priority")
+        self.sound_hotkey_priority_system_first_radio = QRadioButton(
+            "System Hotkey and Quick Action Key have highest priority"
+        )
+        if self._sound_button_hotkey_priority == "sound_button_first":
+            self.sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.sound_hotkey_priority_system_first_radio.setChecked(True)
+        prio_layout.addWidget(self.sound_hotkey_priority_sound_first_radio)
+        prio_layout.addWidget(self.sound_hotkey_priority_system_first_radio)
+        layout.addWidget(prio_group)
+
+        self.sound_button_go_to_playing_checkbox = QCheckBox("Go To Playing after trigger")
+        self.sound_button_go_to_playing_checkbox.setChecked(self._sound_button_hotkey_go_to_playing)
+        layout.addWidget(self.sound_button_go_to_playing_checkbox)
+        layout.addStretch(1)
         return page
 
     def _add_hotkey_row(self, form: QFormLayout, key: str, label: str) -> None:
@@ -855,6 +895,17 @@ class OptionsDialog(QDialog):
     def selected_quick_action_keys(self) -> List[str]:
         return [edit.hotkey() for edit in self._quick_action_edits]
 
+    def selected_sound_button_hotkey_enabled(self) -> bool:
+        return bool(self.sound_button_hotkey_enabled_checkbox.isChecked())
+
+    def selected_sound_button_hotkey_priority(self) -> str:
+        if self.sound_hotkey_priority_sound_first_radio.isChecked():
+            return "sound_button_first"
+        return "system_first"
+
+    def selected_sound_button_hotkey_go_to_playing(self) -> bool:
+        return bool(self.sound_button_go_to_playing_checkbox.isChecked())
+
     def _sync_jog_outside_group_enabled(self) -> None:
         enabled = self.cue_timeline_audio_file_radio.isChecked()
         self.jog_outside_group.setEnabled(enabled)
@@ -989,6 +1040,12 @@ class OptionsDialog(QDialog):
         qa_defaults = default_quick_action_keys()
         for i, edit in enumerate(self._quick_action_edits):
             edit.setHotkey(qa_defaults[i] if i < len(qa_defaults) else "")
+        self.sound_button_hotkey_enabled_checkbox.setChecked(bool(d["sound_button_hotkey_enabled"]))
+        if str(d["sound_button_hotkey_priority"]) == "sound_button_first":
+            self.sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.sound_hotkey_priority_system_first_radio.setChecked(True)
+        self.sound_button_go_to_playing_checkbox.setChecked(bool(d["sound_button_hotkey_go_to_playing"]))
         self._validate_hotkey_conflicts()
 
     def _normalize_hotkey_for_conflict(self, raw: str) -> str:

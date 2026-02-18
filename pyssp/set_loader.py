@@ -28,6 +28,7 @@ class SetSlotData:
     volume_override_pct: Optional[int] = None
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
+    sound_hotkey: str = ""
 
 
 @dataclass
@@ -94,6 +95,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 section.get(f"ce{i}", "").strip(),
                 duration,
             )
+            sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             marker = False
 
             if caption.endswith("%%"):
@@ -123,6 +125,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 volume_override_pct=volume_override_pct,
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
+                sound_hotkey=sound_hotkey,
             )
             loaded_slots += 1
 
@@ -272,3 +275,20 @@ def _parse_non_negative_int(value: str) -> Optional[int]:
     if parsed < 0:
         return None
     return parsed
+
+
+def _parse_sound_hotkey(value: str) -> str:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return ""
+    if raw.startswith("0"):
+        raw = raw[1:]
+    if re.fullmatch(r"F([1-9]|1[1-2])", raw):
+        if raw == "F10":
+            return ""
+        return raw
+    if re.fullmatch(r"[0-9]", raw):
+        return raw
+    if re.fullmatch(r"[A-OQ-Z]", raw):
+        return raw
+    return ""

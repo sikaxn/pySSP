@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from PyQt5.QtCore import Qt
@@ -20,6 +21,46 @@ from PyQt5.QtWidgets import (
 )
 
 
+class SoundHotkeyEdit(QLineEdit):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("Optional: A-O, Q-Z, 0-9, F1-F12 (except F10)")
+        self.setReadOnly(True)
+
+    def setHotkey(self, value: str) -> None:
+        self.setText(self.normalize(value))
+
+    def hotkey(self) -> str:
+        return self.normalize(self.text())
+
+    def keyPressEvent(self, event) -> None:
+        key = int(event.key())
+        if key in {Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Escape}:
+            self.clear()
+            return
+        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier | Qt.MetaModifier):
+            return
+        name = self.normalize(event.text() or "")
+        if not name and Qt.Key_F1 <= key <= Qt.Key_F12:
+                name = f"F{key - Qt.Key_F1 + 1}"
+        self.setText(self.normalize(name))
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        raw = str(value or "").strip().upper()
+        if not raw:
+            return ""
+        if re.fullmatch(r"[A-OQ-Z]", raw):
+            return raw
+        if re.fullmatch(r"[0-9]", raw):
+            return raw
+        if re.fullmatch(r"F([1-9]|1[1-2])", raw):
+            if raw == "F10":
+                return ""
+            return raw
+        return ""
+
+
 class EditSoundButtonDialog(QDialog):
     def __init__(
         self,
@@ -27,12 +68,13 @@ class EditSoundButtonDialog(QDialog):
         caption: str,
         notes: str,
         volume_override_pct: Optional[int] = None,
+        sound_hotkey: str = "",
         start_dir: str = "",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Sound Button")
-        self.resize(640, 220)
+        self.resize(700, 280)
         self._start_dir = start_dir
 
         root = QVBoxLayout(self)
@@ -53,6 +95,17 @@ class EditSoundButtonDialog(QDialog):
 
         self.notes_edit = QLineEdit(notes)
         form.addRow("Notes", self.notes_edit)
+
+        hk_row = QWidget()
+        hk_layout = QHBoxLayout(hk_row)
+        hk_layout.setContentsMargins(0, 0, 0, 0)
+        self.sound_hotkey_edit = SoundHotkeyEdit()
+        self.sound_hotkey_edit.setHotkey(sound_hotkey)
+        clear_hk_btn = QPushButton("Clear")
+        clear_hk_btn.clicked.connect(lambda _=False: self.sound_hotkey_edit.setHotkey(""))
+        hk_layout.addWidget(self.sound_hotkey_edit, 1)
+        hk_layout.addWidget(clear_hk_btn)
+        form.addRow("Sound Button Hot Key", hk_row)
 
         vol_row = QWidget()
         vol_layout = QVBoxLayout(vol_row)
@@ -103,7 +156,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, Optional[int]]:
+    def values(self) -> tuple[str, str, str, Optional[int], str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -112,4 +165,5 @@ class EditSoundButtonDialog(QDialog):
             self.caption_edit.text().strip(),
             self.notes_edit.text().strip(),
             volume_override_pct,
+            self.sound_hotkey_edit.hotkey(),
         )

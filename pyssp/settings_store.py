@@ -130,6 +130,10 @@ class AppSettings:
     hotkey_mute_2: str = ""
     quick_action_enabled: bool = False
     quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
+    sound_button_hotkey_enabled: bool = False
+    sound_button_hotkey_priority: str = "system_first"
+    sound_button_hotkey_go_to_playing: bool = False
+    sound_button_hotkey_system_order: list[str] = field(default_factory=list)
 
 
 def get_settings_path() -> Path:
@@ -260,6 +264,10 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_mute_2": settings.hotkey_mute_2,
         "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
         "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
+        "sound_button_hotkey_enabled": "1" if settings.sound_button_hotkey_enabled else "0",
+        "sound_button_hotkey_priority": settings.sound_button_hotkey_priority,
+        "sound_button_hotkey_go_to_playing": "1" if settings.sound_button_hotkey_go_to_playing else "0",
+        "sound_button_hotkey_system_order": "\t".join(settings.sound_button_hotkey_system_order),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -305,6 +313,12 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         "stop_cue_or_end",
     }:
         outside_action = "stop_immediately"
+    sound_button_hotkey_priority = str(section.get("sound_button_hotkey_priority", "system_first")).strip().lower()
+    if sound_button_hotkey_priority not in {"system_first", "sound_button_first"}:
+        sound_button_hotkey_priority = "system_first"
+    sound_button_hotkey_system_order = [
+        item.strip() for item in str(section.get("sound_button_hotkey_system_order", "")).split("\t") if item.strip()
+    ]
     quick_action_raw = str(section.get("quick_action_keys", "")).strip()
     if quick_action_raw:
         quick_action_keys = _normalize_quick_action_keys(quick_action_raw.split("\t"))
@@ -413,6 +427,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_mute_2=str(section.get("hotkey_mute_2", "")).strip(),
         quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
         quick_action_keys=quick_action_keys,
+        sound_button_hotkey_enabled=_get_bool(section, "sound_button_hotkey_enabled", False),
+        sound_button_hotkey_priority=sound_button_hotkey_priority,
+        sound_button_hotkey_go_to_playing=_get_bool(section, "sound_button_hotkey_go_to_playing", False),
+        sound_button_hotkey_system_order=sound_button_hotkey_system_order,
     )
 
 

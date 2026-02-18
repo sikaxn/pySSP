@@ -107,6 +107,37 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "mute": ("", ""),
 }
 
+SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
+    "new_set",
+    "open_set",
+    "save_set",
+    "save_set_as",
+    "search",
+    "options",
+    "play_selected",
+    "pause_toggle",
+    "stop_playback",
+    "talk",
+    "next_group",
+    "prev_group",
+    "next_page",
+    "prev_page",
+    "next_sound_button",
+    "prev_sound_button",
+    "multi_play",
+    "go_to_playing",
+    "loop",
+    "next",
+    "rapid_fire",
+    "shuffle",
+    "reset_page",
+    "play_list",
+    "fade_in",
+    "cross_fade",
+    "fade_out",
+    "mute",
+]
+
 
 @dataclass
 class SoundButtonData:
@@ -125,6 +156,7 @@ class SoundButtonData:
     volume_override_pct: Optional[int] = None
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
+    sound_hotkey: str = ""
 
     @property
     def assigned(self) -> bool:
@@ -605,6 +637,13 @@ class MainWindow(QMainWindow):
         self.quick_action_keys = list(self.settings.quick_action_keys[:48])
         if len(self.quick_action_keys) < 48:
             self.quick_action_keys.extend(["" for _ in range(48 - len(self.quick_action_keys))])
+        self.sound_button_hotkey_enabled = bool(self.settings.sound_button_hotkey_enabled)
+        self.sound_button_hotkey_priority = (
+            self.settings.sound_button_hotkey_priority
+            if self.settings.sound_button_hotkey_priority in {"system_first", "sound_button_first"}
+            else "system_first"
+        )
+        self.sound_button_hotkey_go_to_playing = bool(self.settings.sound_button_hotkey_go_to_playing)
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
 
@@ -1002,14 +1041,27 @@ class MainWindow(QMainWindow):
             "fade_out": lambda: self._toggle_control_button("Fade Out"),
             "mute": self._toggle_mute_hotkey,
         }
-        for key, handler in runtime_handlers.items():
+        ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
+
+        sound_bindings = self._collect_sound_button_hotkey_bindings() if self.sound_button_hotkey_enabled else {}
+        registered_keys: set[str] = set()
+
+        for key in ordered_system_keys:
+            handler = runtime_handlers[key]
             h1, h2 = self._normalized_hotkey_pair(key)
             for seq_text in [h1, h2]:
+                key_token = self._normalize_hotkey_text(seq_text)
+                if self.sound_button_hotkey_enabled and self.sound_button_hotkey_priority == "sound_button_first":
+                    if key_token and key_token in sound_bindings:
+                        continue
                 modifier_key = self._modifier_key_from_hotkey_text(seq_text)
                 if modifier_key is not None:
                     handlers = self._modifier_hotkey_handlers.setdefault(modifier_key, [])
                     if handler not in handlers:
                         handlers.append(handler)
+                        key_name = self._normalize_hotkey_text(seq_text)
+                        if key_name:
+                            registered_keys.add(key_name)
                     continue
                 seq = self._key_sequence_from_hotkey_text(seq_text)
                 if seq is None:
@@ -1018,15 +1070,35 @@ class MainWindow(QMainWindow):
                 shortcut.setContext(Qt.ApplicationShortcut)
                 shortcut.activated.connect(handler)
                 self._runtime_hotkey_shortcuts.append(shortcut)
+                if key_token:
+                    registered_keys.add(key_token)
 
         if self.quick_action_enabled:
             for idx, raw in enumerate(self.quick_action_keys[:48]):
+                key_token = self._normalize_hotkey_text(raw)
+                if self.sound_button_hotkey_enabled and self.sound_button_hotkey_priority == "sound_button_first":
+                    if key_token and key_token in sound_bindings:
+                        continue
                 seq = self._key_sequence_from_hotkey_text(raw)
                 if seq is None:
                     continue
                 shortcut = QShortcut(seq, self)
                 shortcut.setContext(Qt.ApplicationShortcut)
                 shortcut.activated.connect(lambda slot=idx: self._quick_action_trigger(slot))
+                self._runtime_hotkey_shortcuts.append(shortcut)
+                if key_token:
+                    registered_keys.add(key_token)
+
+        if self.sound_button_hotkey_enabled:
+            for key_token, slot_key in sound_bindings.items():
+                if self.sound_button_hotkey_priority == "system_first" and key_token in registered_keys:
+                    continue
+                seq = self._key_sequence_from_hotkey_text(key_token)
+                if seq is None:
+                    continue
+                shortcut = QShortcut(seq, self)
+                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.activated.connect(lambda sk=slot_key: self._sound_button_hotkey_trigger(sk))
                 self._runtime_hotkey_shortcuts.append(shortcut)
 
     def _load_project_text_file(self, filename: str) -> str:
@@ -2014,6 +2086,7 @@ class MainWindow(QMainWindow):
                     volume_override_pct=slot.volume_override_pct,
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
+                    sound_hotkey=slot.sound_hotkey,
                 )
                 for slot in source_page
             ],
@@ -2043,6 +2116,7 @@ class MainWindow(QMainWindow):
                 volume_override_pct=slot.volume_override_pct,
                 cue_start_ms=slot.cue_start_ms,
                 cue_end_ms=slot.cue_end_ms,
+                sound_hotkey=slot.sound_hotkey,
             )
             for slot in self._copied_page_buffer["slots"]
         ]
@@ -2154,6 +2228,9 @@ class MainWindow(QMainWindow):
             lines.append(f"n{slot_index}={title}")
             if slot.volume_override_pct is not None:
                 lines.append(f"v{slot_index}={max(0, min(100, int(slot.volume_override_pct)))}")
+            hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+            if hotkey_code:
+                lines.append(f"h{slot_index}={hotkey_code}")
             lines.append(f"activity{slot_index}={'2' if slot.played else '8'}")
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
@@ -2215,6 +2292,7 @@ class MainWindow(QMainWindow):
             duration = parse_time_string_to_ms(section.get(f"t{i}", "").strip())
             color = parse_delphi_color(section.get(f"co{i}", "").strip())
             volume_override_pct = self._parse_volume_override_pct(section.get(f"v{i}", "").strip())
+            sound_hotkey = self._parse_sound_hotkey(section.get(f"h{i}", "").strip())
             cue_start_ms, cue_end_ms = self._parse_cue_points(
                 section.get(f"cs{i}", "").strip(),
                 section.get(f"ce{i}", "").strip(),
@@ -2235,6 +2313,7 @@ class MainWindow(QMainWindow):
                 volume_override_pct=volume_override_pct,
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
+                sound_hotkey=sound_hotkey,
             )
         return {
             "page_name": page_name,
@@ -2246,6 +2325,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_sound_grid(self) -> None:
         page = self._current_page_slots()
+        sound_bindings = self._collect_sound_button_hotkey_bindings() if self.sound_button_hotkey_enabled else {}
+        blocked_sound_tokens = (
+            self._registered_system_and_quick_tokens()
+            if self.sound_button_hotkey_enabled and self.sound_button_hotkey_priority == "system_first"
+            else set()
+        )
         for i, button in enumerate(self.sound_buttons):
             slot = page[i]
             if slot.marker:
@@ -2261,10 +2346,8 @@ class MainWindow(QMainWindow):
                     parts.append("V")
                 if has_cue:
                     parts.append("C")
-                if self.quick_action_enabled:
-                    qk = self._normalize_hotkey_text(self.quick_action_keys[i] if i < len(self.quick_action_keys) else "")
-                    if qk:
-                        parts.append(f"[{qk.lower()}]")
+                for badge in self._active_button_trigger_badges(i, slot, sound_bindings, blocked_sound_tokens):
+                    parts.append(badge)
                 suffix = f" {' '.join(parts)}" if parts else ""
                 button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{suffix}")
                 button.setToolTip(slot.notes.strip())
@@ -2736,6 +2819,7 @@ class MainWindow(QMainWindow):
             volume_override_pct=slot.volume_override_pct,
             cue_start_ms=slot.cue_start_ms,
             cue_end_ms=slot.cue_end_ms,
+            sound_hotkey=slot.sound_hotkey,
         )
 
     def _edit_sound_button(self, slot_index: int) -> None:
@@ -2750,14 +2834,23 @@ class MainWindow(QMainWindow):
             caption=slot.title,
             notes=slot.notes,
             volume_override_pct=slot.volume_override_pct,
+            sound_hotkey=slot.sound_hotkey,
             start_dir=start_dir,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
-        file_path, caption, notes, volume_override_pct = dialog.values()
+        file_path, caption, notes, volume_override_pct, sound_hotkey = dialog.values()
         if not file_path:
             QMessageBox.information(self, "Edit Sound Button", "File is required.")
+            return
+        conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
+        if conflict is not None:
+            QMessageBox.warning(
+                self,
+                "Sound Button Hot Key",
+                f"Hot key {sound_hotkey} is already assigned to {self._format_button_key(conflict)}.",
+            )
             return
         previous_file_path = slot.file_path
         self.settings.last_sound_dir = os.path.dirname(file_path)
@@ -2770,12 +2863,38 @@ class MainWindow(QMainWindow):
         slot.activity_code = "8"
         slot.load_failed = False
         slot.volume_override_pct = volume_override_pct
+        slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         if previous_file_path != file_path:
             slot.cue_start_ms = None
             slot.cue_end_ms = None
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+
+    def _find_sound_hotkey_conflict(
+        self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
+    ) -> Optional[Tuple[str, int, int]]:
+        token = self._parse_sound_hotkey(sound_hotkey)
+        if not token:
+            return None
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if ignore_slot_key == (group, page_index, slot_index):
+                        continue
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if self._parse_sound_hotkey(slot.sound_hotkey) == token:
+                        return (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            key = ("Q", 0, slot_index)
+            if ignore_slot_key == key:
+                continue
+            if not slot.assigned or slot.marker:
+                continue
+            if self._parse_sound_hotkey(slot.sound_hotkey) == token:
+                return key
+        return None
 
     def _edit_slot_cue_points(self, slot_index: int) -> None:
         page = self._current_page_slots()
@@ -2866,6 +2985,28 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
         return max(0, min(100, parsed))
+
+    def _parse_sound_hotkey(self, value: str) -> str:
+        raw = str(value or "").strip().upper()
+        if not raw:
+            return ""
+        if raw.startswith("0"):
+            raw = raw[1:]
+        if re.fullmatch(r"F([1-9]|1[1-2])", raw):
+            if raw == "F10":
+                return ""
+            return raw
+        if re.fullmatch(r"[0-9]", raw):
+            return raw
+        if re.fullmatch(r"[A-OQ-Z]", raw):
+            return raw
+        return ""
+
+    def _encode_sound_hotkey(self, value: str) -> str:
+        token = self._parse_sound_hotkey(value)
+        if not token:
+            return ""
+        return f"0{token}"
 
     def _parse_cue_points(self, start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
         start_raw = self._parse_non_negative_int(start_value)
@@ -3668,6 +3809,7 @@ class MainWindow(QMainWindow):
                     volume_override_pct=slot.volume_override_pct,
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
+                    sound_hotkey=slot.sound_hotkey,
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)
@@ -4008,6 +4150,9 @@ class MainWindow(QMainWindow):
             hotkeys=self.hotkeys,
             quick_action_enabled=self.quick_action_enabled,
             quick_action_keys=self.quick_action_keys,
+            sound_button_hotkey_enabled=self.sound_button_hotkey_enabled,
+            sound_button_hotkey_priority=self.sound_button_hotkey_priority,
+            sound_button_hotkey_go_to_playing=self.sound_button_hotkey_go_to_playing,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -4052,6 +4197,9 @@ class MainWindow(QMainWindow):
         self.quick_action_keys = dialog.selected_quick_action_keys()[:48]
         if len(self.quick_action_keys) < 48:
             self.quick_action_keys.extend(["" for _ in range(48 - len(self.quick_action_keys))])
+        self.sound_button_hotkey_enabled = dialog.selected_sound_button_hotkey_enabled()
+        self.sound_button_hotkey_priority = dialog.selected_sound_button_hotkey_priority()
+        self.sound_button_hotkey_go_to_playing = dialog.selected_sound_button_hotkey_go_to_playing()
         self._apply_hotkeys()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
@@ -5505,6 +5653,9 @@ class MainWindow(QMainWindow):
                         lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
                         if slot.copied_to_cue:
                             lines.append(f"ci{slot_index}=Y")
+                        hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                        if hotkey_code:
+                            lines.append(f"h{slot_index}={hotkey_code}")
                         cue_start, cue_end = self._cue_fields_for_set(slot)
                         if cue_start is not None:
                             lines.append(f"cs{slot_index}={cue_start}")
@@ -5576,6 +5727,7 @@ class MainWindow(QMainWindow):
                         volume_override_pct=src.volume_override_pct,
                         cue_start_ms=src.cue_start_ms,
                         cue_end_ms=src.cue_end_ms,
+                        sound_hotkey=src.sound_hotkey,
                     )
 
         self.current_set_path = file_path
@@ -5722,6 +5874,9 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_mute_2 = self.hotkeys.get("mute", ("", ""))[1]
         self.settings.quick_action_enabled = bool(self.quick_action_enabled)
         self.settings.quick_action_keys = list(self.quick_action_keys[:48])
+        self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
+        self.settings.sound_button_hotkey_priority = self.sound_button_hotkey_priority
+        self.settings.sound_button_hotkey_go_to_playing = bool(self.sound_button_hotkey_go_to_playing)
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -5841,6 +5996,117 @@ class MainWindow(QMainWindow):
             return
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         self._play_slot(slot_index)
+
+    def _registered_system_and_quick_tokens(self) -> set[str]:
+        tokens: set[str] = set()
+        for key in SYSTEM_HOTKEY_ORDER_DEFAULT:
+            h1, h2 = self._normalized_hotkey_pair(key)
+            for seq_text in [h1, h2]:
+                key_token = self._normalize_hotkey_text(seq_text)
+                if not key_token:
+                    continue
+                modifier_key = self._modifier_key_from_hotkey_text(seq_text)
+                if modifier_key is not None:
+                    tokens.add(key_token)
+                    continue
+                seq = self._key_sequence_from_hotkey_text(seq_text)
+                if seq is not None:
+                    tokens.add(key_token)
+        if self.quick_action_enabled:
+            for raw in self.quick_action_keys[:48]:
+                key_token = self._normalize_hotkey_text(raw)
+                if not key_token:
+                    continue
+                seq = self._key_sequence_from_hotkey_text(raw)
+                if seq is not None:
+                    tokens.add(key_token)
+        return tokens
+
+    def _active_button_trigger_badges(
+        self,
+        slot_index: int,
+        slot: SoundButtonData,
+        sound_bindings: Dict[str, Tuple[str, int, int]],
+        blocked_sound_tokens: set[str],
+    ) -> List[str]:
+        if not slot.assigned or slot.marker:
+            return []
+        badges: List[str] = []
+        seen: set[str] = set()
+        slot_key = (self._view_group_key(), self.current_page, slot_index)
+        if self.sound_button_hotkey_enabled:
+            sound_token = self._normalize_hotkey_text(self._parse_sound_hotkey(slot.sound_hotkey))
+            if sound_token and sound_bindings.get(sound_token) == slot_key:
+                if sound_token not in blocked_sound_tokens:
+                    badge = f"[{sound_token.lower()}]"
+                    badges.append(badge)
+                    seen.add(badge)
+
+        if self.quick_action_enabled and slot_index < len(self.quick_action_keys):
+            quick_token = self._normalize_hotkey_text(self.quick_action_keys[slot_index])
+            if quick_token and self._key_sequence_from_hotkey_text(quick_token) is not None:
+                quick_blocked = (
+                    self.sound_button_hotkey_enabled
+                    and self.sound_button_hotkey_priority == "sound_button_first"
+                    and quick_token in sound_bindings
+                )
+                if not quick_blocked:
+                    badge = f"[{quick_token.lower()}]"
+                    if badge not in seen:
+                        badges.append(badge)
+        return badges
+
+    def _collect_sound_button_hotkey_bindings(self) -> Dict[str, Tuple[str, int, int]]:
+        bindings: Dict[str, Tuple[str, int, int]] = {}
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    token = self._normalize_hotkey_text(self._parse_sound_hotkey(slot.sound_hotkey))
+                    if not token or token in bindings:
+                        continue
+                    bindings[token] = (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            token = self._normalize_hotkey_text(self._parse_sound_hotkey(slot.sound_hotkey))
+            if not token or token in bindings:
+                continue
+            bindings[token] = ("Q", 0, slot_index)
+        return bindings
+
+    def _sound_button_hotkey_trigger(self, slot_key: Tuple[str, int, int]) -> None:
+        if self._is_button_drag_enabled():
+            return
+        old_cue_mode = self.cue_mode
+        old_group = self.current_group
+        old_page = self.current_page
+
+        group, page_index, slot_index = slot_key
+        if group == "Q":
+            self._toggle_cue_mode(True)
+        else:
+            if self.cue_mode:
+                self._toggle_cue_mode(False)
+            if group in GROUPS:
+                self._select_group(group)
+                self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
+
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
+        self._play_slot(slot_index)
+
+        if self.sound_button_hotkey_go_to_playing:
+            self._go_to_current_playing_page()
+            return
+
+        if old_cue_mode:
+            self._toggle_cue_mode(True)
+        else:
+            if self.cue_mode:
+                self._toggle_cue_mode(False)
+            self._select_group(old_group)
+            self._select_page(old_page)
 
     def _toggle_mute_hotkey(self) -> None:
         current = int(self.volume_slider.value())

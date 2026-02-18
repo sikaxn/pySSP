@@ -407,6 +407,72 @@ class TextFileViewerWindow(QDialog):
         self.viewer.setPlainText(text)
 
 
+class NoAudioPlayer(QObject):
+    StoppedState = 0
+    PlayingState = 1
+    PausedState = 2
+
+    positionChanged = pyqtSignal(int)
+    durationChanged = pyqtSignal(int)
+    stateChanged = pyqtSignal(int)
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._state = self.StoppedState
+        self._duration_ms = 0
+        self._position_ms = 0
+        self._volume = 100
+
+    def setNotifyInterval(self, interval_ms: int) -> None:
+        _ = interval_ms
+
+    def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
+        _ = (file_path, dsp_config)
+        self._duration_ms = 0
+        self._position_ms = 0
+        self.durationChanged.emit(0)
+        self.positionChanged.emit(0)
+
+    def setDSPConfig(self, dsp_config: DSPConfig) -> None:
+        _ = dsp_config
+
+    def play(self) -> None:
+        self._state = self.PlayingState
+        self.stateChanged.emit(self._state)
+
+    def pause(self) -> None:
+        self._state = self.PausedState
+        self.stateChanged.emit(self._state)
+
+    def stop(self) -> None:
+        self._state = self.StoppedState
+        self._position_ms = 0
+        self.stateChanged.emit(self._state)
+        self.positionChanged.emit(0)
+
+    def state(self) -> int:
+        return self._state
+
+    def setPosition(self, position_ms: int) -> None:
+        self._position_ms = max(0, int(position_ms))
+        self.positionChanged.emit(self._position_ms)
+
+    def position(self) -> int:
+        return self._position_ms
+
+    def duration(self) -> int:
+        return self._duration_ms
+
+    def setVolume(self, volume: int) -> None:
+        self._volume = max(0, min(100, int(volume)))
+
+    def volume(self) -> int:
+        return self._volume
+
+    def meterLevels(self) -> Tuple[float, float]:
+        return (0.0, 0.0)
+
+
 class MainThreadExecutor(QObject):
     _execute = pyqtSignal(object, object)
 
@@ -535,11 +601,47 @@ class MainWindow(QMainWindow):
             "fade_out": (self.settings.hotkey_fade_out_1, self.settings.hotkey_fade_out_2),
             "mute": (self.settings.hotkey_mute_1, self.settings.hotkey_mute_2),
         }
+        self.quick_action_enabled = bool(self.settings.quick_action_enabled)
+        self.quick_action_keys = list(self.settings.quick_action_keys[:48])
+        if len(self.quick_action_keys) < 48:
+            self.quick_action_keys.extend(["" for _ in range(48 - len(self.quick_action_keys))])
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
 
-        set_output_device(self.audio_output_device)
-        self._init_audio_players()
+        startup_audio_warning: Optional[str] = None
+        configured_device = self.audio_output_device.strip()
+        if configured_device and not set_output_device(configured_device):
+            startup_audio_warning = (
+                f"Configured audio device was not found:\n{configured_device}\n\n"
+                "Falling back to system default output device."
+            )
+            self.audio_output_device = ""
+            self.settings.audio_output_device = ""
+        else:
+            set_output_device(configured_device)
+        try:
+            self._init_audio_players()
+        except Exception as exc:
+            self._dispose_audio_players()
+            set_output_device("")
+            self.audio_output_device = ""
+            self.settings.audio_output_device = ""
+            try:
+                self._init_audio_players()
+            except Exception as exc2:
+                self._init_silent_audio_players()
+                startup_audio_warning = (
+                    "Audio output failed to initialize. Running in no-audio mode.\n\n"
+                    f"Primary error:\n{exc}\n\n"
+                    f"Fallback error:\n{exc2}"
+                )
+            else:
+                fallback_msg = (
+                    "Audio device failed to initialize at startup.\n"
+                    "Falling back to system default output device.\n\n"
+                    f"Details:\n{exc}"
+                )
+                startup_audio_warning = f"{startup_audio_warning}\n\n{fallback_msg}" if startup_audio_warning else fallback_msg
 
         self.data: Dict[str, List[List[SoundButtonData]]] = {}
         self.page_names: Dict[str, List[str]] = {}
@@ -658,6 +760,8 @@ class MainWindow(QMainWindow):
             self._reset_all_played_state()
             self._refresh_sound_grid()
         self._apply_web_remote_state()
+        if startup_audio_warning:
+            QMessageBox.warning(self, "Audio Device", startup_audio_warning)
 
     def _build_ui(self) -> None:
         self._build_menu_bar()
@@ -692,6 +796,28 @@ class MainWindow(QMainWindow):
         self.player_b = ExternalMediaPlayer(self)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
+        self.player.positionChanged.connect(self._on_position_changed)
+        self.player.durationChanged.connect(self._on_duration_changed)
+        self.player.stateChanged.connect(self._on_state_changed)
+
+    def _dispose_audio_players(self) -> None:
+        for name in ["player", "player_b"]:
+            player = getattr(self, name, None)
+            if player is None:
+                continue
+            try:
+                player.stop()
+            except Exception:
+                pass
+            try:
+                player.deleteLater()
+            except Exception:
+                pass
+            setattr(self, name, None)
+
+    def _init_silent_audio_players(self) -> None:
+        self.player = NoAudioPlayer(self)
+        self.player_b = NoAudioPlayer(self)
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
@@ -891,6 +1017,16 @@ class MainWindow(QMainWindow):
                 shortcut = QShortcut(seq, self)
                 shortcut.setContext(Qt.ApplicationShortcut)
                 shortcut.activated.connect(handler)
+                self._runtime_hotkey_shortcuts.append(shortcut)
+
+        if self.quick_action_enabled:
+            for idx, raw in enumerate(self.quick_action_keys[:48]):
+                seq = self._key_sequence_from_hotkey_text(raw)
+                if seq is None:
+                    continue
+                shortcut = QShortcut(seq, self)
+                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.activated.connect(lambda slot=idx: self._quick_action_trigger(slot))
                 self._runtime_hotkey_shortcuts.append(shortcut)
 
     def _load_project_text_file(self, filename: str) -> str:
@@ -2125,6 +2261,10 @@ class MainWindow(QMainWindow):
                     parts.append("V")
                 if has_cue:
                     parts.append("C")
+                if self.quick_action_enabled:
+                    qk = self._normalize_hotkey_text(self.quick_action_keys[i] if i < len(self.quick_action_keys) else "")
+                    if qk:
+                        parts.append(f"[{qk.lower()}]")
                 suffix = f" {' '.join(parts)}" if parts else ""
                 button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{suffix}")
                 button.setToolTip(slot.notes.strip())
@@ -3866,6 +4006,8 @@ class MainWindow(QMainWindow):
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
+            quick_action_enabled=self.quick_action_enabled,
+            quick_action_keys=self.quick_action_keys,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3906,6 +4048,10 @@ class MainWindow(QMainWindow):
         )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()
+        self.quick_action_enabled = dialog.selected_quick_action_enabled()
+        self.quick_action_keys = dialog.selected_quick_action_keys()[:48]
+        if len(self.quick_action_keys) < 48:
+            self.quick_action_keys.extend(["" for _ in range(48 - len(self.quick_action_keys))])
         self._apply_hotkeys()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
@@ -4784,7 +4930,27 @@ class MainWindow(QMainWindow):
                 extra.deleteLater()
         except Exception:
             pass
-        self._init_audio_players()
+        try:
+            self._init_audio_players()
+        except Exception as exc:
+            self._dispose_audio_players()
+            set_output_device("")
+            self.audio_output_device = ""
+            try:
+                self._init_audio_players()
+                QMessageBox.warning(
+                    self,
+                    "Audio Device",
+                    f"Could not switch to selected audio device.\nFell back to system default.\n\nDetails:\n{exc}",
+                )
+            except Exception as exc2:
+                self._init_silent_audio_players()
+                QMessageBox.warning(
+                    self,
+                    "Audio Device",
+                    "Audio output failed. Running in no-audio mode.\n\n"
+                    f"Primary error:\n{exc}\n\nFallback error:\n{exc2}",
+                )
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
         self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self.current_playing = None
@@ -5554,6 +5720,8 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_fade_out_2 = self.hotkeys.get("fade_out", ("", ""))[1]
         self.settings.hotkey_mute_1 = self.hotkeys.get("mute", ("", ""))[0]
         self.settings.hotkey_mute_2 = self.hotkeys.get("mute", ("", ""))[1]
+        self.settings.quick_action_enabled = bool(self.quick_action_enabled)
+        self.settings.quick_action_keys = list(self.quick_action_keys[:48])
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -5664,6 +5832,12 @@ class MainWindow(QMainWindow):
                     slot_index = i
                     break
         if slot_index is None:
+            return
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
+        self._play_slot(slot_index)
+
+    def _quick_action_trigger(self, slot_index: int) -> None:
+        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
             return
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         self._play_slot(slot_index)

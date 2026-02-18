@@ -2,10 +2,28 @@ from __future__ import annotations
 
 import configparser
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pyssp.set_loader import parse_delphi_color
+
+
+def default_quick_action_keys() -> list[str]:
+    values: list[str] = []
+    values.extend([chr(code) for code in range(ord("A"), ord("O") + 1)])  # A..O
+    values.extend([chr(code) for code in range(ord("Q"), ord("Z") + 1)])  # Q..Z (skip P)
+    values.extend([str(i) for i in range(10)])  # 0..9
+    values.extend([f"F{i}" for i in range(1, 12)])  # F1..F11
+    values.extend(["Ins", "Del"])
+    return values[:48]
+
+
+def _normalize_quick_action_keys(values: list[str]) -> list[str]:
+    defaults = default_quick_action_keys()
+    output = [str(v or "").strip() for v in values[:48]]
+    if len(output) < 48:
+        output.extend(defaults[len(output):48])
+    return output[:48]
 
 
 @dataclass
@@ -110,6 +128,8 @@ class AppSettings:
     hotkey_fade_out_2: str = ""
     hotkey_mute_1: str = ""
     hotkey_mute_2: str = ""
+    quick_action_enabled: bool = False
+    quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
 
 
 def get_settings_path() -> Path:
@@ -238,6 +258,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_fade_out_2": settings.hotkey_fade_out_2,
         "hotkey_mute_1": settings.hotkey_mute_1,
         "hotkey_mute_2": settings.hotkey_mute_2,
+        "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
+        "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -283,6 +305,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         "stop_cue_or_end",
     }:
         outside_action = "stop_immediately"
+    quick_action_raw = str(section.get("quick_action_keys", "")).strip()
+    if quick_action_raw:
+        quick_action_keys = _normalize_quick_action_keys(quick_action_raw.split("\t"))
+    else:
+        quick_action_keys = default_quick_action_keys()
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -384,6 +411,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_fade_out_2=str(section.get("hotkey_fade_out_2", "")).strip(),
         hotkey_mute_1=str(section.get("hotkey_mute_1", "")).strip(),
         hotkey_mute_2=str(section.get("hotkey_mute_2", "")).strip(),
+        quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
+        quick_action_keys=quick_action_keys,
     )
 
 

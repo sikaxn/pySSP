@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QColor, QKeySequence
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,9 +27,12 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QStyle,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
+
+from pyssp.settings_store import default_quick_action_keys
 
 
 class HotkeyCaptureEdit(QLineEdit):
@@ -220,6 +223,8 @@ class OptionsDialog(QDialog):
         state_colors: Dict[str, str],
         sound_button_text_color: str,
         hotkeys: Dict[str, tuple[str, str]],
+        quick_action_enabled: bool,
+        quick_action_keys: List[str],
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -232,6 +237,12 @@ class OptionsDialog(QDialog):
         self.sound_button_text_color = sound_button_text_color
         self._hotkeys = dict(hotkeys)
         self._hotkey_edits: Dict[str, tuple[HotkeyCaptureEdit, HotkeyCaptureEdit]] = {}
+        self._quick_action_enabled = bool(quick_action_enabled)
+        self._quick_action_edits: List[HotkeyCaptureEdit] = []
+        qa_defaults = default_quick_action_keys()
+        self._quick_action_keys = list(quick_action_keys)[:48]
+        if len(self._quick_action_keys) < 48:
+            self._quick_action_keys.extend(qa_defaults[len(self._quick_action_keys):48])
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.state_colors = dict(state_colors)
@@ -254,7 +265,7 @@ class OptionsDialog(QDialog):
 
         self._add_page(
             "General",
-            self.style().standardIcon(QStyle.SP_DesktopIcon),
+            self._mono_icon("info"),
             self._build_general_page(
                 title_char_limit=title_char_limit,
                 show_file_notifications=show_file_notifications,
@@ -266,17 +277,17 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Hotkey",
-            self.style().standardIcon(QStyle.SP_CommandLink),
+            self._mono_icon("keyboard"),
             self._build_hotkey_page(),
         )
         self._add_page(
             "Colour",
-            self.style().standardIcon(QStyle.SP_DriveDVDIcon),
+            self._mono_icon("display"),
             self._build_color_page(),
         )
         self._add_page(
             "Delay",
-            self.style().standardIcon(QStyle.SP_BrowserReload),
+            self._mono_icon("clock"),
             self._build_delay_page(
                 fade_in_sec=fade_in_sec,
                 cross_fade_sec=cross_fade_sec,
@@ -285,7 +296,7 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Playback",
-            self.style().standardIcon(QStyle.SP_MediaPlay),
+            self._mono_icon("play"),
             self._build_playback_page(
                 max_multi_play_songs=max_multi_play_songs,
                 multi_play_limit_action=multi_play_limit_action,
@@ -295,7 +306,7 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Audio Device",
-            self.style().standardIcon(QStyle.SP_MediaVolume),
+            self._mono_icon("speaker"),
             self._build_audio_device_page(
                 audio_output_device=audio_output_device,
                 available_audio_devices=available_audio_devices,
@@ -303,7 +314,7 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Talk",
-            self.style().standardIcon(QStyle.SP_MessageBoxInformation),
+            self._mono_icon("mic"),
             self._build_talk_page(
                 talk_volume_level=talk_volume_level,
                 talk_fade_sec=talk_fade_sec,
@@ -313,7 +324,7 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Web Remote",
-            self.style().standardIcon(QStyle.SP_BrowserReload),
+            self._mono_icon("wireless"),
             self._build_web_remote_page(
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
@@ -336,6 +347,59 @@ class OptionsDialog(QDialog):
         self.stack.addWidget(page)
         item = QListWidgetItem(icon, title)
         self.page_list.addItem(item)
+
+    def _mono_icon(self, kind: str) -> QIcon:
+        size = 22
+        pix = QPixmap(size, size)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        pen = QPen(QColor("#000000"))
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+
+        if kind == "info":
+            p.drawEllipse(QRectF(3, 3, 16, 16))
+            p.setBrush(QColor("#000000"))
+            p.drawEllipse(QRectF(10, 6, 2, 2))
+            p.drawRoundedRect(QRectF(10, 9, 2, 7), 1, 1)
+        elif kind == "keyboard":
+            p.drawRoundedRect(QRectF(2.5, 5, 17, 12), 2, 2)
+            for y in [8, 11, 14]:
+                p.drawLine(5, y, 17, y)
+            p.drawLine(8, 8, 8, 14)
+            p.drawLine(12, 8, 12, 14)
+            p.drawLine(16, 8, 16, 14)
+        elif kind == "display":
+            p.drawRoundedRect(QRectF(3, 3, 16, 12), 1.5, 1.5)
+            p.drawLine(8, 18, 14, 18)
+            p.drawLine(11, 15, 11, 18)
+        elif kind == "clock":
+            p.drawEllipse(QRectF(3, 3, 16, 16))
+            p.drawLine(11, 11, 11, 6)
+            p.drawLine(11, 11, 15, 13)
+        elif kind == "play":
+            tri = QPolygonF([QPointF(7, 5), QPointF(17, 11), QPointF(7, 17)])
+            p.drawPolygon(tri)
+        elif kind == "speaker":
+            body = QPolygonF([QPointF(4, 9), QPointF(8, 9), QPointF(12, 6), QPointF(12, 16), QPointF(8, 13), QPointF(4, 13)])
+            p.drawPolygon(body)
+            p.drawArc(QRectF(12, 7, 5, 8), -40 * 16, 80 * 16)
+            p.drawArc(QRectF(12, 5, 8, 12), -40 * 16, 80 * 16)
+        elif kind == "mic":
+            p.drawRoundedRect(QRectF(8, 4, 6, 10), 3, 3)
+            p.drawLine(11, 14, 11, 18)
+            p.drawLine(8, 18, 14, 18)
+            p.drawArc(QRectF(6, 10, 10, 8), 200 * 16, 140 * 16)
+        elif kind == "wireless":
+            p.drawEllipse(QRectF(10, 14, 2, 2))
+            p.drawArc(QRectF(7, 11, 8, 8), 35 * 16, 110 * 16)
+            p.drawArc(QRectF(5, 9, 12, 12), 35 * 16, 110 * 16)
+            p.drawArc(QRectF(3, 7, 16, 16), 35 * 16, 110 * 16)
+
+        p.end()
+        return QIcon(pix)
 
     def _build_general_page(
         self,
@@ -398,14 +462,10 @@ class OptionsDialog(QDialog):
     def _build_hotkey_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        form = QFormLayout(container)
-        for key, label in self._HOTKEY_ROWS:
-            self._add_hotkey_row(form, key, label)
-        scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
+        tabs = QTabWidget()
+        tabs.addTab(self._build_system_hotkey_tab(), "System Hotkey")
+        tabs.addTab(self._build_quick_action_tab(), "Quick Action Key")
+        layout.addWidget(tabs, 1)
         self.hotkey_warning_label = QLabel("")
         self.hotkey_warning_label.setWordWrap(True)
         self.hotkey_warning_label.setStyleSheet("color:#B00020; font-weight:bold;")
@@ -414,6 +474,49 @@ class OptionsDialog(QDialog):
         note = QLabel("Each operation supports two hotkeys. You can clear either key.")
         note.setWordWrap(True)
         layout.addWidget(note)
+        return page
+
+    def _build_system_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for key, label in self._HOTKEY_ROWS:
+            self._add_hotkey_row(form, key, label)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_quick_action_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.quick_action_enabled_checkbox = QCheckBox("Enable Quick Action Key (Assign Broadcast Short Key)")
+        self.quick_action_enabled_checkbox.setChecked(self._quick_action_enabled)
+        self.quick_action_enabled_checkbox.toggled.connect(self._validate_hotkey_conflicts)
+        layout.addWidget(self.quick_action_enabled_checkbox)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for i in range(48):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            edit = HotkeyCaptureEdit()
+            edit.setHotkey(self._quick_action_keys[i])
+            edit.textChanged.connect(self._validate_hotkey_conflicts)
+            clear_btn = QPushButton("Clear")
+            clear_btn.setFixedWidth(56)
+            clear_btn.clicked.connect(lambda _=False, e=edit: e.setHotkey(""))
+            row_layout.addWidget(edit)
+            row_layout.addWidget(clear_btn)
+            self._quick_action_edits.append(edit)
+            form.addRow(f"Button {i + 1}:", row)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
         return page
 
     def _add_hotkey_row(self, form: QFormLayout, key: str, label: str) -> None:
@@ -746,6 +849,12 @@ class OptionsDialog(QDialog):
             result[key] = (s1, s2)
         return result
 
+    def selected_quick_action_enabled(self) -> bool:
+        return bool(self.quick_action_enabled_checkbox.isChecked())
+
+    def selected_quick_action_keys(self) -> List[str]:
+        return [edit.hotkey() for edit in self._quick_action_edits]
+
     def _sync_jog_outside_group_enabled(self) -> None:
         enabled = self.cue_timeline_audio_file_radio.isChecked()
         self.jog_outside_group.setEnabled(enabled)
@@ -876,6 +985,10 @@ class OptionsDialog(QDialog):
             val1, val2 = defaults.get(key, ("", ""))
             edit1.setHotkey(val1)
             edit2.setHotkey(val2)
+        self.quick_action_enabled_checkbox.setChecked(False)
+        qa_defaults = default_quick_action_keys()
+        for i, edit in enumerate(self._quick_action_edits):
+            edit.setHotkey(qa_defaults[i] if i < len(qa_defaults) else "")
         self._validate_hotkey_conflicts()
 
     def _normalize_hotkey_for_conflict(self, raw: str) -> str:
@@ -916,6 +1029,32 @@ class OptionsDialog(QDialog):
                 else:
                     seen[token] = (key, slot_index)
 
+        quick_enabled = bool(self.quick_action_enabled_checkbox.isChecked())
+        quick_conflict_rows: set[int] = set()
+        if quick_enabled:
+            for idx, edit in enumerate(self._quick_action_edits):
+                token = self._normalize_hotkey_for_conflict(edit.hotkey())
+                if not token:
+                    continue
+                mark = ("quick_action", idx + 1)
+                if token in seen:
+                    prev_key, prev_slot_index = seen[token]
+                    conflict_cells.add((prev_key, prev_slot_index))
+                    conflicts.append(
+                        f"{token}: {self._describe_conflict_target(prev_key, prev_slot_index)} and Quick Action ({idx + 1})"
+                    )
+                    quick_conflict_rows.add(idx)
+                    if prev_key == "quick_action":
+                        quick_conflict_rows.add(max(0, prev_slot_index - 1))
+                else:
+                    seen[token] = mark
+
+        for idx, edit in enumerate(self._quick_action_edits):
+            if quick_enabled and idx in quick_conflict_rows:
+                edit.setStyleSheet("QLineEdit{border:2px solid #B00020;}")
+            else:
+                edit.setStyleSheet("")
+
         for key, (edit1, edit2) in self._hotkey_edits.items():
             for slot_index, edit in enumerate((edit1, edit2), start=1):
                 if (key, slot_index) in conflict_cells:
@@ -937,6 +1076,11 @@ class OptionsDialog(QDialog):
             display += f"; +{len(conflicts) - 4} more"
         self.hotkey_warning_label.setText(f"Hotkey conflict detected. Fix duplicates before saving. {display}")
         self.hotkey_warning_label.setVisible(True)
+
+    def _describe_conflict_target(self, key: str, slot_index: int) -> str:
+        if key == "quick_action":
+            return f"Quick Action ({slot_index})"
+        return f"{self._hotkey_labels.get(key, key)} ({slot_index})"
 
     def _restore_delay_defaults(self) -> None:
         d = self._DEFAULTS

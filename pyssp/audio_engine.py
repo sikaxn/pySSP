@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -19,6 +20,17 @@ _CHANNEL_COUNT = 2
 _REQUESTED_DEVICE = ""
 
 
+class _NullOutputStream:
+    def start(self) -> None:
+        return
+
+    def stop(self) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+
 def _ensure_decoder() -> None:
     global _DECODER_READY
     if _DECODER_READY and pygame.mixer.get_init():
@@ -26,7 +38,22 @@ def _ensure_decoder() -> None:
     if not pygame.get_init():
         pygame.init()
     if not pygame.mixer.get_init():
-        pygame.mixer.init(frequency=44100, size=-16, channels=_CHANNEL_COUNT)
+        original_driver = os.environ.get("SDL_AUDIODRIVER")
+        init_errors: List[str] = []
+        for driver in [original_driver, "wasapi", "directsound", "winmm", "dummy"]:
+            try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.quit()
+                if driver:
+                    os.environ["SDL_AUDIODRIVER"] = driver
+                elif "SDL_AUDIODRIVER" in os.environ:
+                    del os.environ["SDL_AUDIODRIVER"]
+                pygame.mixer.init(frequency=44100, size=-16, channels=_CHANNEL_COUNT)
+                break
+            except Exception as exc:
+                init_errors.append(f"{driver or 'default'}: {exc}")
+        if not pygame.mixer.get_init():
+            raise pygame.error("Unable to initialize pygame mixer: " + " | ".join(init_errors))
     _DECODER_READY = True
 
 
@@ -254,15 +281,18 @@ class ExternalMediaPlayer(QObject):
                 device_index = _find_output_device_index(_REQUESTED_DEVICE)
             except Exception:
                 device_index = None
-        return sd.OutputStream(
-            samplerate=self._sample_rate,
-            channels=self._channels,
-            dtype="float32",
-            callback=self._audio_callback,
-            device=device_index,
-            blocksize=1024,
-            latency="low",
-        )
+        try:
+            return sd.OutputStream(
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                dtype="float32",
+                callback=self._audio_callback,
+                device=device_index,
+                blocksize=1024,
+                latency="low",
+            )
+        except Exception:
+            return _NullOutputStream()
 
     def _audio_callback(self, outdata, frames, _time_info, status) -> None:
         if status:

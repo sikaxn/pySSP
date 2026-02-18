@@ -51,6 +51,7 @@ from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, load_settings, save_settings
 from pyssp.timecode import (
+    LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,
     MtcMidiOutput,
     MTC_IDLE_ALLOW_DARK,
@@ -775,6 +776,7 @@ class MainWindow(QMainWindow):
         self.page_status = QLabel("")
         self.now_playing_label = QLabel("")
         self.drag_mode_banner = QLabel("")
+        self.timecode_multiplay_banner = QLabel("")
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
         self.status_now_playing_label = QLabel("Now Playing: -")
@@ -830,9 +832,13 @@ class MainWindow(QMainWindow):
         self.timecode_dock: Optional[QDockWidget] = None
         self.timecode_panel: Optional[TimecodePanel] = None
         self._mtc_sender = MtcMidiOutput(lambda: self.timecode_mtc_idle_behavior)
+        self._ltc_sender = LtcAudioOutput()
         self._timecode_follow_anchor_ms = 0.0
         self._timecode_follow_anchor_t = time.perf_counter()
         self._timecode_follow_playing = False
+        self._timecode_follow_intent_pending = False
+        self._timecode_last_media_ms = 0.0
+        self._timecode_last_media_t = 0.0
 
         self._build_ui()
         self.statusBar().addWidget(self.status_hover_label)
@@ -859,7 +865,7 @@ class MainWindow(QMainWindow):
 
         self.timecode_mtc_timer = QTimer(self)
         self.timecode_mtc_timer.timeout.connect(self._tick_timecode_mtc)
-        self.timecode_mtc_timer.start(5)
+        self.timecode_mtc_timer.start(10)
 
         self.fade_timer = QTimer(self)
         self.fade_timer.timeout.connect(self._tick_fades)
@@ -880,6 +886,7 @@ class MainWindow(QMainWindow):
         self._update_page_status()
         self._update_button_drag_control_state()
         self._update_button_drag_visual_state()
+        self._update_timecode_multiplay_warning_banner()
         self._restore_last_set_on_startup()
         if self.reset_all_on_startup:
             self._reset_all_played_state()
@@ -905,6 +912,13 @@ class MainWindow(QMainWindow):
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.drag_mode_banner)
+        self.timecode_multiplay_banner.setVisible(False)
+        self.timecode_multiplay_banner.setWordWrap(True)
+        self.timecode_multiplay_banner.setStyleSheet(
+            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.timecode_multiplay_banner)
 
         body_layout = QHBoxLayout()
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -964,39 +978,55 @@ class MainWindow(QMainWindow):
             return
         self.timecode_dock.setVisible(not self.timecode_dock.isVisible())
 
+    def _is_timecode_output_enabled(self) -> bool:
+        ltc_enabled = str(self.timecode_audio_output_device or "none").strip().lower() != "none"
+        mtc_enabled = str(self.timecode_midi_output_device or MIDI_OUTPUT_DEVICE_NONE).strip() != MIDI_OUTPUT_DEVICE_NONE
+        return ltc_enabled or mtc_enabled
+
+    def _update_timecode_multiplay_warning_banner(self) -> None:
+        show_warning = self._is_multi_play_enabled() and self._is_timecode_output_enabled()
+        if show_warning:
+            self.timecode_multiplay_banner.setText(
+                "TIMECODE ENABLED: Multi-Play is not designed for timecode. Unexpected behaviour could happen."
+            )
+            self.timecode_multiplay_banner.setVisible(True)
+            return
+        self.timecode_multiplay_banner.setVisible(False)
+
     def _timecode_current_follow_ms(self) -> int:
         if self.player is None:
             self._timecode_follow_anchor_ms = 0.0
             self._timecode_follow_anchor_t = time.perf_counter()
             self._timecode_follow_playing = False
+            self._timecode_follow_intent_pending = False
             return 0
-        try:
-            absolute_ms = max(0, int(self.player.position()))
-        except Exception:
-            absolute_ms = 0
-        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms))
         is_playing = self.player.state() == ExternalMediaPlayer.PlayingState
         now = time.perf_counter()
+        predicted_ms = self._timecode_follow_anchor_ms + max(0.0, (now - self._timecode_follow_anchor_t) * 1000.0)
+        try:
+            absolute_ms = max(0, int(self.player.enginePositionMs()))
+        except Exception:
+            try:
+                absolute_ms = max(0, int(self.player.position()))
+            except Exception:
+                absolute_ms = 0
+        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms))
         if not is_playing:
+            if self._timecode_follow_intent_pending and self._timecode_follow_playing:
+                self._timecode_follow_anchor_ms = predicted_ms
+                self._timecode_follow_anchor_t = now
+                return int(max(0.0, predicted_ms))
             self._timecode_follow_anchor_ms = media_ms
             self._timecode_follow_anchor_t = now
             self._timecode_follow_playing = False
             return int(media_ms)
 
-        if not self._timecode_follow_playing:
-            self._timecode_follow_anchor_ms = media_ms
-            self._timecode_follow_anchor_t = now
-            self._timecode_follow_playing = True
-            return int(media_ms)
-
-        predicted_ms = self._timecode_follow_anchor_ms + max(0.0, (now - self._timecode_follow_anchor_t) * 1000.0)
-        drift_ms = media_ms - predicted_ms
-        if abs(drift_ms) > 80.0:
-            self._timecode_follow_anchor_ms = media_ms
-        else:
-            # Keep player position as master but smooth tiny jitter.
-            self._timecode_follow_anchor_ms = media_ms - (drift_ms * 0.12)
+        self._timecode_follow_anchor_ms = media_ms
         self._timecode_follow_anchor_t = now
+        self._timecode_follow_playing = True
+        self._timecode_follow_intent_pending = False
+        self._timecode_last_media_ms = media_ms
+        self._timecode_last_media_t = now
         return int(max(0.0, self._timecode_follow_anchor_ms))
 
     def _timecode_display_ms_from_absolute(self, absolute_ms: int) -> int:
@@ -1044,9 +1074,29 @@ class MainWindow(QMainWindow):
         return f"Output Device: {self.timecode_audio_output_device} ({ltc_format}) | {midi_text}"
 
     def _tick_timecode_mtc(self) -> None:
+        ltc_device: Optional[str]
+        if self.timecode_audio_output_device == "none":
+            ltc_device = None
+        elif self.timecode_audio_output_device == "follow_playback":
+            selected = str(self.audio_output_device or "").strip()
+            ltc_device = selected if selected else None
+        elif self.timecode_audio_output_device in {"default", ""}:
+            ltc_device = ""
+        else:
+            ltc_device = str(self.timecode_audio_output_device).strip()
+        self._ltc_sender.set_output(
+            ltc_device,
+            int(self.timecode_sample_rate),
+            int(self.timecode_bit_depth),
+            float(self.timecode_fps),
+        )
         self._mtc_sender.set_device(self.timecode_midi_output_device)
         output_ms = self._timecode_output_ms()
         current_frame = int((max(0, output_ms) / 1000.0) * max(1.0, float(self.timecode_fps)))
+        self._ltc_sender.update(
+            current_frame=current_frame,
+            fps=max(1.0, float(self.timecode_fps)),
+        )
         self._mtc_sender.update(
             current_frame=current_frame,
             source_fps=max(1.0, float(self.timecode_fps)),
@@ -1054,20 +1104,53 @@ class MainWindow(QMainWindow):
         )
 
     def _timecode_on_playback_start(self, slot: Optional[SoundButtonData] = None) -> None:
+        now = time.perf_counter()
         start_abs = 0
         if slot is not None:
             duration_guess = max(0, int(slot.duration_ms))
             start_abs = self._cue_start_for_playback(slot, duration_guess)
         start_display = float(self._timecode_display_ms_from_absolute(start_abs))
         self._timecode_follow_anchor_ms = start_display
-        self._timecode_follow_anchor_t = time.perf_counter()
+        self._timecode_follow_anchor_t = now
         self._timecode_follow_playing = True
+        self._timecode_follow_intent_pending = True
+        self._timecode_last_media_ms = start_display
+        self._timecode_last_media_t = now
+        print(
+            f"[TCDBG] {now:.6f} timecode_start anchor_ms={start_display:.1f} "
+            f"slot={(slot.title if slot else '<none>')}"
+        )
+        self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
 
     def _timecode_on_playback_stop(self) -> None:
+        now = time.perf_counter()
         self._timecode_follow_anchor_ms = 0.0
+        self._timecode_follow_anchor_t = now
+        self._timecode_follow_playing = False
+        self._timecode_follow_intent_pending = False
+        self._timecode_last_media_ms = 0.0
+        self._timecode_last_media_t = now
+        print(f"[TCDBG] {now:.6f} timecode_stop")
+        self._ltc_sender.request_resync()
+        self._mtc_sender.request_resync()
+
+    def _timecode_on_playback_pause(self) -> None:
+        paused_ms = float(self._timecode_current_follow_ms())
+        self._timecode_follow_anchor_ms = paused_ms
         self._timecode_follow_anchor_t = time.perf_counter()
         self._timecode_follow_playing = False
+        self._timecode_follow_intent_pending = False
+        self._ltc_sender.request_resync()
+        self._mtc_sender.request_resync()
+
+    def _timecode_on_playback_resume(self) -> None:
+        resume_ms = float(self._timecode_current_follow_ms())
+        self._timecode_follow_anchor_ms = resume_ms
+        self._timecode_follow_anchor_t = time.perf_counter()
+        self._timecode_follow_playing = True
+        self._timecode_follow_intent_pending = False
+        self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
 
     def _refresh_timecode_panel(self) -> None:
@@ -3573,6 +3656,7 @@ class MainWindow(QMainWindow):
                 self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
 
     def _play_slot(self, slot_index: int) -> None:
+        click_t = time.perf_counter()
         if self._is_button_drag_enabled():
             self.statusBar().showMessage("Playback is not allowed while Button Drag is enabled.", 2500)
             return
@@ -3590,6 +3674,10 @@ class MainWindow(QMainWindow):
 
         group_key = self._view_group_key()
         playing_key = (group_key, self.current_page, slot_index)
+        print(
+            f"[TCDBG] {click_t:.6f} play_click key={playing_key} title={(slot.title or '<untitled>')} "
+            f"mode={self._current_fade_mode()} multi={self._is_multi_play_enabled()}"
+        )
         self._prune_multi_players()
         force_single_play = False
         if (not self._is_multi_play_enabled()) and self._multi_players:
@@ -3613,6 +3701,9 @@ class MainWindow(QMainWindow):
             if self.click_playing_action == "stop_it" and not force_single_play:
                 self._stop_playback()
                 return
+        # Signal timecode immediately on valid play intent (before media load/play).
+        self._timecode_on_playback_start(slot)
+        print(f"[TCDBG] {time.perf_counter():.6f} timecode_intent_start key={playing_key}")
         # Invalidate any previously scheduled delayed start to avoid stale restarts.
         self._pending_start_request = None
         self._pending_start_token += 1
@@ -3632,6 +3723,7 @@ class MainWindow(QMainWindow):
             and fade_out_on
             and not cross_mode
         ):
+            print(f"[TCDBG] {time.perf_counter():.6f} delayed_start_due_to_fadeout key={playing_key}")
             self._schedule_start_after_fadeout(group_key, self.current_page, slot_index)
             return
 
@@ -3662,20 +3754,34 @@ class MainWindow(QMainWindow):
 
         if cross_mode:
             self._stop_player_internal(new_player)
+            load_t = time.perf_counter()
             if not self._try_load_media(new_player, slot):
+                print(
+                    f"[TCDBG] {time.perf_counter():.6f} media_load_failed cross "
+                    f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
+                )
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
                 return
+            print(
+                f"[TCDBG] {time.perf_counter():.6f} media_load_ok cross "
+                f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
+            )
             if new_player is self.player:
                 self._player_slot_volume_pct = slot_pct
             else:
                 self._player_b_slot_volume_pct = slot_pct
             target_volume = self._effective_slot_target_volume(slot_pct)
+            seek_t = time.perf_counter()
             self._seek_player_to_slot_start_cue(new_player, slot)
+            print(
+                f"[TCDBG] {time.perf_counter():.6f} media_seek_done cross "
+                f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
+            )
             new_player.setVolume(0)
+            print(f"[TCDBG] {time.perf_counter():.6f} player_play cross key={playing_key}")
             new_player.play()
-            self._timecode_on_playback_start(slot)
             self._set_player_slot_key(new_player, playing_key)
             fade_seconds = self.cross_fade_sec
             self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
@@ -3688,24 +3794,38 @@ class MainWindow(QMainWindow):
             self._clear_all_player_slot_keys()
             self._stop_player_internal(self.player_b)
             self._stop_player_internal(self.player)
+            load_t = time.perf_counter()
             if not self._try_load_media(self.player, slot):
+                print(
+                    f"[TCDBG] {time.perf_counter():.6f} media_load_failed primary "
+                    f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
+                )
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
                 return
+            print(
+                f"[TCDBG] {time.perf_counter():.6f} media_load_ok primary "
+                f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
+            )
             self._player_slot_volume_pct = slot_pct
             target_volume = self._effective_slot_target_volume(slot_pct)
+            seek_t = time.perf_counter()
             self._seek_player_to_slot_start_cue(self.player, slot)
+            print(
+                f"[TCDBG] {time.perf_counter():.6f} media_seek_done primary "
+                f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
+            )
             if fade_in_on:
                 self.player.setVolume(0)
+                print(f"[TCDBG] {time.perf_counter():.6f} player_play fade_in key={playing_key}")
                 self.player.play()
-                self._timecode_on_playback_start(slot)
                 self._set_player_slot_key(self.player, playing_key)
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
                 self.player.setVolume(target_volume)
+                print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
                 self.player.play()
-                self._timecode_on_playback_start(slot)
                 self._set_player_slot_key(self.player, playing_key)
 
         self._refresh_sound_grid()
@@ -3860,6 +3980,10 @@ class MainWindow(QMainWindow):
         self._refresh_timecode_panel()
 
     def _on_state_changed(self, _state: int) -> None:
+        print(
+            f"[TCDBG] {time.perf_counter():.6f} state_changed "
+            f"primary={self.player.state()} secondary={self.player_b.state()}"
+        )
         self._update_pause_button_label()
         if self._ignore_state_changes > 0:
             return
@@ -4511,6 +4635,7 @@ class MainWindow(QMainWindow):
         self._update_talk_button_visual()
         self._refresh_main_transport_display()
         self._refresh_timecode_panel()
+        self._update_timecode_multiplay_warning_banner()
         self._refresh_group_buttons()
         self._refresh_sound_grid()
         self._apply_web_remote_state()
@@ -5090,15 +5215,19 @@ class MainWindow(QMainWindow):
                 for p in players:
                     if p.state() == ExternalMediaPlayer.PlayingState:
                         p.pause()
+                self._timecode_on_playback_pause()
             elif any_paused:
                 for p in players:
                     if p.state() == ExternalMediaPlayer.PausedState:
                         p.play()
+                self._timecode_on_playback_resume()
         else:
             if self.player.state() == ExternalMediaPlayer.PlayingState:
                 self.player.pause()
+                self._timecode_on_playback_pause()
             elif self.player.state() == ExternalMediaPlayer.PausedState:
                 self.player.play()
+                self._timecode_on_playback_resume()
         self._update_pause_button_label()
 
     def _toggle_talk(self, checked: bool) -> None:
@@ -5297,6 +5426,7 @@ class MainWindow(QMainWindow):
         multi_btn = self.control_buttons.get("Multi-Play")
         if multi_btn:
             multi_btn.setChecked(checked)
+        self._update_timecode_multiplay_warning_banner()
         if checked:
             self.page_playlist_enabled[self.current_group][self.current_page] = False
             self.page_shuffle_enabled[self.current_group][self.current_page] = False
@@ -5450,6 +5580,8 @@ class MainWindow(QMainWindow):
         self._pending_start_request = None
         self._pending_start_token += 1
         self._auto_transition_done = True
+        # Stop timecode immediately on user intent, regardless of audio fade-out.
+        self._timecode_on_playback_stop()
         active_players = self._all_active_players()
         if self._stop_fade_armed:
             self._stop_fade_armed = False
@@ -6466,7 +6598,11 @@ class MainWindow(QMainWindow):
                     return
         self._hard_stop_all()
         try:
-            self._mtc_sender.stop()
+            self._ltc_sender.shutdown()
+        except Exception:
+            pass
+        try:
+            self._mtc_sender.shutdown()
         except Exception:
             pass
         self._stop_web_remote_service()

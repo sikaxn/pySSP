@@ -171,6 +171,9 @@ class ExternalMediaPlayer(QObject):
 
         self._source_frames: Optional[np.ndarray] = None
         self._source_pos = 0.0
+        self._source_pos_anchor = 0.0
+        self._source_pos_anchor_t = time.perf_counter()
+        self._source_pos_anchor_tempo = 1.0
         self._ended = False
         self._dsp_config = DSPConfig()
         self._dsp_processor = RealTimeDSPProcessor(self._sample_rate, self._channels)
@@ -200,6 +203,9 @@ class ExternalMediaPlayer(QObject):
             self._media_path = file_path
             self._source_frames = frames
             self._source_pos = 0.0
+            self._source_pos_anchor = 0.0
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._duration_ms = int((len(frames) / float(self._sample_rate)) * 1000.0)
             self._position_ms = 0
             self._ended = False
@@ -223,6 +229,9 @@ class ExternalMediaPlayer(QObject):
             if self._state == self.PlayingState:
                 return
             self._started_at = time.monotonic() - (self._position_ms / 1000.0)
+            self._source_pos_anchor = self._source_pos
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._set_state_locked(self.PlayingState)
 
     def pause(self) -> None:
@@ -230,11 +239,17 @@ class ExternalMediaPlayer(QObject):
             if self._state != self.PlayingState:
                 return
             self._position_ms = self._position_from_source_pos_locked()
+            self._source_pos_anchor = self._source_pos
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._set_state_locked(self.PausedState)
 
     def stop(self) -> None:
         with self._lock:
             self._source_pos = 0.0
+            self._source_pos_anchor = 0.0
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._position_ms = 0
             self._ended = False
             self._set_state_locked(self.StoppedState)
@@ -251,12 +266,27 @@ class ExternalMediaPlayer(QObject):
             if self._source_frames is not None:
                 self._source_pos = (target / 1000.0) * self._sample_rate
                 self._source_pos = max(0.0, min(self._source_pos, float(len(self._source_frames))))
+                self._source_pos_anchor = self._source_pos
+                self._source_pos_anchor_t = time.perf_counter()
+                self._source_pos_anchor_tempo = self._tempo_ratio_locked()
                 self._ended = False
         self.positionChanged.emit(target)
 
     def position(self) -> int:
         with self._lock:
             return self._position_ms
+
+    def enginePositionMs(self) -> int:
+        with self._lock:
+            if self._duration_ms <= 0:
+                return 0
+            pos_samples = self._source_pos
+            if self._state == self.PlayingState and self._source_frames is not None:
+                elapsed = max(0.0, time.perf_counter() - self._source_pos_anchor_t)
+                pos_samples = self._source_pos_anchor + (elapsed * self._sample_rate * self._source_pos_anchor_tempo)
+                pos_samples = max(0.0, min(float(len(self._source_frames)), pos_samples))
+            pos_ms = int((pos_samples / float(self._sample_rate)) * 1000.0)
+            return max(0, min(pos_ms, self._duration_ms))
 
     def duration(self) -> int:
         with self._lock:
@@ -338,6 +368,9 @@ class ExternalMediaPlayer(QObject):
                 self._source_pos = float(len(self._source_frames))
 
             self._position_ms = self._position_from_source_pos_locked()
+            self._source_pos_anchor = self._source_pos
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = tempo_ratio
 
     def _read_source_block_locked(self, frames: int) -> Optional[np.ndarray]:
         assert self._source_frames is not None
@@ -368,6 +401,9 @@ class ExternalMediaPlayer(QObject):
         if self._source_pos >= float(n_src - 1):
             self._source_pos = float(n_src)
         return block.astype(np.float32, copy=False)
+
+    def _tempo_ratio_locked(self) -> float:
+        return max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
 
     def _apply_pitch_ratio_block(self, block: np.ndarray, ratio: float) -> np.ndarray:
         if len(block) <= 1:

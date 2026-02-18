@@ -147,9 +147,17 @@ class OptionsDialog(QDialog):
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
         "search_double_click_action": "find_highlight",
+        "set_file_encoding": "utf8",
         "fade_in_sec": 1.0,
         "cross_fade_sec": 1.0,
         "fade_out_sec": 1.0,
+        "fade_on_quick_action_hotkey": True,
+        "fade_on_sound_button_hotkey": True,
+        "fade_on_pause": False,
+        "fade_on_resume": False,
+        "fade_on_stop": True,
+        "fade_out_when_done_playing": False,
+        "fade_out_end_lead_sec": 2.0,
         "max_multi_play_songs": 5,
         "multi_play_limit_action": "stop_oldest",
         "main_transport_timeline_mode": "cue_region",
@@ -227,6 +235,13 @@ class OptionsDialog(QDialog):
         fade_in_sec: float,
         cross_fade_sec: float,
         fade_out_sec: float,
+        fade_on_quick_action_hotkey: bool,
+        fade_on_sound_button_hotkey: bool,
+        fade_on_pause: bool,
+        fade_on_resume: bool,
+        fade_on_stop: bool,
+        fade_out_when_done_playing: bool,
+        fade_out_end_lead_sec: float,
         talk_volume_level: int,
         talk_fade_sec: float,
         talk_volume_mode: str,
@@ -235,6 +250,7 @@ class OptionsDialog(QDialog):
         reset_all_on_startup: bool,
         click_playing_action: str,
         search_double_click_action: str,
+        set_file_encoding: str,
         audio_output_device: str,
         available_audio_devices: List[str],
         available_midi_devices: List[tuple[str, str]],
@@ -317,6 +333,7 @@ class OptionsDialog(QDialog):
                 reset_all_on_startup=reset_all_on_startup,
                 click_playing_action=click_playing_action,
                 search_double_click_action=search_double_click_action,
+                set_file_encoding=set_file_encoding,
             ),
         )
         self._add_page(
@@ -330,12 +347,19 @@ class OptionsDialog(QDialog):
             self._build_color_page(),
         )
         self._add_page(
-            "Delay",
+            "Fade",
             self._mono_icon("clock"),
             self._build_delay_page(
                 fade_in_sec=fade_in_sec,
                 cross_fade_sec=cross_fade_sec,
                 fade_out_sec=fade_out_sec,
+                fade_on_quick_action_hotkey=fade_on_quick_action_hotkey,
+                fade_on_sound_button_hotkey=fade_on_sound_button_hotkey,
+                fade_on_pause=fade_on_pause,
+                fade_on_resume=fade_on_resume,
+                fade_on_stop=fade_on_stop,
+                fade_out_when_done_playing=fade_out_when_done_playing,
+                fade_out_end_lead_sec=fade_out_end_lead_sec,
             ),
         )
         self._add_page(
@@ -477,6 +501,7 @@ class OptionsDialog(QDialog):
         reset_all_on_startup: bool,
         click_playing_action: str,
         search_double_click_action: str,
+        set_file_encoding: str,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -498,6 +523,24 @@ class OptionsDialog(QDialog):
         self.reset_on_startup_checkbox = QCheckBox("Reset ALL on Start-up")
         self.reset_on_startup_checkbox.setChecked(reset_all_on_startup)
         form.addRow("Startup:", self.reset_on_startup_checkbox)
+
+        encoding_group = QGroupBox(".set Save Encoding")
+        encoding_layout = QVBoxLayout(encoding_group)
+        self.set_file_encoding_utf8_radio = QRadioButton("UTF-8")
+        self.set_file_encoding_gbk_radio = QRadioButton("GBK (Chinese)")
+        if str(set_file_encoding).strip().lower() == "gbk":
+            self.set_file_encoding_gbk_radio.setChecked(True)
+        else:
+            self.set_file_encoding_utf8_radio.setChecked(True)
+        encoding_layout.addWidget(self.set_file_encoding_utf8_radio)
+        encoding_layout.addWidget(self.set_file_encoding_gbk_radio)
+        encoding_note = QLabel(
+            "GBK note: if song title, notes, file path, etc include Chinese characters, "
+            "GBK has better compatibility with original SSP."
+        )
+        encoding_note.setWordWrap(True)
+        encoding_layout.addWidget(encoding_note)
+        layout.addWidget(encoding_group)
         layout.addLayout(form)
 
         click_group = QGroupBox("Clicking on a Playing Sound will:")
@@ -690,31 +733,98 @@ class OptionsDialog(QDialog):
         self._state_color_buttons[key] = btn
         form.addRow(f"{label}:", btn)
 
-    def _build_delay_page(self, fade_in_sec: float, cross_fade_sec: float, fade_out_sec: float) -> QWidget:
+    def _build_delay_page(
+        self,
+        fade_in_sec: float,
+        cross_fade_sec: float,
+        fade_out_sec: float,
+        fade_on_quick_action_hotkey: bool,
+        fade_on_sound_button_hotkey: bool,
+        fade_on_pause: bool,
+        fade_on_resume: bool,
+        fade_on_stop: bool,
+        fade_out_when_done_playing: bool,
+        fade_out_end_lead_sec: float,
+    ) -> QWidget:
         page = QWidget()
-        form = QFormLayout(page)
+        layout = QVBoxLayout(page)
+
+        trigger_group = QGroupBox("Fader Trigger")
+        trigger_layout = QVBoxLayout(trigger_group)
+
+        self.fade_on_quick_action_checkbox = QCheckBox("Allow fader on Quick Action key active")
+        self.fade_on_quick_action_checkbox.setChecked(bool(fade_on_quick_action_hotkey))
+        trigger_layout.addWidget(self.fade_on_quick_action_checkbox)
+
+        self.fade_on_sound_hotkey_checkbox = QCheckBox("Allow fader on Sound Button hot key active")
+        self.fade_on_sound_hotkey_checkbox.setChecked(bool(fade_on_sound_button_hotkey))
+        trigger_layout.addWidget(self.fade_on_sound_hotkey_checkbox)
+
+        self.fade_on_pause_checkbox = QCheckBox("Fade on Pause")
+        self.fade_on_pause_checkbox.setChecked(bool(fade_on_pause))
+        trigger_layout.addWidget(self.fade_on_pause_checkbox)
+
+        self.fade_on_resume_checkbox = QCheckBox("Fade on Resume (when paused)")
+        self.fade_on_resume_checkbox.setChecked(bool(fade_on_resume))
+        trigger_layout.addWidget(self.fade_on_resume_checkbox)
+
+        self.fade_on_stop_checkbox = QCheckBox("Fade on Stop")
+        self.fade_on_stop_checkbox.setChecked(bool(fade_on_stop))
+        trigger_layout.addWidget(self.fade_on_stop_checkbox)
+
+        self.fade_on_stop_note = QLabel("During fade, click Stop again to force stop (skip fade).")
+        self.fade_on_stop_note.setWordWrap(True)
+        self.fade_on_stop_note.setStyleSheet("color:#666666;")
+        trigger_layout.addWidget(self.fade_on_stop_note)
+        self.fade_dependency_note = QLabel("Note: These options work only when the matching Fade In/Fade Out control is active.")
+        self.fade_dependency_note.setWordWrap(True)
+        self.fade_dependency_note.setStyleSheet("color:#666666;")
+        trigger_layout.addWidget(self.fade_dependency_note)
+        layout.addWidget(trigger_group)
+
+        timing_group = QGroupBox("Fade Timing")
+        timing_form = QFormLayout(timing_group)
 
         self.fade_in_spin = QDoubleSpinBox()
         self.fade_in_spin.setRange(0.0, 20.0)
         self.fade_in_spin.setSingleStep(0.1)
         self.fade_in_spin.setDecimals(1)
         self.fade_in_spin.setValue(fade_in_sec)
-        form.addRow("Fade In Seconds:", self.fade_in_spin)
-
-        self.cross_fade_spin = QDoubleSpinBox()
-        self.cross_fade_spin.setRange(0.0, 20.0)
-        self.cross_fade_spin.setSingleStep(0.1)
-        self.cross_fade_spin.setDecimals(1)
-        self.cross_fade_spin.setValue(cross_fade_sec)
-        form.addRow("Cross Fade Seconds:", self.cross_fade_spin)
+        timing_form.addRow("Fade In Seconds:", self.fade_in_spin)
 
         self.fade_out_spin = QDoubleSpinBox()
         self.fade_out_spin.setRange(0.0, 20.0)
         self.fade_out_spin.setSingleStep(0.1)
         self.fade_out_spin.setDecimals(1)
         self.fade_out_spin.setValue(fade_out_sec)
-        form.addRow("Fade Out Seconds:", self.fade_out_spin)
+        timing_form.addRow("Fade Out Seconds:", self.fade_out_spin)
+
+        self.fade_out_when_done_checkbox = QCheckBox("Fade out when done playing")
+        self.fade_out_when_done_checkbox.setChecked(bool(fade_out_when_done_playing))
+        timing_form.addRow("", self.fade_out_when_done_checkbox)
+
+        self.fade_out_end_lead_spin = QDoubleSpinBox()
+        self.fade_out_end_lead_spin.setRange(0.0, 30.0)
+        self.fade_out_end_lead_spin.setSingleStep(0.1)
+        self.fade_out_end_lead_spin.setDecimals(1)
+        self.fade_out_end_lead_spin.setValue(float(fade_out_end_lead_sec))
+        timing_form.addRow("Length from end to start Fade Out:", self.fade_out_end_lead_spin)
+
+        self.cross_fade_spin = QDoubleSpinBox()
+        self.cross_fade_spin.setRange(0.0, 20.0)
+        self.cross_fade_spin.setSingleStep(0.1)
+        self.cross_fade_spin.setDecimals(1)
+        self.cross_fade_spin.setValue(cross_fade_sec)
+        timing_form.addRow("Cross Fade Seconds:", self.cross_fade_spin)
+        layout.addWidget(timing_group)
+        layout.addStretch(1)
+
+        self.fade_out_when_done_checkbox.toggled.connect(self._sync_fade_out_end_lead_enabled)
+        self._sync_fade_out_end_lead_enabled()
         return page
+
+    def _sync_fade_out_end_lead_enabled(self) -> None:
+        self.fade_out_end_lead_spin.setEnabled(self.fade_out_when_done_checkbox.isChecked())
 
     def _build_playback_page(
         self,
@@ -927,29 +1037,26 @@ class OptionsDialog(QDialog):
         self.talk_blink_checkbox = QCheckBox("Blink Talk Button")
         self.talk_blink_checkbox.setChecked(talk_blink_button)
         form.addRow("Talk Button:", self.talk_blink_checkbox)
-        layout.addLayout(form)
-
-        mode_group = QGroupBox("Talk Volume Behavior")
-        mode_layout = QVBoxLayout(mode_group)
-        self.talk_mode_percent_radio = QRadioButton(
-            "Use Talk level as % of current volume (Talk 40 => 40% of set volume)"
-        )
-        self.talk_mode_lower_only_radio = QRadioButton(
-            "Lower to Talk level only (if current volume is already lower, do nothing)"
-        )
-        self.talk_mode_force_radio = QRadioButton(
-            "Set to Talk level exactly (if current is lower, increase up to Talk level)"
-        )
+        self.talk_mode_percent_radio = QRadioButton("Use Talk level as % of current volume")
+        self.talk_mode_lower_only_radio = QRadioButton("Lower to Talk level only")
+        self.talk_mode_force_radio = QRadioButton("Set exactly to Talk level")
         if talk_volume_mode == "set_exact":
             self.talk_mode_force_radio.setChecked(True)
         elif talk_volume_mode == "lower_only":
             self.talk_mode_lower_only_radio.setChecked(True)
         else:
             self.talk_mode_percent_radio.setChecked(True)
+
+        mode_group = QGroupBox("Talk Volume Behavior")
+        mode_layout = QVBoxLayout(mode_group)
+        mode_layout.setContentsMargins(8, 8, 8, 8)
+        mode_layout.setSpacing(6)
         mode_layout.addWidget(self.talk_mode_percent_radio)
         mode_layout.addWidget(self.talk_mode_lower_only_radio)
         mode_layout.addWidget(self.talk_mode_force_radio)
+        layout.addLayout(form)
         layout.addWidget(mode_group)
+        layout.addStretch(1)
 
         return page
 
@@ -992,6 +1099,11 @@ class OptionsDialog(QDialog):
         if self.search_dbl_play_radio.isChecked():
             return "play_highlight"
         return "find_highlight"
+
+    def selected_set_file_encoding(self) -> str:
+        if self.set_file_encoding_gbk_radio.isChecked():
+            return "gbk"
+        return "utf8"
 
     def selected_audio_output_device(self) -> str:
         return str(self.audio_device_combo.currentData() or "")
@@ -1240,6 +1352,10 @@ class OptionsDialog(QDialog):
         self.notifications_checkbox.setChecked(bool(d["show_file_notifications"]))
         self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
         self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
+        if str(d["set_file_encoding"]).strip().lower() == "gbk":
+            self.set_file_encoding_gbk_radio.setChecked(True)
+        else:
+            self.set_file_encoding_utf8_radio.setChecked(True)
         if d["click_playing_action"] == "stop_it":
             self.playing_click_stop_radio.setChecked(True)
         else:
@@ -1375,9 +1491,17 @@ class OptionsDialog(QDialog):
 
     def _restore_delay_defaults(self) -> None:
         d = self._DEFAULTS
+        self.fade_on_quick_action_checkbox.setChecked(bool(d["fade_on_quick_action_hotkey"]))
+        self.fade_on_sound_hotkey_checkbox.setChecked(bool(d["fade_on_sound_button_hotkey"]))
+        self.fade_on_pause_checkbox.setChecked(bool(d["fade_on_pause"]))
+        self.fade_on_resume_checkbox.setChecked(bool(d["fade_on_resume"]))
+        self.fade_on_stop_checkbox.setChecked(bool(d["fade_on_stop"]))
         self.fade_in_spin.setValue(float(d["fade_in_sec"]))
-        self.cross_fade_spin.setValue(float(d["cross_fade_sec"]))
         self.fade_out_spin.setValue(float(d["fade_out_sec"]))
+        self.fade_out_when_done_checkbox.setChecked(bool(d["fade_out_when_done_playing"]))
+        self.fade_out_end_lead_spin.setValue(float(d["fade_out_end_lead_sec"]))
+        self.cross_fade_spin.setValue(float(d["cross_fade_sec"]))
+        self._sync_fade_out_end_lead_enabled()
 
     def _restore_playback_defaults(self) -> None:
         d = self._DEFAULTS

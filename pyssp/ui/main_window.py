@@ -312,6 +312,12 @@ class ToolListWindow(QDialog):
         top_row.addStretch(1)
         root.addLayout(top_row)
 
+        self.note_label = QLabel("")
+        self.note_label.setWordWrap(True)
+        self.note_label.setStyleSheet("color:#555555;")
+        self.note_label.setVisible(False)
+        root.addWidget(self.note_label)
+
         self.results_list = QListWidget()
         self.results_list.itemActivated.connect(self._on_item_activated)
         root.addWidget(self.results_list, 1)
@@ -377,6 +383,11 @@ class ToolListWindow(QDialog):
                 item.setData(Qt.UserRole, matches[i])
             self.results_list.addItem(item)
         self.status_label.setText(status)
+
+    def set_note(self, text: str) -> None:
+        value = str(text or "").strip()
+        self.note_label.setText(value)
+        self.note_label.setVisible(bool(value))
 
     def go_to_selected(self) -> None:
         if self._goto_handler is None:
@@ -614,6 +625,13 @@ class MainWindow(QMainWindow):
         self.fade_in_sec = self.settings.fade_in_sec
         self.cross_fade_sec = self.settings.cross_fade_sec
         self.fade_out_sec = self.settings.fade_out_sec
+        self.fade_on_quick_action_hotkey = bool(self.settings.fade_on_quick_action_hotkey)
+        self.fade_on_sound_button_hotkey = bool(self.settings.fade_on_sound_button_hotkey)
+        self.fade_on_pause = bool(self.settings.fade_on_pause)
+        self.fade_on_resume = bool(self.settings.fade_on_resume)
+        self.fade_on_stop = bool(self.settings.fade_on_stop)
+        self.fade_out_when_done_playing = bool(self.settings.fade_out_when_done_playing)
+        self.fade_out_end_lead_sec = max(0.0, float(self.settings.fade_out_end_lead_sec))
         self.talk_volume_level = self.settings.talk_volume_level
         self.talk_fade_sec = self.settings.talk_fade_sec
         self.talk_volume_mode = (
@@ -626,6 +644,9 @@ class MainWindow(QMainWindow):
         self.reset_all_on_startup = self.settings.reset_all_on_startup
         self.click_playing_action = self.settings.click_playing_action
         self.search_double_click_action = self.settings.search_double_click_action
+        self.set_file_encoding = self.settings.set_file_encoding or "utf8"
+        if self.set_file_encoding not in {"utf8", "gbk"}:
+            self.set_file_encoding = "utf8"
         self.audio_output_device = self.settings.audio_output_device
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
@@ -841,6 +862,9 @@ class MainWindow(QMainWindow):
         self._timecode_follow_intent_pending = False
         self._timecode_last_media_ms = 0.0
         self._timecode_last_media_t = 0.0
+        self._timecode_event_guard_until = 0.0
+        self._auto_end_fade_track: Optional[Tuple[str, int, int]] = None
+        self._auto_end_fade_done = False
 
         self._build_ui()
         self.statusBar().addWidget(self.status_hover_label)
@@ -1110,6 +1134,8 @@ class MainWindow(QMainWindow):
 
     def _timecode_on_playback_start(self, slot: Optional[SoundButtonData] = None) -> None:
         now = time.perf_counter()
+        if now < self._timecode_event_guard_until:
+            return
         start_abs = 0
         if slot is not None:
             duration_guess = max(0, int(slot.duration_ms))
@@ -1130,6 +1156,8 @@ class MainWindow(QMainWindow):
 
     def _timecode_on_playback_stop(self) -> None:
         now = time.perf_counter()
+        if now < self._timecode_event_guard_until:
+            return
         self._timecode_follow_anchor_ms = 0.0
         self._timecode_follow_anchor_t = now
         self._timecode_follow_playing = False
@@ -1141,6 +1169,8 @@ class MainWindow(QMainWindow):
         self._mtc_sender.request_resync()
 
     def _timecode_on_playback_pause(self) -> None:
+        if time.perf_counter() < self._timecode_event_guard_until:
+            return
         paused_ms = float(self._timecode_current_follow_ms())
         self._timecode_follow_anchor_ms = paused_ms
         self._timecode_follow_anchor_t = time.perf_counter()
@@ -1150,6 +1180,8 @@ class MainWindow(QMainWindow):
         self._mtc_sender.request_resync()
 
     def _timecode_on_playback_resume(self) -> None:
+        if time.perf_counter() < self._timecode_event_guard_until:
+            return
         resume_ms = float(self._timecode_current_follow_ms())
         self._timecode_follow_anchor_ms = resume_ms
         self._timecode_follow_anchor_t = time.perf_counter()
@@ -1276,6 +1308,10 @@ class MainWindow(QMainWindow):
         list_sound_buttons_action.triggered.connect(self._list_sound_buttons)
         tools_menu.addAction(list_sound_buttons_action)
 
+        list_sound_button_hotkey_action = QAction("List Sound Button Hot Key", self)
+        list_sound_button_hotkey_action.triggered.connect(self._list_sound_button_hotkeys)
+        tools_menu.addAction(list_sound_button_hotkey_action)
+
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)
@@ -1289,7 +1325,18 @@ class MainWindow(QMainWindow):
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
         help_menu.addAction(help_action)
+
+        register_action = QAction("Register", self)
+        register_action.triggered.connect(self._show_register_message)
+        help_menu.addAction(register_action)
         self._apply_hotkeys()
+
+    def _show_register_message(self) -> None:
+        QMessageBox.information(
+            self,
+            "Register",
+            "pySSP is free software. No registration is required.",
+        )
 
     def _project_root_path(self) -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -1600,6 +1647,12 @@ class MainWindow(QMainWindow):
             f"{match['title']} | {match['file_path']}"
         )
 
+    def _tool_hotkey_match_to_line(self, match: dict) -> str:
+        return (
+            f"{match['location']} - Button {int(match['slot']) + 1}: "
+            f"{match['sound_hotkey']} | {match['title']} | {match['file_path']}"
+        )
+
     def _tool_export_matches(self, key: str, export_format: str, base_name: str) -> None:
         matches = self._tool_window_matches.get(key, [])
         if not matches:
@@ -1632,6 +1685,13 @@ class MainWindow(QMainWindow):
             lines = ["(no items)"]
         self._print_lines(title, lines)
 
+    def _print_hotkey_tool_window(self, key: str, title: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        lines = [self._tool_hotkey_match_to_line(match) for match in matches]
+        if not lines:
+            lines = ["(no items)"]
+        self._print_lines(title, lines)
+
     def _write_csv_rows(self, file_path: str, header: str, matches: List[dict]) -> None:
         def _csv_cell(value: str) -> str:
             cell = (value or "").replace("\r", " ").replace("\n", " ")
@@ -1652,6 +1712,50 @@ class MainWindow(QMainWindow):
             )
         with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
             fh.write("\r\n".join(lines))
+
+    def _tool_export_sound_hotkey_matches(self, key: str, export_format: str, base_name: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        if not matches:
+            QMessageBox.information(self, "Export", "No rows to export.")
+            return
+        export_format = "excel" if export_format == "excel" else "csv"
+        ext = ".xls" if export_format == "excel" else ".csv"
+        start_dir = self.settings.last_save_dir or self.settings.last_open_dir or self._sports_sounds_pro_folder()
+        initial_path = os.path.join(start_dir, f"{base_name}{ext}")
+        file_filter = "Excel (*.xls)" if export_format == "excel" else "CSV (*.csv)"
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export", initial_path, f"{file_filter};;All Files (*.*)")
+        if not file_path:
+            return
+        if not file_path.lower().endswith(ext):
+            file_path = f"{file_path}{ext}"
+
+        def _csv_cell(value: str) -> str:
+            cell = (value or "").replace("\r", " ").replace("\n", " ")
+            cell = cell.replace('"', '""')
+            return f'"{cell}"'
+
+        lines = ["Page,Button Number,Sound Hotkey,Sound Button Name,File Path"]
+        for match in matches:
+            lines.append(
+                ",".join(
+                    [
+                        _csv_cell(str(match["location"])),
+                        _csv_cell(str(int(match["slot"]) + 1)),
+                        _csv_cell(str(match["sound_hotkey"])),
+                        _csv_cell(str(match["title"])),
+                        _csv_cell(str(match["file_path"])),
+                    ]
+                )
+            )
+        try:
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write("\r\n".join(lines))
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not export file:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Export Complete", f"Exported:\n{file_path}")
 
     def _run_duplicate_check(self) -> None:
         entries = self._iter_all_sound_button_entries(include_cue=True)
@@ -1833,6 +1937,7 @@ class MainWindow(QMainWindow):
             double_click_action="play",
             show_play_button=True,
         )
+        window.set_note("")
         if not window.order_combo.isVisible():
             window.enable_order_controls(
                 options=["Group/Page sequence", "Sound Button sequence"],
@@ -1847,6 +1952,39 @@ class MainWindow(QMainWindow):
         if not window.current_order():
             window.order_combo.setCurrentIndex(0)
         self._refresh_list_sound_buttons_window(window.current_order())
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _list_sound_button_hotkeys(self) -> None:
+        window = self._open_tool_window(
+            key="list_sound_button_hotkeys",
+            title="List Sound Button Hot Key",
+            double_click_action="play",
+            show_play_button=True,
+        )
+        window.set_note(
+            "Note: Sound Button Hot Key only works when enabled in Options > Hotkey. "
+            f"Current priority: {'Sound Button Hot Key first' if self.sound_button_hotkey_priority == 'sound_button_first' else 'System/Quick Action first'}."
+        )
+        if not window.order_combo.isVisible():
+            window.enable_order_controls(
+                options=["Group/Page sequence", "Hotkey sequence"],
+                refresh_handler=self._refresh_list_sound_button_hotkeys_window,
+            )
+        window.set_handlers(
+            goto_handler=self._go_to_found_match,
+            play_handler=self._play_found_match,
+            export_handler=lambda fmt: self._tool_export_sound_hotkey_matches(
+                "list_sound_button_hotkeys",
+                fmt,
+                "ListSoundButtonHotKeys",
+            ),
+            print_handler=lambda: self._print_hotkey_tool_window("list_sound_button_hotkeys", "List Sound Button Hot Key"),
+        )
+        if not window.current_order():
+            window.order_combo.setCurrentIndex(0)
+        self._refresh_list_sound_button_hotkeys_window(window.current_order())
         window.show()
         window.raise_()
         window.activateWindow()
@@ -1870,6 +2008,38 @@ class MainWindow(QMainWindow):
         status = f"{len(matches)} sound button(s)."
         if not lines:
             status = "No sound buttons assigned."
+        window.set_items(lines, matches=matches, status=status)
+
+    def _refresh_list_sound_button_hotkeys_window(self, selected_order: str) -> None:
+        matches: List[dict] = []
+        for entry in self._iter_all_sound_button_entries(include_cue=True):
+            slot = self._slot_for_location(str(entry["group"]), int(entry["page"]), int(entry["slot"]))
+            token = self._parse_sound_hotkey(slot.sound_hotkey)
+            if not token:
+                continue
+            item = dict(entry)
+            item["sound_hotkey"] = token
+            matches.append(item)
+        if selected_order == "Hotkey sequence":
+            matches.sort(
+                key=lambda entry: (
+                    str(entry["sound_hotkey"]).casefold(),
+                    str(entry["location"]).casefold(),
+                    int(entry["slot"]),
+                )
+            )
+        window = self._tool_windows.get("list_sound_button_hotkeys")
+        if window is None:
+            return
+        window.set_note(
+            "Note: Sound Button Hot Key only works when enabled in Options > Hotkey. "
+            f"Current priority: {'Sound Button Hot Key first' if self.sound_button_hotkey_priority == 'sound_button_first' else 'System/Quick Action first'}."
+        )
+        self._tool_window_matches["list_sound_button_hotkeys"] = matches
+        lines = [self._tool_hotkey_match_to_line(entry) for entry in matches]
+        status = f"{len(matches)} sound button hot key assignment(s)."
+        if not lines:
+            status = "No sound button hot keys assigned."
         window.set_items(lines, matches=matches, status=status)
 
     def _browse_export_directory(self) -> None:
@@ -3258,6 +3428,8 @@ class MainWindow(QMainWindow):
             return
         if not slot.assigned or slot.marker:
             return
+        # Guard against transient stop/start events while the cue dialog initializes.
+        self._timecode_event_guard_until = time.perf_counter() + 0.40
         dialog = CuePointDialog(
             file_path=slot.file_path,
             title=slot.title,
@@ -3660,7 +3832,7 @@ class MainWindow(QMainWindow):
                 self._player_slot_volume_pct = original_slot_pct
                 self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
 
-    def _play_slot(self, slot_index: int) -> None:
+    def _play_slot(self, slot_index: int, allow_fade: bool = True) -> None:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
             self.statusBar().showMessage("Playback is not allowed while Button Drag is enabled.", 2500)
@@ -3715,6 +3887,8 @@ class MainWindow(QMainWindow):
         old_player, new_player = self._select_transition_players()
         any_playing = old_player is not None
         mode = self._current_fade_mode()
+        if not allow_fade:
+            mode = "none"
         if self._is_multi_play_enabled():
             if mode == "cross_fade":
                 mode = "none"
@@ -3742,6 +3916,8 @@ class MainWindow(QMainWindow):
         self.current_playing = playing_key
         self._auto_transition_track = self.current_playing
         self._auto_transition_done = False
+        self._auto_end_fade_track = self.current_playing
+        self._auto_end_fade_done = False
         self._track_started_at = time.monotonic()
         # Clear stale timing from previous track so auto-transition cannot jump immediately.
         self.current_duration_ms = 0
@@ -4387,6 +4563,8 @@ class MainWindow(QMainWindow):
         target_volume: int,
         seconds: float,
         stop_on_complete: bool = False,
+        pause_on_complete: bool = False,
+        pause_resume_volume: Optional[int] = None,
     ) -> None:
         start_volume = player.volume()
         target = max(0, min(100, int(target_volume)))
@@ -4414,6 +4592,8 @@ class MainWindow(QMainWindow):
                 "started": time.monotonic(),
                 "duration": max(0.01, float(seconds)),
                 "stop": stop_on_complete,
+                "pause": pause_on_complete,
+                "pause_resume_volume": pause_resume_volume,
             }
         )
 
@@ -4435,6 +4615,11 @@ class MainWindow(QMainWindow):
                 if job["stop"]:
                     job["player"].stop()
                     any_stopped = True
+                elif job.get("pause"):
+                    job["player"].pause()
+                    resume_volume = job.get("pause_resume_volume")
+                    if resume_volume is not None:
+                        self._set_player_volume(job["player"], int(resume_volume))
             else:
                 remaining.append(job)
         self._fade_jobs = remaining
@@ -4462,6 +4647,26 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet("")
 
     def _try_auto_fade_transition(self) -> None:
+        if (
+            self.fade_out_when_done_playing
+            and self.current_playing is not None
+            and self.player.state() == ExternalMediaPlayer.PlayingState
+            and self.current_duration_ms > 0
+            and self.fade_out_sec > 0
+            and self._is_fade_out_enabled()
+            and (not self._is_cross_fade_enabled())
+        ):
+            track_key = self.current_playing
+            if self._auto_end_fade_track != track_key:
+                self._auto_end_fade_track = track_key
+                self._auto_end_fade_done = False
+            if not self._auto_end_fade_done:
+                remaining_ms = max(0, self.current_duration_ms - self.player.position())
+                lead_ms = max(0, int(self.fade_out_end_lead_sec * 1000))
+                if remaining_ms <= lead_ms:
+                    self._auto_end_fade_done = True
+                    self._start_fade(self.player, 0, self.fade_out_sec, stop_on_complete=True)
+
         if not self._is_cross_fade_enabled():
             return
         if self.cue_mode:
@@ -4523,6 +4728,13 @@ class MainWindow(QMainWindow):
             fade_in_sec=self.fade_in_sec,
             cross_fade_sec=self.cross_fade_sec,
             fade_out_sec=self.fade_out_sec,
+            fade_on_quick_action_hotkey=self.fade_on_quick_action_hotkey,
+            fade_on_sound_button_hotkey=self.fade_on_sound_button_hotkey,
+            fade_on_pause=self.fade_on_pause,
+            fade_on_resume=self.fade_on_resume,
+            fade_on_stop=self.fade_on_stop,
+            fade_out_when_done_playing=self.fade_out_when_done_playing,
+            fade_out_end_lead_sec=self.fade_out_end_lead_sec,
             talk_volume_level=self.talk_volume_level,
             talk_fade_sec=self.talk_fade_sec,
             talk_volume_mode=self.talk_volume_mode,
@@ -4531,6 +4743,7 @@ class MainWindow(QMainWindow):
             reset_all_on_startup=self.reset_all_on_startup,
             click_playing_action=self.click_playing_action,
             search_double_click_action=self.search_double_click_action,
+            set_file_encoding=self.set_file_encoding,
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
             available_midi_devices=available_midi_devices,
@@ -4582,6 +4795,13 @@ class MainWindow(QMainWindow):
         self.fade_in_sec = dialog.fade_in_spin.value()
         self.cross_fade_sec = dialog.cross_fade_spin.value()
         self.fade_out_sec = dialog.fade_out_spin.value()
+        self.fade_on_quick_action_hotkey = dialog.fade_on_quick_action_checkbox.isChecked()
+        self.fade_on_sound_button_hotkey = dialog.fade_on_sound_hotkey_checkbox.isChecked()
+        self.fade_on_pause = dialog.fade_on_pause_checkbox.isChecked()
+        self.fade_on_resume = dialog.fade_on_resume_checkbox.isChecked()
+        self.fade_on_stop = dialog.fade_on_stop_checkbox.isChecked()
+        self.fade_out_when_done_playing = dialog.fade_out_when_done_checkbox.isChecked()
+        self.fade_out_end_lead_sec = dialog.fade_out_end_lead_spin.value()
         self.talk_volume_level = dialog.talk_volume_spin.value()
         self.talk_fade_sec = dialog.talk_fade_spin.value()
         self.talk_volume_mode = dialog.selected_talk_volume_mode()
@@ -4590,6 +4810,12 @@ class MainWindow(QMainWindow):
         self.reset_all_on_startup = dialog.reset_on_startup_checkbox.isChecked()
         self.click_playing_action = dialog.selected_click_playing_action()
         self.search_double_click_action = dialog.selected_search_double_click_action()
+        selected_set_file_encoding = dialog.selected_set_file_encoding()
+        if selected_set_file_encoding != self.set_file_encoding:
+            self.set_file_encoding = selected_set_file_encoding
+            self._set_dirty(True)
+        else:
+            self.set_file_encoding = selected_set_file_encoding
         self.max_multi_play_songs = dialog.selected_max_multi_play_songs()
         self.multi_play_limit_action = dialog.selected_multi_play_limit_action()
         selected_timeline_mode = dialog.selected_timecode_timeline_mode()
@@ -5225,23 +5451,54 @@ class MainWindow(QMainWindow):
             any_playing = any(p.state() == ExternalMediaPlayer.PlayingState for p in players)
             any_paused = any(p.state() == ExternalMediaPlayer.PausedState for p in players)
             if any_playing:
-                for p in players:
-                    if p.state() == ExternalMediaPlayer.PlayingState:
-                        p.pause()
+                playing_players = [p for p in players if p.state() == ExternalMediaPlayer.PlayingState]
+                self._pause_players(playing_players)
                 self._timecode_on_playback_pause()
             elif any_paused:
-                for p in players:
-                    if p.state() == ExternalMediaPlayer.PausedState:
-                        p.play()
+                paused_players = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
+                self._resume_players(paused_players)
                 self._timecode_on_playback_resume()
         else:
             if self.player.state() == ExternalMediaPlayer.PlayingState:
-                self.player.pause()
+                self._pause_players([self.player])
                 self._timecode_on_playback_pause()
             elif self.player.state() == ExternalMediaPlayer.PausedState:
-                self.player.play()
+                self._resume_players([self.player])
                 self._timecode_on_playback_resume()
         self._update_pause_button_label()
+
+    def _pause_players(self, players: List[ExternalMediaPlayer]) -> None:
+        playing = [p for p in players if p.state() == ExternalMediaPlayer.PlayingState]
+        if not playing:
+            return
+        if self.fade_on_pause and self._is_fade_out_enabled() and self.fade_out_sec > 0:
+            for player in playing:
+                resume_target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
+                self._start_fade(
+                    player,
+                    0,
+                    self.fade_out_sec,
+                    stop_on_complete=False,
+                    pause_on_complete=True,
+                    pause_resume_volume=resume_target,
+                )
+            return
+        for player in playing:
+            player.pause()
+
+    def _resume_players(self, players: List[ExternalMediaPlayer]) -> None:
+        paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
+        if not paused:
+            return
+        if self.fade_on_resume and self._is_fade_in_enabled() and self.fade_in_sec > 0:
+            for player in paused:
+                target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
+                self._set_player_volume(player, 0)
+                player.play()
+                self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
+            return
+        for player in paused:
+            player.play()
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -5467,7 +5724,7 @@ class MainWindow(QMainWindow):
         player = self._player_for_slot_key(slot_key)
         if player is None:
             return False
-        if self._is_fade_out_enabled() and player.state() in {
+        if self.fade_on_stop and self._is_fade_out_enabled() and player.state() in {
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
@@ -5593,6 +5850,8 @@ class MainWindow(QMainWindow):
         self._pending_start_request = None
         self._pending_start_token += 1
         self._auto_transition_done = True
+        self._auto_end_fade_track = None
+        self._auto_end_fade_done = False
         # Stop timecode immediately on user intent, regardless of audio fade-out.
         self._timecode_on_playback_stop()
         active_players = self._all_active_players()
@@ -5614,8 +5873,12 @@ class MainWindow(QMainWindow):
             self._refresh_sound_grid()
             self._update_now_playing_label("")
             return
-        if self._is_fade_out_enabled() and active_players:
+        if self.fade_on_stop and self._is_fade_out_enabled() and active_players:
             self._stop_fade_armed = True
+            self.statusBar().showMessage(
+                "Stop fade in progress. Click Stop again to force stop (skip fade).",
+                3000,
+            )
             for player in active_players:
                 self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
             return
@@ -5650,6 +5913,8 @@ class MainWindow(QMainWindow):
         self._pending_start_request = None
         self._pending_start_token += 1
         self._auto_transition_done = True
+        self._auto_end_fade_track = None
+        self._auto_end_fade_done = False
         self.player.stop()
         self.player_b.stop()
         self._timecode_on_playback_stop()
@@ -6124,7 +6389,8 @@ class MainWindow(QMainWindow):
             )
 
             payload = "\r\n".join(lines)
-            with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
+            encoding = "utf-8-sig" if self.set_file_encoding == "utf8" else "gbk"
+            with open(file_path, "w", encoding=encoding, newline="") as fh:
                 fh.write(payload)
         except Exception as exc:
             QMessageBox.critical(self, "Save Set Failed", f"Could not save set file:\n{exc}")
@@ -6237,6 +6503,13 @@ class MainWindow(QMainWindow):
         self.settings.fade_in_sec = self.fade_in_sec
         self.settings.cross_fade_sec = self.cross_fade_sec
         self.settings.fade_out_sec = self.fade_out_sec
+        self.settings.fade_on_quick_action_hotkey = bool(self.fade_on_quick_action_hotkey)
+        self.settings.fade_on_sound_button_hotkey = bool(self.fade_on_sound_button_hotkey)
+        self.settings.fade_on_pause = bool(self.fade_on_pause)
+        self.settings.fade_on_resume = bool(self.fade_on_resume)
+        self.settings.fade_on_stop = bool(self.fade_on_stop)
+        self.settings.fade_out_when_done_playing = bool(self.fade_out_when_done_playing)
+        self.settings.fade_out_end_lead_sec = float(self.fade_out_end_lead_sec)
         self.settings.talk_volume_level = self.talk_volume_level
         self.settings.talk_fade_sec = self.talk_fade_sec
         self.settings.talk_volume_mode = self.talk_volume_mode
@@ -6245,6 +6518,7 @@ class MainWindow(QMainWindow):
         self.settings.reset_all_on_startup = self.reset_all_on_startup
         self.settings.click_playing_action = self.click_playing_action
         self.settings.search_double_click_action = self.search_double_click_action
+        self.settings.set_file_encoding = self.set_file_encoding
         self.settings.audio_output_device = self.audio_output_device
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
@@ -6452,7 +6726,7 @@ class MainWindow(QMainWindow):
         if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
             return
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
-        self._play_slot(slot_index)
+        self._play_slot(slot_index, allow_fade=self.fade_on_quick_action_hotkey)
 
     def _registered_system_and_quick_tokens(self) -> set[str]:
         tokens: set[str] = set()
@@ -6551,7 +6825,7 @@ class MainWindow(QMainWindow):
                 self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
 
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
-        self._play_slot(slot_index)
+        self._play_slot(slot_index, allow_fade=self.fade_on_sound_button_hotkey)
 
         if self.sound_button_hotkey_go_to_playing:
             self._go_to_current_playing_page()

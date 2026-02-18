@@ -42,6 +42,13 @@ class AppSettings:
     fade_in_sec: float = 1.0
     cross_fade_sec: float = 1.0
     fade_out_sec: float = 1.0
+    fade_on_quick_action_hotkey: bool = True
+    fade_on_sound_button_hotkey: bool = True
+    fade_on_pause: bool = False
+    fade_on_resume: bool = False
+    fade_on_stop: bool = True
+    fade_out_when_done_playing: bool = False
+    fade_out_end_lead_sec: float = 2.0
     talk_volume_level: int = 30
     talk_fade_sec: float = 0.5
     talk_volume_mode: str = "percent_of_master"
@@ -53,6 +60,7 @@ class AppSettings:
     reset_all_on_startup: bool = False
     click_playing_action: str = "play_it_again"
     search_double_click_action: str = "find_highlight"
+    set_file_encoding: str = "utf8"
     audio_output_device: str = ""
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
@@ -185,6 +193,13 @@ def save_settings(settings: AppSettings) -> None:
         "fade_in_sec": str(settings.fade_in_sec),
         "cross_fade_sec": str(settings.cross_fade_sec),
         "fade_out_sec": str(settings.fade_out_sec),
+        "fade_on_quick_action_hotkey": "1" if settings.fade_on_quick_action_hotkey else "0",
+        "fade_on_sound_button_hotkey": "1" if settings.fade_on_sound_button_hotkey else "0",
+        "fade_on_pause": "1" if settings.fade_on_pause else "0",
+        "fade_on_resume": "1" if settings.fade_on_resume else "0",
+        "fade_on_stop": "1" if settings.fade_on_stop else "0",
+        "fade_out_when_done_playing": "1" if settings.fade_out_when_done_playing else "0",
+        "fade_out_end_lead_sec": str(settings.fade_out_end_lead_sec),
         "talk_volume_level": str(settings.talk_volume_level),
         "talk_fade_sec": str(settings.talk_fade_sec),
         "talk_volume_mode": settings.talk_volume_mode,
@@ -196,6 +211,7 @@ def save_settings(settings: AppSettings) -> None:
         "reset_all_on_startup": "1" if settings.reset_all_on_startup else "0",
         "click_playing_action": settings.click_playing_action,
         "search_double_click_action": settings.search_double_click_action,
+        "set_file_encoding": settings.set_file_encoding,
         "audio_output_device": settings.audio_output_device,
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
@@ -299,6 +315,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     fade_in_sec = _clamp_float(_get_float(section, "fade_in_sec", 1.0), 0.0, 20.0)
     cross_fade_sec = _clamp_float(_get_float(section, "cross_fade_sec", 1.0), 0.0, 20.0)
     fade_out_sec = _clamp_float(_get_float(section, "fade_out_sec", 1.0), 0.0, 20.0)
+    fade_on_quick_action_hotkey = _get_bool(section, "fade_on_quick_action_hotkey", True)
+    fade_on_sound_button_hotkey = _get_bool(section, "fade_on_sound_button_hotkey", True)
+    fade_on_pause = _get_bool(section, "fade_on_pause", False)
+    fade_on_resume = _get_bool(section, "fade_on_resume", False)
+    fade_on_stop = _get_bool(section, "fade_on_stop", True)
+    fade_out_when_done_playing = _get_bool(section, "fade_out_when_done_playing", False)
+    fade_out_end_lead_sec = _clamp_float(_get_float(section, "fade_out_end_lead_sec", 2.0), 0.0, 30.0)
     talk_fade_sec = _clamp_float(_get_float(section, "talk_fade_sec", 0.5), 0.0, 20.0)
     talk_volume_level = _clamp_int(_get_int(section, "talk_volume_level", 30), 0, 100)
     talk_volume_mode = str(section.get("talk_volume_mode", "percent_of_master")).strip().lower()
@@ -313,6 +336,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     search_double_click_action = str(section.get("search_double_click_action", "find_highlight")).strip().lower()
     if search_double_click_action not in {"find_highlight", "play_highlight"}:
         search_double_click_action = "find_highlight"
+    set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
+    if set_file_encoding not in {"utf8", "gbk"}:
+        set_file_encoding = "utf8"
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
@@ -373,6 +399,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         fade_in_sec=fade_in_sec,
         cross_fade_sec=cross_fade_sec,
         fade_out_sec=fade_out_sec,
+        fade_on_quick_action_hotkey=fade_on_quick_action_hotkey,
+        fade_on_sound_button_hotkey=fade_on_sound_button_hotkey,
+        fade_on_pause=fade_on_pause,
+        fade_on_resume=fade_on_resume,
+        fade_on_stop=fade_on_stop,
+        fade_out_when_done_playing=fade_out_when_done_playing,
+        fade_out_end_lead_sec=fade_out_end_lead_sec,
         talk_volume_level=talk_volume_level,
         talk_fade_sec=talk_fade_sec,
         talk_volume_mode=talk_volume_mode,
@@ -384,6 +417,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         reset_all_on_startup=_get_bool(section, "reset_all_on_startup", False),
         click_playing_action=click_playing_action,
         search_double_click_action=search_double_click_action,
+        set_file_encoding=set_file_encoding,
         audio_output_device=str(section.get("audio_output_device", "")),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,

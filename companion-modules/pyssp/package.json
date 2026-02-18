@@ -1,0 +1,16 @@
+{
+  "name": "companion-module-pyssp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bitfocus Companion module for controlling pySSP over HTTP",
+  "main": "src/index.js",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {},
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@companion-module/base": "^1.14.1"
+  }
+}

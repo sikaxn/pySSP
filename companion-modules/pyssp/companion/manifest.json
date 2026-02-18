@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/bitfocus/companion-module-base/main/assets/manifest.schema.json",
+  "id": "pyssp",
+  "name": "pySSP",
+  "shortname": "pySSP",
+  "description": "Control pySSP via its HTTP Web Remote API",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": "https://github.com/sikaxn/pySSP",
+  "bugs": "https://github.com/sikaxn/pySSP/issues",
+  "maintainers": [
+    {
+      "name": "Nathan"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node18",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../src/index.js"
+  },
+  "manufacturer": "pySSP",
+  "products": ["pySSP"],
+  "keywords": ["audio", "playback", "sound", "pyssp"]
+}

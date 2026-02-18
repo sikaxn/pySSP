@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,6 +21,8 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QRadioButton,
+    QLineEdit,
+    QScrollArea,
     QSpacerItem,
     QSpinBox,
     QStackedWidget,
@@ -30,13 +32,102 @@ from PyQt5.QtWidgets import (
 )
 
 
+class HotkeyCaptureEdit(QLineEdit):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("Press key")
+        self.setReadOnly(True)
+
+    def hotkey(self) -> str:
+        return self.text().strip()
+
+    def setHotkey(self, value: str) -> None:
+        text = str(value or "").strip()
+        self.setText(self._normalize_text(text))
+
+    def keyPressEvent(self, event) -> None:
+        key = int(event.key())
+        if key in {Qt.Key_Tab, Qt.Key_Backtab}:
+            super().keyPressEvent(event)
+            return
+        if key in {Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Escape}:
+            self.clear()
+            return
+
+        modifiers = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier | Qt.MetaModifier)
+        text = self._build_hotkey_text(key, modifiers)
+        if text:
+            self.setText(text)
+
+    def _build_hotkey_text(self, key: int, modifiers: Qt.KeyboardModifiers) -> str:
+        if key == Qt.Key_Shift and modifiers == Qt.ShiftModifier:
+            return "Shift"
+        if key == Qt.Key_Control and modifiers == Qt.ControlModifier:
+            return "Ctrl"
+        if key == Qt.Key_Alt and modifiers == Qt.AltModifier:
+            return "Alt"
+        if key == Qt.Key_Meta and modifiers == Qt.MetaModifier:
+            return "Meta"
+        seq = QKeySequence(int(key) | int(modifiers)).toString().strip()
+        return self._normalize_text(seq)
+
+    def _normalize_text(self, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        aliases = {
+            "control": "Ctrl",
+            "ctrl": "Ctrl",
+            "shift": "Shift",
+            "alt": "Alt",
+            "meta": "Meta",
+            "win": "Meta",
+            "super": "Meta",
+        }
+        lower = raw.lower()
+        if lower in aliases:
+            return aliases[lower]
+        normalized = QKeySequence(raw).toString().strip()
+        return normalized or raw
+
+
 class OptionsDialog(QDialog):
+    _HOTKEY_ROWS = [
+        ("new_set", "New Set"),
+        ("open_set", "Open Set"),
+        ("save_set", "Save Set"),
+        ("save_set_as", "Save Set As"),
+        ("search", "Search"),
+        ("options", "Options"),
+        ("play_selected", "Play Selected"),
+        ("pause_toggle", "Pause/Resume"),
+        ("stop_playback", "Stop Playback"),
+        ("talk", "Talk"),
+        ("next_group", "Next Group"),
+        ("prev_group", "Previous Group"),
+        ("next_page", "Next Page"),
+        ("prev_page", "Previous Page"),
+        ("next_sound_button", "Next Sound Button"),
+        ("prev_sound_button", "Previous Sound Button"),
+        ("multi_play", "Multi-Play"),
+        ("go_to_playing", "Go To Playing"),
+        ("loop", "Loop"),
+        ("next", "Next"),
+        ("rapid_fire", "Rapid Fire"),
+        ("shuffle", "Shuffle"),
+        ("reset_page", "Reset Page"),
+        ("play_list", "Play List"),
+        ("fade_in", "Fade In"),
+        ("cross_fade", "X (Cross Fade)"),
+        ("fade_out", "Fade Out"),
+        ("mute", "Mute"),
+    ]
+
     _DEFAULTS = {
         "active_group_color": "#EDE8C8",
         "inactive_group_color": "#ECECEC",
         "title_char_limit": 26,
         "show_file_notifications": True,
-        "enter_key_mirrors_space": False,
         "log_file_enabled": False,
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
@@ -50,9 +141,8 @@ class OptionsDialog(QDialog):
         "main_jog_outside_cue_action": "stop_immediately",
         "talk_volume_level": 30,
         "talk_fade_sec": 0.5,
+        "talk_volume_mode": "percent_of_master",
         "talk_blink_button": False,
-        "talk_shift_accelerator": True,
-        "hotkeys_ignore_talk_level": False,
         "web_remote_enabled": False,
         "web_remote_port": 5050,
         "state_colors": {
@@ -69,6 +159,36 @@ class OptionsDialog(QDialog):
             "volume_indicator": "#FFD45A",
         },
         "sound_button_text_color": "#000000",
+        "hotkeys": {
+            "new_set": ("Ctrl+N", ""),
+            "open_set": ("Ctrl+O", ""),
+            "save_set": ("Ctrl+S", ""),
+            "save_set_as": ("Ctrl+Shift+S", ""),
+            "search": ("Ctrl+F", ""),
+            "options": ("", ""),
+            "play_selected": ("", ""),
+            "pause_toggle": ("P", ""),
+            "stop_playback": ("Space", "Return"),
+            "talk": ("Shift", ""),
+            "next_group": ("", ""),
+            "prev_group": ("", ""),
+            "next_page": ("", ""),
+            "prev_page": ("", ""),
+            "next_sound_button": ("", ""),
+            "prev_sound_button": ("", ""),
+            "multi_play": ("", ""),
+            "go_to_playing": ("", ""),
+            "loop": ("", ""),
+            "next": ("", ""),
+            "rapid_fire": ("", ""),
+            "shuffle": ("", ""),
+            "reset_page": ("", ""),
+            "play_list": ("", ""),
+            "fade_in": ("", ""),
+            "cross_fade": ("", ""),
+            "fade_out": ("", ""),
+            "mute": ("", ""),
+        },
     }
 
     def __init__(
@@ -82,10 +202,8 @@ class OptionsDialog(QDialog):
         fade_out_sec: float,
         talk_volume_level: int,
         talk_fade_sec: float,
+        talk_volume_mode: str,
         talk_blink_button: bool,
-        talk_shift_accelerator: bool,
-        hotkeys_ignore_talk_level: bool,
-        enter_key_mirrors_space: bool,
         log_file_enabled: bool,
         reset_all_on_startup: bool,
         click_playing_action: str,
@@ -101,6 +219,7 @@ class OptionsDialog(QDialog):
         main_jog_outside_cue_action: str,
         state_colors: Dict[str, str],
         sound_button_text_color: str,
+        hotkeys: Dict[str, tuple[str, str]],
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -111,6 +230,10 @@ class OptionsDialog(QDialog):
         self.active_group_color = active_group_color
         self.inactive_group_color = inactive_group_color
         self.sound_button_text_color = sound_button_text_color
+        self._hotkeys = dict(hotkeys)
+        self._hotkey_edits: Dict[str, tuple[HotkeyCaptureEdit, HotkeyCaptureEdit]] = {}
+        self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
+        self.hotkey_warning_label: Optional[QLabel] = None
         self.state_colors = dict(state_colors)
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
@@ -135,12 +258,16 @@ class OptionsDialog(QDialog):
             self._build_general_page(
                 title_char_limit=title_char_limit,
                 show_file_notifications=show_file_notifications,
-                enter_key_mirrors_space=enter_key_mirrors_space,
                 log_file_enabled=log_file_enabled,
                 reset_all_on_startup=reset_all_on_startup,
                 click_playing_action=click_playing_action,
                 search_double_click_action=search_double_click_action,
             ),
+        )
+        self._add_page(
+            "Hotkey",
+            self.style().standardIcon(QStyle.SP_CommandLink),
+            self._build_hotkey_page(),
         )
         self._add_page(
             "Colour",
@@ -180,9 +307,8 @@ class OptionsDialog(QDialog):
             self._build_talk_page(
                 talk_volume_level=talk_volume_level,
                 talk_fade_sec=talk_fade_sec,
+                talk_volume_mode=talk_volume_mode,
                 talk_blink_button=talk_blink_button,
-                talk_shift_accelerator=talk_shift_accelerator,
-                hotkeys_ignore_talk_level=hotkeys_ignore_talk_level,
             ),
         )
         self._add_page(
@@ -198,11 +324,13 @@ class OptionsDialog(QDialog):
         self.page_list.setCurrentRow(0)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.ok_button = buttons.button(QDialogButtonBox.Ok)
         self.restore_defaults_btn = buttons.addButton("Restore Defaults (This Page)", QDialogButtonBox.ResetRole)
         self.restore_defaults_btn.clicked.connect(self._restore_defaults_current_page)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
+        self._validate_hotkey_conflicts()
 
     def _add_page(self, title: str, icon, page: QWidget) -> None:
         self.stack.addWidget(page)
@@ -213,7 +341,6 @@ class OptionsDialog(QDialog):
         self,
         title_char_limit: int,
         show_file_notifications: bool,
-        enter_key_mirrors_space: bool,
         log_file_enabled: bool,
         reset_all_on_startup: bool,
         click_playing_action: str,
@@ -231,10 +358,6 @@ class OptionsDialog(QDialog):
         self.notifications_checkbox = QCheckBox("Show set load/save popup messages")
         self.notifications_checkbox.setChecked(show_file_notifications)
         form.addRow("Notifications:", self.notifications_checkbox)
-
-        self.enter_mirror_checkbox = QCheckBox('"Enter Key" Mirrors "Space Bar"')
-        self.enter_mirror_checkbox.setChecked(enter_key_mirrors_space)
-        form.addRow("Keyboard:", self.enter_mirror_checkbox)
 
         self.log_file_checkbox = QCheckBox("Enable playback log file (SportsSoundsProLog.txt)")
         self.log_file_checkbox.setChecked(log_file_enabled)
@@ -271,6 +394,51 @@ class OptionsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _build_hotkey_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for key, label in self._HOTKEY_ROWS:
+            self._add_hotkey_row(form, key, label)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        self.hotkey_warning_label = QLabel("")
+        self.hotkey_warning_label.setWordWrap(True)
+        self.hotkey_warning_label.setStyleSheet("color:#B00020; font-weight:bold;")
+        self.hotkey_warning_label.setVisible(False)
+        layout.addWidget(self.hotkey_warning_label)
+        note = QLabel("Each operation supports two hotkeys. You can clear either key.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        return page
+
+    def _add_hotkey_row(self, form: QFormLayout, key: str, label: str) -> None:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        edit1 = HotkeyCaptureEdit()
+        edit2 = HotkeyCaptureEdit()
+        clear1 = QPushButton("Clear")
+        clear2 = QPushButton("Clear")
+        clear1.setFixedWidth(56)
+        clear2.setFixedWidth(56)
+        v1, v2 = self._hotkeys.get(key, ("", ""))
+        edit1.setHotkey(v1)
+        edit2.setHotkey(v2)
+        clear1.clicked.connect(lambda _=False, e=edit1: e.setHotkey(""))
+        clear2.clicked.connect(lambda _=False, e=edit2: e.setHotkey(""))
+        edit1.textChanged.connect(self._validate_hotkey_conflicts)
+        edit2.textChanged.connect(self._validate_hotkey_conflicts)
+        row_layout.addWidget(edit1)
+        row_layout.addWidget(clear1)
+        row_layout.addWidget(edit2)
+        row_layout.addWidget(clear2)
+        self._hotkey_edits[key] = (edit1, edit2)
+        form.addRow(f"{label}:", row)
 
     def _build_color_page(self) -> QWidget:
         page = QWidget()
@@ -444,17 +612,17 @@ class OptionsDialog(QDialog):
         self,
         talk_volume_level: int,
         talk_fade_sec: float,
+        talk_volume_mode: str,
         talk_blink_button: bool,
-        talk_shift_accelerator: bool,
-        hotkeys_ignore_talk_level: bool,
     ) -> QWidget:
         page = QWidget()
-        form = QFormLayout(page)
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
 
         self.talk_volume_spin = QSpinBox()
         self.talk_volume_spin.setRange(0, 100)
         self.talk_volume_spin.setValue(talk_volume_level)
-        form.addRow("Talk Volume Level (%):", self.talk_volume_spin)
+        form.addRow("Talk Volume Level:", self.talk_volume_spin)
 
         self.talk_fade_spin = QDoubleSpinBox()
         self.talk_fade_spin.setRange(0.0, 20.0)
@@ -466,14 +634,30 @@ class OptionsDialog(QDialog):
         self.talk_blink_checkbox = QCheckBox("Blink Talk Button")
         self.talk_blink_checkbox.setChecked(talk_blink_button)
         form.addRow("Talk Button:", self.talk_blink_checkbox)
+        layout.addLayout(form)
 
-        self.shift_accel_checkbox = QCheckBox("Use Shift Key to activate Talk")
-        self.shift_accel_checkbox.setChecked(talk_shift_accelerator)
-        form.addRow("Accelerator:", self.shift_accel_checkbox)
+        mode_group = QGroupBox("Talk Volume Behavior")
+        mode_layout = QVBoxLayout(mode_group)
+        self.talk_mode_percent_radio = QRadioButton(
+            "Use Talk level as % of current volume (Talk 40 => 40% of set volume)"
+        )
+        self.talk_mode_lower_only_radio = QRadioButton(
+            "Lower to Talk level only (if current volume is already lower, do nothing)"
+        )
+        self.talk_mode_force_radio = QRadioButton(
+            "Set to Talk level exactly (if current is lower, increase up to Talk level)"
+        )
+        if talk_volume_mode == "set_exact":
+            self.talk_mode_force_radio.setChecked(True)
+        elif talk_volume_mode == "lower_only":
+            self.talk_mode_lower_only_radio.setChecked(True)
+        else:
+            self.talk_mode_percent_radio.setChecked(True)
+        mode_layout.addWidget(self.talk_mode_percent_radio)
+        mode_layout.addWidget(self.talk_mode_lower_only_radio)
+        mode_layout.addWidget(self.talk_mode_force_radio)
+        layout.addWidget(mode_group)
 
-        self.hotkeys_ignore_checkbox = QCheckBox("Hot Keys Ignore Talk Volume Level")
-        self.hotkeys_ignore_checkbox.setChecked(hotkeys_ignore_talk_level)
-        form.addRow("Hot Keys:", self.hotkeys_ignore_checkbox)
         return page
 
     def _build_web_remote_page(self, web_remote_enabled: bool, web_remote_port: int, web_remote_url: str) -> QWidget:
@@ -546,6 +730,21 @@ class OptionsDialog(QDialog):
 
     def selected_sound_button_text_color(self) -> str:
         return self.sound_button_text_color
+
+    def selected_talk_volume_mode(self) -> str:
+        if self.talk_mode_force_radio.isChecked():
+            return "set_exact"
+        if self.talk_mode_lower_only_radio.isChecked():
+            return "lower_only"
+        return "percent_of_master"
+
+    def selected_hotkeys(self) -> Dict[str, tuple[str, str]]:
+        result: Dict[str, tuple[str, str]] = {}
+        for key, (edit1, edit2) in self._hotkey_edits.items():
+            s1 = edit1.hotkey()
+            s2 = edit2.hotkey()
+            result[key] = (s1, s2)
+        return result
 
     def _sync_jog_outside_group_enabled(self) -> None:
         enabled = self.cue_timeline_audio_file_radio.isChecked()
@@ -620,21 +819,24 @@ class OptionsDialog(QDialog):
             self._restore_general_defaults()
             return
         if idx == 1:
-            self._restore_color_defaults()
+            self._restore_hotkey_defaults()
             return
         if idx == 2:
-            self._restore_delay_defaults()
+            self._restore_color_defaults()
             return
         if idx == 3:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 4:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 5:
-            self._restore_talk_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 6:
+            self._restore_talk_defaults()
+            return
+        if idx == 7:
             self._restore_web_remote_defaults()
             return
 
@@ -642,7 +844,6 @@ class OptionsDialog(QDialog):
         d = self._DEFAULTS
         self.title_limit_spin.setValue(int(d["title_char_limit"]))
         self.notifications_checkbox.setChecked(bool(d["show_file_notifications"]))
-        self.enter_mirror_checkbox.setChecked(bool(d["enter_key_mirrors_space"]))
         self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
         self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
         if d["click_playing_action"] == "stop_it":
@@ -667,6 +868,75 @@ class OptionsDialog(QDialog):
                 self._refresh_color_button(btn, value)
         self.sound_button_text_color = str(d["sound_button_text_color"])
         self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+
+    def _restore_hotkey_defaults(self) -> None:
+        d = self._DEFAULTS
+        defaults = dict(d["hotkeys"])
+        for key, (edit1, edit2) in self._hotkey_edits.items():
+            val1, val2 = defaults.get(key, ("", ""))
+            edit1.setHotkey(val1)
+            edit2.setHotkey(val2)
+        self._validate_hotkey_conflicts()
+
+    def _normalize_hotkey_for_conflict(self, raw: str) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        aliases = {
+            "control": "Ctrl",
+            "ctrl": "Ctrl",
+            "shift": "Shift",
+            "alt": "Alt",
+            "meta": "Meta",
+            "win": "Meta",
+            "super": "Meta",
+        }
+        lower = text.lower()
+        if lower in aliases:
+            return aliases[lower]
+        canonical = QKeySequence(text).toString().strip()
+        return canonical or text
+
+    def _validate_hotkey_conflicts(self) -> None:
+        seen: Dict[str, tuple[str, int]] = {}
+        conflicts: List[str] = []
+        conflict_cells: set[tuple[str, int]] = set()
+        for key, (edit1, edit2) in self._hotkey_edits.items():
+            for slot_index, edit in enumerate((edit1, edit2), start=1):
+                token = self._normalize_hotkey_for_conflict(edit.hotkey())
+                if not token:
+                    continue
+                if token in seen:
+                    prev_key, prev_slot_index = seen[token]
+                    conflict_cells.add((prev_key, prev_slot_index))
+                    conflict_cells.add((key, slot_index))
+                    left = f"{self._hotkey_labels.get(prev_key, prev_key)} ({prev_slot_index})"
+                    right = f"{self._hotkey_labels.get(key, key)} ({slot_index})"
+                    conflicts.append(f"{token}: {left} and {right}")
+                else:
+                    seen[token] = (key, slot_index)
+
+        for key, (edit1, edit2) in self._hotkey_edits.items():
+            for slot_index, edit in enumerate((edit1, edit2), start=1):
+                if (key, slot_index) in conflict_cells:
+                    edit.setStyleSheet("QLineEdit{border:2px solid #B00020;}")
+                else:
+                    edit.setStyleSheet("")
+
+        has_conflict = bool(conflicts)
+        if self.ok_button is not None:
+            self.ok_button.setEnabled(not has_conflict)
+        if self.hotkey_warning_label is None:
+            return
+        if not has_conflict:
+            self.hotkey_warning_label.setVisible(False)
+            self.hotkey_warning_label.setText("")
+            return
+        display = "; ".join(conflicts[:4])
+        if len(conflicts) > 4:
+            display += f"; +{len(conflicts) - 4} more"
+        self.hotkey_warning_label.setText(f"Hotkey conflict detected. Fix duplicates before saving. {display}")
+        self.hotkey_warning_label.setVisible(True)
 
     def _restore_delay_defaults(self) -> None:
         d = self._DEFAULTS
@@ -707,8 +977,13 @@ class OptionsDialog(QDialog):
         self.talk_volume_spin.setValue(int(d["talk_volume_level"]))
         self.talk_fade_spin.setValue(float(d["talk_fade_sec"]))
         self.talk_blink_checkbox.setChecked(bool(d["talk_blink_button"]))
-        self.shift_accel_checkbox.setChecked(bool(d["talk_shift_accelerator"]))
-        self.hotkeys_ignore_checkbox.setChecked(bool(d["hotkeys_ignore_talk_level"]))
+        mode = str(d["talk_volume_mode"])
+        if mode == "set_exact":
+            self.talk_mode_force_radio.setChecked(True)
+        elif mode == "lower_only":
+            self.talk_mode_lower_only_radio.setChecked(True)
+        else:
+            self.talk_mode_percent_radio.setChecked(True)
 
     def _restore_web_remote_defaults(self) -> None:
         d = self._DEFAULTS

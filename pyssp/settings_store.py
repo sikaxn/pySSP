@@ -26,6 +26,7 @@ class AppSettings:
     fade_out_sec: float = 1.0
     talk_volume_level: int = 30
     talk_fade_sec: float = 0.5
+    talk_volume_mode: str = "percent_of_master"
     talk_blink_button: bool = False
     talk_shift_accelerator: bool = True
     hotkeys_ignore_talk_level: bool = False
@@ -53,6 +54,62 @@ class AppSettings:
     color_cue_indicator: str = "#61D6FF"
     color_volume_indicator: str = "#FFD45A"
     sound_button_text_color: str = "#000000"
+    hotkey_new_set_1: str = "Ctrl+N"
+    hotkey_new_set_2: str = ""
+    hotkey_open_set_1: str = "Ctrl+O"
+    hotkey_open_set_2: str = ""
+    hotkey_save_set_1: str = "Ctrl+S"
+    hotkey_save_set_2: str = ""
+    hotkey_save_set_as_1: str = "Ctrl+Shift+S"
+    hotkey_save_set_as_2: str = ""
+    hotkey_search_1: str = "Ctrl+F"
+    hotkey_search_2: str = ""
+    hotkey_options_1: str = ""
+    hotkey_options_2: str = ""
+    hotkey_play_selected_1: str = ""
+    hotkey_play_selected_2: str = ""
+    hotkey_pause_toggle_1: str = "P"
+    hotkey_pause_toggle_2: str = ""
+    hotkey_stop_playback_1: str = "Space"
+    hotkey_stop_playback_2: str = "Return"
+    hotkey_talk_1: str = "Shift"
+    hotkey_talk_2: str = ""
+    hotkey_next_group_1: str = ""
+    hotkey_next_group_2: str = ""
+    hotkey_prev_group_1: str = ""
+    hotkey_prev_group_2: str = ""
+    hotkey_next_page_1: str = ""
+    hotkey_next_page_2: str = ""
+    hotkey_prev_page_1: str = ""
+    hotkey_prev_page_2: str = ""
+    hotkey_next_sound_button_1: str = ""
+    hotkey_next_sound_button_2: str = ""
+    hotkey_prev_sound_button_1: str = ""
+    hotkey_prev_sound_button_2: str = ""
+    hotkey_multi_play_1: str = ""
+    hotkey_multi_play_2: str = ""
+    hotkey_go_to_playing_1: str = ""
+    hotkey_go_to_playing_2: str = ""
+    hotkey_loop_1: str = ""
+    hotkey_loop_2: str = ""
+    hotkey_next_1: str = ""
+    hotkey_next_2: str = ""
+    hotkey_rapid_fire_1: str = ""
+    hotkey_rapid_fire_2: str = ""
+    hotkey_shuffle_1: str = ""
+    hotkey_shuffle_2: str = ""
+    hotkey_reset_page_1: str = ""
+    hotkey_reset_page_2: str = ""
+    hotkey_play_list_1: str = ""
+    hotkey_play_list_2: str = ""
+    hotkey_fade_in_1: str = ""
+    hotkey_fade_in_2: str = ""
+    hotkey_cross_fade_1: str = ""
+    hotkey_cross_fade_2: str = ""
+    hotkey_fade_out_1: str = ""
+    hotkey_fade_out_2: str = ""
+    hotkey_mute_1: str = ""
+    hotkey_mute_2: str = ""
 
 
 def get_settings_path() -> Path:
@@ -97,6 +154,7 @@ def save_settings(settings: AppSettings) -> None:
         "fade_out_sec": str(settings.fade_out_sec),
         "talk_volume_level": str(settings.talk_volume_level),
         "talk_fade_sec": str(settings.talk_fade_sec),
+        "talk_volume_mode": settings.talk_volume_mode,
         "talk_blink_button": "1" if settings.talk_blink_button else "0",
         "talk_shift_accelerator": "1" if settings.talk_shift_accelerator else "0",
         "hotkeys_ignore_talk_level": "1" if settings.hotkeys_ignore_talk_level else "0",
@@ -124,6 +182,62 @@ def save_settings(settings: AppSettings) -> None:
         "color_cue_indicator": settings.color_cue_indicator,
         "color_volume_indicator": settings.color_volume_indicator,
         "sound_button_text_color": settings.sound_button_text_color,
+        "hotkey_new_set_1": settings.hotkey_new_set_1,
+        "hotkey_new_set_2": settings.hotkey_new_set_2,
+        "hotkey_open_set_1": settings.hotkey_open_set_1,
+        "hotkey_open_set_2": settings.hotkey_open_set_2,
+        "hotkey_save_set_1": settings.hotkey_save_set_1,
+        "hotkey_save_set_2": settings.hotkey_save_set_2,
+        "hotkey_save_set_as_1": settings.hotkey_save_set_as_1,
+        "hotkey_save_set_as_2": settings.hotkey_save_set_as_2,
+        "hotkey_search_1": settings.hotkey_search_1,
+        "hotkey_search_2": settings.hotkey_search_2,
+        "hotkey_options_1": settings.hotkey_options_1,
+        "hotkey_options_2": settings.hotkey_options_2,
+        "hotkey_play_selected_1": settings.hotkey_play_selected_1,
+        "hotkey_play_selected_2": settings.hotkey_play_selected_2,
+        "hotkey_pause_toggle_1": settings.hotkey_pause_toggle_1,
+        "hotkey_pause_toggle_2": settings.hotkey_pause_toggle_2,
+        "hotkey_stop_playback_1": settings.hotkey_stop_playback_1,
+        "hotkey_stop_playback_2": settings.hotkey_stop_playback_2,
+        "hotkey_talk_1": settings.hotkey_talk_1,
+        "hotkey_talk_2": settings.hotkey_talk_2,
+        "hotkey_next_group_1": settings.hotkey_next_group_1,
+        "hotkey_next_group_2": settings.hotkey_next_group_2,
+        "hotkey_prev_group_1": settings.hotkey_prev_group_1,
+        "hotkey_prev_group_2": settings.hotkey_prev_group_2,
+        "hotkey_next_page_1": settings.hotkey_next_page_1,
+        "hotkey_next_page_2": settings.hotkey_next_page_2,
+        "hotkey_prev_page_1": settings.hotkey_prev_page_1,
+        "hotkey_prev_page_2": settings.hotkey_prev_page_2,
+        "hotkey_next_sound_button_1": settings.hotkey_next_sound_button_1,
+        "hotkey_next_sound_button_2": settings.hotkey_next_sound_button_2,
+        "hotkey_prev_sound_button_1": settings.hotkey_prev_sound_button_1,
+        "hotkey_prev_sound_button_2": settings.hotkey_prev_sound_button_2,
+        "hotkey_multi_play_1": settings.hotkey_multi_play_1,
+        "hotkey_multi_play_2": settings.hotkey_multi_play_2,
+        "hotkey_go_to_playing_1": settings.hotkey_go_to_playing_1,
+        "hotkey_go_to_playing_2": settings.hotkey_go_to_playing_2,
+        "hotkey_loop_1": settings.hotkey_loop_1,
+        "hotkey_loop_2": settings.hotkey_loop_2,
+        "hotkey_next_1": settings.hotkey_next_1,
+        "hotkey_next_2": settings.hotkey_next_2,
+        "hotkey_rapid_fire_1": settings.hotkey_rapid_fire_1,
+        "hotkey_rapid_fire_2": settings.hotkey_rapid_fire_2,
+        "hotkey_shuffle_1": settings.hotkey_shuffle_1,
+        "hotkey_shuffle_2": settings.hotkey_shuffle_2,
+        "hotkey_reset_page_1": settings.hotkey_reset_page_1,
+        "hotkey_reset_page_2": settings.hotkey_reset_page_2,
+        "hotkey_play_list_1": settings.hotkey_play_list_1,
+        "hotkey_play_list_2": settings.hotkey_play_list_2,
+        "hotkey_fade_in_1": settings.hotkey_fade_in_1,
+        "hotkey_fade_in_2": settings.hotkey_fade_in_2,
+        "hotkey_cross_fade_1": settings.hotkey_cross_fade_1,
+        "hotkey_cross_fade_2": settings.hotkey_cross_fade_2,
+        "hotkey_fade_out_1": settings.hotkey_fade_out_1,
+        "hotkey_fade_out_2": settings.hotkey_fade_out_2,
+        "hotkey_mute_1": settings.hotkey_mute_1,
+        "hotkey_mute_2": settings.hotkey_mute_2,
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -139,6 +253,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     fade_out_sec = _clamp_float(_get_float(section, "fade_out_sec", 1.0), 0.0, 20.0)
     talk_fade_sec = _clamp_float(_get_float(section, "talk_fade_sec", 0.5), 0.0, 20.0)
     talk_volume_level = _clamp_int(_get_int(section, "talk_volume_level", 30), 0, 100)
+    talk_volume_mode = str(section.get("talk_volume_mode", "percent_of_master")).strip().lower()
+    if talk_volume_mode not in {"percent_of_master", "lower_only", "set_exact"}:
+        talk_volume_mode = "percent_of_master"
     group = str(section.get("last_group", "A")).upper()
     if group not in "ABCDEFGHIJ":
         group = "A"
@@ -183,6 +300,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         fade_out_sec=fade_out_sec,
         talk_volume_level=talk_volume_level,
         talk_fade_sec=talk_fade_sec,
+        talk_volume_mode=talk_volume_mode,
         talk_blink_button=_get_bool(section, "talk_blink_button", False),
         talk_shift_accelerator=_get_bool(section, "talk_shift_accelerator", True),
         hotkeys_ignore_talk_level=_get_bool(section, "hotkeys_ignore_talk_level", False),
@@ -210,6 +328,62 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
         color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
+        hotkey_new_set_1=str(section.get("hotkey_new_set_1", "Ctrl+N")).strip(),
+        hotkey_new_set_2=str(section.get("hotkey_new_set_2", "")).strip(),
+        hotkey_open_set_1=str(section.get("hotkey_open_set_1", "Ctrl+O")).strip(),
+        hotkey_open_set_2=str(section.get("hotkey_open_set_2", "")).strip(),
+        hotkey_save_set_1=str(section.get("hotkey_save_set_1", "Ctrl+S")).strip(),
+        hotkey_save_set_2=str(section.get("hotkey_save_set_2", "")).strip(),
+        hotkey_save_set_as_1=str(section.get("hotkey_save_set_as_1", "Ctrl+Shift+S")).strip(),
+        hotkey_save_set_as_2=str(section.get("hotkey_save_set_as_2", "")).strip(),
+        hotkey_search_1=str(section.get("hotkey_search_1", "Ctrl+F")).strip(),
+        hotkey_search_2=str(section.get("hotkey_search_2", "")).strip(),
+        hotkey_options_1=str(section.get("hotkey_options_1", "")).strip(),
+        hotkey_options_2=str(section.get("hotkey_options_2", "")).strip(),
+        hotkey_play_selected_1=str(section.get("hotkey_play_selected_1", "")).strip(),
+        hotkey_play_selected_2=str(section.get("hotkey_play_selected_2", "")).strip(),
+        hotkey_pause_toggle_1=str(section.get("hotkey_pause_toggle_1", "P")).strip(),
+        hotkey_pause_toggle_2=str(section.get("hotkey_pause_toggle_2", "")).strip(),
+        hotkey_stop_playback_1=str(section.get("hotkey_stop_playback_1", "Space")).strip(),
+        hotkey_stop_playback_2=str(section.get("hotkey_stop_playback_2", "Return")).strip(),
+        hotkey_talk_1=str(section.get("hotkey_talk_1", "Shift")).strip(),
+        hotkey_talk_2=str(section.get("hotkey_talk_2", "")).strip(),
+        hotkey_next_group_1=str(section.get("hotkey_next_group_1", "")).strip(),
+        hotkey_next_group_2=str(section.get("hotkey_next_group_2", "")).strip(),
+        hotkey_prev_group_1=str(section.get("hotkey_prev_group_1", "")).strip(),
+        hotkey_prev_group_2=str(section.get("hotkey_prev_group_2", "")).strip(),
+        hotkey_next_page_1=str(section.get("hotkey_next_page_1", "")).strip(),
+        hotkey_next_page_2=str(section.get("hotkey_next_page_2", "")).strip(),
+        hotkey_prev_page_1=str(section.get("hotkey_prev_page_1", "")).strip(),
+        hotkey_prev_page_2=str(section.get("hotkey_prev_page_2", "")).strip(),
+        hotkey_next_sound_button_1=str(section.get("hotkey_next_sound_button_1", "")).strip(),
+        hotkey_next_sound_button_2=str(section.get("hotkey_next_sound_button_2", "")).strip(),
+        hotkey_prev_sound_button_1=str(section.get("hotkey_prev_sound_button_1", "")).strip(),
+        hotkey_prev_sound_button_2=str(section.get("hotkey_prev_sound_button_2", "")).strip(),
+        hotkey_multi_play_1=str(section.get("hotkey_multi_play_1", "")).strip(),
+        hotkey_multi_play_2=str(section.get("hotkey_multi_play_2", "")).strip(),
+        hotkey_go_to_playing_1=str(section.get("hotkey_go_to_playing_1", "")).strip(),
+        hotkey_go_to_playing_2=str(section.get("hotkey_go_to_playing_2", "")).strip(),
+        hotkey_loop_1=str(section.get("hotkey_loop_1", "")).strip(),
+        hotkey_loop_2=str(section.get("hotkey_loop_2", "")).strip(),
+        hotkey_next_1=str(section.get("hotkey_next_1", "")).strip(),
+        hotkey_next_2=str(section.get("hotkey_next_2", "")).strip(),
+        hotkey_rapid_fire_1=str(section.get("hotkey_rapid_fire_1", "")).strip(),
+        hotkey_rapid_fire_2=str(section.get("hotkey_rapid_fire_2", "")).strip(),
+        hotkey_shuffle_1=str(section.get("hotkey_shuffle_1", "")).strip(),
+        hotkey_shuffle_2=str(section.get("hotkey_shuffle_2", "")).strip(),
+        hotkey_reset_page_1=str(section.get("hotkey_reset_page_1", "")).strip(),
+        hotkey_reset_page_2=str(section.get("hotkey_reset_page_2", "")).strip(),
+        hotkey_play_list_1=str(section.get("hotkey_play_list_1", "")).strip(),
+        hotkey_play_list_2=str(section.get("hotkey_play_list_2", "")).strip(),
+        hotkey_fade_in_1=str(section.get("hotkey_fade_in_1", "")).strip(),
+        hotkey_fade_in_2=str(section.get("hotkey_fade_in_2", "")).strip(),
+        hotkey_cross_fade_1=str(section.get("hotkey_cross_fade_1", "")).strip(),
+        hotkey_cross_fade_2=str(section.get("hotkey_cross_fade_2", "")).strip(),
+        hotkey_fade_out_1=str(section.get("hotkey_fade_out_1", "")).strip(),
+        hotkey_fade_out_2=str(section.get("hotkey_fade_out_2", "")).strip(),
+        hotkey_mute_1=str(section.get("hotkey_mute_1", "")).strip(),
+        hotkey_mute_2=str(section.get("hotkey_mute_2", "")).strip(),
     )
 
 

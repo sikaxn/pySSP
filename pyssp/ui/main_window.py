@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread
-from PyQt5.QtGui import QColor, QTextDocument, QDrag
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QInputDialog,
     QSlider,
+    QShortcut,
     QStyle,
     QSizePolicy,
     QVBoxLayout,
@@ -73,6 +74,37 @@ COLORS = {
     "copied": "#2E65FF",
     "cue_indicator": "#61D6FF",
     "volume_indicator": "#FFD45A",
+}
+
+HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
+    "new_set": ("Ctrl+N", ""),
+    "open_set": ("Ctrl+O", ""),
+    "save_set": ("Ctrl+S", ""),
+    "save_set_as": ("Ctrl+Shift+S", ""),
+    "search": ("Ctrl+F", ""),
+    "options": ("", ""),
+    "play_selected": ("", ""),
+    "pause_toggle": ("P", ""),
+    "stop_playback": ("Space", "Return"),
+    "talk": ("Shift", ""),
+    "next_group": ("", ""),
+    "prev_group": ("", ""),
+    "next_page": ("", ""),
+    "prev_page": ("", ""),
+    "next_sound_button": ("", ""),
+    "prev_sound_button": ("", ""),
+    "multi_play": ("", ""),
+    "go_to_playing": ("", ""),
+    "loop": ("", ""),
+    "next": ("", ""),
+    "rapid_fire": ("", ""),
+    "shuffle": ("", ""),
+    "reset_page": ("", ""),
+    "play_list": ("", ""),
+    "fade_in": ("", ""),
+    "cross_fade": ("", ""),
+    "fade_out": ("", ""),
+    "mute": ("", ""),
 }
 
 
@@ -419,7 +451,6 @@ class MainWindow(QMainWindow):
         self.loop_enabled = False
         self._manual_stop_requested = False
         self.talk_active = False
-        self._shift_down = False
         self._fade_jobs: List[dict] = []
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
@@ -433,10 +464,12 @@ class MainWindow(QMainWindow):
         self.fade_out_sec = self.settings.fade_out_sec
         self.talk_volume_level = self.settings.talk_volume_level
         self.talk_fade_sec = self.settings.talk_fade_sec
+        self.talk_volume_mode = (
+            self.settings.talk_volume_mode
+            if self.settings.talk_volume_mode in {"percent_of_master", "lower_only", "set_exact"}
+            else "percent_of_master"
+        )
         self.talk_blink_button = self.settings.talk_blink_button
-        self.talk_shift_accelerator = self.settings.talk_shift_accelerator
-        self.hotkeys_ignore_talk_level = self.settings.hotkeys_ignore_talk_level
-        self.enter_key_mirrors_space = self.settings.enter_key_mirrors_space
         self.log_file_enabled = self.settings.log_file_enabled
         self.reset_all_on_startup = self.settings.reset_all_on_startup
         self.click_playing_action = self.settings.click_playing_action
@@ -472,6 +505,36 @@ class MainWindow(QMainWindow):
             "volume_indicator": self.settings.color_volume_indicator,
         }
         self.sound_button_text_color = self.settings.sound_button_text_color
+        self.hotkeys: Dict[str, tuple[str, str]] = {
+            "new_set": (self.settings.hotkey_new_set_1, self.settings.hotkey_new_set_2),
+            "open_set": (self.settings.hotkey_open_set_1, self.settings.hotkey_open_set_2),
+            "save_set": (self.settings.hotkey_save_set_1, self.settings.hotkey_save_set_2),
+            "save_set_as": (self.settings.hotkey_save_set_as_1, self.settings.hotkey_save_set_as_2),
+            "search": (self.settings.hotkey_search_1, self.settings.hotkey_search_2),
+            "options": (self.settings.hotkey_options_1, self.settings.hotkey_options_2),
+            "play_selected": (self.settings.hotkey_play_selected_1, self.settings.hotkey_play_selected_2),
+            "pause_toggle": (self.settings.hotkey_pause_toggle_1, self.settings.hotkey_pause_toggle_2),
+            "stop_playback": (self.settings.hotkey_stop_playback_1, self.settings.hotkey_stop_playback_2),
+            "talk": (self.settings.hotkey_talk_1, self.settings.hotkey_talk_2),
+            "next_group": (self.settings.hotkey_next_group_1, self.settings.hotkey_next_group_2),
+            "prev_group": (self.settings.hotkey_prev_group_1, self.settings.hotkey_prev_group_2),
+            "next_page": (self.settings.hotkey_next_page_1, self.settings.hotkey_next_page_2),
+            "prev_page": (self.settings.hotkey_prev_page_1, self.settings.hotkey_prev_page_2),
+            "next_sound_button": (self.settings.hotkey_next_sound_button_1, self.settings.hotkey_next_sound_button_2),
+            "prev_sound_button": (self.settings.hotkey_prev_sound_button_1, self.settings.hotkey_prev_sound_button_2),
+            "multi_play": (self.settings.hotkey_multi_play_1, self.settings.hotkey_multi_play_2),
+            "go_to_playing": (self.settings.hotkey_go_to_playing_1, self.settings.hotkey_go_to_playing_2),
+            "loop": (self.settings.hotkey_loop_1, self.settings.hotkey_loop_2),
+            "next": (self.settings.hotkey_next_1, self.settings.hotkey_next_2),
+            "rapid_fire": (self.settings.hotkey_rapid_fire_1, self.settings.hotkey_rapid_fire_2),
+            "shuffle": (self.settings.hotkey_shuffle_1, self.settings.hotkey_shuffle_2),
+            "reset_page": (self.settings.hotkey_reset_page_1, self.settings.hotkey_reset_page_2),
+            "play_list": (self.settings.hotkey_play_list_1, self.settings.hotkey_play_list_2),
+            "fade_in": (self.settings.hotkey_fade_in_1, self.settings.hotkey_fade_in_2),
+            "cross_fade": (self.settings.hotkey_cross_fade_1, self.settings.hotkey_cross_fade_2),
+            "fade_out": (self.settings.hotkey_fade_out_1, self.settings.hotkey_fade_out_2),
+            "mute": (self.settings.hotkey_mute_1, self.settings.hotkey_mute_2),
+        }
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
 
@@ -533,6 +596,10 @@ class MainWindow(QMainWindow):
         self._dsp_window: Optional[DSPWindow] = None
         self._tool_windows: Dict[str, ToolListWindow] = {}
         self._tool_window_matches: Dict[str, List[dict]] = {}
+        self._menu_actions: Dict[str, QAction] = {}
+        self._runtime_hotkey_shortcuts: List[QShortcut] = []
+        self._modifier_hotkey_handlers: Dict[int, List[Callable[[], None]]] = {}
+        self._modifier_hotkey_down: set[int] = set()
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
@@ -541,6 +608,8 @@ class MainWindow(QMainWindow):
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
         self._flash_slot_until = 0.0
+        self._hotkey_selected_slot_key: Optional[Tuple[str, int, int]] = None
+        self._pre_mute_volume: Optional[int] = None
 
         self._build_ui()
         self.statusBar().addWidget(self.status_hover_label)
@@ -630,33 +699,34 @@ class MainWindow(QMainWindow):
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("File")
         new_set_action = QAction("New Set", self)
-        new_set_action.setShortcut("Ctrl+N")
         new_set_action.triggered.connect(self._new_set)
         file_menu.addAction(new_set_action)
+        self._menu_actions["new_set"] = new_set_action
 
         open_set_action = QAction("Open Set", self)
-        open_set_action.setShortcut("Ctrl+O")
         open_set_action.triggered.connect(self._open_set_dialog)
         file_menu.addAction(open_set_action)
+        self._menu_actions["open_set"] = open_set_action
 
         save_set_action = QAction("Save Set", self)
-        save_set_action.setShortcut("Ctrl+S")
         save_set_action.triggered.connect(self._save_set)
         file_menu.addAction(save_set_action)
+        self._menu_actions["save_set"] = save_set_action
 
         save_set_at_action = QAction("Save Set At", self)
-        save_set_at_action.setShortcut("Ctrl+Shift+S")
         save_set_at_action.triggered.connect(self._save_set_at)
         file_menu.addAction(save_set_at_action)
+        self._menu_actions["save_set_as"] = save_set_at_action
 
         setup_menu = self.menuBar().addMenu("Setup")
         options_action = QAction("Options", self)
         options_action.triggered.connect(self._open_options_dialog)
         setup_menu.addAction(options_action)
+        self._menu_actions["options"] = options_action
         search_action = QAction("Search", self)
-        search_action.setShortcut("Ctrl+F")
         search_action.triggered.connect(self._open_find_dialog)
         self.addAction(search_action)
+        self._menu_actions["search"] = search_action
 
         tools_menu = self.menuBar().addMenu("Tools")
         duplicate_check_action = QAction("Duplicate Check", self)
@@ -700,9 +770,128 @@ class MainWindow(QMainWindow):
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
         help_menu.addAction(help_action)
+        self._apply_hotkeys()
 
     def _project_root_path(self) -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _normalized_hotkey_pair(self, action_key: str) -> tuple[str, str]:
+        raw1, raw2 = self.hotkeys.get(action_key, HOTKEY_DEFAULTS.get(action_key, ("", "")))
+        seq1 = self._normalize_hotkey_text(raw1)
+        seq2 = self._normalize_hotkey_text(raw2)
+        if seq2 == seq1:
+            seq2 = ""
+        return seq1, seq2
+
+    def _normalize_hotkey_text(self, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        aliases = {
+            "control": "Ctrl",
+            "ctrl": "Ctrl",
+            "shift": "Shift",
+            "alt": "Alt",
+            "meta": "Meta",
+            "win": "Meta",
+            "super": "Meta",
+        }
+        lower = raw.lower()
+        if lower in aliases:
+            return aliases[lower]
+        normalized = QKeySequence(raw).toString().strip()
+        return normalized or raw
+
+    def _key_sequence_from_hotkey_text(self, value: str) -> Optional[QKeySequence]:
+        text = self._normalize_hotkey_text(value)
+        if not text:
+            return None
+        if text == "Shift":
+            return QKeySequence(int(Qt.SHIFT))
+        if text == "Ctrl":
+            return QKeySequence(int(Qt.CTRL))
+        if text == "Alt":
+            return QKeySequence(int(Qt.ALT))
+        if text == "Meta":
+            return QKeySequence(int(Qt.META))
+        return QKeySequence(text)
+
+    def _modifier_key_from_hotkey_text(self, value: str) -> Optional[int]:
+        text = self._normalize_hotkey_text(value)
+        if text == "Shift":
+            return int(Qt.Key_Shift)
+        if text == "Ctrl":
+            return int(Qt.Key_Control)
+        if text == "Alt":
+            return int(Qt.Key_Alt)
+        if text == "Meta":
+            return int(Qt.Key_Meta)
+        return None
+
+    def _apply_hotkeys(self) -> None:
+        for key in ["new_set", "open_set", "save_set", "save_set_as", "search", "options"]:
+            action = self._menu_actions.get(key)
+            if action is None:
+                continue
+            h1, h2 = self._normalized_hotkey_pair(key)
+            sequences: List[QKeySequence] = []
+            for text in [h1, h2]:
+                seq = self._key_sequence_from_hotkey_text(text)
+                if seq is not None:
+                    sequences.append(seq)
+            action.setShortcuts(sequences)
+
+        for sc in self._runtime_hotkey_shortcuts:
+            try:
+                sc.activated.disconnect()
+            except Exception:
+                pass
+            sc.setParent(None)
+            sc.deleteLater()
+        self._runtime_hotkey_shortcuts = []
+        self._modifier_hotkey_handlers = {}
+        self._modifier_hotkey_down.clear()
+
+        runtime_handlers: Dict[str, Callable[[], None]] = {
+            "play_selected": self._hotkey_play_selected,
+            "pause_toggle": self._toggle_pause,
+            "stop_playback": self._handle_space_bar_action,
+            "talk": self._hotkey_toggle_talk,
+            "next_group": lambda: self._hotkey_select_group_delta(1),
+            "prev_group": lambda: self._hotkey_select_group_delta(-1),
+            "next_page": lambda: self._hotkey_select_page_delta(1),
+            "prev_page": lambda: self._hotkey_select_page_delta(-1),
+            "next_sound_button": lambda: self._hotkey_select_sound_button_delta(1),
+            "prev_sound_button": lambda: self._hotkey_select_sound_button_delta(-1),
+            "multi_play": lambda: self._toggle_control_button("Multi-Play"),
+            "go_to_playing": self._go_to_current_playing_page,
+            "loop": lambda: self._toggle_control_button("Loop"),
+            "next": self._play_next,
+            "rapid_fire": self._on_rapid_fire_clicked,
+            "shuffle": lambda: self._toggle_control_button("Shuffle"),
+            "reset_page": self._reset_current_page_state,
+            "play_list": lambda: self._toggle_control_button("Play List"),
+            "fade_in": lambda: self._toggle_control_button("Fade In"),
+            "cross_fade": lambda: self._toggle_control_button("X"),
+            "fade_out": lambda: self._toggle_control_button("Fade Out"),
+            "mute": self._toggle_mute_hotkey,
+        }
+        for key, handler in runtime_handlers.items():
+            h1, h2 = self._normalized_hotkey_pair(key)
+            for seq_text in [h1, h2]:
+                modifier_key = self._modifier_key_from_hotkey_text(seq_text)
+                if modifier_key is not None:
+                    handlers = self._modifier_hotkey_handlers.setdefault(modifier_key, [])
+                    if handler not in handlers:
+                        handlers.append(handler)
+                    continue
+                seq = self._key_sequence_from_hotkey_text(seq_text)
+                if seq is None:
+                    continue
+                shortcut = QShortcut(seq, self)
+                shortcut.setContext(Qt.ApplicationShortcut)
+                shortcut.activated.connect(handler)
+                self._runtime_hotkey_shortcuts.append(shortcut)
 
     def _load_project_text_file(self, filename: str) -> str:
         file_path = os.path.join(self._project_root_path(), filename)
@@ -1440,6 +1629,7 @@ class MainWindow(QMainWindow):
 
     def _select_group(self, group: str) -> None:
         self.cue_mode = False
+        self._hotkey_selected_slot_key = None
         cue_btn = self.control_buttons.get("Cue")
         if cue_btn:
             cue_btn.setChecked(False)
@@ -1460,9 +1650,11 @@ class MainWindow(QMainWindow):
             return
         if self.cue_mode:
             self.current_page = 0
+            self._hotkey_selected_slot_key = None
             self._update_page_status()
             return
         self.current_page = index
+        self._hotkey_selected_slot_key = None
         self.current_playlist_start = None
         self.settings.last_group = self.current_group
         self.settings.last_page = self.current_page
@@ -1963,7 +2155,7 @@ class MainWindow(QMainWindow):
                 "QPushButton{"
                 f"background:{background};"
                 f"color:{text_color};"
-                "font-size:10pt;font-weight:bold;border:1px solid #94B8BA;"
+                f"font-size:10pt;font-weight:bold;border:{'3px solid #FFE04A' if self._hotkey_selected_slot_key == (self._view_group_key(), self.current_page, i) else '1px solid #94B8BA'};"
                 "padding:4px;"
                 "}"
             )
@@ -2215,6 +2407,7 @@ class MainWindow(QMainWindow):
         self._update_button_drag_visual_state()
 
     def _on_sound_button_clicked(self, slot_index: int) -> None:
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         if not self._is_button_drag_enabled():
             self._play_slot(slot_index)
             return
@@ -3383,7 +3576,13 @@ class MainWindow(QMainWindow):
     def _effective_master_volume(self) -> int:
         base = self.volume_slider.value()
         if self.talk_active:
-            base = int(base * (self.talk_volume_level / 100.0))
+            talk_level = max(0, min(100, int(self.talk_volume_level)))
+            if self.talk_volume_mode == "set_exact":
+                base = talk_level
+            elif self.talk_volume_mode == "lower_only":
+                base = min(base, talk_level)
+            else:
+                base = int(base * (talk_level / 100.0))
         return max(0, min(100, base))
 
     def _effective_slot_target_volume(self, slot_volume_pct: int) -> int:
@@ -3637,10 +3836,8 @@ class MainWindow(QMainWindow):
             fade_out_sec=self.fade_out_sec,
             talk_volume_level=self.talk_volume_level,
             talk_fade_sec=self.talk_fade_sec,
+            talk_volume_mode=self.talk_volume_mode,
             talk_blink_button=self.talk_blink_button,
-            talk_shift_accelerator=self.talk_shift_accelerator,
-            hotkeys_ignore_talk_level=self.hotkeys_ignore_talk_level,
-            enter_key_mirrors_space=self.enter_key_mirrors_space,
             log_file_enabled=self.log_file_enabled,
             reset_all_on_startup=self.reset_all_on_startup,
             click_playing_action=self.click_playing_action,
@@ -3668,6 +3865,7 @@ class MainWindow(QMainWindow):
                 "volume_indicator": self.state_colors["volume_indicator"],
             },
             sound_button_text_color=self.sound_button_text_color,
+            hotkeys=self.hotkeys,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -3681,10 +3879,8 @@ class MainWindow(QMainWindow):
         self.fade_out_sec = dialog.fade_out_spin.value()
         self.talk_volume_level = dialog.talk_volume_spin.value()
         self.talk_fade_sec = dialog.talk_fade_spin.value()
+        self.talk_volume_mode = dialog.selected_talk_volume_mode()
         self.talk_blink_button = dialog.talk_blink_checkbox.isChecked()
-        self.talk_shift_accelerator = dialog.shift_accel_checkbox.isChecked()
-        self.hotkeys_ignore_talk_level = dialog.hotkeys_ignore_checkbox.isChecked()
-        self.enter_key_mirrors_space = dialog.enter_mirror_checkbox.isChecked()
         self.log_file_enabled = dialog.log_file_checkbox.isChecked()
         self.reset_all_on_startup = dialog.reset_on_startup_checkbox.isChecked()
         self.click_playing_action = dialog.selected_click_playing_action()
@@ -3709,6 +3905,8 @@ class MainWindow(QMainWindow):
             self.state_colors["volume_indicator"],
         )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
+        self.hotkeys = dialog.selected_hotkeys()
+        self._apply_hotkeys()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
         if self._search_window is not None:
@@ -4317,6 +4515,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_cue_mode(self, checked: bool) -> None:
         self.cue_mode = checked
+        self._hotkey_selected_slot_key = None
         cue_btn = self.control_buttons.get("Cue")
         if cue_btn:
             cue_btn.setChecked(checked)
@@ -4479,6 +4678,7 @@ class MainWindow(QMainWindow):
         else:
             return
         self.sound_buttons[slot].setFocus()
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot)
         if flash:
             self._flash_slot_key = (self._view_group_key(), self.current_page, slot)
             self._flash_slot_until = time.monotonic() + 1.0
@@ -5273,10 +5473,8 @@ class MainWindow(QMainWindow):
         self.settings.fade_out_sec = self.fade_out_sec
         self.settings.talk_volume_level = self.talk_volume_level
         self.settings.talk_fade_sec = self.talk_fade_sec
+        self.settings.talk_volume_mode = self.talk_volume_mode
         self.settings.talk_blink_button = self.talk_blink_button
-        self.settings.talk_shift_accelerator = self.talk_shift_accelerator
-        self.settings.hotkeys_ignore_talk_level = self.hotkeys_ignore_talk_level
-        self.settings.enter_key_mirrors_space = self.enter_key_mirrors_space
         self.settings.log_file_enabled = self.log_file_enabled
         self.settings.reset_all_on_startup = self.reset_all_on_startup
         self.settings.click_playing_action = self.click_playing_action
@@ -5300,6 +5498,62 @@ class MainWindow(QMainWindow):
         self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
         self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
         self.settings.sound_button_text_color = self.sound_button_text_color
+        self.settings.hotkey_new_set_1 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[0]
+        self.settings.hotkey_new_set_2 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[1]
+        self.settings.hotkey_open_set_1 = self.hotkeys.get("open_set", ("Ctrl+O", ""))[0]
+        self.settings.hotkey_open_set_2 = self.hotkeys.get("open_set", ("Ctrl+O", ""))[1]
+        self.settings.hotkey_save_set_1 = self.hotkeys.get("save_set", ("Ctrl+S", ""))[0]
+        self.settings.hotkey_save_set_2 = self.hotkeys.get("save_set", ("Ctrl+S", ""))[1]
+        self.settings.hotkey_save_set_as_1 = self.hotkeys.get("save_set_as", ("Ctrl+Shift+S", ""))[0]
+        self.settings.hotkey_save_set_as_2 = self.hotkeys.get("save_set_as", ("Ctrl+Shift+S", ""))[1]
+        self.settings.hotkey_search_1 = self.hotkeys.get("search", ("Ctrl+F", ""))[0]
+        self.settings.hotkey_search_2 = self.hotkeys.get("search", ("Ctrl+F", ""))[1]
+        self.settings.hotkey_options_1 = self.hotkeys.get("options", ("", ""))[0]
+        self.settings.hotkey_options_2 = self.hotkeys.get("options", ("", ""))[1]
+        self.settings.hotkey_play_selected_1 = self.hotkeys.get("play_selected", ("", ""))[0]
+        self.settings.hotkey_play_selected_2 = self.hotkeys.get("play_selected", ("", ""))[1]
+        self.settings.hotkey_pause_toggle_1 = self.hotkeys.get("pause_toggle", ("P", ""))[0]
+        self.settings.hotkey_pause_toggle_2 = self.hotkeys.get("pause_toggle", ("P", ""))[1]
+        self.settings.hotkey_stop_playback_1 = self.hotkeys.get("stop_playback", ("Space", "Return"))[0]
+        self.settings.hotkey_stop_playback_2 = self.hotkeys.get("stop_playback", ("Space", "Return"))[1]
+        self.settings.hotkey_talk_1 = self.hotkeys.get("talk", ("", ""))[0]
+        self.settings.hotkey_talk_2 = self.hotkeys.get("talk", ("", ""))[1]
+        self.settings.hotkey_next_group_1 = self.hotkeys.get("next_group", ("", ""))[0]
+        self.settings.hotkey_next_group_2 = self.hotkeys.get("next_group", ("", ""))[1]
+        self.settings.hotkey_prev_group_1 = self.hotkeys.get("prev_group", ("", ""))[0]
+        self.settings.hotkey_prev_group_2 = self.hotkeys.get("prev_group", ("", ""))[1]
+        self.settings.hotkey_next_page_1 = self.hotkeys.get("next_page", ("", ""))[0]
+        self.settings.hotkey_next_page_2 = self.hotkeys.get("next_page", ("", ""))[1]
+        self.settings.hotkey_prev_page_1 = self.hotkeys.get("prev_page", ("", ""))[0]
+        self.settings.hotkey_prev_page_2 = self.hotkeys.get("prev_page", ("", ""))[1]
+        self.settings.hotkey_next_sound_button_1 = self.hotkeys.get("next_sound_button", ("", ""))[0]
+        self.settings.hotkey_next_sound_button_2 = self.hotkeys.get("next_sound_button", ("", ""))[1]
+        self.settings.hotkey_prev_sound_button_1 = self.hotkeys.get("prev_sound_button", ("", ""))[0]
+        self.settings.hotkey_prev_sound_button_2 = self.hotkeys.get("prev_sound_button", ("", ""))[1]
+        self.settings.hotkey_multi_play_1 = self.hotkeys.get("multi_play", ("", ""))[0]
+        self.settings.hotkey_multi_play_2 = self.hotkeys.get("multi_play", ("", ""))[1]
+        self.settings.hotkey_go_to_playing_1 = self.hotkeys.get("go_to_playing", ("", ""))[0]
+        self.settings.hotkey_go_to_playing_2 = self.hotkeys.get("go_to_playing", ("", ""))[1]
+        self.settings.hotkey_loop_1 = self.hotkeys.get("loop", ("", ""))[0]
+        self.settings.hotkey_loop_2 = self.hotkeys.get("loop", ("", ""))[1]
+        self.settings.hotkey_next_1 = self.hotkeys.get("next", ("", ""))[0]
+        self.settings.hotkey_next_2 = self.hotkeys.get("next", ("", ""))[1]
+        self.settings.hotkey_rapid_fire_1 = self.hotkeys.get("rapid_fire", ("", ""))[0]
+        self.settings.hotkey_rapid_fire_2 = self.hotkeys.get("rapid_fire", ("", ""))[1]
+        self.settings.hotkey_shuffle_1 = self.hotkeys.get("shuffle", ("", ""))[0]
+        self.settings.hotkey_shuffle_2 = self.hotkeys.get("shuffle", ("", ""))[1]
+        self.settings.hotkey_reset_page_1 = self.hotkeys.get("reset_page", ("", ""))[0]
+        self.settings.hotkey_reset_page_2 = self.hotkeys.get("reset_page", ("", ""))[1]
+        self.settings.hotkey_play_list_1 = self.hotkeys.get("play_list", ("", ""))[0]
+        self.settings.hotkey_play_list_2 = self.hotkeys.get("play_list", ("", ""))[1]
+        self.settings.hotkey_fade_in_1 = self.hotkeys.get("fade_in", ("", ""))[0]
+        self.settings.hotkey_fade_in_2 = self.hotkeys.get("fade_in", ("", ""))[1]
+        self.settings.hotkey_cross_fade_1 = self.hotkeys.get("cross_fade", ("", ""))[0]
+        self.settings.hotkey_cross_fade_2 = self.hotkeys.get("cross_fade", ("", ""))[1]
+        self.settings.hotkey_fade_out_1 = self.hotkeys.get("fade_out", ("", ""))[0]
+        self.settings.hotkey_fade_out_2 = self.hotkeys.get("fade_out", ("", ""))[1]
+        self.settings.hotkey_mute_1 = self.hotkeys.get("mute", ("", ""))[0]
+        self.settings.hotkey_mute_2 = self.hotkeys.get("mute", ("", ""))[1]
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -5327,35 +5581,107 @@ class MainWindow(QMainWindow):
                     return True
         return super().eventFilter(obj, event)
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_P and not event.isAutoRepeat():
-            self._toggle_pause()
-            return
-        if event.key() == Qt.Key_Space and not event.isAutoRepeat():
-            self._handle_space_bar_action()
-            return
-        if self.enter_key_mirrors_space and not event.isAutoRepeat():
-            if event.key() in {Qt.Key_Return, Qt.Key_Enter}:
-                self._handle_space_bar_action()
-                return
-        if event.key() == Qt.Key_Shift and self.talk_shift_accelerator and not event.isAutoRepeat():
-            if not self._shift_down:
-                self._shift_down = True
-                talk_btn = self.control_buttons.get("Talk")
-                if talk_btn:
-                    talk_btn.click()
-                else:
-                    self._toggle_talk(not self.talk_active)
-                return
-        super().keyPressEvent(event)
-
     def _handle_space_bar_action(self) -> None:
         self._stop_playback()
         return
 
+    def keyPressEvent(self, event) -> None:
+        if event.isAutoRepeat():
+            super().keyPressEvent(event)
+            return
+        key = int(event.key())
+        handlers = self._modifier_hotkey_handlers.get(key)
+        if handlers:
+            if key not in self._modifier_hotkey_down:
+                self._modifier_hotkey_down.add(key)
+                for handler in handlers:
+                    handler()
+            return
+        super().keyPressEvent(event)
+
+    def _click_control_button(self, key: str) -> None:
+        button = self.control_buttons.get(key)
+        if button is None or (not button.isEnabled()):
+            return
+        button.click()
+
+    def _toggle_control_button(self, key: str) -> None:
+        button = self.control_buttons.get(key)
+        if button is None or (not button.isEnabled()) or (not button.isCheckable()):
+            return
+        button.click()
+
+    def _hotkey_toggle_talk(self) -> None:
+        self._toggle_control_button("Talk")
+
+    def _hotkey_select_group_delta(self, delta: int) -> None:
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        try:
+            idx = GROUPS.index(self.current_group)
+        except ValueError:
+            idx = 0
+        next_idx = (idx + delta) % len(GROUPS)
+        self._select_group(GROUPS[next_idx])
+
+    def _hotkey_select_page_delta(self, delta: int) -> None:
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        next_page = (self.current_page + delta) % PAGE_COUNT
+        self._select_page(next_page)
+
+    def _hotkey_select_sound_button_delta(self, delta: int) -> None:
+        page = self._current_page_slots()
+        candidates = [i for i, slot in enumerate(page) if slot.assigned and not slot.marker]
+        if not candidates:
+            return
+        current_index = -1
+        key = self._hotkey_selected_slot_key
+        if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
+            current_index = key[2]
+        elif self.current_playing is not None and self.current_playing[0] == self._view_group_key() and self.current_playing[1] == self.current_page:
+            current_index = self.current_playing[2]
+
+        if current_index in candidates:
+            pos = candidates.index(current_index)
+            next_slot = candidates[(pos + delta) % len(candidates)]
+        else:
+            next_slot = candidates[0] if delta >= 0 else candidates[-1]
+
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, next_slot)
+        self.sound_buttons[next_slot].setFocus()
+        self._on_sound_button_hover(next_slot)
+        self._refresh_sound_grid()
+
+    def _hotkey_play_selected(self) -> None:
+        slot_index: Optional[int] = None
+        key = self._hotkey_selected_slot_key
+        if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
+            slot_index = key[2]
+        else:
+            for i, btn in enumerate(self.sound_buttons):
+                if btn.hasFocus():
+                    slot_index = i
+                    break
+        if slot_index is None:
+            return
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
+        self._play_slot(slot_index)
+
+    def _toggle_mute_hotkey(self) -> None:
+        current = int(self.volume_slider.value())
+        if current > 0:
+            self._pre_mute_volume = current
+            self.volume_slider.setValue(0)
+            return
+        restore = self._pre_mute_volume if self._pre_mute_volume is not None else 90
+        self.volume_slider.setValue(max(0, min(100, int(restore))))
+
     def keyReleaseEvent(self, event) -> None:
-        if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
-            self._shift_down = False
+        key = int(event.key())
+        if key in self._modifier_hotkey_down:
+            self._modifier_hotkey_down.discard(key)
+            return
         super().keyReleaseEvent(event)
 
     def closeEvent(self, event) -> None:

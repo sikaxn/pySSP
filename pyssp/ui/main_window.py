@@ -653,6 +653,31 @@ class MainWindow(QMainWindow):
         self.audio_output_device = self.settings.audio_output_device
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
+        self.playlist_play_mode = (
+            self.settings.playlist_play_mode
+            if self.settings.playlist_play_mode in {"unplayed_only", "any_available"}
+            else "unplayed_only"
+        )
+        self.rapid_fire_play_mode = (
+            self.settings.rapid_fire_play_mode
+            if self.settings.rapid_fire_play_mode in {"unplayed_only", "any_available"}
+            else "unplayed_only"
+        )
+        self.next_play_mode = (
+            self.settings.next_play_mode
+            if self.settings.next_play_mode in {"unplayed_only", "any_available"}
+            else "unplayed_only"
+        )
+        self.playlist_loop_mode = (
+            self.settings.playlist_loop_mode
+            if self.settings.playlist_loop_mode in {"loop_list", "loop_single"}
+            else "loop_list"
+        )
+        self.candidate_error_action = (
+            self.settings.candidate_error_action
+            if self.settings.candidate_error_action in {"stop_playback", "keep_playing"}
+            else "stop_playback"
+        )
         self.web_remote_enabled = self.settings.web_remote_enabled
         self.web_remote_host = "0.0.0.0"
         self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
@@ -803,6 +828,8 @@ class MainWindow(QMainWindow):
         self.now_playing_label = QLabel("")
         self.drag_mode_banner = QLabel("")
         self.timecode_multiplay_banner = QLabel("")
+        self.playback_warning_banner = QLabel("")
+        self.save_notice_banner = QLabel("")
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
         self.status_now_playing_label = QLabel("Now Playing: -")
@@ -870,6 +897,8 @@ class MainWindow(QMainWindow):
         self._timecode_event_guard_until = 0.0
         self._auto_end_fade_track: Optional[Tuple[str, int, int]] = None
         self._auto_end_fade_done = False
+        self._playback_warning_token = 0
+        self._save_notice_token = 0
 
         self._build_ui()
         self._apply_language()
@@ -955,6 +984,20 @@ class MainWindow(QMainWindow):
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.timecode_multiplay_banner)
+        self.playback_warning_banner.setVisible(False)
+        self.playback_warning_banner.setWordWrap(True)
+        self.playback_warning_banner.setStyleSheet(
+            "QLabel{background:#EFE3FA; color:#3F205E; border:1px solid #7B3FB3; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.playback_warning_banner)
+        self.save_notice_banner.setVisible(False)
+        self.save_notice_banner.setWordWrap(True)
+        self.save_notice_banner.setStyleSheet(
+            "QLabel{background:#E4F7E7; color:#165A20; border:1px solid #2E9B47; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.save_notice_banner)
 
         body_layout = QHBoxLayout()
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -1046,6 +1089,32 @@ class MainWindow(QMainWindow):
             self.timecode_multiplay_banner.setVisible(True)
             return
         self.timecode_multiplay_banner.setVisible(False)
+
+    def _show_playback_warning_banner(self, text: str, timeout_ms: int = 5000) -> None:
+        self._playback_warning_token += 1
+        token = self._playback_warning_token
+        self.playback_warning_banner.setText(str(text or "").strip())
+        self.playback_warning_banner.setVisible(True)
+        if timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda t=token: self._hide_playback_warning_banner(t))
+
+    def _hide_playback_warning_banner(self, token: Optional[int] = None) -> None:
+        if token is not None and token != self._playback_warning_token:
+            return
+        self.playback_warning_banner.setVisible(False)
+
+    def _show_save_notice_banner(self, text: str, timeout_ms: int = 5000) -> None:
+        self._save_notice_token += 1
+        token = self._save_notice_token
+        self.save_notice_banner.setText(str(text or "").strip())
+        self.save_notice_banner.setVisible(True)
+        if timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda t=token: self._hide_save_notice_banner(t))
+
+    def _hide_save_notice_banner(self, token: Optional[int] = None) -> None:
+        if token is not None and token != self._save_notice_token:
+            return
+        self.save_notice_banner.setVisible(False)
 
     def _timecode_current_follow_ms(self) -> int:
         if self.player is None:
@@ -2746,8 +2815,7 @@ class MainWindow(QMainWindow):
             return
         self.settings.last_save_dir = os.path.dirname(file_path)
         self._save_settings()
-        if self.show_file_notifications:
-            QMessageBox.information(self, "Page Exported", f"Exported page to:\n{file_path}")
+        self._show_save_notice_banner(f"Page Exported: {file_path}")
 
     def _import_page(self, page_index: int) -> None:
         start_dir = self.settings.last_open_dir or self.settings.last_save_dir or os.path.expanduser("~")
@@ -3903,22 +3971,22 @@ class MainWindow(QMainWindow):
                 self._player_slot_volume_pct = original_slot_pct
                 self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
 
-    def _play_slot(self, slot_index: int, allow_fade: bool = True) -> None:
+    def _play_slot(self, slot_index: int, allow_fade: bool = True) -> bool:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
             self.statusBar().showMessage(tr("Playback is not allowed while Button Drag is enabled."), 2500)
-            return
+            return False
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
-            return
+            return False
         if slot.marker:
-            return
+            return False
         if not slot.assigned:
-            return
+            return False
         if slot.missing:
             self._refresh_sound_grid()
-            return
+            return False
 
         group_key = self._view_group_key()
         playing_key = (group_key, self.current_page, slot_index)
@@ -3937,18 +4005,17 @@ class MainWindow(QMainWindow):
             self._prune_multi_players()
         if self._is_multi_play_enabled() and playing_key in self._active_playing_keys:
             self._stop_track_by_slot_key(playing_key)
-            return
+            return False
         playlist_enabled_here = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         if self._is_multi_play_enabled() and (not playlist_enabled_here) and self._all_active_players():
-            self._play_slot_multi(slot, playing_key)
-            return
+            return self._play_slot_multi(slot, playing_key)
         if self.current_playing == playing_key and self.player.state() in {
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
             if self.click_playing_action == "stop_it" and not force_single_play:
                 self._stop_playback()
-                return
+                return False
         # Invalidate any previously scheduled delayed start to avoid stale restarts.
         self._pending_start_request = None
         self._pending_start_token += 1
@@ -3972,7 +4039,7 @@ class MainWindow(QMainWindow):
         ):
             print(f"[TCDBG] {time.perf_counter():.6f} delayed_start_due_to_fadeout key={playing_key}")
             self._schedule_start_after_fadeout(group_key, self.current_page, slot_index)
-            return
+            return True
 
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         if playlist_enabled and self.current_playlist_start is None:
@@ -3999,7 +4066,7 @@ class MainWindow(QMainWindow):
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
-                return
+                return False
             print(
                 f"[TCDBG] {time.perf_counter():.6f} media_load_ok cross "
                 f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
@@ -4040,7 +4107,7 @@ class MainWindow(QMainWindow):
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
-                return
+                return False
             print(
                 f"[TCDBG] {time.perf_counter():.6f} media_load_ok primary "
                 f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
@@ -4075,6 +4142,7 @@ class MainWindow(QMainWindow):
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
         self._mark_player_started(self.player)
+        return True
 
     def _prepare_transport_for_new_playback(self) -> None:
         self._auto_transition_track = self.current_playing
@@ -4091,9 +4159,9 @@ class MainWindow(QMainWindow):
         self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))
         self._refresh_main_jog_meta(display_pos, total_ms)
 
-    def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> None:
+    def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> bool:
         if not self._enforce_multi_play_limit():
-            return
+            return False
         extra_player = ExternalMediaPlayer(self)
         extra_player.setNotifyInterval(90)
         extra_player.setDSPConfig(self._dsp_config)
@@ -4101,7 +4169,7 @@ class MainWindow(QMainWindow):
         try:
             if not self._try_load_media(extra_player, slot):
                 extra_player.deleteLater()
-                return
+                return False
             self._set_player_slot_pct(extra_player, slot_pct)
             target_volume = self._effective_slot_target_volume(slot_pct)
             self._seek_player_to_slot_start_cue(extra_player, slot)
@@ -4118,7 +4186,7 @@ class MainWindow(QMainWindow):
                 extra_player.deleteLater()
             except Exception:
                 pass
-            return
+            return False
         self._multi_players.append(extra_player)
         self._set_player_slot_key(extra_player, playing_key)
         self._mark_player_started(extra_player)
@@ -4129,21 +4197,19 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
+        return True
 
     def _try_load_media(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> bool:
         try:
             player.setMedia(slot.file_path, dsp_config=self._dsp_config)
             slot.load_failed = False
+            self._hide_playback_warning_banner()
             return True
         except Exception as exc:
             slot.load_failed = True
             self._stop_player_internal(player)
             title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
-            QMessageBox.warning(
-                self,
-                "Audio Load Failed",
-                f"Could not play '{title}'.\n\nReason: {exc}",
-            )
+            self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
             print(f"[pySSP] Audio load failed: {slot.file_path} | {exc}", flush=True)
             return False
 
@@ -4286,10 +4352,17 @@ class MainWindow(QMainWindow):
                     self._update_now_playing_label("")
                     self._refresh_sound_grid()
                     return
-                next_slot = self._next_playlist_slot()
-                if next_slot is not None:
-                    self._play_slot(next_slot)
-                    return
+                blocked: set[int] = set()
+                while True:
+                    next_slot = self._next_playlist_slot(for_auto_advance=True, blocked=blocked)
+                    if next_slot is None:
+                        break
+                    if self._play_slot(next_slot):
+                        return
+                    blocked.add(next_slot)
+                    if self.candidate_error_action == "stop_playback":
+                        self._stop_playback()
+                        return
             self.current_playing = None
             self._auto_transition_track = None
             self._auto_transition_done = False
@@ -4398,12 +4471,17 @@ class MainWindow(QMainWindow):
             shuffle_enabled = self.page_shuffle_enabled[self.current_group][self.current_page]
         play_btn = self.control_buttons.get("Play List")
         shuf_btn = self.control_buttons.get("Shuffle")
-        next_btn = self.control_buttons.get("Next")
+        loop_btn = self.control_buttons.get("Loop")
         if play_btn:
             play_btn.setChecked(playlist_enabled)
         if shuf_btn:
             shuf_btn.setEnabled(playlist_enabled)
             shuf_btn.setChecked(shuffle_enabled)
+        if loop_btn:
+            if playlist_enabled:
+                loop_btn.setText(tr("Loop Single") if self.playlist_loop_mode == "loop_single" else tr("Loop List"))
+            else:
+                loop_btn.setText(tr("Loop"))
         self._update_next_button_enabled()
 
     def _update_next_button_enabled(self) -> None:
@@ -4419,9 +4497,12 @@ class MainWindow(QMainWindow):
         }
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         if playlist_enabled:
-            has_next = self._has_next_playlist_slot()
+            has_next = self._has_next_playlist_slot(for_auto_advance=False)
         else:
-            has_next = self._next_unplayed_slot_on_current_page() is not None
+            if self.next_play_mode == "any_available":
+                has_next = self._next_available_slot_on_current_page() is not None
+            else:
+                has_next = self._next_unplayed_slot_on_current_page() is not None
         next_btn.setEnabled(is_playing and has_next)
         self._update_button_drag_control_state()
 
@@ -4769,10 +4850,18 @@ class MainWindow(QMainWindow):
         remaining_ms = max(0, self.current_duration_ms - self.player.position())
         if self._is_cross_fade_enabled() and self.cross_fade_sec > 0:
             if remaining_ms <= int(self.cross_fade_sec * 1000):
-                next_slot = self._next_playlist_slot()
-                if next_slot is not None:
-                    self._auto_transition_done = True
-                    self._play_slot(next_slot)
+                blocked: set[int] = set()
+                while True:
+                    next_slot = self._next_playlist_slot(for_auto_advance=True, blocked=blocked)
+                    if next_slot is None:
+                        break
+                    if self._play_slot(next_slot):
+                        self._auto_transition_done = True
+                        break
+                    blocked.add(next_slot)
+                    if self.candidate_error_action == "stop_playback":
+                        self._stop_playback()
+                        break
             return
 
     def _swap_primary_secondary_players(self) -> None:
@@ -4835,6 +4924,11 @@ class MainWindow(QMainWindow):
             timecode_timeline_mode=self.main_transport_timeline_mode,
             max_multi_play_songs=self.max_multi_play_songs,
             multi_play_limit_action=self.multi_play_limit_action,
+            playlist_play_mode=self.playlist_play_mode,
+            rapid_fire_play_mode=self.rapid_fire_play_mode,
+            next_play_mode=self.next_play_mode,
+            playlist_loop_mode=self.playlist_loop_mode,
+            candidate_error_action=self.candidate_error_action,
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
             web_remote_url=self._web_remote_open_url(),
@@ -4869,7 +4963,6 @@ class MainWindow(QMainWindow):
         self.active_group_color = dialog.active_group_color
         self.inactive_group_color = dialog.inactive_group_color
         self.title_char_limit = dialog.title_limit_spin.value()
-        self.show_file_notifications = dialog.notifications_checkbox.isChecked()
         self.fade_in_sec = dialog.fade_in_spin.value()
         self.cross_fade_sec = dialog.cross_fade_spin.value()
         self.fade_out_sec = dialog.fade_out_spin.value()
@@ -4896,6 +4989,11 @@ class MainWindow(QMainWindow):
             self.set_file_encoding = selected_set_file_encoding
         self.max_multi_play_songs = dialog.selected_max_multi_play_songs()
         self.multi_play_limit_action = dialog.selected_multi_play_limit_action()
+        self.playlist_play_mode = dialog.selected_playlist_play_mode()
+        self.rapid_fire_play_mode = dialog.selected_rapid_fire_play_mode()
+        self.next_play_mode = dialog.selected_next_play_mode()
+        self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
+        self.candidate_error_action = dialog.selected_candidate_error_action()
         selected_timeline_mode = dialog.selected_timecode_timeline_mode()
         if selected_timeline_mode not in {"cue_region", "audio_file"}:
             selected_timeline_mode = dialog.selected_main_transport_timeline_mode()
@@ -4954,6 +5052,7 @@ class MainWindow(QMainWindow):
                 self.audio_output_device = selected_device
         self._apply_talk_state_volume(fade=True)
         self._update_talk_button_visual()
+        self._sync_playlist_shuffle_buttons()
         self._refresh_main_transport_display()
         self._refresh_timecode_panel()
         self._update_timecode_multiplay_warning_banner()
@@ -5447,25 +5546,43 @@ class MainWindow(QMainWindow):
             return self._api_success({"state": self._api_state()})
 
         if cmd == "rapidfire":
-            slot_index = self._random_unplayed_slot_on_current_page()
-            if slot_index is None:
-                return self._api_error("no_candidate", "No unplayed button is available on the current page.", status=409)
-            self._play_slot(slot_index)
-            key = (self._view_group_key(), self.current_page, slot_index)
-            return self._api_success({"button": self._api_slot_state(*key), "state": self._api_state()})
+            blocked: set[int] = set()
+            while True:
+                if self.rapid_fire_play_mode == "any_available":
+                    slot_index = self._random_available_slot_on_current_page(blocked=blocked)
+                else:
+                    slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
+                if slot_index is None:
+                    return self._api_error("no_candidate", "No playable button is available on the current page.", status=409)
+                if self._play_slot(slot_index):
+                    key = (self._view_group_key(), self.current_page, slot_index)
+                    return self._api_success({"button": self._api_slot_state(*key), "state": self._api_state()})
+                blocked.add(slot_index)
+                if self.candidate_error_action == "stop_playback":
+                    self._stop_playback()
+                    return self._api_error("audio_load_failed", "Playback stopped due to audio load error.", status=409)
 
         if cmd == "playnext":
             if not self._all_active_players():
                 return self._api_error("not_playing", "Cannot play next when nothing is currently playing.", status=409)
             playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-            if playlist_enabled:
-                next_slot = self._next_playlist_slot()
-            else:
-                next_slot = self._next_unplayed_slot_on_current_page()
-            if next_slot is None:
-                return self._api_error("no_next", "No next track is available (likely all played).", status=409)
-            self._play_slot(next_slot)
-            return self._api_success({"state": self._api_state()})
+            blocked: set[int] = set()
+            while True:
+                if playlist_enabled:
+                    next_slot = self._next_playlist_slot(for_auto_advance=False, blocked=blocked)
+                else:
+                    if self.next_play_mode == "any_available":
+                        next_slot = self._next_available_slot_on_current_page(blocked=blocked)
+                    else:
+                        next_slot = self._next_unplayed_slot_on_current_page(blocked=blocked)
+                if next_slot is None:
+                    return self._api_error("no_next", "No next track is available.", status=409)
+                if self._play_slot(next_slot):
+                    return self._api_success({"state": self._api_state()})
+                blocked.add(next_slot)
+                if self.candidate_error_action == "stop_playback":
+                    self._stop_playback()
+                    return self._api_error("audio_load_failed", "Playback stopped due to audio load error.", status=409)
 
         if cmd in {"talk", "playlist", "playlist_shuffle", "multiplay"}:
             mode = self._parse_api_mode(params.get("mode", ""))
@@ -6020,16 +6137,26 @@ class MainWindow(QMainWindow):
 
     def _play_next(self) -> None:
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-        if playlist_enabled:
-            next_slot = self._next_playlist_slot()
-        else:
-            next_slot = self._next_unplayed_slot_on_current_page()
-        if next_slot is None:
-            self._update_next_button_enabled()
-            return
-        self._play_slot(next_slot)
+        blocked: set[int] = set()
+        while True:
+            if playlist_enabled:
+                next_slot = self._next_playlist_slot(for_auto_advance=False, blocked=blocked)
+            else:
+                if self.next_play_mode == "any_available":
+                    next_slot = self._next_available_slot_on_current_page(blocked=blocked)
+                else:
+                    next_slot = self._next_unplayed_slot_on_current_page(blocked=blocked)
+            if next_slot is None:
+                self._update_next_button_enabled()
+                return
+            if self._play_slot(next_slot):
+                return
+            blocked.add(next_slot)
+            if self.candidate_error_action == "stop_playback":
+                self._stop_playback()
+                return
 
-    def _has_next_playlist_slot(self) -> bool:
+    def _has_next_playlist_slot(self, for_auto_advance: bool = False) -> bool:
         page = self._current_page_slots()
         if not page:
             return False
@@ -6040,32 +6167,77 @@ class MainWindow(QMainWindow):
         ]
         if not valid_slots:
             return False
+        current_idx: Optional[int] = None
+        if self.current_playing and self.current_playing[0] == self._view_group_key():
+            current_idx = self.current_playing[2]
+        if (
+            for_auto_advance
+            and self.loop_enabled
+            and self.playlist_loop_mode == "loop_single"
+            and current_idx is not None
+            and current_idx in valid_slots
+        ):
+            return True
+        if self.playlist_play_mode == "any_available":
+            if self.page_shuffle_enabled[self.current_group][self.current_page]:
+                if current_idx is not None and len(valid_slots) > 1:
+                    return any(idx != current_idx for idx in valid_slots)
+                return bool(valid_slots)
+            start = 0
+            if self.current_playlist_start is not None:
+                start = self.current_playlist_start
+            if current_idx is not None:
+                start = current_idx + 1
+            for idx in range(start, SLOTS_PER_PAGE):
+                if idx in valid_slots:
+                    return True
+            return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
         unplayed_slots = [idx for idx in valid_slots if not page[idx].played]
         if self.page_shuffle_enabled[self.current_group][self.current_page]:
             if unplayed_slots:
                 return True
-            return self.loop_enabled and bool(valid_slots)
+            return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
         start = 0
         if self.current_playlist_start is not None:
             start = self.current_playlist_start
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            start = self.current_playing[2] + 1
+        if current_idx is not None:
+            start = current_idx + 1
         for idx in range(start, SLOTS_PER_PAGE):
             if idx in unplayed_slots:
                 return True
-        return self.loop_enabled and bool(valid_slots)
+        return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
 
-    def _next_unplayed_slot_on_current_page(self) -> Optional[int]:
+    def _next_unplayed_slot_on_current_page(self, blocked: Optional[set[int]] = None) -> Optional[int]:
         page = self._current_page_slots()
         if not page:
             return None
+        blocked = blocked or set()
         start_slot = -1
         current_key = self._view_group_key()
         if self.current_playing and self.current_playing[0] == current_key and self.current_playing[1] == self.current_page:
             start_slot = self.current_playing[2]
         for idx in range(start_slot + 1, SLOTS_PER_PAGE):
             slot = page[idx]
+            if idx in blocked:
+                continue
             if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played:
+                return idx
+        return None
+
+    def _next_available_slot_on_current_page(self, blocked: Optional[set[int]] = None) -> Optional[int]:
+        page = self._current_page_slots()
+        if not page:
+            return None
+        blocked = blocked or set()
+        start_slot = -1
+        current_key = self._view_group_key()
+        if self.current_playing and self.current_playing[0] == current_key and self.current_playing[1] == self.current_page:
+            start_slot = self.current_playing[2]
+        for idx in range(start_slot + 1, SLOTS_PER_PAGE):
+            slot = page[idx]
+            if idx in blocked:
+                continue
+            if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
                 return idx
         return None
 
@@ -6081,30 +6253,47 @@ class MainWindow(QMainWindow):
                 return idx
         return None
 
-    def _next_playlist_slot(self) -> Optional[int]:
+    def _next_playlist_slot(self, for_auto_advance: bool = False, blocked: Optional[set[int]] = None) -> Optional[int]:
         page = self._current_page_slots()
         if not page:
             return None
+        blocked = blocked or set()
+        valid_slots = [
+            idx
+            for idx, slot in enumerate(page)
+            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and idx not in blocked
+        ]
+        if not valid_slots:
+            return None
+        current_idx: Optional[int] = None
+        if self.current_playing and self.current_playing[0] == self._view_group_key():
+            current_idx = self.current_playing[2]
+        if (
+            for_auto_advance
+            and self.loop_enabled
+            and self.playlist_loop_mode == "loop_single"
+            and current_idx is not None
+            and current_idx in valid_slots
+        ):
+            return current_idx
+        any_available = self.playlist_play_mode == "any_available"
         if self.page_shuffle_enabled[self.current_group][self.current_page]:
-            candidates = [
-                idx
-                for idx, slot in enumerate(page)
-                if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
-            ]
+            if any_available:
+                candidates = list(valid_slots)
+            else:
+                candidates = [idx for idx in valid_slots if not page[idx].played]
             if not candidates:
-                if self.loop_enabled:
+                if self.loop_enabled and self.playlist_loop_mode == "loop_list":
                     for slot in page:
                         slot.played = False
                         if slot.assigned:
                             slot.activity_code = "8"
                     self._set_dirty(True)
-                    candidates = [
-                        idx
-                        for idx, slot in enumerate(page)
-                        if slot.assigned and not slot.marker and not slot.locked and not slot.missing
-                    ]
+                    candidates = list(valid_slots)
                 else:
                     return None
+            if current_idx is not None and len(candidates) > 1 and current_idx in candidates:
+                candidates = [idx for idx in candidates if idx != current_idx]
             if not candidates:
                 return None
             return random.choice(candidates)
@@ -6112,41 +6301,65 @@ class MainWindow(QMainWindow):
         start = 0
         if self.current_playlist_start is not None:
             start = self.current_playlist_start
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            start = self.current_playing[2] + 1
+        if current_idx is not None:
+            start = current_idx + 1
 
         for idx in range(start, SLOTS_PER_PAGE):
             slot = page[idx]
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played:
+            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and (any_available or (not slot.played)):
                 return idx
-        if self.loop_enabled:
-            for slot in page:
-                slot.played = False
-                if slot.assigned:
-                    slot.activity_code = "8"
-            self._set_dirty(True)
+        if self.loop_enabled and self.playlist_loop_mode == "loop_list":
+            if not any_available:
+                for slot in page:
+                    slot.played = False
+                    if slot.assigned:
+                        slot.activity_code = "8"
+                self._set_dirty(True)
             for idx in range(0, SLOTS_PER_PAGE):
                 slot = page[idx]
                 if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
                     return idx
         return None
 
-    def _random_unplayed_slot_on_current_page(self) -> Optional[int]:
+    def _random_unplayed_slot_on_current_page(self, blocked: Optional[set[int]] = None) -> Optional[int]:
         page = self._current_page_slots()
+        blocked = blocked or set()
         candidates = [
             idx
             for idx, slot in enumerate(page)
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
+            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
+        ]
+        if not candidates:
+            return None
+        return random.choice(candidates)
+
+    def _random_available_slot_on_current_page(self, blocked: Optional[set[int]] = None) -> Optional[int]:
+        page = self._current_page_slots()
+        blocked = blocked or set()
+        candidates = [
+            idx
+            for idx, slot in enumerate(page)
+            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing
         ]
         if not candidates:
             return None
         return random.choice(candidates)
 
     def _on_rapid_fire_clicked(self, _checked: bool = False) -> None:
-        slot_index = self._random_unplayed_slot_on_current_page()
-        if slot_index is None:
-            return
-        self._play_slot(slot_index)
+        blocked: set[int] = set()
+        while True:
+            if self.rapid_fire_play_mode == "any_available":
+                slot_index = self._random_available_slot_on_current_page(blocked=blocked)
+            else:
+                slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
+            if slot_index is None:
+                return
+            if self._play_slot(slot_index):
+                return
+            blocked.add(slot_index)
+            if self.candidate_error_action == "stop_playback":
+                self._stop_playback()
+                return
 
     def _toggle_loop(self, checked: bool) -> None:
         self.loop_enabled = checked
@@ -6493,8 +6706,7 @@ class MainWindow(QMainWindow):
         self.settings.last_save_dir = os.path.dirname(file_path)
         self.settings.last_open_dir = os.path.dirname(file_path)
         self._save_settings()
-        if self.show_file_notifications:
-            QMessageBox.information(self, "Set Saved", f"Saved set file:\n{file_path}")
+        self._show_save_notice_banner(f"Set Saved: {file_path}")
 
     def _load_set(self, file_path: str, show_message: bool = True, restore_last_position: bool = False) -> None:
         try:
@@ -6614,6 +6826,11 @@ class MainWindow(QMainWindow):
         self.settings.audio_output_device = self.audio_output_device
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
+        self.settings.playlist_play_mode = self.playlist_play_mode
+        self.settings.rapid_fire_play_mode = self.rapid_fire_play_mode
+        self.settings.next_play_mode = self.next_play_mode
+        self.settings.playlist_loop_mode = self.playlist_loop_mode
+        self.settings.candidate_error_action = self.candidate_error_action
         self.settings.web_remote_enabled = self.web_remote_enabled
         self.settings.web_remote_port = self.web_remote_port
         self.settings.timecode_audio_output_device = self.timecode_audio_output_device

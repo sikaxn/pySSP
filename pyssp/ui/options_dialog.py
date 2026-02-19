@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QColorDialog,
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -162,6 +164,11 @@ class OptionsDialog(QDialog):
         "fade_out_end_lead_sec": 2.0,
         "max_multi_play_songs": 5,
         "multi_play_limit_action": "stop_oldest",
+        "playlist_play_mode": "unplayed_only",
+        "rapid_fire_play_mode": "unplayed_only",
+        "next_play_mode": "unplayed_only",
+        "playlist_loop_mode": "loop_list",
+        "candidate_error_action": "stop_playback",
         "main_transport_timeline_mode": "cue_region",
         "main_jog_outside_cue_action": "stop_immediately",
         "talk_volume_level": 30,
@@ -267,6 +274,11 @@ class OptionsDialog(QDialog):
         timecode_timeline_mode: str,
         max_multi_play_songs: int,
         multi_play_limit_action: str,
+        playlist_play_mode: str,
+        rapid_fire_play_mode: str,
+        next_play_mode: str,
+        playlist_loop_mode: str,
+        candidate_error_action: str,
         web_remote_enabled: bool,
         web_remote_port: int,
         web_remote_url: str,
@@ -377,6 +389,11 @@ class OptionsDialog(QDialog):
             self._build_playback_page(
                 max_multi_play_songs=max_multi_play_songs,
                 multi_play_limit_action=multi_play_limit_action,
+                playlist_play_mode=playlist_play_mode,
+                rapid_fire_play_mode=rapid_fire_play_mode,
+                next_play_mode=next_play_mode,
+                playlist_loop_mode=playlist_loop_mode,
+                candidate_error_action=candidate_error_action,
                 main_transport_timeline_mode=main_transport_timeline_mode,
                 main_jog_outside_cue_action=main_jog_outside_cue_action,
             ),
@@ -528,10 +545,6 @@ class OptionsDialog(QDialog):
         self.title_limit_spin.setRange(8, 80)
         self.title_limit_spin.setValue(title_char_limit)
         form.addRow("Button Title Max Chars:", self.title_limit_spin)
-
-        self.notifications_checkbox = QCheckBox("Show set load/save popup messages")
-        self.notifications_checkbox.setChecked(show_file_notifications)
-        form.addRow("Notifications:", self.notifications_checkbox)
 
         self.log_file_checkbox = QCheckBox("Enable playback log file (SportsSoundsProLog.txt)")
         self.log_file_checkbox.setChecked(log_file_enabled)
@@ -864,6 +877,11 @@ class OptionsDialog(QDialog):
         self,
         max_multi_play_songs: int,
         multi_play_limit_action: str,
+        playlist_play_mode: str,
+        rapid_fire_play_mode: str,
+        next_play_mode: str,
+        playlist_loop_mode: str,
+        candidate_error_action: str,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
     ) -> QWidget:
@@ -888,6 +906,77 @@ class OptionsDialog(QDialog):
         limit_layout.addWidget(self.multi_play_disallow_radio)
         limit_layout.addWidget(self.multi_play_stop_oldest_radio)
         layout.addWidget(limit_group)
+
+        mode_matrix_group = QGroupBox("Playback Candidate Rules:")
+        mode_matrix_layout = QGridLayout(mode_matrix_group)
+        mode_matrix_layout.addWidget(QLabel("Control"), 0, 0)
+        mode_matrix_layout.addWidget(QLabel("Play unplayed only"), 0, 1)
+        mode_matrix_layout.addWidget(QLabel("Play any (ignore red) available"), 0, 2)
+
+        self.playlist_mode_unplayed_radio = QRadioButton("")
+        self.playlist_mode_any_radio = QRadioButton("")
+        self.playlist_mode_group = QButtonGroup(self)
+        self.playlist_mode_group.addButton(self.playlist_mode_unplayed_radio)
+        self.playlist_mode_group.addButton(self.playlist_mode_any_radio)
+        if playlist_play_mode == "any_available":
+            self.playlist_mode_any_radio.setChecked(True)
+        else:
+            self.playlist_mode_unplayed_radio.setChecked(True)
+        mode_matrix_layout.addWidget(self.playlist_mode_unplayed_radio, 1, 1)
+        mode_matrix_layout.addWidget(self.playlist_mode_any_radio, 1, 2)
+
+        self.rapid_fire_mode_unplayed_radio = QRadioButton("")
+        self.rapid_fire_mode_any_radio = QRadioButton("")
+        self.rapid_fire_mode_group = QButtonGroup(self)
+        self.rapid_fire_mode_group.addButton(self.rapid_fire_mode_unplayed_radio)
+        self.rapid_fire_mode_group.addButton(self.rapid_fire_mode_any_radio)
+        if rapid_fire_play_mode == "any_available":
+            self.rapid_fire_mode_any_radio.setChecked(True)
+        else:
+            self.rapid_fire_mode_unplayed_radio.setChecked(True)
+        mode_matrix_layout.addWidget(self.rapid_fire_mode_unplayed_radio, 2, 1)
+        mode_matrix_layout.addWidget(self.rapid_fire_mode_any_radio, 2, 2)
+
+        self.next_mode_unplayed_radio = QRadioButton("")
+        self.next_mode_any_radio = QRadioButton("")
+        self.next_mode_group = QButtonGroup(self)
+        self.next_mode_group.addButton(self.next_mode_unplayed_radio)
+        self.next_mode_group.addButton(self.next_mode_any_radio)
+        if next_play_mode == "any_available":
+            self.next_mode_any_radio.setChecked(True)
+        else:
+            self.next_mode_unplayed_radio.setChecked(True)
+        mode_matrix_layout.addWidget(self.next_mode_unplayed_radio, 3, 1)
+        mode_matrix_layout.addWidget(self.next_mode_any_radio, 3, 2)
+
+        mode_matrix_layout.addWidget(QLabel("Play List"), 1, 0)
+        mode_matrix_layout.addWidget(QLabel("Rapid Fire"), 2, 0)
+        mode_matrix_layout.addWidget(QLabel("Next"), 3, 0)
+        layout.addWidget(mode_matrix_group)
+
+        playlist_loop_group = QGroupBox("When Loop is enabled in Play List:")
+        playlist_loop_layout = QVBoxLayout(playlist_loop_group)
+        self.playlist_loop_list_radio = QRadioButton("Loop List")
+        self.playlist_loop_single_radio = QRadioButton("Loop Single")
+        if playlist_loop_mode == "loop_single":
+            self.playlist_loop_single_radio.setChecked(True)
+        else:
+            self.playlist_loop_list_radio.setChecked(True)
+        playlist_loop_layout.addWidget(self.playlist_loop_list_radio)
+        playlist_loop_layout.addWidget(self.playlist_loop_single_radio)
+        layout.addWidget(playlist_loop_group)
+
+        candidate_error_group = QGroupBox("When Play List/Next/Rapid Fire hits audio load error (purple):")
+        candidate_error_layout = QVBoxLayout(candidate_error_group)
+        self.candidate_error_stop_radio = QRadioButton("Stop playback")
+        self.candidate_error_keep_radio = QRadioButton("Keep playing")
+        if candidate_error_action == "keep_playing":
+            self.candidate_error_keep_radio.setChecked(True)
+        else:
+            self.candidate_error_stop_radio.setChecked(True)
+        candidate_error_layout.addWidget(self.candidate_error_stop_radio)
+        candidate_error_layout.addWidget(self.candidate_error_keep_radio)
+        layout.addWidget(candidate_error_group)
 
         cue_group = QGroupBox("Main Player Timeline / Jog Display:")
         cue_layout = QVBoxLayout(cue_group)
@@ -1198,6 +1287,31 @@ class OptionsDialog(QDialog):
             return "disallow_more_play"
         return "stop_oldest"
 
+    def selected_playlist_play_mode(self) -> str:
+        if self.playlist_mode_any_radio.isChecked():
+            return "any_available"
+        return "unplayed_only"
+
+    def selected_rapid_fire_play_mode(self) -> str:
+        if self.rapid_fire_mode_any_radio.isChecked():
+            return "any_available"
+        return "unplayed_only"
+
+    def selected_next_play_mode(self) -> str:
+        if self.next_mode_any_radio.isChecked():
+            return "any_available"
+        return "unplayed_only"
+
+    def selected_playlist_loop_mode(self) -> str:
+        if self.playlist_loop_single_radio.isChecked():
+            return "loop_single"
+        return "loop_list"
+
+    def selected_candidate_error_action(self) -> str:
+        if self.candidate_error_keep_radio.isChecked():
+            return "keep_playing"
+        return "stop_playback"
+
     def selected_main_transport_timeline_mode(self) -> str:
         if self.cue_timeline_audio_file_radio.isChecked():
             return "audio_file"
@@ -1396,7 +1510,6 @@ class OptionsDialog(QDialog):
     def _restore_general_defaults(self) -> None:
         d = self._DEFAULTS
         self.title_limit_spin.setValue(int(d["title_char_limit"]))
-        self.notifications_checkbox.setChecked(bool(d["show_file_notifications"]))
         self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
         self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
         if str(d["set_file_encoding"]).strip().lower() == "gbk":
@@ -1557,6 +1670,26 @@ class OptionsDialog(QDialog):
             self.multi_play_disallow_radio.setChecked(True)
         else:
             self.multi_play_stop_oldest_radio.setChecked(True)
+        if str(d["playlist_play_mode"]) == "any_available":
+            self.playlist_mode_any_radio.setChecked(True)
+        else:
+            self.playlist_mode_unplayed_radio.setChecked(True)
+        if str(d["rapid_fire_play_mode"]) == "any_available":
+            self.rapid_fire_mode_any_radio.setChecked(True)
+        else:
+            self.rapid_fire_mode_unplayed_radio.setChecked(True)
+        if str(d["next_play_mode"]) == "any_available":
+            self.next_mode_any_radio.setChecked(True)
+        else:
+            self.next_mode_unplayed_radio.setChecked(True)
+        if str(d["playlist_loop_mode"]) == "loop_single":
+            self.playlist_loop_single_radio.setChecked(True)
+        else:
+            self.playlist_loop_list_radio.setChecked(True)
+        if str(d["candidate_error_action"]) == "keep_playing":
+            self.candidate_error_keep_radio.setChecked(True)
+        else:
+            self.candidate_error_stop_radio.setChecked(True)
         if d["main_transport_timeline_mode"] == "audio_file":
             self.cue_timeline_audio_file_radio.setChecked(True)
         else:

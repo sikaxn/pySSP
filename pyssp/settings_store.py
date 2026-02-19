@@ -65,6 +65,11 @@ class AppSettings:
     audio_output_device: str = ""
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
+    playlist_play_mode: str = "unplayed_only"
+    rapid_fire_play_mode: str = "unplayed_only"
+    next_play_mode: str = "unplayed_only"
+    playlist_loop_mode: str = "loop_list"
+    candidate_error_action: str = "stop_playback"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
     timecode_audio_output_device: str = "none"
@@ -217,6 +222,11 @@ def save_settings(settings: AppSettings) -> None:
         "audio_output_device": settings.audio_output_device,
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
+        "playlist_play_mode": settings.playlist_play_mode,
+        "rapid_fire_play_mode": settings.rapid_fire_play_mode,
+        "next_play_mode": settings.next_play_mode,
+        "playlist_loop_mode": settings.playlist_loop_mode,
+        "candidate_error_action": settings.candidate_error_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
@@ -348,6 +358,21 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
+    playlist_play_mode = str(section.get("playlist_play_mode", "unplayed_only")).strip().lower()
+    if playlist_play_mode not in {"unplayed_only", "any_available"}:
+        playlist_play_mode = "unplayed_only"
+    rapid_fire_play_mode = str(section.get("rapid_fire_play_mode", "unplayed_only")).strip().lower()
+    if rapid_fire_play_mode not in {"unplayed_only", "any_available"}:
+        rapid_fire_play_mode = "unplayed_only"
+    next_play_mode = str(section.get("next_play_mode", "unplayed_only")).strip().lower()
+    if next_play_mode not in {"unplayed_only", "any_available"}:
+        next_play_mode = "unplayed_only"
+    playlist_loop_mode = str(section.get("playlist_loop_mode", "loop_list")).strip().lower()
+    if playlist_loop_mode not in {"loop_list", "loop_single"}:
+        playlist_loop_mode = "loop_list"
+    candidate_error_action = str(section.get("candidate_error_action", "stop_playback")).strip().lower()
+    if candidate_error_action not in {"stop_playback", "keep_playing"}:
+        candidate_error_action = "stop_playback"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
@@ -427,6 +452,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         audio_output_device=str(section.get("audio_output_device", "")),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,
+        playlist_play_mode=playlist_play_mode,
+        rapid_fire_play_mode=rapid_fire_play_mode,
+        next_play_mode=next_play_mode,
+        playlist_loop_mode=playlist_loop_mode,
+        candidate_error_action=candidate_error_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
         timecode_audio_output_device=timecode_audio_output_device,

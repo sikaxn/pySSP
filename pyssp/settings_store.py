@@ -81,6 +81,7 @@ class AppSettings:
     timecode_sample_rate: int = 48000
     timecode_bit_depth: int = 16
     show_timecode_panel: bool = False
+    timecode_timeline_mode: str = "cue_region"
     main_transport_timeline_mode: str = "cue_region"
     main_jog_outside_cue_action: str = "stop_immediately"
     color_empty: str = "#0B868A"
@@ -238,6 +239,7 @@ def save_settings(settings: AppSettings) -> None:
         "timecode_sample_rate": str(settings.timecode_sample_rate),
         "timecode_bit_depth": str(settings.timecode_bit_depth),
         "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
+        "timecode_timeline_mode": settings.timecode_timeline_mode,
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
         "main_jog_outside_cue_action": settings.main_jog_outside_cue_action,
         "color_empty": settings.color_empty,
@@ -390,6 +392,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     timecode_bit_depth = _clamp_int(_get_int(section, "timecode_bit_depth", 16), 8, 32)
     if timecode_bit_depth not in {8, 16, 32}:
         timecode_bit_depth = 16
+    timecode_timeline_mode_raw = str(
+        section.get("timecode_timeline_mode", section.get("main_transport_timeline_mode", "cue_region"))
+    ).strip().lower()
+    if timecode_timeline_mode_raw not in {"cue_region", "audio_file"}:
+        timecode_timeline_mode_raw = "cue_region"
     timeline_mode_raw = str(
         section.get("main_transport_timeline_mode", section.get("cue_editor_timeline_mode", "cue_region"))
     ).strip().lower()
@@ -468,6 +475,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         timecode_sample_rate=timecode_sample_rate,
         timecode_bit_depth=timecode_bit_depth,
         show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
+        timecode_timeline_mode=timecode_timeline_mode_raw,
         main_transport_timeline_mode=timeline_mode_raw,
         main_jog_outside_cue_action=outside_action,
         color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),

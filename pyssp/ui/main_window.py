@@ -705,6 +705,13 @@ class MainWindow(QMainWindow):
         if self.timecode_bit_depth not in {8, 16, 32}:
             self.timecode_bit_depth = 16
         self.show_timecode_panel = bool(self.settings.show_timecode_panel)
+        self.timecode_timeline_mode = (
+            self.settings.timecode_timeline_mode
+            if self.settings.timecode_timeline_mode in {"cue_region", "audio_file"}
+            else self.settings.main_transport_timeline_mode
+        )
+        if self.timecode_timeline_mode not in {"cue_region", "audio_file"}:
+            self.timecode_timeline_mode = "cue_region"
         self.main_transport_timeline_mode = (
             self.settings.main_transport_timeline_mode
             if self.settings.main_transport_timeline_mode in {"cue_region", "audio_file"}
@@ -1164,7 +1171,7 @@ class MainWindow(QMainWindow):
 
     def _timecode_display_ms_from_absolute(self, absolute_ms: int) -> int:
         absolute = max(0, int(absolute_ms))
-        if self.main_transport_timeline_mode == "audio_file":
+        if self.timecode_timeline_mode == "audio_file":
             return absolute
         if self.current_playing is None:
             return absolute
@@ -1317,12 +1324,12 @@ class MainWindow(QMainWindow):
         elif self.timecode_mode == TIMECODE_MODE_SYSTEM:
             mode_text = "System Time"
         elif self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
-            if self.main_transport_timeline_mode == "audio_file":
+            if self.timecode_timeline_mode == "audio_file":
                 mode_text = "Freeze Timecode (relative to actual audio file)"
             else:
                 mode_text = "Freeze Timecode (relative to cue set point)"
         else:
-            if self.main_transport_timeline_mode == "audio_file":
+            if self.timecode_timeline_mode == "audio_file":
                 mode_text = "Follow Media/Audio Player (relative to actual audio file)"
             else:
                 mode_text = "Follow Media/Audio Player (relative to cue set point)"
@@ -4945,7 +4952,7 @@ class MainWindow(QMainWindow):
             timecode_mtc_idle_behavior=self.timecode_mtc_idle_behavior,
             timecode_sample_rate=self.timecode_sample_rate,
             timecode_bit_depth=self.timecode_bit_depth,
-            timecode_timeline_mode=self.main_transport_timeline_mode,
+            timecode_timeline_mode=self.timecode_timeline_mode,
             max_multi_play_songs=self.max_multi_play_songs,
             multi_play_limit_action=self.multi_play_limit_action,
             playlist_play_mode=self.playlist_play_mode,
@@ -5018,11 +5025,9 @@ class MainWindow(QMainWindow):
         self.next_play_mode = dialog.selected_next_play_mode()
         self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
         self.candidate_error_action = dialog.selected_candidate_error_action()
-        selected_timeline_mode = dialog.selected_timecode_timeline_mode()
-        if selected_timeline_mode not in {"cue_region", "audio_file"}:
-            selected_timeline_mode = dialog.selected_main_transport_timeline_mode()
-        self.main_transport_timeline_mode = selected_timeline_mode
+        self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
         self.main_jog_outside_cue_action = dialog.selected_main_jog_outside_cue_action()
+        self.timecode_timeline_mode = dialog.selected_timecode_timeline_mode()
         self.timecode_audio_output_device = dialog.selected_timecode_audio_output_device()
         self.timecode_midi_output_device = dialog.selected_timecode_midi_output_device()
         selected_timecode_mode = dialog.selected_timecode_mode()
@@ -6935,6 +6940,7 @@ class MainWindow(QMainWindow):
         self.settings.timecode_sample_rate = self.timecode_sample_rate
         self.settings.timecode_bit_depth = self.timecode_bit_depth
         self.settings.show_timecode_panel = bool(self.show_timecode_panel)
+        self.settings.timecode_timeline_mode = self.timecode_timeline_mode
         self.settings.main_transport_timeline_mode = self.main_transport_timeline_mode
         self.settings.main_jog_outside_cue_action = self.main_jog_outside_cue_action
         self.settings.color_empty = self.state_colors["empty"]

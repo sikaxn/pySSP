@@ -188,7 +188,8 @@ def configure_audio_preload_cache(enabled: bool, memory_limit_mb: int) -> None:
 
 def configure_audio_preload_cache_policy(enabled: bool, memory_limit_mb: int, pressure_enabled: bool) -> None:
     global _PRELOAD_ENABLED, _PRELOAD_LIMIT_BYTES, _PRELOAD_CACHE_BYTES, _PRELOAD_PRESSURE_ENABLED, _PRELOAD_PAUSED
-    limit_mb = max(64, min(8192, int(memory_limit_mb)))
+    _total_mb, _reserve_mb, max_limit_mb = get_preload_memory_limits_mb()
+    limit_mb = max(64, min(int(max_limit_mb), int(memory_limit_mb)))
     with _PRELOAD_LOCK:
         _PRELOAD_ENABLED = bool(enabled)
         _PRELOAD_LIMIT_BYTES = limit_mb * 1024 * 1024
@@ -239,16 +240,42 @@ def get_audio_preload_runtime_status() -> Tuple[bool, int]:
         return bool(_PRELOAD_ENABLED), int(active)
 
 
-def request_audio_preload(file_paths: List[str]) -> None:
+def is_audio_preloaded(file_path: str) -> bool:
+    path = _normalize_cache_key(file_path)
+    if not path:
+        return False
+    with _PRELOAD_LOCK:
+        return path in _PRELOAD_CACHE
+
+
+def request_audio_preload(file_paths: List[str], prioritize: bool = False) -> None:
     with _PRELOAD_LOCK:
         if (not _PRELOAD_ENABLED) or _PRELOAD_PAUSED:
             return
+    normalized: List[str] = []
+    wanted: set[str] = set()
     for raw_path in file_paths:
         path = _normalize_cache_key(raw_path)
         if not path:
             continue
         if not os.path.exists(path):
             continue
+        if path in wanted:
+            continue
+        wanted.add(path)
+        normalized.append(path)
+    if prioritize:
+        with _PRELOAD_LOCK:
+            for task_path, future in list(_PRELOAD_TASKS.items()):
+                if task_path in wanted:
+                    continue
+                try:
+                    if not future.done():
+                        future.cancel()
+                except Exception:
+                    pass
+                _PRELOAD_TASKS.pop(task_path, None)
+    for path in normalized:
         with _PRELOAD_LOCK:
             cached = _PRELOAD_CACHE.get(path)
             if cached is not None:

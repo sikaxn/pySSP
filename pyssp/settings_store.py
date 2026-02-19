@@ -367,7 +367,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if ui_language not in {"en", "zh", "zh_cn", "zh-cn"}:
         ui_language = "en"
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
-    preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 8192)
+    preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"

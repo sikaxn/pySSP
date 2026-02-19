@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -53,6 +53,7 @@ from pyssp.audio_engine import (
     get_audio_preload_runtime_status,
     get_preload_memory_limits_mb,
     get_media_ssp_units,
+    is_audio_preloaded,
     list_output_devices,
     request_audio_preload,
     set_audio_preload_paused,
@@ -216,6 +217,7 @@ class SoundButton(QPushButton):
         self._host = host
         self.slot_index = slot_index
         self._drag_start_pos = None
+        self._ram_loaded = False
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMinimumSize(0, 0)
         self.setStyleSheet("font-size: 10pt; font-weight: bold;")
@@ -266,6 +268,27 @@ class SoundButton(QPushButton):
     def leaveEvent(self, event) -> None:
         self._host._on_sound_button_hover(None)
         super().leaveEvent(event)
+
+    def set_ram_loaded(self, loaded: bool) -> None:
+        loaded_flag = bool(loaded)
+        if loaded_flag == self._ram_loaded:
+            return
+        self._ram_loaded = loaded_flag
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if not self._ram_loaded:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#2ED573"))
+        d = 8
+        x = max(2, self.width() - d - 3)
+        y = max(2, self.height() - d - 3)
+        p.drawEllipse(x, y, d, d)
+        p.end()
 
 
 class GroupButton(QPushButton):
@@ -663,11 +686,12 @@ class MainWindow(QMainWindow):
         if self.set_file_encoding not in {"utf8", "gbk"}:
             self.set_file_encoding = "utf8"
         self.audio_output_device = self.settings.audio_output_device
+        _preload_total_mb, _preload_reserved_mb, _preload_cap_mb = get_preload_memory_limits_mb()
         self.preload_audio_enabled = bool(getattr(self.settings, "preload_audio_enabled", False))
         self.preload_current_page_audio = bool(getattr(self.settings, "preload_current_page_audio", True))
         self.preload_audio_memory_limit_mb = max(
             64,
-            min(8192, int(getattr(self.settings, "preload_audio_memory_limit_mb", 512))),
+            min(int(_preload_cap_mb), int(getattr(self.settings, "preload_audio_memory_limit_mb", 512))),
         )
         self.preload_memory_pressure_enabled = bool(
             getattr(self.settings, "preload_memory_pressure_enabled", True)
@@ -3062,6 +3086,7 @@ class MainWindow(QMainWindow):
         )
         for i, button in enumerate(self.sound_buttons):
             slot = page[i]
+            button.set_ram_loaded(False)
             if slot.marker:
                 button.setText(elide_text(slot.title, self.title_char_limit))
                 button.setToolTip("")
@@ -3069,6 +3094,7 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
+                button.set_ram_loaded(is_audio_preloaded(slot.file_path))
                 has_cue = self._slot_has_custom_cue(slot)
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:
@@ -4467,6 +4493,7 @@ class MainWindow(QMainWindow):
 
     def _tick_preload_status_icon(self) -> None:
         enabled, active_jobs = get_audio_preload_runtime_status()
+        self._refresh_current_page_ram_loaded_indicators()
         if (not enabled) or active_jobs <= 0:
             self._preload_icon_blink_on = False
             self.preload_status_icon.setStyleSheet(
@@ -4587,7 +4614,19 @@ class MainWindow(QMainWindow):
                 continue
             paths.append(path)
         if paths:
-            request_audio_preload(paths)
+            request_audio_preload(paths, prioritize=True)
+
+    def _refresh_current_page_ram_loaded_indicators(self) -> None:
+        page = self._current_page_slots()
+        for i, button in enumerate(self.sound_buttons):
+            if i >= len(page):
+                button.set_ram_loaded(False)
+                continue
+            slot = page[i]
+            if slot.assigned and not slot.marker:
+                button.set_ram_loaded(is_audio_preloaded(slot.file_path))
+            else:
+                button.set_ram_loaded(False)
 
     def _sync_preload_pause_state(self, playback_active: bool) -> None:
         should_pause = bool(self.preload_pause_on_playback and playback_active)

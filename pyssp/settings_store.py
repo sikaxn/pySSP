@@ -63,6 +63,11 @@ class AppSettings:
     set_file_encoding: str = "utf8"
     ui_language: str = "en"
     audio_output_device: str = ""
+    preload_audio_enabled: bool = False
+    preload_current_page_audio: bool = True
+    preload_audio_memory_limit_mb: int = 512
+    preload_memory_pressure_enabled: bool = True
+    preload_pause_on_playback: bool = False
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
     playlist_play_mode: str = "unplayed_only"
@@ -221,6 +226,11 @@ def save_settings(settings: AppSettings) -> None:
         "set_file_encoding": settings.set_file_encoding,
         "ui_language": settings.ui_language,
         "audio_output_device": settings.audio_output_device,
+        "preload_audio_enabled": "1" if settings.preload_audio_enabled else "0",
+        "preload_current_page_audio": "1" if settings.preload_current_page_audio else "0",
+        "preload_audio_memory_limit_mb": str(settings.preload_audio_memory_limit_mb),
+        "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
+        "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
         "playlist_play_mode": settings.playlist_play_mode,
@@ -357,6 +367,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if ui_language not in {"en", "zh", "zh_cn", "zh-cn"}:
         ui_language = "en"
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
+    preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 8192)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
@@ -457,6 +468,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         set_file_encoding=set_file_encoding,
         ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
         audio_output_device=str(section.get("audio_output_device", "")),
+        preload_audio_enabled=_get_bool(section, "preload_audio_enabled", False),
+        preload_current_page_audio=_get_bool(section, "preload_current_page_audio", True),
+        preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
+        preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
+        preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", False),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,
         playlist_play_mode=playlist_play_mode,

@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QRadioButton,
     QLineEdit,
     QScrollArea,
+    QSlider,
     QSpacerItem,
     QSpinBox,
     QStackedWidget,
@@ -152,6 +153,11 @@ class OptionsDialog(QDialog):
         "search_double_click_action": "find_highlight",
         "set_file_encoding": "utf8",
         "ui_language": "en",
+        "preload_audio_enabled": False,
+        "preload_current_page_audio": True,
+        "preload_audio_memory_limit_mb": 512,
+        "preload_memory_pressure_enabled": True,
+        "preload_pause_on_playback": False,
         "fade_in_sec": 1.0,
         "cross_fade_sec": 1.0,
         "fade_out_sec": 1.0,
@@ -263,6 +269,13 @@ class OptionsDialog(QDialog):
         audio_output_device: str,
         available_audio_devices: List[str],
         available_midi_devices: List[tuple[str, str]],
+        preload_audio_enabled: bool,
+        preload_current_page_audio: bool,
+        preload_audio_memory_limit_mb: int,
+        preload_memory_pressure_enabled: bool,
+        preload_pause_on_playback: bool,
+        preload_total_ram_mb: int,
+        preload_ram_cap_mb: int,
         timecode_audio_output_device: str,
         timecode_midi_output_device: str,
         timecode_mode: str,
@@ -417,6 +430,19 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
+            "Audio Preload",
+            self._mono_icon("ram"),
+            self._build_audio_preload_page(
+                preload_audio_enabled=preload_audio_enabled,
+                preload_current_page_audio=preload_current_page_audio,
+                preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
+                preload_memory_pressure_enabled=preload_memory_pressure_enabled,
+                preload_pause_on_playback=preload_pause_on_playback,
+                preload_total_ram_mb=preload_total_ram_mb,
+                preload_ram_cap_mb=preload_ram_cap_mb,
+            ),
+        )
+        self._add_page(
             "Talk",
             self._mono_icon("mic"),
             self._build_talk_page(
@@ -516,6 +542,13 @@ class OptionsDialog(QDialog):
             p.drawArc(QRectF(7, 11, 8, 8), 35 * 16, 110 * 16)
             p.drawArc(QRectF(5, 9, 12, 12), 35 * 16, 110 * 16)
             p.drawArc(QRectF(3, 7, 16, 16), 35 * 16, 110 * 16)
+        elif kind == "ram":
+            p.drawRoundedRect(QRectF(4, 6, 14, 10), 1.5, 1.5)
+            p.drawLine(6, 9, 16, 9)
+            p.drawLine(6, 12, 16, 12)
+            for x in [5, 8, 11, 14, 17]:
+                p.drawLine(x, 4, x, 6)
+                p.drawLine(x, 16, x, 18)
         elif kind == "earth":
             p.drawEllipse(QRectF(3, 3, 16, 16))
             p.drawArc(QRectF(5, 3, 12, 16), 90 * 16, 180 * 16)
@@ -1134,6 +1167,77 @@ class OptionsDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_audio_preload_page(
+        self,
+        preload_audio_enabled: bool,
+        preload_current_page_audio: bool,
+        preload_audio_memory_limit_mb: int,
+        preload_memory_pressure_enabled: bool,
+        preload_pause_on_playback: bool,
+        preload_total_ram_mb: int,
+        preload_ram_cap_mb: int,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self._preload_slider_step_mb = 128
+        total_mb = max(512, int(preload_total_ram_mb))
+        cap_mb = max(128, min(int(preload_ram_cap_mb), total_mb))
+        cap_steps = max(1, cap_mb // self._preload_slider_step_mb)
+        cap_mb = cap_steps * self._preload_slider_step_mb
+        selected_mb = max(128, min(int(preload_audio_memory_limit_mb), cap_mb))
+        selected_steps = max(1, selected_mb // self._preload_slider_step_mb)
+        selected_mb = selected_steps * self._preload_slider_step_mb
+        reserve_mb = max(128, int(total_mb - cap_mb))
+        self._preload_ram_cap_mb = cap_mb
+
+        options_group = QGroupBox("Behavior")
+        options_form = QFormLayout(options_group)
+        self.preload_audio_enabled_checkbox = QCheckBox("Enable audio preload cache")
+        self.preload_audio_enabled_checkbox.setChecked(bool(preload_audio_enabled))
+        options_form.addRow(self.preload_audio_enabled_checkbox)
+
+        self.preload_current_page_checkbox = QCheckBox("Preload current page first")
+        self.preload_current_page_checkbox.setChecked(bool(preload_current_page_audio))
+        options_form.addRow(self.preload_current_page_checkbox)
+
+        self.preload_memory_pressure_checkbox = QCheckBox("Auto-free cache when other apps use RAM (FIFO)")
+        self.preload_memory_pressure_checkbox.setChecked(bool(preload_memory_pressure_enabled))
+        options_form.addRow(self.preload_memory_pressure_checkbox)
+        self.preload_pause_on_playback_checkbox = QCheckBox("Pause audio preload during playback")
+        self.preload_pause_on_playback_checkbox.setChecked(bool(preload_pause_on_playback))
+        options_form.addRow(self.preload_pause_on_playback_checkbox)
+        layout.addWidget(options_group)
+
+        ram_group = QGroupBox("RAM Limit")
+        ram_layout = QVBoxLayout(ram_group)
+        self.preload_ram_info_label = QLabel(
+            f"System RAM: {total_mb} MB | Reserved: {reserve_mb} MB | Max Cache Limit: {cap_mb} MB"
+        )
+        self.preload_ram_info_label.setWordWrap(True)
+        ram_layout.addWidget(self.preload_ram_info_label)
+
+        self.preload_memory_slider = QSlider(Qt.Horizontal)
+        self.preload_memory_slider.setRange(1, cap_steps)
+        self.preload_memory_slider.setSingleStep(1)
+        self.preload_memory_slider.setPageStep(1)
+        self.preload_memory_slider.setValue(selected_steps)
+        self.preload_memory_slider.valueChanged.connect(self._update_preload_slider_label)
+        ram_layout.addWidget(self.preload_memory_slider)
+
+        self.preload_memory_value_label = QLabel("")
+        ram_layout.addWidget(self.preload_memory_value_label)
+        self._update_preload_slider_label()
+        layout.addWidget(ram_group)
+
+        layout.addStretch(1)
+        return page
+
+    def _update_preload_slider_label(self) -> None:
+        value = int(self.preload_memory_slider.value())
+        selected_mb = value * int(self._preload_slider_step_mb)
+        self.preload_memory_value_label.setText(f"Selected Cache Limit: {selected_mb} MB")
+
     def _build_talk_page(
         self,
         talk_volume_level: int,
@@ -1236,6 +1340,23 @@ class OptionsDialog(QDialog):
 
     def selected_timecode_audio_output_device(self) -> str:
         return str(self.timecode_output_combo.currentData() or "none")
+
+    def selected_preload_audio_enabled(self) -> bool:
+        return bool(self.preload_audio_enabled_checkbox.isChecked())
+
+    def selected_preload_current_page_audio(self) -> bool:
+        return bool(self.preload_current_page_checkbox.isChecked())
+
+    def selected_preload_audio_memory_limit_mb(self) -> int:
+        step_mb = int(self._preload_slider_step_mb)
+        selected_mb = max(step_mb, int(self.preload_memory_slider.value()) * step_mb)
+        return max(128, min(int(self._preload_ram_cap_mb), selected_mb))
+
+    def selected_preload_memory_pressure_enabled(self) -> bool:
+        return bool(self.preload_memory_pressure_checkbox.isChecked())
+
+    def selected_preload_pause_on_playback(self) -> bool:
+        return bool(self.preload_pause_on_playback_checkbox.isChecked())
 
     def selected_timecode_midi_output_device(self) -> str:
         return str(self.timecode_midi_output_combo.currentData() or MIDI_OUTPUT_DEVICE_NONE)
@@ -1495,9 +1616,12 @@ class OptionsDialog(QDialog):
             self._restore_audio_device_defaults()
             return
         if idx == 7:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 8:
+            self._restore_talk_defaults()
+            return
+        if idx == 9:
             self._restore_web_remote_defaults()
             return
 
@@ -1752,6 +1876,17 @@ class OptionsDialog(QDialog):
             self.timecode_timeline_audio_file_radio.setChecked(True)
         else:
             self.timecode_timeline_cue_region_radio.setChecked(True)
+
+    def _restore_preload_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.preload_audio_enabled_checkbox.setChecked(bool(d["preload_audio_enabled"]))
+        self.preload_current_page_checkbox.setChecked(bool(d["preload_current_page_audio"]))
+        self.preload_memory_pressure_checkbox.setChecked(bool(d["preload_memory_pressure_enabled"]))
+        self.preload_pause_on_playback_checkbox.setChecked(bool(d["preload_pause_on_playback"]))
+        step_mb = int(self._preload_slider_step_mb)
+        target_mb = max(step_mb, min(int(self._preload_ram_cap_mb), int(d["preload_audio_memory_limit_mb"])))
+        self.preload_memory_slider.setValue(max(1, target_mb // step_mb))
+        self._update_preload_slider_label()
 
     def _restore_talk_defaults(self) -> None:
         d = self._DEFAULTS

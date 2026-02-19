@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import atexit
 import os
 import sys
 import threading
 import time
-from typing import List, Optional, Tuple
+from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pygame
@@ -18,6 +21,42 @@ _DECODER_READY = False
 _NEXT_STREAM_ID = 0
 _CHANNEL_COUNT = 2
 _REQUESTED_DEVICE = ""
+_DECODER_LOCK = threading.RLock()
+_PRELOAD_LOCK = threading.RLock()
+_PRELOAD_ENABLED = False
+_PRELOAD_LIMIT_BYTES = 256 * 1024 * 1024
+_PRELOAD_PRESSURE_ENABLED = True
+_PRELOAD_PAUSED = False
+_PRELOAD_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDict()
+_PRELOAD_CACHE_BYTES = 0
+_PRELOAD_TASKS: Dict[str, Future] = {}
+_PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-preload")
+
+
+def _shutdown_preload_executor() -> None:
+    try:
+        _PRELOAD_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_preload_executor)
+
+
+def shutdown_audio_preload() -> None:
+    global _PRELOAD_ENABLED, _PRELOAD_CACHE_BYTES, _PRELOAD_PAUSED
+    with _PRELOAD_LOCK:
+        _PRELOAD_ENABLED = False
+        _PRELOAD_PAUSED = False
+        for future in list(_PRELOAD_TASKS.values()):
+            try:
+                future.cancel()
+            except Exception:
+                pass
+        _PRELOAD_TASKS.clear()
+        _PRELOAD_CACHE.clear()
+        _PRELOAD_CACHE_BYTES = 0
+    _shutdown_preload_executor()
 
 
 class _NullOutputStream:
@@ -33,28 +72,29 @@ class _NullOutputStream:
 
 def _ensure_decoder() -> None:
     global _DECODER_READY
-    if _DECODER_READY and pygame.mixer.get_init():
-        return
-    if not pygame.get_init():
-        pygame.init()
-    if not pygame.mixer.get_init():
-        original_driver = os.environ.get("SDL_AUDIODRIVER")
-        init_errors: List[str] = []
-        for driver in [original_driver, "wasapi", "directsound", "winmm", "dummy"]:
-            try:
-                if pygame.mixer.get_init():
-                    pygame.mixer.quit()
-                if driver:
-                    os.environ["SDL_AUDIODRIVER"] = driver
-                elif "SDL_AUDIODRIVER" in os.environ:
-                    del os.environ["SDL_AUDIODRIVER"]
-                pygame.mixer.init(frequency=44100, size=-16, channels=_CHANNEL_COUNT)
-                break
-            except Exception as exc:
-                init_errors.append(f"{driver or 'default'}: {exc}")
+    with _DECODER_LOCK:
+        if _DECODER_READY and pygame.mixer.get_init():
+            return
+        if not pygame.get_init():
+            pygame.init()
         if not pygame.mixer.get_init():
-            raise pygame.error("Unable to initialize pygame mixer: " + " | ".join(init_errors))
-    _DECODER_READY = True
+            original_driver = os.environ.get("SDL_AUDIODRIVER")
+            init_errors: List[str] = []
+            for driver in [original_driver, "wasapi", "directsound", "winmm", "dummy"]:
+                try:
+                    if pygame.mixer.get_init():
+                        pygame.mixer.quit()
+                    if driver:
+                        os.environ["SDL_AUDIODRIVER"] = driver
+                    elif "SDL_AUDIODRIVER" in os.environ:
+                        del os.environ["SDL_AUDIODRIVER"]
+                    pygame.mixer.init(frequency=44100, size=-16, channels=_CHANNEL_COUNT)
+                    break
+                except Exception as exc:
+                    init_errors.append(f"{driver or 'default'}: {exc}")
+            if not pygame.mixer.get_init():
+                raise pygame.error("Unable to initialize pygame mixer: " + " | ".join(init_errors))
+        _DECODER_READY = True
 
 
 def _allocate_stream_id() -> int:
@@ -142,6 +182,236 @@ def get_media_ssp_units(file_path: str) -> Tuple[int, int]:
     return duration_ms, max(0, int(raw_units))
 
 
+def configure_audio_preload_cache(enabled: bool, memory_limit_mb: int) -> None:
+    configure_audio_preload_cache_policy(enabled=enabled, memory_limit_mb=memory_limit_mb, pressure_enabled=True)
+
+
+def configure_audio_preload_cache_policy(enabled: bool, memory_limit_mb: int, pressure_enabled: bool) -> None:
+    global _PRELOAD_ENABLED, _PRELOAD_LIMIT_BYTES, _PRELOAD_CACHE_BYTES, _PRELOAD_PRESSURE_ENABLED, _PRELOAD_PAUSED
+    limit_mb = max(64, min(8192, int(memory_limit_mb)))
+    with _PRELOAD_LOCK:
+        _PRELOAD_ENABLED = bool(enabled)
+        _PRELOAD_LIMIT_BYTES = limit_mb * 1024 * 1024
+        _PRELOAD_PRESSURE_ENABLED = bool(pressure_enabled)
+        if not _PRELOAD_ENABLED:
+            _PRELOAD_PAUSED = False
+        if not _PRELOAD_ENABLED:
+            for future in list(_PRELOAD_TASKS.values()):
+                try:
+                    future.cancel()
+                except Exception:
+                    pass
+            _PRELOAD_TASKS.clear()
+            _PRELOAD_CACHE.clear()
+            _PRELOAD_CACHE_BYTES = 0
+            return
+        _evict_preload_cache_locked()
+
+
+def enforce_audio_preload_limits() -> None:
+    with _PRELOAD_LOCK:
+        if not _PRELOAD_ENABLED:
+            return
+        _evict_preload_cache_locked()
+
+
+def get_preload_memory_limits_mb() -> Tuple[int, int, int]:
+    total_bytes, _available_bytes = _system_memory_bytes()
+    if total_bytes <= 0:
+        return 4096, 410, 3686
+    reserve_bytes = _memory_reserve_bytes(total_bytes)
+    max_limit_bytes = max(128 * 1024 * 1024, total_bytes - reserve_bytes)
+    total_mb = max(256, int(total_bytes // (1024 * 1024)))
+    reserve_mb = max(128, int(reserve_bytes // (1024 * 1024)))
+    max_limit_mb = max(128, int(max_limit_bytes // (1024 * 1024)))
+    return total_mb, reserve_mb, max_limit_mb
+
+
+def get_audio_preload_runtime_status() -> Tuple[bool, int]:
+    with _PRELOAD_LOCK:
+        active = 0
+        for future in _PRELOAD_TASKS.values():
+            try:
+                if not future.done():
+                    active += 1
+            except Exception:
+                continue
+        return bool(_PRELOAD_ENABLED), int(active)
+
+
+def request_audio_preload(file_paths: List[str]) -> None:
+    with _PRELOAD_LOCK:
+        if (not _PRELOAD_ENABLED) or _PRELOAD_PAUSED:
+            return
+    for raw_path in file_paths:
+        path = _normalize_cache_key(raw_path)
+        if not path:
+            continue
+        if not os.path.exists(path):
+            continue
+        with _PRELOAD_LOCK:
+            cached = _PRELOAD_CACHE.get(path)
+            if cached is not None:
+                continue
+            future = _PRELOAD_TASKS.get(path)
+            if future is not None and not future.done():
+                continue
+            future = _PRELOAD_EXECUTOR.submit(_preload_path_worker, path)
+            _PRELOAD_TASKS[path] = future
+
+            def _clear_task(done_future, cache_path=path) -> None:
+                with _PRELOAD_LOCK:
+                    active = _PRELOAD_TASKS.get(cache_path)
+                    if active is done_future:
+                        _PRELOAD_TASKS.pop(cache_path, None)
+
+            future.add_done_callback(_clear_task)
+
+
+def _preload_path_worker(file_path: str) -> None:
+    with _PRELOAD_LOCK:
+        if (not _PRELOAD_ENABLED) or _PRELOAD_PAUSED:
+            return
+    try:
+        frames, duration_ms = _decode_media_frames(file_path)
+    except Exception:
+        return
+    _store_preload_entry(file_path, frames, duration_ms)
+
+
+def set_audio_preload_paused(paused: bool) -> None:
+    global _PRELOAD_PAUSED
+    with _PRELOAD_LOCK:
+        _PRELOAD_PAUSED = bool(paused)
+        if _PRELOAD_PAUSED:
+            for future in list(_PRELOAD_TASKS.values()):
+                try:
+                    future.cancel()
+                except Exception:
+                    pass
+
+
+def _store_preload_entry(file_path: str, frames: np.ndarray, duration_ms: int) -> None:
+    global _PRELOAD_CACHE_BYTES
+    size_bytes = int(frames.nbytes)
+    with _PRELOAD_LOCK:
+        if not _PRELOAD_ENABLED:
+            return
+        existing = _PRELOAD_CACHE.get(file_path)
+        if existing is not None:
+            _PRELOAD_CACHE_BYTES = max(0, _PRELOAD_CACHE_BYTES - int(existing[2]))
+        if size_bytes > _PRELOAD_LIMIT_BYTES:
+            return
+        _PRELOAD_CACHE[file_path] = (frames, int(duration_ms), size_bytes)
+        _PRELOAD_CACHE_BYTES += size_bytes
+        _evict_preload_cache_locked()
+
+
+def _evict_preload_cache_locked() -> None:
+    global _PRELOAD_CACHE_BYTES
+    effective_limit = int(_PRELOAD_LIMIT_BYTES)
+    if _PRELOAD_PRESSURE_ENABLED:
+        total_bytes, available_bytes = _system_memory_bytes()
+        reserve_bytes = _memory_reserve_bytes(total_bytes)
+        pressure_limit = max(0, int(available_bytes - reserve_bytes))
+        effective_limit = min(effective_limit, pressure_limit)
+    while _PRELOAD_CACHE and _PRELOAD_CACHE_BYTES > effective_limit:
+        _old_path, (_old_frames, _old_duration_ms, old_size) = _PRELOAD_CACHE.popitem(last=False)
+        _PRELOAD_CACHE_BYTES = max(0, _PRELOAD_CACHE_BYTES - int(old_size))
+
+
+def _memory_reserve_bytes(total_bytes: int) -> int:
+    if total_bytes <= 0:
+        return 128 * 1024 * 1024
+    return max(int(total_bytes * 0.10), 128 * 1024 * 1024)
+
+
+def _system_memory_bytes() -> Tuple[int, int]:
+    if os.name == "nt":
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullTotalPhys), int(stat.ullAvailPhys)
+        except Exception:
+            pass
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
+        avail_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+        return max(0, page_size * phys_pages), max(0, page_size * avail_pages)
+    except Exception:
+        return 0, 0
+
+
+def _normalize_cache_key(file_path: str) -> str:
+    if not file_path:
+        return ""
+    return os.path.normcase(os.path.abspath(str(file_path)))
+
+
+def _bytes_to_frames(raw: bytes, sample_size: int, channels: int) -> Optional[np.ndarray]:
+    if channels <= 0:
+        return None
+    if sample_size in (-16, 16):
+        src = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sample_size == 8:
+        src = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif sample_size == -8:
+        src = np.frombuffer(raw, dtype=np.int8).astype(np.float32) / 128.0
+    elif sample_size in (-32, 32):
+        src = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+    else:
+        return None
+    frame_count = int(len(src) // channels)
+    if frame_count <= 0:
+        return None
+    src = src[: frame_count * channels]
+    return src.reshape((frame_count, channels))
+
+
+def _decode_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
+    _ensure_decoder()
+    sound = pygame.mixer.Sound(file_path)
+    raw = sound.get_raw()
+    mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+    sample_rate = int(mixer_info[0])
+    sample_size = int(mixer_info[1])
+    channels = int(mixer_info[2])
+    frames = _bytes_to_frames(raw, sample_size, channels)
+    if frames is None:
+        raise ValueError("Unsupported mixer sample format for streaming DSP")
+    duration_ms = int((len(frames) / float(sample_rate)) * 1000.0)
+    return frames, duration_ms
+
+
+def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
+    cache_key = _normalize_cache_key(file_path)
+    if cache_key:
+        with _PRELOAD_LOCK:
+            if _PRELOAD_ENABLED:
+                cached = _PRELOAD_CACHE.get(cache_key)
+                if cached is not None:
+                    return cached[0], int(cached[1])
+    frames, duration_ms = _decode_media_frames(file_path)
+    if cache_key:
+        _store_preload_entry(cache_key, frames, duration_ms)
+    return frames, duration_ms
+
+
 class ExternalMediaPlayer(QObject):
     StoppedState = 0
     PlayingState = 1
@@ -192,12 +462,7 @@ class ExternalMediaPlayer(QObject):
 
     def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
         self.stop()
-        _ensure_decoder()
-        sound = pygame.mixer.Sound(file_path)
-        raw = sound.get_raw()
-        frames = self._bytes_to_frames(raw, self._sample_size, self._channels)
-        if frames is None:
-            raise ValueError("Unsupported mixer sample format for streaming DSP")
+        frames, duration_ms = _load_media_frames(file_path)
 
         with self._lock:
             self._media_path = file_path
@@ -206,7 +471,7 @@ class ExternalMediaPlayer(QObject):
             self._source_pos_anchor = 0.0
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = self._tempo_ratio_locked()
-            self._duration_ms = int((len(frames) / float(self._sample_rate)) * 1000.0)
+            self._duration_ms = int(duration_ms)
             self._position_ms = 0
             self._ended = False
             if dsp_config is not None:
@@ -417,23 +682,7 @@ class ExternalMediaPlayer(QObject):
         return out
 
     def _bytes_to_frames(self, raw: bytes, sample_size: int, channels: int) -> Optional[np.ndarray]:
-        if channels <= 0:
-            return None
-        if sample_size in (-16, 16):
-            src = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sample_size == 8:
-            src = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-        elif sample_size == -8:
-            src = np.frombuffer(raw, dtype=np.int8).astype(np.float32) / 128.0
-        elif sample_size in (-32, 32):
-            src = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:
-            return None
-        frame_count = int(len(src) // channels)
-        if frame_count <= 0:
-            return None
-        src = src[: frame_count * channels]
-        return src.reshape((frame_count, channels))
+        return _bytes_to_frames(raw, sample_size, channels)
 
     def _position_from_source_pos_locked(self) -> int:
         if self._duration_ms <= 0:

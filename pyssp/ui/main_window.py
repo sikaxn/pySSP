@@ -46,7 +46,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from pyssp.audio_engine import ExternalMediaPlayer, get_media_ssp_units, list_output_devices, set_output_device
+from pyssp.audio_engine import (
+    ExternalMediaPlayer,
+    configure_audio_preload_cache_policy,
+    enforce_audio_preload_limits,
+    get_audio_preload_runtime_status,
+    get_preload_memory_limits_mb,
+    get_media_ssp_units,
+    list_output_devices,
+    request_audio_preload,
+    set_audio_preload_paused,
+    set_output_device,
+    shutdown_audio_preload,
+)
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, load_settings, save_settings
@@ -651,6 +663,22 @@ class MainWindow(QMainWindow):
         if self.set_file_encoding not in {"utf8", "gbk"}:
             self.set_file_encoding = "utf8"
         self.audio_output_device = self.settings.audio_output_device
+        self.preload_audio_enabled = bool(getattr(self.settings, "preload_audio_enabled", False))
+        self.preload_current_page_audio = bool(getattr(self.settings, "preload_current_page_audio", True))
+        self.preload_audio_memory_limit_mb = max(
+            64,
+            min(8192, int(getattr(self.settings, "preload_audio_memory_limit_mb", 512))),
+        )
+        self.preload_memory_pressure_enabled = bool(
+            getattr(self.settings, "preload_memory_pressure_enabled", True)
+        )
+        self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", False))
+        self._preload_runtime_paused = False
+        configure_audio_preload_cache_policy(
+            self.preload_audio_enabled,
+            self.preload_audio_memory_limit_mb,
+            self.preload_memory_pressure_enabled,
+        )
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
         self.playlist_play_mode = (
@@ -846,6 +874,7 @@ class MainWindow(QMainWindow):
         self.timecode_status_label = QLabel("")
         self.web_remote_status_label = QLabel("")
         self.total_time = QLabel("00:00:00")
+        self.preload_status_icon = QLabel("RAM")
         self.elapsed_time = QLabel("00:00:00")
         self.remaining_time = QLabel("00:00:00")
         self.progress_label = QLabel("0%")
@@ -907,6 +936,7 @@ class MainWindow(QMainWindow):
         self._timecode_event_guard_until = 0.0
         self._auto_end_fade_track: Optional[Tuple[str, int, int]] = None
         self._auto_end_fade_done = False
+        self._preload_icon_blink_on = False
         self._playback_warning_token = 0
         self._save_notice_token = 0
 
@@ -919,6 +949,13 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.timecode_status_label)
         self.statusBar().addPermanentWidget(self.web_remote_status_label)
         self.statusBar().addPermanentWidget(self.status_totals_label)
+        self.preload_status_icon.setAlignment(Qt.AlignCenter)
+        self.preload_status_icon.setFixedSize(34, 18)
+        self.preload_status_icon.setStyleSheet(
+            "QLabel{font-size:9pt;font-weight:bold;color:#4A4F55;background:#C8CDD4;border:1px solid #8C939D;border-radius:8px;}"
+        )
+        self.preload_status_icon.setToolTip("RAM preload idle")
+        self.statusBar().addPermanentWidget(self.preload_status_icon)
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
@@ -928,6 +965,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
         self._update_now_playing_label("")
         self._refresh_window_title()
         self._update_status_totals()
@@ -946,6 +984,15 @@ class MainWindow(QMainWindow):
         self.fade_timer.timeout.connect(self._tick_fades)
         self.fade_timer.start(30)
 
+        self._preload_trim_timer = QTimer(self)
+        self._preload_trim_timer.timeout.connect(enforce_audio_preload_limits)
+        self._preload_trim_timer.start(2000)
+
+        self._preload_status_timer = QTimer(self)
+        self._preload_status_timer.timeout.connect(self._tick_preload_status_icon)
+        self._preload_status_timer.start(350)
+        self._tick_preload_status_icon()
+
         self.talk_blink_timer = QTimer(self)
         self.talk_blink_timer.timeout.connect(self._tick_talk_blink)
         self.talk_blink_timer.start(280)
@@ -959,6 +1006,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
         self._update_button_drag_control_state()
         self._update_button_drag_visual_state()
         self._update_timecode_multiplay_warning_banner()
@@ -2531,6 +2579,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
 
     def _select_page(self, index: int) -> None:
         if index < 0:
@@ -2539,6 +2588,7 @@ class MainWindow(QMainWindow):
             self.current_page = 0
             self._hotkey_selected_slot_key = None
             self._update_page_status()
+            self._queue_current_page_audio_preload()
             return
         self.current_page = index
         self._hotkey_selected_slot_key = None
@@ -2549,6 +2599,7 @@ class MainWindow(QMainWindow):
         self._refresh_page_list()
         self._refresh_sound_grid()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
 
     def _refresh_group_buttons(self) -> None:
         for group, button in self.group_buttons.items():
@@ -4300,6 +4351,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
         self._play_slot(slot_index)
 
     def _on_position_changed(self, pos: int) -> None:
@@ -4413,6 +4465,26 @@ class MainWindow(QMainWindow):
         finally:
             self._ignore_state_changes = max(0, self._ignore_state_changes - 1)
 
+    def _tick_preload_status_icon(self) -> None:
+        enabled, active_jobs = get_audio_preload_runtime_status()
+        if (not enabled) or active_jobs <= 0:
+            self._preload_icon_blink_on = False
+            self.preload_status_icon.setStyleSheet(
+                "QLabel{font-size:9pt;font-weight:bold;color:#4A4F55;background:#C8CDD4;border:1px solid #8C939D;border-radius:8px;}"
+            )
+            self.preload_status_icon.setToolTip("RAM preload idle")
+            return
+        self._preload_icon_blink_on = not self._preload_icon_blink_on
+        if self._preload_icon_blink_on:
+            self.preload_status_icon.setStyleSheet(
+                "QLabel{font-size:9pt;font-weight:bold;color:#0B4A1F;background:#5FE088;border:1px solid #219653;border-radius:8px;}"
+            )
+        else:
+            self.preload_status_icon.setStyleSheet(
+                "QLabel{font-size:9pt;font-weight:bold;color:#4A4F55;background:#C8CDD4;border:1px solid #8C939D;border-radius:8px;}"
+            )
+        self.preload_status_icon.setToolTip(f"RAM preload active ({active_jobs})")
+
     def _tick_meter(self) -> None:
         self._prune_multi_players()
         self._enforce_cue_end_limits()
@@ -4452,6 +4524,7 @@ class MainWindow(QMainWindow):
             self._vu_levels[1] += (target_right - self._vu_levels[1]) * attack
         else:
             self._vu_levels[1] += (target_right - self._vu_levels[1]) * release
+        self._sync_preload_pause_state(any_playing)
         self._refresh_timecode_panel()
         self.left_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[0]))))
         self.right_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[1]))))
@@ -4492,6 +4565,38 @@ class MainWindow(QMainWindow):
         if self.cue_mode:
             return self.cue_page
         return self.data[self.current_group][self.current_page]
+
+    def _apply_audio_preload_cache_settings(self) -> None:
+        configure_audio_preload_cache_policy(
+            self.preload_audio_enabled,
+            self.preload_audio_memory_limit_mb,
+            self.preload_memory_pressure_enabled,
+        )
+        self._sync_preload_pause_state(self._is_playback_in_progress())
+        self._queue_current_page_audio_preload()
+
+    def _queue_current_page_audio_preload(self) -> None:
+        if not self.preload_audio_enabled or not self.preload_current_page_audio:
+            return
+        paths: List[str] = []
+        for slot in self._current_page_slots():
+            if not slot.assigned or slot.marker:
+                continue
+            path = str(slot.file_path or "").strip()
+            if not path or not os.path.exists(path):
+                continue
+            paths.append(path)
+        if paths:
+            request_audio_preload(paths)
+
+    def _sync_preload_pause_state(self, playback_active: bool) -> None:
+        should_pause = bool(self.preload_pause_on_playback and playback_active)
+        if should_pause == self._preload_runtime_paused:
+            return
+        self._preload_runtime_paused = should_pause
+        set_audio_preload_paused(should_pause)
+        if not should_pause:
+            self._queue_current_page_audio_preload()
 
     def _sync_playlist_shuffle_buttons(self) -> None:
         if self.cue_mode:
@@ -4917,6 +5022,7 @@ class MainWindow(QMainWindow):
     def _open_options_dialog(self, initial_page: Optional[str] = None) -> None:
         available_devices = sorted(list_output_devices(), key=lambda v: v.lower())
         available_midi_devices = list_midi_output_devices()
+        total_ram_mb, _reserved_ram_mb, preload_cap_mb = get_preload_memory_limits_mb()
         dialog = OptionsDialog(
             active_group_color=self.active_group_color,
             inactive_group_color=self.inactive_group_color,
@@ -4944,6 +5050,13 @@ class MainWindow(QMainWindow):
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
             available_midi_devices=available_midi_devices,
+            preload_audio_enabled=self.preload_audio_enabled,
+            preload_current_page_audio=self.preload_current_page_audio,
+            preload_audio_memory_limit_mb=self.preload_audio_memory_limit_mb,
+            preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
+            preload_pause_on_playback=self.preload_pause_on_playback,
+            preload_total_ram_mb=total_ram_mb,
+            preload_ram_cap_mb=preload_cap_mb,
             timecode_audio_output_device=self.timecode_audio_output_device,
             timecode_midi_output_device=self.timecode_midi_output_device,
             timecode_mode=self.timecode_mode,
@@ -5076,6 +5189,12 @@ class MainWindow(QMainWindow):
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
+        self.preload_audio_enabled = dialog.selected_preload_audio_enabled()
+        self.preload_current_page_audio = dialog.selected_preload_current_page_audio()
+        self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()
+        self.preload_memory_pressure_enabled = dialog.selected_preload_memory_pressure_enabled()
+        self.preload_pause_on_playback = dialog.selected_preload_pause_on_playback()
+        self._apply_audio_preload_cache_settings()
         if selected_device != self.audio_output_device:
             if self._switch_audio_device(selected_device):
                 self.audio_output_device = selected_device
@@ -5825,6 +5944,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
 
     def _show_cue_button_menu(self, pos) -> None:
         cue_btn = self.control_buttons.get("Cue")
@@ -6690,6 +6810,7 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_group_status()
         self._update_page_status()
+        self._queue_current_page_audio_preload()
         self._update_now_playing_label("")
         self._set_dirty(False)
         self.seek_slider.setValue(0)
@@ -6891,6 +7012,7 @@ class MainWindow(QMainWindow):
             self._save_settings()
             return
         self._load_set(last_set_path, show_message=False, restore_last_position=True)
+        self._queue_current_page_audio_preload()
 
     def _save_settings(self) -> None:
         self.settings.active_group_color = self.active_group_color
@@ -6922,6 +7044,11 @@ class MainWindow(QMainWindow):
         self.settings.set_file_encoding = self.set_file_encoding
         self.settings.ui_language = self.ui_language
         self.settings.audio_output_device = self.audio_output_device
+        self.settings.preload_audio_enabled = bool(self.preload_audio_enabled)
+        self.settings.preload_current_page_audio = bool(self.preload_current_page_audio)
+        self.settings.preload_audio_memory_limit_mb = int(self.preload_audio_memory_limit_mb)
+        self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
+        self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
         self.settings.playlist_play_mode = self.playlist_play_mode
@@ -7298,6 +7425,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self._mtc_sender.shutdown()
+        except Exception:
+            pass
+        try:
+            shutdown_audio_preload()
         except Exception:
             pass
         self._stop_web_remote_service()

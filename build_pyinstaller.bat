@@ -50,7 +50,7 @@ echo [INFO] Cleaning previous PyInstaller output...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo [INFO] Building app with PyInstaller...
+echo [INFO] Building app (no terminal) with PyInstaller...
 pipenv run pyinstaller ^
   --noconfirm ^
   --clean ^
@@ -60,7 +60,35 @@ pipenv run pyinstaller ^
   --add-data "pyssp\assets;pyssp\assets" ^
   main.py
 if errorlevel 1 (
-    echo [ERROR] PyInstaller build failed.
+    echo [ERROR] PyInstaller GUI build failed.
+    popd
+    exit /b 1
+)
+
+echo [INFO] Adding cleanstart launcher...
+(
+  echo @echo off
+  echo setlocal
+  echo set "EXE_DIR=%%~dp0"
+  echo "%%EXE_DIR%%pySSP.exe" --cleanstart
+  echo exit /b %%ERRORLEVEL%%
+) > "%ROOT_DIR%dist\pySSP\pySSP_cleanstart.bat"
+if errorlevel 1 (
+    echo [ERROR] Failed to create cleanstart launcher.
+    popd
+    exit /b 1
+)
+
+echo [INFO] Adding debug launcher...
+(
+  echo @echo off
+  echo setlocal
+  echo set "EXE_DIR=%%~dp0"
+  echo "%%EXE_DIR%%pySSP.exe" -debug
+  echo exit /b %%ERRORLEVEL%%
+) > "%ROOT_DIR%dist\pySSP\pySSP_debug.bat"
+if errorlevel 1 (
+    echo [ERROR] Failed to create debug launcher.
     popd
     exit /b 1
 )
@@ -68,6 +96,8 @@ if errorlevel 1 (
 echo.
 echo [SUCCESS] Build complete:
 echo   %ROOT_DIR%dist\pySSP\pySSP.exe
+echo   %ROOT_DIR%dist\pySSP\pySSP_cleanstart.bat
+echo   %ROOT_DIR%dist\pySSP\pySSP_debug.bat
 
 popd
 exit /b 0

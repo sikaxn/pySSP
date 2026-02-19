@@ -681,6 +681,8 @@ class MainWindow(QMainWindow):
         self.web_remote_enabled = self.settings.web_remote_enabled
         self.web_remote_host = "0.0.0.0"
         self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
+        self._local_ip_cache = "127.0.0.1"
+        self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
         self.timecode_midi_output_device = self.settings.timecode_midi_output_device or MIDI_OUTPUT_DEVICE_NONE
         self.timecode_mode = self.settings.timecode_mode or TIMECODE_MODE_FOLLOW
@@ -828,6 +830,7 @@ class MainWindow(QMainWindow):
         self.now_playing_label = QLabel("")
         self.drag_mode_banner = QLabel("")
         self.timecode_multiplay_banner = QLabel("")
+        self.web_remote_warning_banner = QLabel("")
         self.playback_warning_banner = QLabel("")
         self.save_notice_banner = QLabel("")
         self.status_totals_label = QLabel("")
@@ -984,6 +987,13 @@ class MainWindow(QMainWindow):
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.timecode_multiplay_banner)
+        self.web_remote_warning_banner.setVisible(False)
+        self.web_remote_warning_banner.setWordWrap(True)
+        self.web_remote_warning_banner.setStyleSheet(
+            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.web_remote_warning_banner)
         self.playback_warning_banner.setVisible(False)
         self.playback_warning_banner.setWordWrap(True)
         self.playback_warning_banner.setStyleSheet(
@@ -5298,26 +5308,22 @@ class MainWindow(QMainWindow):
         }
 
     def _resolve_local_ip(self) -> str:
+        now = time.perf_counter()
+        if (now - float(self._local_ip_cache_at)) < 10.0 and self._local_ip_cache:
+            return self._local_ip_cache
+
         candidates: List[str] = []
 
-        # Primary source on Windows/LAN/offline: parse ipconfig output.
+        # Fast path: no external process; UDP connect does not send packets.
         try:
-            proc = subprocess.run(
-                ["ipconfig"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                timeout=2.0,
-                check=False,
-            )
-            text = proc.stdout or ""
-            for line in text.splitlines():
-                if "IPv4" not in line:
-                    continue
-                match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
-                if match:
-                    candidates.append(match.group(1))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("8.8.8.8", 80))
+                value = sock.getsockname()[0]
+                if value:
+                    candidates.append(value)
+            finally:
+                sock.close()
         except Exception:
             pass
 
@@ -5331,6 +5337,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        resolved = "127.0.0.1"
         seen = set()
         filtered: List[str] = []
         for value in candidates:
@@ -5350,12 +5357,16 @@ class MainWindow(QMainWindow):
         for value in filtered:
             try:
                 if ipaddress.ip_address(value).is_private:
-                    return value
+                    resolved = value
+                    break
             except ValueError:
                 continue
-        if filtered:
-            return filtered[0]
-        return "127.0.0.1"
+        if resolved == "127.0.0.1" and filtered:
+            resolved = filtered[0]
+
+        self._local_ip_cache = resolved
+        self._local_ip_cache_at = now
+        return resolved
 
     def _web_remote_open_url(self) -> str:
         host = self._resolve_local_ip()
@@ -5423,6 +5434,10 @@ class MainWindow(QMainWindow):
 
     def _start_web_remote_service(self) -> None:
         if self._web_remote_server is not None and self._web_remote_server.is_running:
+            self._set_web_remote_warning_banner("")
+            return
+        if self._is_port_listening_by_other_process(self.web_remote_port):
+            self._set_web_remote_warning_banner(self._web_remote_port_conflict_text())
             return
         try:
             self._web_remote_server = WebRemoteServer(
@@ -5431,12 +5446,62 @@ class MainWindow(QMainWindow):
                 port=self.web_remote_port,
             )
             self._web_remote_server.start()
+            self._set_web_remote_warning_banner("")
             self._update_web_remote_status_label()
         except Exception as exc:
-            self.web_remote_enabled = False
+            self._stop_web_remote_service()
             self._web_remote_server = None
             self._update_web_remote_status_label()
-            QMessageBox.warning(self, "Web Remote", f"Could not start Web Remote service:\n{exc}")
+            if self._is_web_remote_port_conflict(exc):
+                self._set_web_remote_warning_banner(self._web_remote_port_conflict_text())
+                return
+            self._set_web_remote_warning_banner(
+                f"{tr('WEB REMOTE ERROR: Could not start Web Remote service.')} {exc}"
+            )
+
+    @staticmethod
+    def _is_web_remote_port_conflict(exc: Exception) -> bool:
+        if isinstance(exc, OSError):
+            if getattr(exc, "errno", None) in {48, 98, 10048}:
+                return True
+            if getattr(exc, "winerror", None) == 10048:
+                return True
+        message = str(exc).lower()
+        return (
+            "address already in use" in message
+            or "only one usage of each socket address" in message
+            or "winerror 10048" in message
+        )
+
+    @staticmethod
+    def _is_port_listening_by_other_process(port: int) -> bool:
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+        except Exception:
+            return False
+        pid_self = str(os.getpid())
+        port_token = f":{int(port)}"
+        for line in (result.stdout or "").splitlines():
+            row = line.strip()
+            if not row:
+                continue
+            parts = re.split(r"\s+", row)
+            if len(parts) < 5:
+                continue
+            proto, local_addr, _foreign, state, pid = parts[0], parts[1], parts[2], parts[3], parts[4]
+            if proto.upper() != "TCP" or state.upper() != "LISTENING":
+                continue
+            if not local_addr.endswith(port_token):
+                continue
+            if pid != pid_self:
+                return True
+        return False
 
     def _update_web_remote_status_label(self) -> None:
         state = "Enabled" if self.web_remote_enabled else "Disabled"
@@ -5445,12 +5510,26 @@ class MainWindow(QMainWindow):
     def _stop_web_remote_service(self) -> None:
         server = self._web_remote_server
         self._web_remote_server = None
+        if not self.web_remote_enabled:
+            self._set_web_remote_warning_banner("")
         if server is None:
             return
         try:
             server.stop()
         except Exception:
             pass
+
+    def _set_web_remote_warning_banner(self, text: str) -> None:
+        message = str(text or "").strip()
+        self.web_remote_warning_banner.setText(message)
+        self.web_remote_warning_banner.setVisible(bool(message))
+
+    def _web_remote_port_conflict_text(self) -> str:
+        return (
+            f"{tr('WEB REMOTE PORT CONFLICT:')} {tr('Port')} {self.web_remote_port} {tr('is already in use.')}\n"
+            f"{tr('Change port, disable Web Remote, or close the program using this port.')}\n"
+            f"{tr('Restart pySSP to resolve the issue.')}"
+        )
 
     def _dispatch_web_remote_command_threadsafe(self, command: str, params: dict) -> dict:
         try:

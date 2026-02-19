@@ -8,10 +8,11 @@ pyqt5 = ">=5.15"
 pygame-ce = ">=2.5"
 numpy = ">=1.26"
 sounddevice = ">=0.4.7"
-pytest = ">=8.0"
 flask = "*"
 
 [dev-packages]
+pytest = ">=8.0"
+pyinstaller = ">=6.0"
 
 [requires]
-python_version = "3.14"
+python_version = "3.12"

@@ -183,6 +183,7 @@ _TRANSLATIONS = {
         "Keep playing": "继续播放",
         "Audio Load Failed:": "音频加载失败：",
         "Talk*": "讲话闪避*",
+        "Add Sound Button": "添加声音按钮",
         "Add Page": "添加页面",
         "Rename Page": "重命名页面",
         "Delete Page": "删除页面",
@@ -387,6 +388,7 @@ _TRANSLATIONS = {
         "Inactive Button Color": "非活动按钮颜色",
         "Color": "颜色",
         "Sound Button Text Color": "声音按钮文字颜色",
+        "Select Sound Files": "选择声音文件",
     }
 }
 

@@ -3166,7 +3166,7 @@ class MainWindow(QMainWindow):
         is_unused = (not slot.assigned) and (not slot.marker) and (not slot.title.strip()) and (not slot.notes.strip())
 
         if is_unused:
-            add_action = menu.addAction("Add Sound Button")
+            add_action = menu.addAction(tr("Add Sound Button"))
             add_action.setEnabled(page_created)
             edit_action = menu.addAction("Edit Sound Button")
             edit_action.setEnabled(page_created)
@@ -3605,31 +3605,45 @@ class MainWindow(QMainWindow):
             return
 
         start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Sound File",
+            tr("Select Sound Files"),
             start_dir,
-            "Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)",
+            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
         )
-        if not file_path:
+        if not file_paths:
             return
-        self.settings.last_sound_dir = os.path.dirname(file_path)
+        self.settings.last_sound_dir = os.path.dirname(file_paths[0])
         self._save_settings()
 
-        slot.file_path = file_path
-        slot.title = os.path.splitext(os.path.basename(file_path))[0]
-        slot.notes = ""
-        slot.duration_ms = 0
-        slot.custom_color = None
-        slot.marker = False
-        slot.played = False
-        slot.activity_code = "8"
-        slot.load_failed = False
-        slot.cue_start_ms = None
-        slot.cue_end_ms = None
-        self._set_dirty(True)
-        self._refresh_page_list()
-        self._refresh_sound_grid()
+        changed = False
+        next_file_idx = 0
+        for target_index in range(slot_index, SLOTS_PER_PAGE):
+            if next_file_idx >= len(file_paths):
+                break
+            target = page[target_index]
+            is_unused = (not target.assigned) and (not target.marker) and (not target.title.strip()) and (not target.notes.strip())
+            if not is_unused:
+                continue
+            file_path = file_paths[next_file_idx]
+            next_file_idx += 1
+            target.file_path = file_path
+            target.title = os.path.splitext(os.path.basename(file_path))[0]
+            target.notes = ""
+            target.duration_ms = 0
+            target.custom_color = None
+            target.marker = False
+            target.played = False
+            target.activity_code = "8"
+            target.load_failed = False
+            target.cue_start_ms = None
+            target.cue_end_ms = None
+            changed = True
+
+        if changed:
+            self._set_dirty(True)
+            self._refresh_page_list()
+            self._refresh_sound_grid()
 
     def _verify_slot(self, slot: SoundButtonData) -> None:
         if slot.missing:

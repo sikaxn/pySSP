@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -299,7 +300,33 @@ class OptionsDialog(QDialog):
         "midi_rotary_volume_mode": "relative",
         "midi_rotary_volume_step": 2,
         "midi_rotary_jog_step_ms": 250,
+        "stage_display_layout": [
+            "total_time",
+            "elapsed",
+            "remaining",
+            "progress_bar",
+            "song_name",
+            "next_song",
+        ],
+        "stage_display_visibility": {
+            "total_time": True,
+            "elapsed": True,
+            "remaining": True,
+            "progress_bar": True,
+            "song_name": True,
+            "next_song": True,
+        },
+        "stage_display_text_source": "caption",
     }
+
+    _DISPLAY_OPTION_SPECS = [
+        ("total_time", "Total Time"),
+        ("elapsed", "Elapsed"),
+        ("remaining", "Remaining"),
+        ("progress_bar", "Progress Bar"),
+        ("song_name", "Song Name"),
+        ("next_song", "Next Song"),
+    ]
 
     def __init__(
         self,
@@ -394,6 +421,9 @@ class OptionsDialog(QDialog):
         midi_rotary_volume_mode: str,
         midi_rotary_volume_step: int,
         midi_rotary_jog_step_ms: int,
+        stage_display_layout: List[str],
+        stage_display_visibility: Dict[str, bool],
+        stage_display_text_source: str,
         ui_language: str,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -466,6 +496,13 @@ class OptionsDialog(QDialog):
         self._midi_has_conflict = False
         self._learning_midi_target: Optional[MidiCaptureEdit] = None
         self._ui_language = normalize_language(ui_language)
+        self._stage_display_layout = self._normalize_stage_display_layout(stage_display_layout)
+        self._stage_display_visibility = self._normalize_stage_display_visibility(stage_display_visibility)
+        self._stage_display_text_source = (
+            str(stage_display_text_source or "").strip().lower()
+            if str(stage_display_text_source or "").strip().lower() in {"caption", "filename", "note"}
+            else "caption"
+        )
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.state_colors = dict(state_colors)
@@ -519,6 +556,11 @@ class OptionsDialog(QDialog):
             "Colour",
             self._mono_icon("display"),
             self._build_color_page(),
+        )
+        self._add_page(
+            "Display",
+            self._mono_icon("projector"),
+            self._build_display_page(),
         )
         self._add_page(
             "Fade",
@@ -661,6 +703,12 @@ class OptionsDialog(QDialog):
             p.drawRoundedRect(QRectF(3, 3, 16, 12), 1.5, 1.5)
             p.drawLine(8, 18, 14, 18)
             p.drawLine(11, 15, 11, 18)
+        elif kind == "projector":
+            p.drawRoundedRect(QRectF(3, 5, 16, 10), 2, 2)
+            p.drawEllipse(QRectF(6, 8, 3, 3))
+            p.drawLine(7, 15, 5, 19)
+            p.drawLine(15, 15, 17, 19)
+            p.drawLine(9, 19, 13, 19)
         elif kind == "clock":
             p.drawEllipse(QRectF(3, 3, 16, 16))
             p.drawLine(11, 11, 11, 6)
@@ -1736,6 +1784,65 @@ class OptionsDialog(QDialog):
         )
         return page
 
+    @classmethod
+    def _normalize_stage_display_layout(cls, values: List[str]) -> List[str]:
+        valid = {key for key, _label in cls._DISPLAY_OPTION_SPECS}
+        result: List[str] = []
+        for raw in list(values or []):
+            key = str(raw or "").strip().lower()
+            if key and key in valid and key not in result:
+                result.append(key)
+        for key, _label in cls._DISPLAY_OPTION_SPECS:
+            if key not in result:
+                result.append(key)
+        return result
+
+    @classmethod
+    def _normalize_stage_display_visibility(cls, values: Dict[str, bool]) -> Dict[str, bool]:
+        raw = dict(values or {})
+        result: Dict[str, bool] = {}
+        for key, _label in cls._DISPLAY_OPTION_SPECS:
+            result[key] = bool(raw.get(key, True))
+        return result
+
+    def _build_display_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        source_form = QFormLayout()
+        self.display_text_source_combo = QComboBox()
+        self.display_text_source_combo.addItem("Caption", "caption")
+        self.display_text_source_combo.addItem("Filename", "filename")
+        self.display_text_source_combo.addItem("Note", "note")
+        self._set_combo_data_or_default(self.display_text_source_combo, self._stage_display_text_source, "caption")
+        source_form.addRow("Now/Next Text Source:", self.display_text_source_combo)
+        layout.addLayout(source_form)
+
+        tip = QLabel("Drag to reorder rows. Check items to show on the stage display window.")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        self.display_items_list = QListWidget()
+        self.display_items_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.display_items_list.setDefaultDropAction(Qt.MoveAction)
+        self.display_items_list.setSelectionMode(QListWidget.SingleSelection)
+        self._reload_display_items_list()
+        layout.addWidget(self.display_items_list, 1)
+
+        note = QLabel("Next Song is shown when playlist mode is enabled on the active page.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        return page
+
+    def _reload_display_items_list(self) -> None:
+        self.display_items_list.clear()
+        labels = {key: label for key, label in self._DISPLAY_OPTION_SPECS}
+        for key in self._stage_display_layout:
+            item = QListWidgetItem(labels.get(key, key))
+            item.setData(Qt.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setCheckState(Qt.Checked if self._stage_display_visibility.get(key, True) else Qt.Unchecked)
+            self.display_items_list.addItem(item)
+
     def _build_web_remote_url_text(self, port: int) -> str:
         return f"{self._web_remote_url_scheme}://{self._web_remote_url_host}:{port}/"
 
@@ -1871,6 +1978,35 @@ class OptionsDialog(QDialog):
         if self.jog_outside_stop_cue_or_end_radio.isChecked():
             return "stop_cue_or_end"
         return "stop_immediately"
+
+    def selected_stage_display_layout(self) -> List[str]:
+        output: List[str] = []
+        for i in range(self.display_items_list.count()):
+            item = self.display_items_list.item(i)
+            if item is None:
+                continue
+            key = str(item.data(Qt.UserRole) or "").strip().lower()
+            if key:
+                output.append(key)
+        return self._normalize_stage_display_layout(output)
+
+    def selected_stage_display_visibility(self) -> Dict[str, bool]:
+        values: Dict[str, bool] = {}
+        for i in range(self.display_items_list.count()):
+            item = self.display_items_list.item(i)
+            if item is None:
+                continue
+            key = str(item.data(Qt.UserRole) or "").strip().lower()
+            if not key:
+                continue
+            values[key] = bool(item.checkState() == Qt.Checked)
+        return self._normalize_stage_display_visibility(values)
+
+    def selected_stage_display_text_source(self) -> str:
+        token = str(self.display_text_source_combo.currentData() or "caption").strip().lower()
+        if token not in {"caption", "filename", "note"}:
+            return "caption"
+        return token
 
     def selected_state_colors(self) -> Dict[str, str]:
         return dict(self.state_colors)
@@ -2396,21 +2532,24 @@ class OptionsDialog(QDialog):
             self._restore_color_defaults()
             return
         if idx == 5:
-            self._restore_delay_defaults()
+            self._restore_display_defaults()
             return
         if idx == 6:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 7:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 8:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 9:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 10:
+            self._restore_talk_defaults()
+            return
+        if idx == 11:
             self._restore_web_remote_defaults()
             return
 
@@ -2451,6 +2590,17 @@ class OptionsDialog(QDialog):
                 self._refresh_color_button(btn, value)
         self.sound_button_text_color = str(d["sound_button_text_color"])
         self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+
+    def _restore_display_defaults(self) -> None:
+        d = self._DEFAULTS
+        self._stage_display_layout = self._normalize_stage_display_layout(list(d.get("stage_display_layout", [])))
+        self._stage_display_visibility = self._normalize_stage_display_visibility(dict(d.get("stage_display_visibility", {})))
+        self._set_combo_data_or_default(
+            self.display_text_source_combo,
+            str(d.get("stage_display_text_source", "caption")),
+            "caption",
+        )
+        self._reload_display_items_list()
 
     def _restore_hotkey_defaults(self) -> None:
         d = self._DEFAULTS

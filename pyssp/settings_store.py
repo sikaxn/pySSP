@@ -37,6 +37,17 @@ def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
     return output[:48]
 
 
+def default_stage_display_layout() -> list[str]:
+    return [
+        "total_time",
+        "elapsed",
+        "remaining",
+        "progress_bar",
+        "song_name",
+        "next_song",
+    ]
+
+
 @dataclass
 class AppSettings:
     last_open_dir: str = ""
@@ -271,6 +282,14 @@ class AppSettings:
     midi_rotary_volume_mode: str = "relative"
     midi_rotary_volume_step: int = 2
     midi_rotary_jog_step_ms: int = 250
+    stage_display_layout: list[str] = field(default_factory=default_stage_display_layout)
+    stage_display_show_total_time: bool = True
+    stage_display_show_elapsed: bool = True
+    stage_display_show_remaining: bool = True
+    stage_display_show_progress_bar: bool = True
+    stage_display_show_song_name: bool = True
+    stage_display_show_next_song: bool = True
+    stage_display_text_source: str = "caption"
 
 
 def get_settings_path() -> Path:
@@ -531,6 +550,14 @@ def save_settings(settings: AppSettings) -> None:
         "midi_rotary_volume_mode": settings.midi_rotary_volume_mode,
         "midi_rotary_volume_step": str(settings.midi_rotary_volume_step),
         "midi_rotary_jog_step_ms": str(settings.midi_rotary_jog_step_ms),
+        "stage_display_layout": "\t".join(default_stage_display_layout() if not settings.stage_display_layout else settings.stage_display_layout),
+        "stage_display_show_total_time": "1" if settings.stage_display_show_total_time else "0",
+        "stage_display_show_elapsed": "1" if settings.stage_display_show_elapsed else "0",
+        "stage_display_show_remaining": "1" if settings.stage_display_show_remaining else "0",
+        "stage_display_show_progress_bar": "1" if settings.stage_display_show_progress_bar else "0",
+        "stage_display_show_song_name": "1" if settings.stage_display_show_song_name else "0",
+        "stage_display_show_next_song": "1" if settings.stage_display_show_next_song else "0",
+        "stage_display_text_source": settings.stage_display_text_source,
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -670,6 +697,28 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_rotary_volume_relative_mode = "auto"
     midi_rotary_volume_step = _clamp_int(_get_int(section, "midi_rotary_volume_step", 2), 1, 20)
     midi_rotary_jog_step_ms = _clamp_int(_get_int(section, "midi_rotary_jog_step_ms", 250), 10, 5000)
+    valid_stage_layout_ids = {
+        "total_time",
+        "elapsed",
+        "remaining",
+        "progress_bar",
+        "song_name",
+        "next_song",
+    }
+    stage_display_layout = [
+        str(v).strip().lower()
+        for v in str(section.get("stage_display_layout", "")).split("\t")
+        if str(v).strip().lower() in valid_stage_layout_ids
+    ]
+    if not stage_display_layout:
+        stage_display_layout = default_stage_display_layout()
+    else:
+        for default_id in default_stage_display_layout():
+            if default_id not in stage_display_layout:
+                stage_display_layout.append(default_id)
+    stage_display_text_source = str(section.get("stage_display_text_source", "caption")).strip().lower()
+    if stage_display_text_source not in {"caption", "filename", "note"}:
+        stage_display_text_source = "caption"
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -903,6 +952,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_rotary_volume_mode=midi_rotary_volume_mode,
         midi_rotary_volume_step=midi_rotary_volume_step,
         midi_rotary_jog_step_ms=midi_rotary_jog_step_ms,
+        stage_display_layout=stage_display_layout,
+        stage_display_show_total_time=_get_bool(section, "stage_display_show_total_time", True),
+        stage_display_show_elapsed=_get_bool(section, "stage_display_show_elapsed", True),
+        stage_display_show_remaining=_get_bool(section, "stage_display_show_remaining", True),
+        stage_display_show_progress_bar=_get_bool(section, "stage_display_show_progress_bar", True),
+        stage_display_show_song_name=_get_bool(section, "stage_display_show_song_name", True),
+        stage_display_show_next_song=_get_bool(section, "stage_display_show_next_song", True),
+        stage_display_text_source=stage_display_text_source,
     )
 
 

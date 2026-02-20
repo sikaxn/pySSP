@@ -118,6 +118,9 @@ def _build_dialog(**overrides):
         midi_rotary_volume_mode=str(overrides.get("midi_rotary_volume_mode", "relative")),
         midi_rotary_volume_step=int(overrides.get("midi_rotary_volume_step", 2)),
         midi_rotary_jog_step_ms=int(overrides.get("midi_rotary_jog_step_ms", 250)),
+        stage_display_layout=overrides.get("stage_display_layout", defaults["stage_display_layout"]),
+        stage_display_visibility=overrides.get("stage_display_visibility", defaults["stage_display_visibility"]),
+        stage_display_text_source=str(overrides.get("stage_display_text_source", defaults["stage_display_text_source"])),
         ui_language=defaults["ui_language"],
         initial_page=overrides.get("initial_page"),
         parent=None,
@@ -144,7 +147,7 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
     dialog.jog_outside_stop_cue_or_end_radio.setChecked(True)
     dialog.candidate_error_keep_radio.setChecked(True)
 
-    dialog.page_list.setCurrentRow(5)
+    dialog.select_page("Playback")
     dialog._restore_defaults_current_page()
 
     assert dialog.selected_main_transport_timeline_mode() == "cue_region"
@@ -198,3 +201,29 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_multi_play_limit_action() == "disallow_more_play"
     assert dialog.selected_candidate_error_action() == "keep_playing"
     assert dialog.selected_timecode_timeline_mode() == "audio_file"
+
+
+def test_display_page_layout_and_visibility_round_trip(qapp):
+    dialog = _build_dialog(
+        stage_display_layout=["song_name", "progress_bar", "elapsed", "remaining", "total_time", "next_song"],
+        stage_display_visibility={
+            "song_name": True,
+            "progress_bar": True,
+            "elapsed": True,
+            "remaining": False,
+            "total_time": True,
+            "next_song": False,
+        },
+        initial_page="Display",
+    )
+    assert dialog.selected_stage_display_layout()[0] == "song_name"
+    visibility = dialog.selected_stage_display_visibility()
+    assert visibility["remaining"] is False
+    assert visibility["next_song"] is False
+
+
+def test_display_page_text_source_selection(qapp):
+    dialog = _build_dialog(stage_display_text_source="note", initial_page="Display")
+    assert dialog.selected_stage_display_text_source() == "note"
+    dialog.display_text_source_combo.setCurrentIndex(dialog.display_text_source_combo.findData("filename"))
+    assert dialog.selected_stage_display_text_source() == "filename"

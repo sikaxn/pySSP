@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -558,6 +558,336 @@ class TimecodePanel(QWidget):
         root.addStretch(1)
 
 
+class StageDisplayWindow(QWidget):
+    DISPLAY_LABELS = {
+        "total_time": "Total Time",
+        "elapsed": "Elapsed",
+        "remaining": "Remaining",
+        "progress_bar": "Progress",
+        "song_name": "Song",
+        "next_song": "Next Song",
+    }
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, Qt.Window)
+        self.setWindowTitle("Stage Display")
+        self.resize(980, 600)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setStyleSheet("background:#000000; color:#FFFFFF;")
+        self._order = list(self.DISPLAY_LABELS.keys())
+        self._visibility = {key: True for key in self.DISPLAY_LABELS.keys()}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+        self._outer_layout = root
+        self._datetime_label = QLabel("", self)
+        self._datetime_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._datetime_label.setStyleSheet("font-size:20pt; font-weight:bold; color:#E6E6E6;")
+        root.addWidget(self._datetime_label, 0, Qt.AlignLeft | Qt.AlignTop)
+
+        center = QWidget(self)
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(18)
+        center_layout.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self._center_layout = center_layout
+        self._rows: Dict[str, QWidget] = {}
+        self._value_labels: Dict[str, QLabel] = {}
+        self._title_labels: Dict[str, QLabel] = {}
+        self._time_value_labels: List[QLabel] = []
+        self._song_value_labels: List[QLabel] = []
+        self._song_raw_values: Dict[str, str] = {"song_name": "-", "next_song": "-"}
+        self._song_base_pt = 48
+        self._song_text_boxes: Dict[str, QFrame] = {}
+
+        times_row = QWidget(center)
+        times_layout = QHBoxLayout(times_row)
+        times_layout.setContentsMargins(0, 0, 0, 0)
+        times_layout.setSpacing(28)
+        self._times_layout = times_layout
+        for key in ["total_time", "elapsed", "remaining"]:
+            panel = QFrame(times_row)
+            panel_layout = QVBoxLayout(panel)
+            panel_layout.setContentsMargins(0, 0, 0, 0)
+            panel_layout.setSpacing(4)
+            title_label = QLabel(self.DISPLAY_LABELS[key], panel)
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setStyleSheet("font-size:20pt; font-weight:bold; color:#D0D0D0;")
+            value = QLabel("-", panel)
+            value.setAlignment(Qt.AlignCenter)
+            value.setStyleSheet("font-size:44pt; font-weight:bold; color:#FFFFFF;")
+            panel_layout.addWidget(title_label)
+            panel_layout.addWidget(value)
+            self._rows[key] = panel
+            self._value_labels[key] = value
+            self._title_labels[key] = title_label
+            self._time_value_labels.append(value)
+            times_layout.addWidget(panel)
+        center_layout.addWidget(times_row, 0, Qt.AlignHCenter)
+        self._times_row = times_row
+
+        progress_row = QFrame(center)
+        progress_layout = QVBoxLayout(progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(8)
+        progress_title = QLabel(self.DISPLAY_LABELS["progress_bar"], progress_row)
+        progress_title.setAlignment(Qt.AlignCenter)
+        progress_title.setStyleSheet("font-size:20pt; font-weight:bold; color:#D0D0D0;")
+        progress = QLabel("0%", progress_row)
+        progress.setAlignment(Qt.AlignCenter)
+        progress.setMinimumWidth(760)
+        progress.setMinimumHeight(46)
+        progress.setStyleSheet("font-size:12pt; font-weight:bold; color:white;")
+        progress_layout.addWidget(progress_title)
+        progress_layout.addWidget(progress)
+        self._rows["progress_bar"] = progress_row
+        self._value_labels["progress_bar"] = progress
+        self._title_labels["progress_bar"] = progress_title
+        self._progress_bar = progress
+        center_layout.addWidget(progress_row, 0, Qt.AlignHCenter)
+
+        for key in ["song_name", "next_song"]:
+            row = QFrame(center)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            title_text = "Now Playing" if key == "song_name" else "Next Playing"
+            title_label = QLabel(title_text, row)
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setStyleSheet("font-size:20pt; font-weight:bold; color:#D0D0D0;")
+            text_box = QFrame(row)
+            text_box.setFrameShape(QFrame.NoFrame)
+            box_layout = QVBoxLayout(text_box)
+            box_layout.setContentsMargins(0, 0, 0, 0)
+            box_layout.setSpacing(0)
+            value = QLabel("-", text_box)
+            value.setAlignment(Qt.AlignCenter)
+            value.setWordWrap(False)
+            value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            value.setStyleSheet("font-size:48pt; font-weight:bold; color:#FFFFFF;")
+            box_layout.addWidget(value)
+            row_layout.addWidget(title_label)
+            row_layout.addWidget(text_box, 1)
+            self._rows[key] = row
+            self._value_labels[key] = value
+            self._title_labels[key] = title_label
+            self._song_value_labels.append(value)
+            self._song_text_boxes[key] = text_box
+            center_layout.addWidget(row, 0, Qt.AlignHCenter)
+
+        root.addWidget(center, 1)
+        footer = QWidget(self)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.addStretch(1)
+        self._status_value = QPushButton("Not Playing", footer)
+        self._status_value.setEnabled(False)
+        self._status_base_style = (
+            "QPushButton{font-size:16pt; font-weight:bold; color:#F5F5F5; border:1px solid #6A6A6A; border-radius:8px; padding:4px 12px; background:#0E0E0E;}"
+            "QPushButton:disabled{color:#F5F5F5;}"
+        )
+        self._status_value.setStyleSheet(self._status_base_style)
+        footer_layout.addWidget(self._status_value, 0, Qt.AlignRight)
+        root.addWidget(footer, 0)
+        self._footer_layout = footer_layout
+        self._root_layout = center_layout
+        self._datetime_timer = QTimer(self)
+        self._datetime_timer.timeout.connect(self._update_datetime)
+        self._datetime_timer.start(1000)
+        self._update_datetime()
+        self._apply_layout()
+        self._apply_responsive_sizes()
+
+    def configure_layout(self, order: List[str], visibility: Dict[str, bool]) -> None:
+        valid = [key for key in order if key in self._rows]
+        for key in self.DISPLAY_LABELS.keys():
+            if key not in valid:
+                valid.append(key)
+        self._order = valid
+        self._visibility = {key: bool(visibility.get(key, True)) for key in self.DISPLAY_LABELS.keys()}
+        self._apply_layout()
+
+    def update_values(
+        self,
+        total_time: str,
+        elapsed: str,
+        remaining: str,
+        progress_percent: int,
+        song_name: str,
+        next_song: str,
+        progress_text: str = "",
+        progress_style: str = "",
+    ) -> None:
+        values = {
+            "total_time": total_time,
+            "elapsed": elapsed,
+            "remaining": remaining,
+        }
+        for key, value in values.items():
+            label = self._value_labels.get(key)
+            if isinstance(label, QLabel):
+                label.setText(value)
+        self._song_raw_values["song_name"] = str(song_name or "-")
+        self._song_raw_values["next_song"] = str(next_song or "-")
+        self._apply_song_text_fit()
+        progress = self._value_labels.get("progress_bar")
+        if isinstance(progress, QLabel):
+            pct = max(0, min(100, int(progress_percent)))
+            progress.setText(str(progress_text or f"{pct}%"))
+            if progress_style:
+                progress.setStyleSheet(progress_style)
+            elif "border" not in progress.styleSheet():
+                progress.setStyleSheet(
+                    "QLabel{font-size:12pt;font-weight:bold;color:white;border:1px solid #3C4E58;border-radius:4px;padding:2px 8px;"
+                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2ECC40, stop:0.5 #2ECC40, stop:0.502 #111111, stop:1 #111111);}"
+                )
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _apply_layout(self) -> None:
+        for key, row in self._rows.items():
+            row.setVisible(bool(self._visibility.get(key, True)))
+        times_visible = any(
+            bool(self._visibility.get(key, True))
+            for key in ["total_time", "elapsed", "remaining"]
+        )
+        self._times_row.setVisible(times_visible)
+
+    def _update_datetime(self) -> None:
+        self._datetime_label.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_sizes()
+
+    def _apply_responsive_sizes(self) -> None:
+        w = max(640, self.width())
+        h = max(360, self.height())
+        scale = max(0.65, min(3.2, min(w / 1280.0, h / 720.0)))
+
+        margin = int(18 * scale)
+        self._outer_layout.setContentsMargins(margin, margin, margin, margin)
+        self._outer_layout.setSpacing(max(10, int(14 * scale)))
+        self._center_layout.setSpacing(max(10, int(18 * scale)))
+        self._times_layout.setSpacing(max(12, int(28 * scale)))
+        self._footer_layout.setSpacing(max(6, int(10 * scale)))
+
+        date_pt = max(12, int(20 * scale))
+        title_pt = max(12, int(20 * scale))
+        time_pt = max(16, int(44 * scale))
+        song_pt = max(18, int(48 * scale))
+        progress_pt = max(12, int(20 * scale))
+        progress_height = max(24, int(46 * scale))
+        progress_width = max(280, int(w * 0.72))
+        radius = max(4, int(6 * scale))
+        status_pt = max(10, int(16 * scale))
+        song_box_width = max(320, int(w * 0.90))
+        song_box_height = max(80, int(h * 0.15))
+
+        self._datetime_label.setStyleSheet(
+            f"font-size:{date_pt}pt; font-weight:bold; color:#E6E6E6;"
+        )
+        for label in self._title_labels.values():
+            label.setStyleSheet(
+                f"font-size:{title_pt}pt; font-weight:bold; color:#D0D0D0;"
+            )
+        for label in self._time_value_labels:
+            label.setStyleSheet(
+                f"font-size:{time_pt}pt; font-weight:bold; color:#FFFFFF;"
+            )
+        for label in self._song_value_labels:
+            label.setStyleSheet(
+                f"font-size:{song_pt}pt; font-weight:bold; color:#FFFFFF;"
+            )
+        self._song_base_pt = song_pt
+        for key in ["song_name", "next_song"]:
+            box = self._song_text_boxes.get(key)
+            if box is not None:
+                box.setFixedSize(song_box_width, song_box_height)
+        self._progress_bar.setMinimumHeight(progress_height)
+        self._progress_bar.setMinimumWidth(progress_width)
+        self._status_value.setStyleSheet(
+            "QPushButton{"
+            f"font-size:{status_pt}pt; font-weight:bold; color:#F5F5F5; border:1px solid #6A6A6A; border-radius:{max(6, int(8 * scale))}px; padding:4px 12px; background:#0E0E0E;"
+            "}"
+            "QPushButton:disabled{color:#F5F5F5;}"
+        )
+        self._status_base_style = self._status_value.styleSheet()
+        self._apply_song_text_fit()
+
+    def set_playback_status(self, state: str) -> None:
+        token = str(state or "").strip().lower()
+        if token == "playing":
+            self._status_value.setText("> Playing")
+            self._status_value.setStyleSheet(
+                self._status_base_style
+                + "QPushButton{background:#1E5E2D;border-color:#4FBF6A;}"
+            )
+        elif token == "paused":
+            self._status_value.setText("|| Paused")
+            self._status_value.setStyleSheet(
+                self._status_base_style
+                + "QPushButton{background:#5A4A12;border-color:#E0C14A;}"
+            )
+        else:
+            self._status_value.setText("[] Not Playing")
+            self._status_value.setStyleSheet(
+                self._status_base_style
+                + "QPushButton{background:#3C1B1B;border-color:#B56161;}"
+            )
+
+    def _apply_song_text_fit(self) -> None:
+        for key in ["song_name", "next_song"]:
+            label = self._value_labels.get(key)
+            if not isinstance(label, QLabel):
+                continue
+            text_box = self._song_text_boxes.get(key)
+            if text_box is None:
+                continue
+            raw = str(self._song_raw_values.get(key, "-") or "-")
+            label.setText(raw)
+            target_width = max(120, text_box.width() - 16)
+            target_height = max(40, text_box.height() - 8)
+            min_pt = 8
+            base_font = QFont(label.font())
+            base_font.setPointSize(max(min_pt, int(self._song_base_pt)))
+            label.setFont(base_font)
+            fit_pt = base_font.pointSize()
+            while fit_pt > min_pt:
+                metrics = label.fontMetrics()
+                rect = metrics.boundingRect(
+                    0,
+                    0,
+                    target_width,
+                    target_height,
+                    int(Qt.AlignCenter | Qt.TextWordWrap),
+                    raw,
+                )
+                if rect.width() <= target_width and rect.height() <= target_height:
+                    break
+                fit_pt -= 1
+                next_font = QFont(base_font)
+                next_font.setPointSize(fit_pt)
+                label.setFont(next_font)
+            label.setWordWrap(True)
+
+
 class NoAudioPlayer(QObject):
     StoppedState = 0
     PlayingState = 1
@@ -797,6 +1127,21 @@ class MainWindow(QMainWindow):
             in {"stop_immediately", "ignore_cue", "next_cue_or_stop", "stop_cue_or_end"}
             else "stop_immediately"
         )
+        self.stage_display_layout = self._normalize_stage_display_layout(
+            list(getattr(self.settings, "stage_display_layout", []))
+        )
+        self.stage_display_visibility = self._normalize_stage_display_visibility(
+            {
+                "total_time": bool(getattr(self.settings, "stage_display_show_total_time", True)),
+                "elapsed": bool(getattr(self.settings, "stage_display_show_elapsed", True)),
+                "remaining": bool(getattr(self.settings, "stage_display_show_remaining", True)),
+                "progress_bar": bool(getattr(self.settings, "stage_display_show_progress_bar", True)),
+                "song_name": bool(getattr(self.settings, "stage_display_show_song_name", True)),
+                "next_song": bool(getattr(self.settings, "stage_display_show_next_song", True)),
+            }
+        )
+        source = str(getattr(self.settings, "stage_display_text_source", "caption")).strip().lower()
+        self.stage_display_text_source = source if source in {"caption", "filename", "note"} else "caption"
         self.state_colors = {
             "empty": self.settings.color_empty,
             "assigned": self.settings.color_unplayed,
@@ -1085,6 +1430,8 @@ class MainWindow(QMainWindow):
         self._preload_icon_blink_on = False
         self._playback_warning_token = 0
         self._save_notice_token = 0
+        self._stage_display_window: Optional[StageDisplayWindow] = None
+        self._hover_slot_index: Optional[int] = None
 
         self._build_ui()
         self._apply_language()
@@ -1631,6 +1978,15 @@ class MainWindow(QMainWindow):
         options_action.triggered.connect(self._open_options_dialog)
         setup_menu.addAction(options_action)
         self._menu_actions["options"] = options_action
+
+        display_menu = self.menuBar().addMenu("Display")
+        show_display_action = QAction("Show Display", self)
+        show_display_action.triggered.connect(self._show_stage_display)
+        display_menu.addAction(show_display_action)
+        stage_display_setting_action = QAction("Stage Display Setting", self)
+        stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Display"))
+        display_menu.addAction(stage_display_setting_action)
+
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
         self.addAction(search_action)
@@ -1740,6 +2096,27 @@ class MainWindow(QMainWindow):
         except Exception:
             parsed = int(default)
         return max(int(minimum), min(int(maximum), int(parsed)))
+
+    @staticmethod
+    def _normalize_stage_display_layout(values: List[str]) -> List[str]:
+        valid = ["total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        output: List[str] = []
+        for raw in list(values or []):
+            key = str(raw or "").strip().lower()
+            if key in valid and key not in output:
+                output.append(key)
+        for key in valid:
+            if key not in output:
+                output.append(key)
+        return output
+
+    @staticmethod
+    def _normalize_stage_display_visibility(values: Dict[str, bool]) -> Dict[str, bool]:
+        valid = ["total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        output: Dict[str, bool] = {}
+        for key in valid:
+            output[key] = bool(values.get(key, True))
+        return output
 
     def _backup_pyssp_settings(self) -> None:
         self._save_settings()
@@ -3894,15 +4271,20 @@ class MainWindow(QMainWindow):
         self.status_totals_label.setText(f"{total_buttons} {tr('button')} ({format_set_time(total_ms)})")
 
     def _on_sound_button_hover(self, slot_index: Optional[int]) -> None:
+        self._hover_slot_index = None
         if slot_index is None:
             self.status_hover_label.setText(tr("Button: -"))
+            self._refresh_stage_display()
             return
         if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
             self.status_hover_label.setText(tr("Button: -"))
+            self._refresh_stage_display()
             return
+        self._hover_slot_index = slot_index
         group = self._view_group_key()
         group_text = group if group == "Q" else group.upper()
         self.status_hover_label.setText(f"{tr('Button: ')}{group_text}-{self.current_page + 1}-{slot_index + 1}")
+        self._refresh_stage_display()
 
     def _format_button_key(self, slot_key: Tuple[str, int, int]) -> str:
         group, page_index, slot_index = slot_key
@@ -5189,6 +5571,7 @@ class MainWindow(QMainWindow):
         progress = 0 if total_ms == 0 else int((display_pos / total_ms) * 100)
         self._refresh_main_jog_meta(display_pos, total_ms)
         self._refresh_timecode_panel()
+        self._refresh_stage_display()
 
     def _on_duration_changed(self, duration: int) -> None:
         self.current_duration_ms = duration
@@ -5205,6 +5588,7 @@ class MainWindow(QMainWindow):
                 self.data[group][page_index][slot_index].duration_ms = duration
             self._refresh_sound_grid()
         self._refresh_timecode_panel()
+        self._refresh_stage_display()
 
     def _on_state_changed(self, _state: int) -> None:
         print(
@@ -5277,6 +5661,7 @@ class MainWindow(QMainWindow):
             self.seek_slider.setValue(0)
             self._update_now_playing_label("")
         self._refresh_timecode_panel()
+        self._refresh_stage_display()
 
     def _stop_player_internal(self, player: ExternalMediaPlayer) -> None:
         self._ignore_state_changes += 1
@@ -5349,6 +5734,7 @@ class MainWindow(QMainWindow):
         self._refresh_timecode_panel()
         self.left_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[0]))))
         self.right_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[1]))))
+        self._refresh_stage_display()
 
     def _update_group_status(self) -> None:
         if self.cue_mode:
@@ -5371,6 +5757,7 @@ class MainWindow(QMainWindow):
             self.now_playing_label.setText(f"{tr('NOW PLAYING: ')}{text}")
         else:
             self.now_playing_label.setText(tr("NOW PLAYING:"))
+        self._refresh_stage_display()
 
     def _build_now_playing_text(self, slot: SoundButtonData) -> str:
         title = slot.title.strip()
@@ -5378,6 +5765,123 @@ class MainWindow(QMainWindow):
             return title
         base_name = os.path.basename(slot.file_path)
         return os.path.splitext(base_name)[0]
+
+    def _show_stage_display(self) -> None:
+        if self._stage_display_window is None:
+            self._stage_display_window = StageDisplayWindow(self)
+            self._stage_display_window.destroyed.connect(self._on_stage_display_destroyed)
+        self._stage_display_window.configure_layout(self.stage_display_layout, self.stage_display_visibility)
+        self._refresh_stage_display()
+        self._stage_display_window.show()
+        self._stage_display_window.raise_()
+        self._stage_display_window.activateWindow()
+
+    def _on_stage_display_destroyed(self, _obj=None) -> None:
+        self._stage_display_window = None
+
+    def _refresh_stage_display(self) -> None:
+        if self._stage_display_window is None:
+            return
+        if not self._stage_display_window.isVisible():
+            return
+        total_ms = max(0, self._transport_total_ms())
+        elapsed_text = self.elapsed_time.text().strip() or "00:00:00"
+        remaining_text = self.remaining_time.text().strip() or "00:00:00"
+        total_text = self.total_time.text().strip() or "00:00:00"
+        display_pos = 0
+        try:
+            display_pos = max(0, int(self.seek_slider.value()))
+        except Exception:
+            display_pos = 0
+        progress = 0 if total_ms <= 0 else int((display_pos / float(total_ms)) * 100)
+        song_name = "-"
+        if self.current_playing is not None:
+            slot = self._slot_for_key(self.current_playing)
+            if slot is not None:
+                song_name = self._build_stage_slot_text(slot) or "-"
+        next_song = self._next_stage_song_name()
+        self._stage_display_window.update_values(
+            total_time=total_text,
+            elapsed=elapsed_text,
+            remaining=remaining_text,
+            progress_percent=progress,
+            song_name=song_name,
+            next_song=next_song,
+            progress_text=self.progress_label.text().strip(),
+            progress_style=self.progress_label.styleSheet(),
+        )
+        self._stage_display_window.set_playback_status(self._stage_playback_status())
+
+    def _stage_playback_status(self) -> str:
+        states = [
+            self.player.state(),
+            self.player_b.state(),
+        ]
+        for extra in self._multi_players:
+            try:
+                states.append(extra.state())
+            except Exception:
+                pass
+        if any(state == ExternalMediaPlayer.PlayingState for state in states):
+            return "playing"
+        if any(state == ExternalMediaPlayer.PausedState for state in states):
+            return "paused"
+        return "not_playing"
+
+    def _build_stage_slot_text(self, slot: SoundButtonData) -> str:
+        source = str(self.stage_display_text_source or "caption").strip().lower()
+        if source == "filename":
+            base_name = os.path.basename(slot.file_path or "")
+            if base_name:
+                return base_name
+        elif source == "note":
+            note = str(slot.notes or "").strip()
+            if note:
+                return note
+        title = str(slot.title or "").strip()
+        if title:
+            return title
+        base_name = os.path.basename(slot.file_path or "")
+        if base_name:
+            return os.path.splitext(base_name)[0]
+        return "-"
+
+    def _next_stage_song_name(self) -> str:
+        if self.cue_mode:
+            return "-"
+        playlist_enabled = self.page_playlist_enabled[self.current_group][self.current_page]
+        if playlist_enabled:
+            next_slot = self._next_playlist_slot(for_auto_advance=False)
+        else:
+            hovered = self._next_stage_from_hover()
+            if hovered is not None:
+                return hovered
+            if self.next_play_mode == "any_available":
+                next_slot = self._next_available_slot_on_current_page()
+            else:
+                next_slot = self._next_unplayed_slot_on_current_page()
+        if next_slot is None:
+            return "-"
+        slots = self.data[self.current_group][self.current_page]
+        if next_slot < 0 or next_slot >= len(slots):
+            return "-"
+        slot = slots[next_slot]
+        if not slot.assigned or slot.marker:
+            return "-"
+        return self._build_stage_slot_text(slot) or "-"
+
+    def _next_stage_from_hover(self) -> Optional[str]:
+        slot_index = self._hover_slot_index
+        if slot_index is None:
+            return None
+        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+            return None
+        group = self._view_group_key()
+        key = (group, self.current_page, slot_index)
+        slot = self._slot_for_key(key)
+        if slot is None:
+            return None
+        return self._build_stage_slot_text(slot) or "-"
 
     def _view_group_key(self) -> str:
         return "Q" if self.cue_mode else self.current_group
@@ -5452,6 +5956,7 @@ class MainWindow(QMainWindow):
             else:
                 loop_btn.setText(tr("Loop"))
         self._update_next_button_enabled()
+        self._refresh_stage_display()
 
     def _update_next_button_enabled(self) -> None:
         next_btn = self.control_buttons.get("Next")
@@ -5962,6 +6467,9 @@ class MainWindow(QMainWindow):
             midi_rotary_volume_mode=self.midi_rotary_volume_mode,
             midi_rotary_volume_step=self.midi_rotary_volume_step,
             midi_rotary_jog_step_ms=self.midi_rotary_jog_step_ms,
+            stage_display_layout=self.stage_display_layout,
+            stage_display_visibility=self.stage_display_visibility,
+            stage_display_text_source=self.stage_display_text_source,
             ui_language=self.ui_language,
             initial_page=initial_page,
             parent=self,
@@ -6094,6 +6602,12 @@ class MainWindow(QMainWindow):
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(dialog.selected_midi_rotary_volume_step())))
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(dialog.selected_midi_rotary_jog_step_ms())))
+        self.stage_display_layout = self._normalize_stage_display_layout(dialog.selected_stage_display_layout())
+        self.stage_display_visibility = self._normalize_stage_display_visibility(dialog.selected_stage_display_visibility())
+        self.stage_display_text_source = dialog.selected_stage_display_text_source()
+        if self._stage_display_window is not None:
+            self._stage_display_window.configure_layout(self.stage_display_layout, self.stage_display_visibility)
+            self._refresh_stage_display()
         selected_ui_language = dialog.selected_ui_language()
         if selected_ui_language != self.ui_language:
             self.ui_language = selected_ui_language
@@ -7576,6 +8090,7 @@ class MainWindow(QMainWindow):
         progress = 0 if total_ms == 0 else int((display / total_ms) * 100)
         self._refresh_main_jog_meta(display, total_ms)
         self._refresh_timecode_panel()
+        self._refresh_stage_display()
 
     def _refresh_main_jog_meta(self, display_ms: int, total_ms: int) -> None:
         low, high = self._main_transport_bounds()
@@ -8159,6 +8674,14 @@ class MainWindow(QMainWindow):
         self.settings.midi_rotary_volume_mode = self.midi_rotary_volume_mode
         self.settings.midi_rotary_volume_step = int(self.midi_rotary_volume_step)
         self.settings.midi_rotary_jog_step_ms = int(self.midi_rotary_jog_step_ms)
+        self.settings.stage_display_layout = list(self.stage_display_layout)
+        self.settings.stage_display_show_total_time = bool(self.stage_display_visibility.get("total_time", True))
+        self.settings.stage_display_show_elapsed = bool(self.stage_display_visibility.get("elapsed", True))
+        self.settings.stage_display_show_remaining = bool(self.stage_display_visibility.get("remaining", True))
+        self.settings.stage_display_show_progress_bar = bool(self.stage_display_visibility.get("progress_bar", True))
+        self.settings.stage_display_show_song_name = bool(self.stage_display_visibility.get("song_name", True))
+        self.settings.stage_display_show_next_song = bool(self.stage_display_visibility.get("next_song", True))
+        self.settings.stage_display_text_source = self.stage_display_text_source
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -8746,6 +9269,11 @@ class MainWindow(QMainWindow):
             pass
         try:
             self._midi_router.close()
+        except Exception:
+            pass
+        try:
+            if self._stage_display_window is not None:
+                self._stage_display_window.close()
         except Exception:
             pass
         self._stop_web_remote_service()

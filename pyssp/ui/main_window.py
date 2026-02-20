@@ -912,6 +912,35 @@ class MainWindow(QMainWindow):
         )
         self.midi_rotary_jog_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_jog_binding", ""))
         self.midi_rotary_volume_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_volume_binding", ""))
+        self.midi_rotary_group_invert = bool(getattr(self.settings, "midi_rotary_group_invert", False))
+        self.midi_rotary_page_invert = bool(getattr(self.settings, "midi_rotary_page_invert", False))
+        self.midi_rotary_sound_button_invert = bool(getattr(self.settings, "midi_rotary_sound_button_invert", False))
+        self.midi_rotary_jog_invert = bool(getattr(self.settings, "midi_rotary_jog_invert", False))
+        self.midi_rotary_volume_invert = bool(getattr(self.settings, "midi_rotary_volume_invert", False))
+        self.midi_rotary_group_sensitivity = max(
+            1, min(20, int(getattr(self.settings, "midi_rotary_group_sensitivity", 1)))
+        )
+        self.midi_rotary_page_sensitivity = max(
+            1, min(20, int(getattr(self.settings, "midi_rotary_page_sensitivity", 1)))
+        )
+        self.midi_rotary_sound_button_sensitivity = max(
+            1, min(20, int(getattr(self.settings, "midi_rotary_sound_button_sensitivity", 1)))
+        )
+        self.midi_rotary_group_relative_mode = self._normalize_midi_relative_mode(
+            getattr(self.settings, "midi_rotary_group_relative_mode", "auto")
+        )
+        self.midi_rotary_page_relative_mode = self._normalize_midi_relative_mode(
+            getattr(self.settings, "midi_rotary_page_relative_mode", "auto")
+        )
+        self.midi_rotary_sound_button_relative_mode = self._normalize_midi_relative_mode(
+            getattr(self.settings, "midi_rotary_sound_button_relative_mode", "auto")
+        )
+        self.midi_rotary_jog_relative_mode = self._normalize_midi_relative_mode(
+            getattr(self.settings, "midi_rotary_jog_relative_mode", "auto")
+        )
+        self.midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
+            getattr(self.settings, "midi_rotary_volume_relative_mode", "auto")
+        )
         mode = str(getattr(self.settings, "midi_rotary_volume_mode", "relative")).strip().lower()
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(getattr(self.settings, "midi_rotary_volume_step", 2))))
@@ -5376,6 +5405,19 @@ class MainWindow(QMainWindow):
             midi_rotary_sound_button_binding=self.midi_rotary_sound_button_binding,
             midi_rotary_jog_binding=self.midi_rotary_jog_binding,
             midi_rotary_volume_binding=self.midi_rotary_volume_binding,
+            midi_rotary_group_invert=self.midi_rotary_group_invert,
+            midi_rotary_page_invert=self.midi_rotary_page_invert,
+            midi_rotary_sound_button_invert=self.midi_rotary_sound_button_invert,
+            midi_rotary_jog_invert=self.midi_rotary_jog_invert,
+            midi_rotary_volume_invert=self.midi_rotary_volume_invert,
+            midi_rotary_group_sensitivity=self.midi_rotary_group_sensitivity,
+            midi_rotary_page_sensitivity=self.midi_rotary_page_sensitivity,
+            midi_rotary_sound_button_sensitivity=self.midi_rotary_sound_button_sensitivity,
+            midi_rotary_group_relative_mode=self.midi_rotary_group_relative_mode,
+            midi_rotary_page_relative_mode=self.midi_rotary_page_relative_mode,
+            midi_rotary_sound_button_relative_mode=self.midi_rotary_sound_button_relative_mode,
+            midi_rotary_jog_relative_mode=self.midi_rotary_jog_relative_mode,
+            midi_rotary_volume_relative_mode=self.midi_rotary_volume_relative_mode,
             midi_rotary_volume_mode=self.midi_rotary_volume_mode,
             midi_rotary_volume_step=self.midi_rotary_volume_step,
             midi_rotary_jog_step_ms=self.midi_rotary_jog_step_ms,
@@ -5481,6 +5523,31 @@ class MainWindow(QMainWindow):
         self.midi_rotary_sound_button_binding = normalize_midi_binding(dialog.selected_midi_rotary_sound_button_binding())
         self.midi_rotary_jog_binding = normalize_midi_binding(dialog.selected_midi_rotary_jog_binding())
         self.midi_rotary_volume_binding = normalize_midi_binding(dialog.selected_midi_rotary_volume_binding())
+        self.midi_rotary_group_invert = bool(dialog.selected_midi_rotary_group_invert())
+        self.midi_rotary_page_invert = bool(dialog.selected_midi_rotary_page_invert())
+        self.midi_rotary_sound_button_invert = bool(dialog.selected_midi_rotary_sound_button_invert())
+        self.midi_rotary_jog_invert = bool(dialog.selected_midi_rotary_jog_invert())
+        self.midi_rotary_volume_invert = bool(dialog.selected_midi_rotary_volume_invert())
+        self.midi_rotary_group_sensitivity = max(1, min(20, int(dialog.selected_midi_rotary_group_sensitivity())))
+        self.midi_rotary_page_sensitivity = max(1, min(20, int(dialog.selected_midi_rotary_page_sensitivity())))
+        self.midi_rotary_sound_button_sensitivity = max(
+            1, min(20, int(dialog.selected_midi_rotary_sound_button_sensitivity()))
+        )
+        self.midi_rotary_group_relative_mode = self._normalize_midi_relative_mode(
+            dialog.selected_midi_rotary_group_relative_mode()
+        )
+        self.midi_rotary_page_relative_mode = self._normalize_midi_relative_mode(
+            dialog.selected_midi_rotary_page_relative_mode()
+        )
+        self.midi_rotary_sound_button_relative_mode = self._normalize_midi_relative_mode(
+            dialog.selected_midi_rotary_sound_button_relative_mode()
+        )
+        self.midi_rotary_jog_relative_mode = self._normalize_midi_relative_mode(
+            dialog.selected_midi_rotary_jog_relative_mode()
+        )
+        self.midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
+            dialog.selected_midi_rotary_volume_relative_mode()
+        )
         mode = str(dialog.selected_midi_rotary_volume_mode()).strip().lower()
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(dialog.selected_midi_rotary_volume_step())))
@@ -7533,6 +7600,19 @@ class MainWindow(QMainWindow):
         self.settings.midi_rotary_sound_button_binding = self.midi_rotary_sound_button_binding
         self.settings.midi_rotary_jog_binding = self.midi_rotary_jog_binding
         self.settings.midi_rotary_volume_binding = self.midi_rotary_volume_binding
+        self.settings.midi_rotary_group_invert = bool(self.midi_rotary_group_invert)
+        self.settings.midi_rotary_page_invert = bool(self.midi_rotary_page_invert)
+        self.settings.midi_rotary_sound_button_invert = bool(self.midi_rotary_sound_button_invert)
+        self.settings.midi_rotary_jog_invert = bool(self.midi_rotary_jog_invert)
+        self.settings.midi_rotary_volume_invert = bool(self.midi_rotary_volume_invert)
+        self.settings.midi_rotary_group_sensitivity = int(self.midi_rotary_group_sensitivity)
+        self.settings.midi_rotary_page_sensitivity = int(self.midi_rotary_page_sensitivity)
+        self.settings.midi_rotary_sound_button_sensitivity = int(self.midi_rotary_sound_button_sensitivity)
+        self.settings.midi_rotary_group_relative_mode = self.midi_rotary_group_relative_mode
+        self.settings.midi_rotary_page_relative_mode = self.midi_rotary_page_relative_mode
+        self.settings.midi_rotary_sound_button_relative_mode = self.midi_rotary_sound_button_relative_mode
+        self.settings.midi_rotary_jog_relative_mode = self.midi_rotary_jog_relative_mode
+        self.settings.midi_rotary_volume_relative_mode = self.midi_rotary_volume_relative_mode
         self.settings.midi_rotary_volume_mode = self.midi_rotary_volume_mode
         self.settings.midi_rotary_volume_step = int(self.midi_rotary_volume_step)
         self.settings.midi_rotary_jog_step_ms = int(self.midi_rotary_jog_step_ms)
@@ -7844,10 +7924,27 @@ class MainWindow(QMainWindow):
         return selector == source_selector
 
     @staticmethod
-    def _midi_cc_relative_delta(value: int) -> int:
+    def _normalize_midi_relative_mode(mode: str) -> str:
+        token = str(mode or "").strip().lower()
+        if token in {"auto", "twos_complement", "sign_magnitude", "binary_offset"}:
+            return token
+        return "auto"
+
+    @staticmethod
+    def _midi_cc_relative_delta(value: int, mode: str = "auto") -> int:
         v = int(value) & 0x7F
         if v == 64:
             return 0
+        mode_name = MainWindow._normalize_midi_relative_mode(mode)
+        if mode_name == "binary_offset":
+            return v - 64
+        if mode_name == "sign_magnitude":
+            if 1 <= v <= 63:
+                return v
+            if 65 <= v <= 127:
+                return -(v - 64)
+            return 0
+        # twos_complement and auto fallback
         if 1 <= v <= 63:
             return v
         if 65 <= v <= 127:
@@ -7875,30 +7972,62 @@ class MainWindow(QMainWindow):
         if high not in {0xB0, 0xE0}:
             return False
         source_token = ""
-        raw_delta = 0
         if high == 0xB0:
             source_token = normalize_midi_binding(f"{status:02X}:{data1:02X}")
-            raw_delta = self._midi_cc_relative_delta(data2)
         elif high == 0xE0:
             source_token = normalize_midi_binding(f"{status:02X}")
-            raw_delta = self._midi_pitch_relative_delta(data1, data2)
         if not source_token:
             return False
-        step_delta = 1 if raw_delta > 0 else (-1 if raw_delta < 0 else 0)
-
         if self._cc_binding_matches(self.midi_rotary_group_binding, source_selector, source_token):
-            if step_delta != 0:
-                self._hotkey_select_group_delta(step_delta)
+            raw_delta = (
+                self._midi_cc_relative_delta(data2, self.midi_rotary_group_relative_mode)
+                if high == 0xB0
+                else self._midi_pitch_relative_delta(data1, data2)
+            )
+            if raw_delta != 0:
+                nav_delta = raw_delta
+                if self.midi_rotary_group_invert:
+                    nav_delta = -nav_delta
+                effective_delta = self._midi_rotary_apply_sensitivity("group", nav_delta, self.midi_rotary_group_sensitivity)
+                if effective_delta == 0:
+                    return True
+                self._hotkey_select_group_delta(effective_delta)
                 return True
             return False
         if self._cc_binding_matches(self.midi_rotary_page_binding, source_selector, source_token):
-            if step_delta != 0:
-                self._hotkey_select_page_delta(step_delta)
+            raw_delta = (
+                self._midi_cc_relative_delta(data2, self.midi_rotary_page_relative_mode)
+                if high == 0xB0
+                else self._midi_pitch_relative_delta(data1, data2)
+            )
+            if raw_delta != 0:
+                nav_delta = raw_delta
+                if self.midi_rotary_page_invert:
+                    nav_delta = -nav_delta
+                effective_delta = self._midi_rotary_apply_sensitivity("page", nav_delta, self.midi_rotary_page_sensitivity)
+                if effective_delta == 0:
+                    return True
+                self._hotkey_select_page_delta(effective_delta)
                 return True
             return False
         if self._cc_binding_matches(self.midi_rotary_sound_button_binding, source_selector, source_token):
-            if step_delta != 0:
-                self._hotkey_select_sound_button_delta(step_delta)
+            raw_delta = (
+                self._midi_cc_relative_delta(data2, self.midi_rotary_sound_button_relative_mode)
+                if high == 0xB0
+                else self._midi_pitch_relative_delta(data1, data2)
+            )
+            if raw_delta != 0:
+                nav_delta = raw_delta
+                if self.midi_rotary_sound_button_invert:
+                    nav_delta = -nav_delta
+                effective_delta = self._midi_rotary_apply_sensitivity(
+                    "sound_button",
+                    nav_delta,
+                    self.midi_rotary_sound_button_sensitivity,
+                )
+                if effective_delta == 0:
+                    return True
+                self._hotkey_select_sound_button_delta(effective_delta)
                 return True
             return False
         if self._cc_binding_matches(self.midi_rotary_volume_binding, source_selector, source_token):
@@ -7908,23 +8037,59 @@ class MainWindow(QMainWindow):
                 else:
                     value14 = (int(data1) & 0x7F) | ((int(data2) & 0x7F) << 7)
                     level = int(round((max(0, min(16383, value14)) / 16383.0) * 100.0))
+                if self.midi_rotary_volume_invert:
+                    level = 100 - level
                 self.volume_slider.setValue(max(0, min(100, level)))
                 return True
+            raw_delta = (
+                self._midi_cc_relative_delta(data2, self.midi_rotary_volume_relative_mode)
+                if high == 0xB0
+                else self._midi_pitch_relative_delta(data1, data2)
+            )
             if raw_delta != 0:
+                if self.midi_rotary_volume_invert:
+                    raw_delta = -raw_delta
                 current = int(self.volume_slider.value())
                 next_level = current + (int(self.midi_rotary_volume_step) * raw_delta)
                 self.volume_slider.setValue(max(0, min(100, next_level)))
                 return True
             return False
         if self._cc_binding_matches(self.midi_rotary_jog_binding, source_selector, source_token):
+            raw_delta = (
+                self._midi_cc_relative_delta(data2, self.midi_rotary_jog_relative_mode)
+                if high == 0xB0
+                else self._midi_pitch_relative_delta(data1, data2)
+            )
             if raw_delta != 0:
+                if self.midi_rotary_jog_invert:
+                    raw_delta = -raw_delta
                 current = int(self.seek_slider.value())
                 total_ms = self._transport_total_ms()
-                next_value = current + (int(self.midi_rotary_jog_step_ms) * raw_delta)
-                self.seek_slider.setValue(max(0, min(total_ms, next_value)))
+                next_display = max(0, min(total_ms, current + (int(self.midi_rotary_jog_step_ms) * raw_delta)))
+                absolute = self._transport_absolute_ms_for_display(next_display)
+                self.player.setPosition(max(0, int(absolute)))
+                self.seek_slider.setValue(next_display)
                 return True
             return False
         return False
+
+    def _midi_rotary_apply_sensitivity(self, key: str, raw_delta: int, sensitivity: int) -> int:
+        delta = int(raw_delta)
+        sens = max(1, int(sensitivity))
+        if sens <= 1:
+            return delta
+        if not hasattr(self, "_midi_rotary_nav_accum"):
+            self._midi_rotary_nav_accum = {}
+        accum = int(self._midi_rotary_nav_accum.get(key, 0)) + delta
+        out = 0
+        while accum >= sens:
+            out += 1
+            accum -= sens
+        while accum <= -sens:
+            out -= 1
+            accum += sens
+        self._midi_rotary_nav_accum[key] = accum
+        return out
 
     def _on_midi_binding_triggered(
         self,

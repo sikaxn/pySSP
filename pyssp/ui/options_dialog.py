@@ -282,6 +282,19 @@ class OptionsDialog(QDialog):
         "midi_rotary_sound_button_binding": "",
         "midi_rotary_jog_binding": "",
         "midi_rotary_volume_binding": "",
+        "midi_rotary_group_invert": False,
+        "midi_rotary_page_invert": False,
+        "midi_rotary_sound_button_invert": False,
+        "midi_rotary_jog_invert": False,
+        "midi_rotary_volume_invert": False,
+        "midi_rotary_group_sensitivity": 1,
+        "midi_rotary_page_sensitivity": 1,
+        "midi_rotary_sound_button_sensitivity": 1,
+        "midi_rotary_group_relative_mode": "auto",
+        "midi_rotary_page_relative_mode": "auto",
+        "midi_rotary_sound_button_relative_mode": "auto",
+        "midi_rotary_jog_relative_mode": "auto",
+        "midi_rotary_volume_relative_mode": "auto",
         "midi_rotary_volume_mode": "relative",
         "midi_rotary_volume_step": 2,
         "midi_rotary_jog_step_ms": 250,
@@ -364,6 +377,19 @@ class OptionsDialog(QDialog):
         midi_rotary_sound_button_binding: str,
         midi_rotary_jog_binding: str,
         midi_rotary_volume_binding: str,
+        midi_rotary_group_invert: bool,
+        midi_rotary_page_invert: bool,
+        midi_rotary_sound_button_invert: bool,
+        midi_rotary_jog_invert: bool,
+        midi_rotary_volume_invert: bool,
+        midi_rotary_group_sensitivity: int,
+        midi_rotary_page_sensitivity: int,
+        midi_rotary_sound_button_sensitivity: int,
+        midi_rotary_group_relative_mode: str,
+        midi_rotary_page_relative_mode: str,
+        midi_rotary_sound_button_relative_mode: str,
+        midi_rotary_jog_relative_mode: str,
+        midi_rotary_volume_relative_mode: str,
         midi_rotary_volume_mode: str,
         midi_rotary_volume_step: int,
         midi_rotary_jog_step_ms: int,
@@ -413,6 +439,19 @@ class OptionsDialog(QDialog):
         self._midi_rotary_sound_button_binding = normalize_midi_binding(midi_rotary_sound_button_binding)
         self._midi_rotary_jog_binding = normalize_midi_binding(midi_rotary_jog_binding)
         self._midi_rotary_volume_binding = normalize_midi_binding(midi_rotary_volume_binding)
+        self._midi_rotary_group_invert = bool(midi_rotary_group_invert)
+        self._midi_rotary_page_invert = bool(midi_rotary_page_invert)
+        self._midi_rotary_sound_button_invert = bool(midi_rotary_sound_button_invert)
+        self._midi_rotary_jog_invert = bool(midi_rotary_jog_invert)
+        self._midi_rotary_volume_invert = bool(midi_rotary_volume_invert)
+        self._midi_rotary_group_sensitivity = max(1, min(20, int(midi_rotary_group_sensitivity)))
+        self._midi_rotary_page_sensitivity = max(1, min(20, int(midi_rotary_page_sensitivity)))
+        self._midi_rotary_sound_button_sensitivity = max(1, min(20, int(midi_rotary_sound_button_sensitivity)))
+        self._midi_rotary_group_relative_mode = self._normalize_midi_relative_mode(midi_rotary_group_relative_mode)
+        self._midi_rotary_page_relative_mode = self._normalize_midi_relative_mode(midi_rotary_page_relative_mode)
+        self._midi_rotary_sound_button_relative_mode = self._normalize_midi_relative_mode(midi_rotary_sound_button_relative_mode)
+        self._midi_rotary_jog_relative_mode = self._normalize_midi_relative_mode(midi_rotary_jog_relative_mode)
+        self._midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(midi_rotary_volume_relative_mode)
         self._midi_rotary_volume_mode = (
             str(midi_rotary_volume_mode).strip().lower()
             if str(midi_rotary_volume_mode).strip().lower() in {"absolute", "relative"}
@@ -421,7 +460,9 @@ class OptionsDialog(QDialog):
         self._midi_rotary_volume_step = max(1, min(20, int(midi_rotary_volume_step)))
         self._midi_rotary_jog_step_ms = max(10, min(5000, int(midi_rotary_jog_step_ms)))
         self._learning_midi_rotary_target: Optional[MidiCaptureEdit] = None
+        self._learning_midi_rotary_state: Optional[dict] = None
         self._midi_warning_label: Optional[QLabel] = None
+        self._midi_has_conflict = False
         self._learning_midi_target: Optional[MidiCaptureEdit] = None
         self._ui_language = normalize_language(ui_language)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
@@ -843,22 +884,58 @@ class OptionsDialog(QDialog):
         self.midi_rotary_group_edit = MidiCaptureEdit()
         self.midi_rotary_group_edit.setBinding(self._midi_rotary_group_binding)
         form.addRow("Group Rotary:", self._build_midi_learn_row(self.midi_rotary_group_edit, rotary=True))
+        self.midi_rotary_group_invert_checkbox = QCheckBox("Invert")
+        self.midi_rotary_group_invert_checkbox.setChecked(self._midi_rotary_group_invert)
+        self.midi_rotary_group_sensitivity_spin = QSpinBox()
+        self.midi_rotary_group_sensitivity_spin.setRange(1, 20)
+        self.midi_rotary_group_sensitivity_spin.setValue(self._midi_rotary_group_sensitivity)
+        form.addRow(
+            "Group Options:",
+            self._build_rotary_option_row(self.midi_rotary_group_invert_checkbox, self.midi_rotary_group_sensitivity_spin),
+        )
 
         self.midi_rotary_page_edit = MidiCaptureEdit()
         self.midi_rotary_page_edit.setBinding(self._midi_rotary_page_binding)
         form.addRow("Page Rotary:", self._build_midi_learn_row(self.midi_rotary_page_edit, rotary=True))
+        self.midi_rotary_page_invert_checkbox = QCheckBox("Invert")
+        self.midi_rotary_page_invert_checkbox.setChecked(self._midi_rotary_page_invert)
+        self.midi_rotary_page_sensitivity_spin = QSpinBox()
+        self.midi_rotary_page_sensitivity_spin.setRange(1, 20)
+        self.midi_rotary_page_sensitivity_spin.setValue(self._midi_rotary_page_sensitivity)
+        form.addRow(
+            "Page Options:",
+            self._build_rotary_option_row(self.midi_rotary_page_invert_checkbox, self.midi_rotary_page_sensitivity_spin),
+        )
 
         self.midi_rotary_sound_button_edit = MidiCaptureEdit()
         self.midi_rotary_sound_button_edit.setBinding(self._midi_rotary_sound_button_binding)
         form.addRow("Sound Button Rotary:", self._build_midi_learn_row(self.midi_rotary_sound_button_edit, rotary=True))
+        self.midi_rotary_sound_button_invert_checkbox = QCheckBox("Invert")
+        self.midi_rotary_sound_button_invert_checkbox.setChecked(self._midi_rotary_sound_button_invert)
+        self.midi_rotary_sound_button_sensitivity_spin = QSpinBox()
+        self.midi_rotary_sound_button_sensitivity_spin.setRange(1, 20)
+        self.midi_rotary_sound_button_sensitivity_spin.setValue(self._midi_rotary_sound_button_sensitivity)
+        form.addRow(
+            "Sound Button Options:",
+            self._build_rotary_option_row(
+                self.midi_rotary_sound_button_invert_checkbox,
+                self.midi_rotary_sound_button_sensitivity_spin,
+            ),
+        )
 
         self.midi_rotary_volume_edit = MidiCaptureEdit()
         self.midi_rotary_volume_edit.setBinding(self._midi_rotary_volume_binding)
         form.addRow("Volume Control:", self._build_midi_learn_row(self.midi_rotary_volume_edit, rotary=True))
+        self.midi_rotary_volume_invert_checkbox = QCheckBox("Invert")
+        self.midi_rotary_volume_invert_checkbox.setChecked(self._midi_rotary_volume_invert)
+        form.addRow("Volume Options:", self._build_rotary_invert_row(self.midi_rotary_volume_invert_checkbox))
 
         self.midi_rotary_jog_edit = MidiCaptureEdit()
         self.midi_rotary_jog_edit.setBinding(self._midi_rotary_jog_binding)
         form.addRow("Jog Control:", self._build_midi_learn_row(self.midi_rotary_jog_edit, rotary=True))
+        self.midi_rotary_jog_invert_checkbox = QCheckBox("Invert")
+        self.midi_rotary_jog_invert_checkbox.setChecked(self._midi_rotary_jog_invert)
+        form.addRow("Jog Options:", self._build_rotary_invert_row(self.midi_rotary_jog_invert_checkbox))
 
         self.midi_rotary_volume_mode_combo = QComboBox()
         self.midi_rotary_volume_mode_combo.addItem("Relative (rotary encoder)", "relative")
@@ -883,6 +960,25 @@ class OptionsDialog(QDialog):
         layout.addWidget(note)
         layout.addStretch(1)
         return page
+
+    def _build_rotary_invert_row(self, invert_checkbox: QCheckBox) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(invert_checkbox)
+        row_layout.addStretch(1)
+        return row
+
+    def _build_rotary_option_row(self, invert_checkbox: QCheckBox, sensitivity_spin: QSpinBox) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(invert_checkbox)
+        row_layout.addSpacing(8)
+        row_layout.addWidget(QLabel("Sensitivity:"))
+        row_layout.addWidget(sensitivity_spin)
+        row_layout.addStretch(1)
+        return row
 
     def _build_midi_learn_row(self, edit: MidiCaptureEdit, rotary: bool = False) -> QWidget:
         row = QWidget()
@@ -1839,6 +1935,45 @@ class OptionsDialog(QDialog):
     def selected_midi_rotary_volume_binding(self) -> str:
         return self.midi_rotary_volume_edit.binding()
 
+    def selected_midi_rotary_group_invert(self) -> bool:
+        return bool(self.midi_rotary_group_invert_checkbox.isChecked())
+
+    def selected_midi_rotary_page_invert(self) -> bool:
+        return bool(self.midi_rotary_page_invert_checkbox.isChecked())
+
+    def selected_midi_rotary_sound_button_invert(self) -> bool:
+        return bool(self.midi_rotary_sound_button_invert_checkbox.isChecked())
+
+    def selected_midi_rotary_jog_invert(self) -> bool:
+        return bool(self.midi_rotary_jog_invert_checkbox.isChecked())
+
+    def selected_midi_rotary_volume_invert(self) -> bool:
+        return bool(self.midi_rotary_volume_invert_checkbox.isChecked())
+
+    def selected_midi_rotary_group_sensitivity(self) -> int:
+        return int(self.midi_rotary_group_sensitivity_spin.value())
+
+    def selected_midi_rotary_page_sensitivity(self) -> int:
+        return int(self.midi_rotary_page_sensitivity_spin.value())
+
+    def selected_midi_rotary_sound_button_sensitivity(self) -> int:
+        return int(self.midi_rotary_sound_button_sensitivity_spin.value())
+
+    def selected_midi_rotary_group_relative_mode(self) -> str:
+        return self._midi_rotary_group_relative_mode
+
+    def selected_midi_rotary_page_relative_mode(self) -> str:
+        return self._midi_rotary_page_relative_mode
+
+    def selected_midi_rotary_sound_button_relative_mode(self) -> str:
+        return self._midi_rotary_sound_button_relative_mode
+
+    def selected_midi_rotary_jog_relative_mode(self) -> str:
+        return self._midi_rotary_jog_relative_mode
+
+    def selected_midi_rotary_volume_relative_mode(self) -> str:
+        return self._midi_rotary_volume_relative_mode
+
     def selected_midi_rotary_volume_mode(self) -> str:
         return str(self.midi_rotary_volume_mode_combo.currentData() or "relative")
 
@@ -1927,9 +2062,11 @@ class OptionsDialog(QDialog):
         self._midi_input_device_ids = ids
 
     def _start_midi_learning(self, target: MidiCaptureEdit) -> None:
+        self._set_midi_info("")
         if self._learning_midi_rotary_target is not None and self._learning_midi_rotary_target is not target:
             self._learning_midi_rotary_target.setStyleSheet("")
             self._learning_midi_rotary_target = None
+            self._learning_midi_rotary_state = None
         if self._learning_midi_target is not None and self._learning_midi_target is not target:
             self._learning_midi_target.setStyleSheet("")
         self._learning_midi_target = target
@@ -1942,6 +2079,15 @@ class OptionsDialog(QDialog):
         if self._learning_midi_rotary_target is not None and self._learning_midi_rotary_target is not target:
             self._learning_midi_rotary_target.setStyleSheet("")
         self._learning_midi_rotary_target = target
+        self._learning_midi_rotary_state = {
+            "selector": "",
+            "status": -1,
+            "data1": -1,
+            "phase": "forward",
+            "forward": [],
+            "backward": [],
+        }
+        self._set_midi_info("Rotary learn: turn encoder forward several ticks, then backward several ticks.")
         target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
 
     def _on_midi_binding_captured(self, token: str, source_selector: str = "") -> None:
@@ -1967,17 +2113,67 @@ class OptionsDialog(QDialog):
         if self._learning_midi_rotary_target is not None:
             status = int(status) & 0xFF
             data1 = int(data1) & 0xFF
+            data2 = int(data2) & 0xFF
             base = ""
-            if (status & 0xF0) == 0xB0:
+            high = status & 0xF0
+            state = self._learning_midi_rotary_state or {
+                "selector": "",
+                "status": -1,
+                "data1": -1,
+                "phase": "forward",
+                "forward": [],
+                "backward": [],
+            }
+            if high == 0xB0:
                 base = normalize_midi_binding(f"{status:02X}:{data1:02X}")
-            elif (status & 0xF0) == 0xE0:
+                bound_selector = str(state.get("selector", "") or "")
+                bound_status = int(state.get("status", -1))
+                bound_data1 = int(state.get("data1", -1))
+                if bound_status < 0:
+                    state["selector"] = str(source_selector or "")
+                    state["status"] = status
+                    state["data1"] = data1
+                else:
+                    if str(source_selector or "") != bound_selector:
+                        return True
+                    if status != bound_status or data1 != bound_data1:
+                        return True
+                phase = str(state.get("phase", "forward"))
+                if data2 != 64:
+                    if phase == "forward":
+                        state["forward"].append(data2)
+                        if len(state["forward"]) >= 4:
+                            state["phase"] = "backward"
+                            self._set_midi_info("Rotary learn: now turn backward several ticks.")
+                    else:
+                        state["backward"].append(data2)
+                self._learning_midi_rotary_state = state
+                if len(state["forward"]) >= 4 and len(state["backward"]) >= 4:
+                    mode = self._infer_midi_relative_mode(
+                        [int(v) for v in state["forward"]],
+                        [int(v) for v in state["backward"]],
+                    )
+                    value = f"{source_selector}|{base}" if source_selector else base
+                    self._learning_midi_rotary_target.setBinding(value)
+                    self._set_midi_rotary_relative_mode_for_target(self._learning_midi_rotary_target, mode)
+                    self._learning_midi_rotary_target.setStyleSheet("")
+                    self._learning_midi_rotary_target = None
+                    self._learning_midi_rotary_state = None
+                    self._set_midi_info(f"Rotary learn complete. Relative mode: {mode}.")
+                    self._validate_midi_conflicts()
+                return True
+            elif high == 0xE0:
                 # Pitch Bend encoders/wheels: bind by status(channel).
                 base = normalize_midi_binding(f"{status:02X}")
             if base:
                 value = f"{source_selector}|{base}" if source_selector else base
                 self._learning_midi_rotary_target.setBinding(value)
+                self._set_midi_rotary_relative_mode_for_target(self._learning_midi_rotary_target, "auto")
                 self._learning_midi_rotary_target.setStyleSheet("")
                 self._learning_midi_rotary_target = None
+                self._learning_midi_rotary_state = None
+                self._set_midi_info("Rotary learn complete.")
+                self._validate_midi_conflicts()
                 return True
             return False
         if self._learning_midi_target is None:
@@ -1990,6 +2186,82 @@ class OptionsDialog(QDialog):
                 return False
         self._on_midi_binding_captured(token, source_selector)
         return True
+
+    def _set_midi_info(self, text: str) -> None:
+        if self._midi_warning_label is None:
+            return
+        message = str(text or "").strip()
+        if message:
+            self._midi_warning_label.setStyleSheet("color:#1E4FAF; font-weight:bold;")
+            self._midi_warning_label.setText(message)
+            self._midi_warning_label.setVisible(True)
+            return
+        self._midi_warning_label.setVisible(False)
+        self._midi_warning_label.setText("")
+
+    @staticmethod
+    def _normalize_midi_relative_mode(value: str) -> str:
+        mode = str(value or "").strip().lower()
+        if mode in {"auto", "twos_complement", "sign_magnitude", "binary_offset"}:
+            return mode
+        return "auto"
+
+    @staticmethod
+    def _decode_relative_delta(value: int, mode: str) -> int:
+        v = int(value) & 0x7F
+        if v == 64:
+            return 0
+        mode_name = OptionsDialog._normalize_midi_relative_mode(mode)
+        if mode_name == "binary_offset":
+            return v - 64
+        if mode_name == "sign_magnitude":
+            if 1 <= v <= 63:
+                return v
+            if 65 <= v <= 127:
+                return -(v - 64)
+            return 0
+        # twos_complement and auto fallback
+        if 1 <= v <= 63:
+            return v
+        if 65 <= v <= 127:
+            return v - 128
+        return 0
+
+    def _infer_midi_relative_mode(self, forward_values: List[int], backward_values: List[int]) -> str:
+        modes = ["twos_complement", "sign_magnitude", "binary_offset"]
+        best_mode = "auto"
+        best_score = None
+        for mode in modes:
+            f = [self._decode_relative_delta(v, mode) for v in forward_values]
+            b = [self._decode_relative_delta(v, mode) for v in backward_values]
+            sign_penalty = (sum(1 for d in f if d <= 0) + sum(1 for d in b if d >= 0)) * 1000
+            f_abs = [abs(d) for d in f if d > 0]
+            b_abs = [abs(d) for d in b if d < 0]
+            if not f_abs or not b_abs:
+                score = sign_penalty + 99999
+            else:
+                mean_f = sum(f_abs) / float(len(f_abs))
+                mean_b = sum(b_abs) / float(len(b_abs))
+                symmetry_penalty = abs(mean_f - mean_b) * 20.0
+                size_penalty = max(0.0, mean_f - 12.0) * 8.0 + max(0.0, mean_b - 12.0) * 8.0
+                score = sign_penalty + symmetry_penalty + size_penalty
+            if best_score is None or score < best_score:
+                best_score = score
+                best_mode = mode
+        return best_mode
+
+    def _set_midi_rotary_relative_mode_for_target(self, target: MidiCaptureEdit, mode: str) -> None:
+        normalized = self._normalize_midi_relative_mode(mode)
+        if target is self.midi_rotary_group_edit:
+            self._midi_rotary_group_relative_mode = normalized
+        elif target is self.midi_rotary_page_edit:
+            self._midi_rotary_page_relative_mode = normalized
+        elif target is self.midi_rotary_sound_button_edit:
+            self._midi_rotary_sound_button_relative_mode = normalized
+        elif target is self.midi_rotary_jog_edit:
+            self._midi_rotary_jog_relative_mode = normalized
+        elif target is self.midi_rotary_volume_edit:
+            self._midi_rotary_volume_relative_mode = normalized
 
     def _set_combo_data_or_default(self, combo: QComboBox, selected_data, default_data) -> None:
         index = combo.findData(selected_data)
@@ -2222,6 +2494,29 @@ class OptionsDialog(QDialog):
         self.midi_rotary_sound_button_edit.setBinding(str(d.get("midi_rotary_sound_button_binding", "")))
         self.midi_rotary_jog_edit.setBinding(str(d.get("midi_rotary_jog_binding", "")))
         self.midi_rotary_volume_edit.setBinding(str(d.get("midi_rotary_volume_binding", "")))
+        self.midi_rotary_group_invert_checkbox.setChecked(bool(d.get("midi_rotary_group_invert", False)))
+        self.midi_rotary_page_invert_checkbox.setChecked(bool(d.get("midi_rotary_page_invert", False)))
+        self.midi_rotary_sound_button_invert_checkbox.setChecked(bool(d.get("midi_rotary_sound_button_invert", False)))
+        self.midi_rotary_jog_invert_checkbox.setChecked(bool(d.get("midi_rotary_jog_invert", False)))
+        self.midi_rotary_volume_invert_checkbox.setChecked(bool(d.get("midi_rotary_volume_invert", False)))
+        self.midi_rotary_group_sensitivity_spin.setValue(int(d.get("midi_rotary_group_sensitivity", 1)))
+        self.midi_rotary_page_sensitivity_spin.setValue(int(d.get("midi_rotary_page_sensitivity", 1)))
+        self.midi_rotary_sound_button_sensitivity_spin.setValue(int(d.get("midi_rotary_sound_button_sensitivity", 1)))
+        self._midi_rotary_group_relative_mode = self._normalize_midi_relative_mode(
+            str(d.get("midi_rotary_group_relative_mode", "auto"))
+        )
+        self._midi_rotary_page_relative_mode = self._normalize_midi_relative_mode(
+            str(d.get("midi_rotary_page_relative_mode", "auto"))
+        )
+        self._midi_rotary_sound_button_relative_mode = self._normalize_midi_relative_mode(
+            str(d.get("midi_rotary_sound_button_relative_mode", "auto"))
+        )
+        self._midi_rotary_jog_relative_mode = self._normalize_midi_relative_mode(
+            str(d.get("midi_rotary_jog_relative_mode", "auto"))
+        )
+        self._midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
+            str(d.get("midi_rotary_volume_relative_mode", "auto"))
+        )
         self._set_combo_data_or_default(self.midi_rotary_volume_mode_combo, str(d.get("midi_rotary_volume_mode", "relative")), "relative")
         self.midi_rotary_volume_step_spin.setValue(int(d.get("midi_rotary_volume_step", 2)))
         self.midi_rotary_jog_step_spin.setValue(int(d.get("midi_rotary_jog_step_ms", 250)))
@@ -2300,7 +2595,7 @@ class OptionsDialog(QDialog):
 
         has_conflict = bool(conflicts)
         if self.ok_button is not None:
-            midi_conflict = bool(self._midi_warning_label is not None and self._midi_warning_label.isVisible())
+            midi_conflict = bool(self._midi_has_conflict)
             self.ok_button.setEnabled((not has_conflict) and (not midi_conflict))
         if self.hotkey_warning_label is None:
             return
@@ -2378,16 +2673,19 @@ class OptionsDialog(QDialog):
                     edit.setStyleSheet("")
 
         has_conflict = bool(conflicts)
+        self._midi_has_conflict = has_conflict
         if self._midi_warning_label is not None:
             if has_conflict:
                 display = "; ".join(conflicts[:4])
                 if len(conflicts) > 4:
                     display += f"; +{len(conflicts) - 4} {tr('more')}"
+                self._midi_warning_label.setStyleSheet("color:#B00020; font-weight:bold;")
                 self._midi_warning_label.setText(f"MIDI conflict detected. Fix duplicates before saving. {display}")
                 self._midi_warning_label.setVisible(True)
             else:
-                self._midi_warning_label.setVisible(False)
-                self._midi_warning_label.setText("")
+                if self._learning_midi_rotary_target is None:
+                    self._midi_warning_label.setVisible(False)
+                    self._midi_warning_label.setText("")
         if self.ok_button is not None and self.hotkey_warning_label is not None:
             keyboard_conflict = self.hotkey_warning_label.isVisible()
             self.ok_button.setEnabled((not keyboard_conflict) and (not has_conflict))

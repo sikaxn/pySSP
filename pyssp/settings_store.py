@@ -254,6 +254,19 @@ class AppSettings:
     midi_rotary_sound_button_binding: str = ""
     midi_rotary_jog_binding: str = ""
     midi_rotary_volume_binding: str = ""
+    midi_rotary_group_invert: bool = False
+    midi_rotary_page_invert: bool = False
+    midi_rotary_sound_button_invert: bool = False
+    midi_rotary_jog_invert: bool = False
+    midi_rotary_volume_invert: bool = False
+    midi_rotary_group_sensitivity: int = 1
+    midi_rotary_page_sensitivity: int = 1
+    midi_rotary_sound_button_sensitivity: int = 1
+    midi_rotary_group_relative_mode: str = "auto"
+    midi_rotary_page_relative_mode: str = "auto"
+    midi_rotary_sound_button_relative_mode: str = "auto"
+    midi_rotary_jog_relative_mode: str = "auto"
+    midi_rotary_volume_relative_mode: str = "auto"
     midi_rotary_volume_mode: str = "relative"
     midi_rotary_volume_step: int = 2
     midi_rotary_jog_step_ms: int = 250
@@ -500,6 +513,19 @@ def save_settings(settings: AppSettings) -> None:
         "midi_rotary_sound_button_binding": settings.midi_rotary_sound_button_binding,
         "midi_rotary_jog_binding": settings.midi_rotary_jog_binding,
         "midi_rotary_volume_binding": settings.midi_rotary_volume_binding,
+        "midi_rotary_group_invert": "1" if settings.midi_rotary_group_invert else "0",
+        "midi_rotary_page_invert": "1" if settings.midi_rotary_page_invert else "0",
+        "midi_rotary_sound_button_invert": "1" if settings.midi_rotary_sound_button_invert else "0",
+        "midi_rotary_jog_invert": "1" if settings.midi_rotary_jog_invert else "0",
+        "midi_rotary_volume_invert": "1" if settings.midi_rotary_volume_invert else "0",
+        "midi_rotary_group_sensitivity": str(settings.midi_rotary_group_sensitivity),
+        "midi_rotary_page_sensitivity": str(settings.midi_rotary_page_sensitivity),
+        "midi_rotary_sound_button_sensitivity": str(settings.midi_rotary_sound_button_sensitivity),
+        "midi_rotary_group_relative_mode": settings.midi_rotary_group_relative_mode,
+        "midi_rotary_page_relative_mode": settings.midi_rotary_page_relative_mode,
+        "midi_rotary_sound_button_relative_mode": settings.midi_rotary_sound_button_relative_mode,
+        "midi_rotary_jog_relative_mode": settings.midi_rotary_jog_relative_mode,
+        "midi_rotary_volume_relative_mode": settings.midi_rotary_volume_relative_mode,
         "midi_rotary_volume_mode": settings.midi_rotary_volume_mode,
         "midi_rotary_volume_step": str(settings.midi_rotary_volume_step),
         "midi_rotary_jog_step_ms": str(settings.midi_rotary_jog_step_ms),
@@ -621,6 +647,25 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     midi_rotary_volume_mode = str(section.get("midi_rotary_volume_mode", "relative")).strip().lower()
     if midi_rotary_volume_mode not in {"absolute", "relative"}:
         midi_rotary_volume_mode = "relative"
+    midi_rotary_group_sensitivity = _clamp_int(_get_int(section, "midi_rotary_group_sensitivity", 1), 1, 20)
+    midi_rotary_page_sensitivity = _clamp_int(_get_int(section, "midi_rotary_page_sensitivity", 1), 1, 20)
+    midi_rotary_sound_button_sensitivity = _clamp_int(_get_int(section, "midi_rotary_sound_button_sensitivity", 1), 1, 20)
+    rotary_relative_modes = {"auto", "twos_complement", "sign_magnitude", "binary_offset"}
+    midi_rotary_group_relative_mode = str(section.get("midi_rotary_group_relative_mode", "auto")).strip().lower()
+    if midi_rotary_group_relative_mode not in rotary_relative_modes:
+        midi_rotary_group_relative_mode = "auto"
+    midi_rotary_page_relative_mode = str(section.get("midi_rotary_page_relative_mode", "auto")).strip().lower()
+    if midi_rotary_page_relative_mode not in rotary_relative_modes:
+        midi_rotary_page_relative_mode = "auto"
+    midi_rotary_sound_button_relative_mode = str(section.get("midi_rotary_sound_button_relative_mode", "auto")).strip().lower()
+    if midi_rotary_sound_button_relative_mode not in rotary_relative_modes:
+        midi_rotary_sound_button_relative_mode = "auto"
+    midi_rotary_jog_relative_mode = str(section.get("midi_rotary_jog_relative_mode", "auto")).strip().lower()
+    if midi_rotary_jog_relative_mode not in rotary_relative_modes:
+        midi_rotary_jog_relative_mode = "auto"
+    midi_rotary_volume_relative_mode = str(section.get("midi_rotary_volume_relative_mode", "auto")).strip().lower()
+    if midi_rotary_volume_relative_mode not in rotary_relative_modes:
+        midi_rotary_volume_relative_mode = "auto"
     midi_rotary_volume_step = _clamp_int(_get_int(section, "midi_rotary_volume_step", 2), 1, 20)
     midi_rotary_jog_step_ms = _clamp_int(_get_int(section, "midi_rotary_jog_step_ms", 250), 10, 5000)
     return AppSettings(
@@ -839,6 +884,19 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_rotary_sound_button_binding=str(section.get("midi_rotary_sound_button_binding", "")).strip(),
         midi_rotary_jog_binding=str(section.get("midi_rotary_jog_binding", "")).strip(),
         midi_rotary_volume_binding=str(section.get("midi_rotary_volume_binding", "")).strip(),
+        midi_rotary_group_invert=_get_bool(section, "midi_rotary_group_invert", False),
+        midi_rotary_page_invert=_get_bool(section, "midi_rotary_page_invert", False),
+        midi_rotary_sound_button_invert=_get_bool(section, "midi_rotary_sound_button_invert", False),
+        midi_rotary_jog_invert=_get_bool(section, "midi_rotary_jog_invert", False),
+        midi_rotary_volume_invert=_get_bool(section, "midi_rotary_volume_invert", False),
+        midi_rotary_group_sensitivity=midi_rotary_group_sensitivity,
+        midi_rotary_page_sensitivity=midi_rotary_page_sensitivity,
+        midi_rotary_sound_button_sensitivity=midi_rotary_sound_button_sensitivity,
+        midi_rotary_group_relative_mode=midi_rotary_group_relative_mode,
+        midi_rotary_page_relative_mode=midi_rotary_page_relative_mode,
+        midi_rotary_sound_button_relative_mode=midi_rotary_sound_button_relative_mode,
+        midi_rotary_jog_relative_mode=midi_rotary_jog_relative_mode,
+        midi_rotary_volume_relative_mode=midi_rotary_volume_relative_mode,
         midi_rotary_volume_mode=midi_rotary_volume_mode,
         midi_rotary_volume_step=midi_rotary_volume_step,
         midi_rotary_jog_step_ms=midi_rotary_jog_step_ms,

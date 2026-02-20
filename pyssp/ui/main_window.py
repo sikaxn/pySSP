@@ -8,6 +8,8 @@ import socket
 import ipaddress
 import subprocess
 import re
+import json
+import shutil
 import configparser
 from datetime import datetime
 from dataclasses import dataclass
@@ -62,7 +64,7 @@ from pyssp.audio_engine import (
 )
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
-from pyssp.settings_store import AppSettings, load_settings, save_settings
+from pyssp.settings_store import AppSettings, get_settings_path, load_settings, save_settings
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.midi_control import (
     MidiInputRouter,
@@ -1056,6 +1058,7 @@ class MainWindow(QMainWindow):
         self._midi_last_trigger_t: Dict[str, float] = {}
         self._midi_context_handler = None
         self._midi_context_block_actions = False
+        self._skip_save_on_close = False
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
@@ -1587,6 +1590,42 @@ class MainWindow(QMainWindow):
         file_menu.addAction(save_set_at_action)
         self._menu_actions["save_set_as"] = save_set_at_action
 
+        file_menu.addSeparator()
+
+        backup_settings_action = QAction("Backup pySSP Settings", self)
+        backup_settings_action.triggered.connect(self._backup_pyssp_settings)
+        file_menu.addAction(backup_settings_action)
+
+        restore_settings_action = QAction("Restore pySSP Settings", self)
+        restore_settings_action.triggered.connect(self._restore_pyssp_settings)
+        file_menu.addAction(restore_settings_action)
+
+        file_menu.addSeparator()
+
+        backup_keyboard_hotkeys_action = QAction("Backup Keyboard Hotkey Bindings", self)
+        backup_keyboard_hotkeys_action.triggered.connect(self._backup_keyboard_hotkey_bindings)
+        file_menu.addAction(backup_keyboard_hotkeys_action)
+
+        restore_keyboard_hotkeys_action = QAction("Restore Keyboard Hotkey Bindings", self)
+        restore_keyboard_hotkeys_action.triggered.connect(self._restore_keyboard_hotkey_bindings)
+        file_menu.addAction(restore_keyboard_hotkeys_action)
+
+        file_menu.addSeparator()
+
+        backup_midi_bindings_action = QAction("Backup MIDI Bindings", self)
+        backup_midi_bindings_action.triggered.connect(self._backup_midi_bindings)
+        file_menu.addAction(backup_midi_bindings_action)
+
+        restore_midi_bindings_action = QAction("Restore MIDI Bindings", self)
+        restore_midi_bindings_action.triggered.connect(self._restore_midi_bindings)
+        file_menu.addAction(restore_midi_bindings_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
         setup_menu = self.menuBar().addMenu("Setup")
         options_action = QAction("Options", self)
         options_action.triggered.connect(self._open_options_dialog)
@@ -1646,6 +1685,10 @@ class MainWindow(QMainWindow):
         list_sound_button_hotkey_action.triggered.connect(self._list_sound_button_hotkeys)
         tools_menu.addAction(list_sound_button_hotkey_action)
 
+        list_sound_device_midi_mapping_action = QAction("List Sound Device MIDI Mapping", self)
+        list_sound_device_midi_mapping_action.triggered.connect(self._list_sound_device_midi_mappings)
+        tools_menu.addAction(list_sound_device_midi_mapping_action)
+
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)
@@ -1674,6 +1717,347 @@ class MainWindow(QMainWindow):
 
     def _project_root_path(self) -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _default_backup_dir(self) -> str:
+        return self.settings.last_save_dir or self.settings.last_open_dir or os.path.expanduser("~")
+
+    @staticmethod
+    def _coerce_bool(value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if token in {"1", "true", "yes", "on"}:
+                return True
+            if token in {"0", "false", "no", "off"}:
+                return False
+        return bool(value) if value is not None else bool(default)
+
+    @staticmethod
+    def _coerce_int(value, default: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = int(default)
+        return max(int(minimum), min(int(maximum), int(parsed)))
+
+    def _backup_pyssp_settings(self) -> None:
+        self._save_settings()
+        source = get_settings_path()
+        if not source.exists():
+            try:
+                save_settings(self.settings)
+            except Exception as exc:
+                QMessageBox.critical(self, "Backup pySSP Settings", f"Could not create settings file:\n{exc}")
+                return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        initial_path = os.path.join(self._default_backup_dir(), f"pyssp_settings_backup_{stamp}.ini")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Backup pySSP Settings",
+            initial_path,
+            "INI Files (*.ini);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".ini"):
+            file_path = f"{file_path}.ini"
+        try:
+            shutil.copy2(str(source), file_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Backup pySSP Settings", f"Could not backup settings:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Backup pySSP Settings", f"Backup saved:\n{file_path}")
+
+    def _restore_pyssp_settings(self) -> None:
+        start_dir = self._default_backup_dir()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Restore pySSP Settings",
+            start_dir,
+            "INI Files (*.ini);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        target = get_settings_path()
+        try:
+            shutil.copy2(file_path, str(target))
+        except Exception as exc:
+            QMessageBox.critical(self, "Restore pySSP Settings", f"Could not restore settings:\n{exc}")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Restore pySSP Settings",
+            "Settings restored.\npySSP needs restart to apply them correctly.\n\nRestart now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._skip_save_on_close = True
+            self.close()
+            return
+        QMessageBox.information(
+            self,
+            "Restore pySSP Settings",
+            "Settings restored to disk. Restart pySSP before making more changes.",
+        )
+
+    def _backup_keyboard_hotkey_bindings(self) -> None:
+        payload = {
+            "type": "pyssp_keyboard_hotkey_bindings",
+            "version": 1,
+            "hotkeys": {k: [v[0], v[1]] for k, v in self.hotkeys.items()},
+            "quick_action_enabled": bool(self.quick_action_enabled),
+            "quick_action_keys": list(self.quick_action_keys[:48]),
+            "sound_button_hotkey_enabled": bool(self.sound_button_hotkey_enabled),
+            "sound_button_hotkey_priority": str(self.sound_button_hotkey_priority),
+            "sound_button_hotkey_go_to_playing": bool(self.sound_button_hotkey_go_to_playing),
+        }
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        initial_path = os.path.join(self._default_backup_dir(), f"keyboard_hotkeys_backup_{stamp}.json")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Backup Keyboard Hotkey Bindings",
+            initial_path,
+            "JSON Files (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".json"):
+            file_path = f"{file_path}.json"
+        try:
+            with open(file_path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Backup Keyboard Hotkey Bindings", f"Could not write backup file:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Backup Keyboard Hotkey Bindings", f"Backup saved:\n{file_path}")
+
+    def _restore_keyboard_hotkey_bindings(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Restore Keyboard Hotkey Bindings",
+            self._default_backup_dir(),
+            "JSON Files (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            QMessageBox.critical(self, "Restore Keyboard Hotkey Bindings", f"Could not read backup file:\n{exc}")
+            return
+        if not isinstance(payload, dict):
+            QMessageBox.critical(self, "Restore Keyboard Hotkey Bindings", "Invalid backup format.")
+            return
+
+        raw_hotkeys = payload.get("hotkeys", {})
+        next_hotkeys: Dict[str, tuple[str, str]] = {}
+        for key in HOTKEY_DEFAULTS.keys():
+            default_pair = HOTKEY_DEFAULTS.get(key, ("", ""))
+            raw_pair = raw_hotkeys.get(key, default_pair) if isinstance(raw_hotkeys, dict) else default_pair
+            v1 = str(raw_pair[0]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 1 else str(default_pair[0])
+            v2 = str(raw_pair[1]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 2 else str(default_pair[1])
+            next_hotkeys[key] = (v1, v2)
+
+        raw_quick = payload.get("quick_action_keys", [])
+        next_quick: List[str] = []
+        if isinstance(raw_quick, list):
+            next_quick = [str(v).strip() for v in raw_quick[:48]]
+        if len(next_quick) < 48:
+            next_quick.extend(["" for _ in range(48 - len(next_quick))])
+
+        self.hotkeys = next_hotkeys
+        self.quick_action_enabled = self._coerce_bool(payload.get("quick_action_enabled", self.quick_action_enabled))
+        self.quick_action_keys = next_quick
+        self.sound_button_hotkey_enabled = self._coerce_bool(
+            payload.get("sound_button_hotkey_enabled", self.sound_button_hotkey_enabled)
+        )
+        priority = str(payload.get("sound_button_hotkey_priority", self.sound_button_hotkey_priority)).strip()
+        self.sound_button_hotkey_priority = (
+            priority if priority in {"system_first", "sound_button_first"} else "system_first"
+        )
+        self.sound_button_hotkey_go_to_playing = self._coerce_bool(
+            payload.get("sound_button_hotkey_go_to_playing", self.sound_button_hotkey_go_to_playing)
+        )
+        self._apply_hotkeys()
+        self._save_settings()
+        QMessageBox.information(self, "Restore Keyboard Hotkey Bindings", "Keyboard hotkey bindings restored.")
+
+    def _backup_midi_bindings(self) -> None:
+        payload = {
+            "type": "pyssp_midi_bindings",
+            "version": 1,
+            "midi_input_device_ids": list(self.midi_input_device_ids),
+            "midi_hotkeys": {k: [v[0], v[1]] for k, v in self.midi_hotkeys.items()},
+            "midi_quick_action_enabled": bool(self.midi_quick_action_enabled),
+            "midi_quick_action_bindings": list(self.midi_quick_action_bindings[:48]),
+            "midi_sound_button_hotkey_enabled": bool(self.midi_sound_button_hotkey_enabled),
+            "midi_sound_button_hotkey_priority": str(self.midi_sound_button_hotkey_priority),
+            "midi_sound_button_hotkey_go_to_playing": bool(self.midi_sound_button_hotkey_go_to_playing),
+            "midi_rotary_enabled": bool(self.midi_rotary_enabled),
+            "midi_rotary_group_binding": self.midi_rotary_group_binding,
+            "midi_rotary_page_binding": self.midi_rotary_page_binding,
+            "midi_rotary_sound_button_binding": self.midi_rotary_sound_button_binding,
+            "midi_rotary_jog_binding": self.midi_rotary_jog_binding,
+            "midi_rotary_volume_binding": self.midi_rotary_volume_binding,
+            "midi_rotary_group_invert": bool(self.midi_rotary_group_invert),
+            "midi_rotary_page_invert": bool(self.midi_rotary_page_invert),
+            "midi_rotary_sound_button_invert": bool(self.midi_rotary_sound_button_invert),
+            "midi_rotary_jog_invert": bool(self.midi_rotary_jog_invert),
+            "midi_rotary_volume_invert": bool(self.midi_rotary_volume_invert),
+            "midi_rotary_group_sensitivity": int(self.midi_rotary_group_sensitivity),
+            "midi_rotary_page_sensitivity": int(self.midi_rotary_page_sensitivity),
+            "midi_rotary_sound_button_sensitivity": int(self.midi_rotary_sound_button_sensitivity),
+            "midi_rotary_group_relative_mode": self.midi_rotary_group_relative_mode,
+            "midi_rotary_page_relative_mode": self.midi_rotary_page_relative_mode,
+            "midi_rotary_sound_button_relative_mode": self.midi_rotary_sound_button_relative_mode,
+            "midi_rotary_jog_relative_mode": self.midi_rotary_jog_relative_mode,
+            "midi_rotary_volume_relative_mode": self.midi_rotary_volume_relative_mode,
+            "midi_rotary_volume_mode": self.midi_rotary_volume_mode,
+            "midi_rotary_volume_step": int(self.midi_rotary_volume_step),
+            "midi_rotary_jog_step_ms": int(self.midi_rotary_jog_step_ms),
+        }
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        initial_path = os.path.join(self._default_backup_dir(), f"midi_bindings_backup_{stamp}.json")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Backup MIDI Bindings",
+            initial_path,
+            "JSON Files (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".json"):
+            file_path = f"{file_path}.json"
+        try:
+            with open(file_path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Backup MIDI Bindings", f"Could not write backup file:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Backup MIDI Bindings", f"Backup saved:\n{file_path}")
+
+    def _restore_midi_bindings(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Restore MIDI Bindings",
+            self._default_backup_dir(),
+            "JSON Files (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            QMessageBox.critical(self, "Restore MIDI Bindings", f"Could not read backup file:\n{exc}")
+            return
+        if not isinstance(payload, dict):
+            QMessageBox.critical(self, "Restore MIDI Bindings", "Invalid backup format.")
+            return
+
+        raw_hotkeys = payload.get("midi_hotkeys", {})
+        next_midi_hotkeys: Dict[str, tuple[str, str]] = {}
+        for key in MIDI_HOTKEY_DEFAULTS.keys():
+            raw_pair = raw_hotkeys.get(key, ("", "")) if isinstance(raw_hotkeys, dict) else ("", "")
+            v1 = str(raw_pair[0]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 1 else ""
+            v2 = str(raw_pair[1]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 2 else ""
+            next_midi_hotkeys[key] = (normalize_midi_binding(v1), normalize_midi_binding(v2))
+
+        raw_midi_quick = payload.get("midi_quick_action_bindings", [])
+        next_midi_quick: List[str] = []
+        if isinstance(raw_midi_quick, list):
+            next_midi_quick = [normalize_midi_binding(str(v).strip()) for v in raw_midi_quick[:48]]
+        if len(next_midi_quick) < 48:
+            next_midi_quick.extend(["" for _ in range(48 - len(next_midi_quick))])
+
+        raw_inputs = payload.get("midi_input_device_ids", [])
+        midi_inputs = [str(v).strip() for v in raw_inputs] if isinstance(raw_inputs, list) else []
+        self.midi_input_device_ids = self._normalize_midi_input_selectors([v for v in midi_inputs if v])
+        self.midi_hotkeys = next_midi_hotkeys
+        self.midi_quick_action_enabled = self._coerce_bool(
+            payload.get("midi_quick_action_enabled", self.midi_quick_action_enabled)
+        )
+        self.midi_quick_action_bindings = next_midi_quick
+        self.midi_sound_button_hotkey_enabled = self._coerce_bool(
+            payload.get("midi_sound_button_hotkey_enabled", self.midi_sound_button_hotkey_enabled)
+        )
+        midi_prio = str(payload.get("midi_sound_button_hotkey_priority", self.midi_sound_button_hotkey_priority)).strip()
+        self.midi_sound_button_hotkey_priority = (
+            midi_prio if midi_prio in {"system_first", "sound_button_first"} else "system_first"
+        )
+        self.midi_sound_button_hotkey_go_to_playing = self._coerce_bool(
+            payload.get("midi_sound_button_hotkey_go_to_playing", self.midi_sound_button_hotkey_go_to_playing)
+        )
+        self.midi_rotary_enabled = self._coerce_bool(payload.get("midi_rotary_enabled", self.midi_rotary_enabled))
+        self.midi_rotary_group_binding = normalize_midi_binding(str(payload.get("midi_rotary_group_binding", "")))
+        self.midi_rotary_page_binding = normalize_midi_binding(str(payload.get("midi_rotary_page_binding", "")))
+        self.midi_rotary_sound_button_binding = normalize_midi_binding(str(payload.get("midi_rotary_sound_button_binding", "")))
+        self.midi_rotary_jog_binding = normalize_midi_binding(str(payload.get("midi_rotary_jog_binding", "")))
+        self.midi_rotary_volume_binding = normalize_midi_binding(str(payload.get("midi_rotary_volume_binding", "")))
+        self.midi_rotary_group_invert = self._coerce_bool(payload.get("midi_rotary_group_invert", self.midi_rotary_group_invert))
+        self.midi_rotary_page_invert = self._coerce_bool(payload.get("midi_rotary_page_invert", self.midi_rotary_page_invert))
+        self.midi_rotary_sound_button_invert = self._coerce_bool(payload.get("midi_rotary_sound_button_invert", self.midi_rotary_sound_button_invert))
+        self.midi_rotary_jog_invert = self._coerce_bool(payload.get("midi_rotary_jog_invert", self.midi_rotary_jog_invert))
+        self.midi_rotary_volume_invert = self._coerce_bool(payload.get("midi_rotary_volume_invert", self.midi_rotary_volume_invert))
+        self.midi_rotary_group_sensitivity = self._coerce_int(
+            payload.get("midi_rotary_group_sensitivity", self.midi_rotary_group_sensitivity),
+            self.midi_rotary_group_sensitivity,
+            1,
+            20,
+        )
+        self.midi_rotary_page_sensitivity = self._coerce_int(
+            payload.get("midi_rotary_page_sensitivity", self.midi_rotary_page_sensitivity),
+            self.midi_rotary_page_sensitivity,
+            1,
+            20,
+        )
+        self.midi_rotary_sound_button_sensitivity = self._coerce_int(
+            payload.get("midi_rotary_sound_button_sensitivity", self.midi_rotary_sound_button_sensitivity),
+            self.midi_rotary_sound_button_sensitivity,
+            1,
+            20,
+        )
+        self.midi_rotary_group_relative_mode = self._normalize_midi_relative_mode(
+            str(payload.get("midi_rotary_group_relative_mode", self.midi_rotary_group_relative_mode))
+        )
+        self.midi_rotary_page_relative_mode = self._normalize_midi_relative_mode(
+            str(payload.get("midi_rotary_page_relative_mode", self.midi_rotary_page_relative_mode))
+        )
+        self.midi_rotary_sound_button_relative_mode = self._normalize_midi_relative_mode(
+            str(payload.get("midi_rotary_sound_button_relative_mode", self.midi_rotary_sound_button_relative_mode))
+        )
+        self.midi_rotary_jog_relative_mode = self._normalize_midi_relative_mode(
+            str(payload.get("midi_rotary_jog_relative_mode", self.midi_rotary_jog_relative_mode))
+        )
+        self.midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
+            str(payload.get("midi_rotary_volume_relative_mode", self.midi_rotary_volume_relative_mode))
+        )
+        mode = str(payload.get("midi_rotary_volume_mode", self.midi_rotary_volume_mode)).strip().lower()
+        self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
+        self.midi_rotary_volume_step = self._coerce_int(
+            payload.get("midi_rotary_volume_step", self.midi_rotary_volume_step),
+            self.midi_rotary_volume_step,
+            1,
+            20,
+        )
+        self.midi_rotary_jog_step_ms = self._coerce_int(
+            payload.get("midi_rotary_jog_step_ms", self.midi_rotary_jog_step_ms),
+            self.midi_rotary_jog_step_ms,
+            10,
+            5000,
+        )
+        self._apply_hotkeys()
+        self._save_settings()
+        QMessageBox.information(self, "Restore MIDI Bindings", "MIDI bindings restored.")
 
     def _normalized_hotkey_pair(self, action_key: str) -> tuple[str, str]:
         raw1, raw2 = self.hotkeys.get(action_key, HOTKEY_DEFAULTS.get(action_key, ("", "")))
@@ -2052,6 +2436,12 @@ class MainWindow(QMainWindow):
             f"{match['sound_hotkey']} | {match['title']} | {match['file_path']}"
         )
 
+    def _tool_midi_match_to_line(self, match: dict) -> str:
+        return (
+            f"{match['location']} - Button {int(match['slot']) + 1}: "
+            f"{match['sound_midi_hotkey']} | {match['title']} | {match['file_path']}"
+        )
+
     def _tool_export_matches(self, key: str, export_format: str, base_name: str) -> None:
         matches = self._tool_window_matches.get(key, [])
         if not matches:
@@ -2087,6 +2477,13 @@ class MainWindow(QMainWindow):
     def _print_hotkey_tool_window(self, key: str, title: str) -> None:
         matches = self._tool_window_matches.get(key, [])
         lines = [self._tool_hotkey_match_to_line(match) for match in matches]
+        if not lines:
+            lines = ["(no items)"]
+        self._print_lines(title, lines)
+
+    def _print_midi_tool_window(self, key: str, title: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        lines = [self._tool_midi_match_to_line(match) for match in matches]
         if not lines:
             lines = ["(no items)"]
         self._print_lines(title, lines)
@@ -2141,6 +2538,50 @@ class MainWindow(QMainWindow):
                         _csv_cell(str(match["location"])),
                         _csv_cell(str(int(match["slot"]) + 1)),
                         _csv_cell(str(match["sound_hotkey"])),
+                        _csv_cell(str(match["title"])),
+                        _csv_cell(str(match["file_path"])),
+                    ]
+                )
+            )
+        try:
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write("\r\n".join(lines))
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not export file:\n{exc}")
+            return
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self._save_settings()
+        QMessageBox.information(self, "Export Complete", f"Exported:\n{file_path}")
+
+    def _tool_export_sound_midi_matches(self, key: str, export_format: str, base_name: str) -> None:
+        matches = self._tool_window_matches.get(key, [])
+        if not matches:
+            QMessageBox.information(self, "Export", "No rows to export.")
+            return
+        export_format = "excel" if export_format == "excel" else "csv"
+        ext = ".xls" if export_format == "excel" else ".csv"
+        start_dir = self.settings.last_save_dir or self.settings.last_open_dir or self._sports_sounds_pro_folder()
+        initial_path = os.path.join(start_dir, f"{base_name}{ext}")
+        file_filter = "Excel (*.xls)" if export_format == "excel" else "CSV (*.csv)"
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export", initial_path, f"{file_filter};;All Files (*.*)")
+        if not file_path:
+            return
+        if not file_path.lower().endswith(ext):
+            file_path = f"{file_path}{ext}"
+
+        def _csv_cell(value: str) -> str:
+            cell = (value or "").replace("\r", " ").replace("\n", " ")
+            cell = cell.replace('"', '""')
+            return f'"{cell}"'
+
+        lines = ["Page,Button Number,Sound MIDI Mapping,Sound Button Name,File Path"]
+        for match in matches:
+            lines.append(
+                ",".join(
+                    [
+                        _csv_cell(str(match["location"])),
+                        _csv_cell(str(int(match["slot"]) + 1)),
+                        _csv_cell(str(match["sound_midi_hotkey"])),
                         _csv_cell(str(match["title"])),
                         _csv_cell(str(match["file_path"])),
                     ]
@@ -2404,6 +2845,42 @@ class MainWindow(QMainWindow):
         window.raise_()
         window.activateWindow()
 
+    def _list_sound_device_midi_mappings(self) -> None:
+        window = self._open_tool_window(
+            key="list_sound_device_midi_mappings",
+            title="List Sound Device MIDI Mapping",
+            double_click_action="play",
+            show_play_button=True,
+        )
+        window.set_note(
+            "Note: Sound Button MIDI Hot Key only works when enabled in Options > Midi Control > Sound Button Hot Key. "
+            f"Current priority: {'Sound Button MIDI Hot Key first' if self.midi_sound_button_hotkey_priority == 'sound_button_first' else 'System/Quick Action first'}."
+        )
+        if not window.order_combo.isVisible():
+            window.enable_order_controls(
+                options=["Group/Page sequence", "MIDI mapping sequence"],
+                refresh_handler=self._refresh_list_sound_device_midi_mappings_window,
+            )
+        window.set_handlers(
+            goto_handler=self._go_to_found_match,
+            play_handler=self._play_found_match,
+            export_handler=lambda fmt: self._tool_export_sound_midi_matches(
+                "list_sound_device_midi_mappings",
+                fmt,
+                "ListSoundDeviceMidiMappings",
+            ),
+            print_handler=lambda: self._print_midi_tool_window(
+                "list_sound_device_midi_mappings",
+                "List Sound Device MIDI Mapping",
+            ),
+        )
+        if not window.current_order():
+            window.order_combo.setCurrentIndex(0)
+        self._refresh_list_sound_device_midi_mappings_window(window.current_order())
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
     def _refresh_list_sound_buttons_window(self, selected_order: str) -> None:
         matches: List[dict] = self._iter_all_sound_button_entries(include_cue=True)
         if selected_order == "Sound Button sequence":
@@ -2455,6 +2932,38 @@ class MainWindow(QMainWindow):
         status = f"{len(matches)} sound button hot key assignment(s)."
         if not lines:
             status = "No sound button hot keys assigned."
+        window.set_items(lines, matches=matches, status=status)
+
+    def _refresh_list_sound_device_midi_mappings_window(self, selected_order: str) -> None:
+        matches: List[dict] = []
+        for entry in self._iter_all_sound_button_entries(include_cue=True):
+            slot = self._slot_for_location(str(entry["group"]), int(entry["page"]), int(entry["slot"]))
+            token = normalize_midi_binding(slot.sound_midi_hotkey)
+            if not token:
+                continue
+            item = dict(entry)
+            item["sound_midi_hotkey"] = token
+            matches.append(item)
+        if selected_order == "MIDI mapping sequence":
+            matches.sort(
+                key=lambda entry: (
+                    str(entry["sound_midi_hotkey"]).casefold(),
+                    str(entry["location"]).casefold(),
+                    int(entry["slot"]),
+                )
+            )
+        window = self._tool_windows.get("list_sound_device_midi_mappings")
+        if window is None:
+            return
+        window.set_note(
+            "Note: Sound Button MIDI Hot Key only works when enabled in Options > Midi Control > Sound Button Hot Key. "
+            f"Current priority: {'Sound Button MIDI Hot Key first' if self.midi_sound_button_hotkey_priority == 'sound_button_first' else 'System/Quick Action first'}."
+        )
+        self._tool_window_matches["list_sound_device_midi_mappings"] = matches
+        lines = [self._tool_midi_match_to_line(entry) for entry in matches]
+        status = f"{len(matches)} sound button MIDI mapping assignment(s)."
+        if not lines:
+            status = "No sound button MIDI mappings assigned."
         window.set_items(lines, matches=matches, status=status)
 
     def _browse_export_directory(self) -> None:
@@ -8240,7 +8749,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._stop_web_remote_service()
-        self._save_settings()
+        if not self._skip_save_on_close:
+            self._save_settings()
         super().closeEvent(event)
 
     def _is_playback_in_progress(self) -> bool:

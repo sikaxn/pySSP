@@ -135,6 +135,8 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "cross_fade": ("", ""),
     "fade_out": ("", ""),
     "mute": ("", ""),
+    "volume_up": ("", ""),
+    "volume_down": ("", ""),
 }
 
 SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
@@ -166,6 +168,8 @@ SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "cross_fade",
     "fade_out",
     "mute",
+    "volume_up",
+    "volume_down",
 ]
 
 
@@ -821,6 +825,8 @@ class MainWindow(QMainWindow):
             "cross_fade": (self.settings.hotkey_cross_fade_1, self.settings.hotkey_cross_fade_2),
             "fade_out": (self.settings.hotkey_fade_out_1, self.settings.hotkey_fade_out_2),
             "mute": (self.settings.hotkey_mute_1, self.settings.hotkey_mute_2),
+            "volume_up": (self.settings.hotkey_volume_up_1, self.settings.hotkey_volume_up_2),
+            "volume_down": (self.settings.hotkey_volume_down_1, self.settings.hotkey_volume_down_2),
         }
         self.quick_action_enabled = bool(self.settings.quick_action_enabled)
         self.quick_action_keys = list(self.settings.quick_action_keys[:48])
@@ -1652,6 +1658,8 @@ class MainWindow(QMainWindow):
             "cross_fade": lambda: self._toggle_control_button("X"),
             "fade_out": lambda: self._toggle_control_button("Fade Out"),
             "mute": self._toggle_mute_hotkey,
+            "volume_up": self._volume_up_hotkey,
+            "volume_down": self._volume_down_hotkey,
         }
         ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
 
@@ -7177,6 +7185,10 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_fade_out_2 = self.hotkeys.get("fade_out", ("", ""))[1]
         self.settings.hotkey_mute_1 = self.hotkeys.get("mute", ("", ""))[0]
         self.settings.hotkey_mute_2 = self.hotkeys.get("mute", ("", ""))[1]
+        self.settings.hotkey_volume_up_1 = self.hotkeys.get("volume_up", ("", ""))[0]
+        self.settings.hotkey_volume_up_2 = self.hotkeys.get("volume_up", ("", ""))[1]
+        self.settings.hotkey_volume_down_1 = self.hotkeys.get("volume_down", ("", ""))[0]
+        self.settings.hotkey_volume_down_2 = self.hotkeys.get("volume_down", ("", ""))[1]
         self.settings.quick_action_enabled = bool(self.quick_action_enabled)
         self.settings.quick_action_keys = list(self.quick_action_keys[:48])
         self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
@@ -7421,6 +7433,16 @@ class MainWindow(QMainWindow):
             return
         restore = self._pre_mute_volume if self._pre_mute_volume is not None else 90
         self.volume_slider.setValue(max(0, min(100, int(restore))))
+
+    def _adjust_volume_hotkey(self, delta: int) -> None:
+        current = int(self.volume_slider.value())
+        self.volume_slider.setValue(max(0, min(100, current + int(delta))))
+
+    def _volume_up_hotkey(self) -> None:
+        self._adjust_volume_hotkey(5)
+
+    def _volume_down_hotkey(self) -> None:
+        self._adjust_volume_hotkey(-5)
 
     def keyReleaseEvent(self, event) -> None:
         key = int(event.key())

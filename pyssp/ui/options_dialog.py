@@ -140,6 +140,8 @@ class OptionsDialog(QDialog):
         ("cross_fade", "X (Cross Fade)"),
         ("fade_out", "Fade Out"),
         ("mute", "Mute"),
+        ("volume_up", "Volume Up"),
+        ("volume_down", "Volume Down"),
     ]
 
     _DEFAULTS = {
@@ -235,6 +237,8 @@ class OptionsDialog(QDialog):
             "cross_fade": ("", ""),
             "fade_out": ("", ""),
             "mute": ("", ""),
+            "volume_up": ("", ""),
+            "volume_down": ("", ""),
         },
         "sound_button_hotkey_enabled": False,
         "sound_button_hotkey_priority": "system_first",

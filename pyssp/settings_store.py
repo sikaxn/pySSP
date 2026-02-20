@@ -157,6 +157,10 @@ class AppSettings:
     hotkey_fade_out_2: str = ""
     hotkey_mute_1: str = ""
     hotkey_mute_2: str = ""
+    hotkey_volume_up_1: str = ""
+    hotkey_volume_up_2: str = ""
+    hotkey_volume_down_1: str = ""
+    hotkey_volume_down_2: str = ""
     quick_action_enabled: bool = False
     quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
     sound_button_hotkey_enabled: bool = False
@@ -320,6 +324,10 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_fade_out_2": settings.hotkey_fade_out_2,
         "hotkey_mute_1": settings.hotkey_mute_1,
         "hotkey_mute_2": settings.hotkey_mute_2,
+        "hotkey_volume_up_1": settings.hotkey_volume_up_1,
+        "hotkey_volume_up_2": settings.hotkey_volume_up_2,
+        "hotkey_volume_down_1": settings.hotkey_volume_down_1,
+        "hotkey_volume_down_2": settings.hotkey_volume_down_2,
         "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
         "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
         "sound_button_hotkey_enabled": "1" if settings.sound_button_hotkey_enabled else "0",
@@ -562,6 +570,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_fade_out_2=str(section.get("hotkey_fade_out_2", "")).strip(),
         hotkey_mute_1=str(section.get("hotkey_mute_1", "")).strip(),
         hotkey_mute_2=str(section.get("hotkey_mute_2", "")).strip(),
+        hotkey_volume_up_1=str(section.get("hotkey_volume_up_1", "")).strip(),
+        hotkey_volume_up_2=str(section.get("hotkey_volume_up_2", "")).strip(),
+        hotkey_volume_down_1=str(section.get("hotkey_volume_down_1", "")).strip(),
+        hotkey_volume_down_2=str(section.get("hotkey_volume_down_2", "")).strip(),
         quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
         quick_action_keys=quick_action_keys,
         sound_button_hotkey_enabled=_get_bool(section, "sound_button_hotkey_enabled", False),

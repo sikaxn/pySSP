@@ -231,6 +231,7 @@ class OptionsDialog(QDialog):
             "copied_to_cue": "#2E65FF",
             "cue_indicator": "#61D6FF",
             "volume_indicator": "#FFD45A",
+            "midi_indicator": "#FF9E4A",
         },
         "sound_button_text_color": "#000000",
         "hotkeys": {
@@ -1207,6 +1208,7 @@ class OptionsDialog(QDialog):
         indicator_form = QFormLayout(indicator_group)
         self._add_state_color_row(indicator_form, "cue_indicator", "Cue Indicator")
         self._add_state_color_row(indicator_form, "volume_indicator", "Volume Indicator")
+        self._add_state_color_row(indicator_form, "midi_indicator", "MIDI Indicator")
         self.sound_text_color_btn = QPushButton()
         self.sound_text_color_btn.clicked.connect(self._pick_sound_text_color)
         self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)

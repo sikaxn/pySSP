@@ -111,6 +111,7 @@ COLORS = {
     "copied": "#2E65FF",
     "cue_indicator": "#61D6FF",
     "volume_indicator": "#FFD45A",
+    "midi_indicator": "#FF9E4A",
 }
 
 HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
@@ -806,6 +807,7 @@ class MainWindow(QMainWindow):
             "copied": self.settings.color_copied_to_cue,
             "cue_indicator": self.settings.color_cue_indicator,
             "volume_indicator": self.settings.color_volume_indicator,
+            "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
         }
         self.sound_button_text_color = self.settings.sound_button_text_color
         self.hotkeys: Dict[str, tuple[str, str]] = {
@@ -3302,7 +3304,36 @@ class MainWindow(QMainWindow):
             text_color = self.sound_button_text_color
             has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
             has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
-            if has_volume_override and has_cue:
+            has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
+            if has_midi_hotkey and has_volume_override and has_cue:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
+                    f"stop:0.12 {color}, stop:0.74 {color}, "
+                    f"stop:0.75 {self.state_colors['cue_indicator']}, stop:0.87 {self.state_colors['cue_indicator']}, "
+                    f"stop:0.88 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
+                )
+            elif has_midi_hotkey and has_volume_override:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
+                    f"stop:0.12 {color}, stop:0.82 {color}, "
+                    f"stop:0.83 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
+                )
+            elif has_midi_hotkey and has_cue:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
+                    f"stop:0.12 {color}, stop:0.82 {color}, "
+                    f"stop:0.83 {self.state_colors['cue_indicator']}, stop:1 {self.state_colors['cue_indicator']})"
+                )
+            elif has_midi_hotkey:
+                background = (
+                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
+                    f"stop:0.12 {color}, stop:1 {color})"
+                )
+            elif has_volume_override and has_cue:
                 background = (
                     "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
                     f"stop:0 {color}, stop:0.74 {color}, "
@@ -5384,6 +5415,7 @@ class MainWindow(QMainWindow):
                 "copied_to_cue": self.state_colors["copied"],
                 "cue_indicator": self.state_colors["cue_indicator"],
                 "volume_indicator": self.state_colors["volume_indicator"],
+                "midi_indicator": self.state_colors["midi_indicator"],
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
@@ -5499,6 +5531,7 @@ class MainWindow(QMainWindow):
             "volume_indicator",
             self.state_colors["volume_indicator"],
         )
+        self.state_colors["midi_indicator"] = selected_colors.get("midi_indicator", self.state_colors["midi_indicator"])
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()
         self.quick_action_enabled = dialog.selected_quick_action_enabled()
@@ -7458,6 +7491,7 @@ class MainWindow(QMainWindow):
         self.settings.color_copied_to_cue = self.state_colors["copied"]
         self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
         self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
+        self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
         self.settings.sound_button_text_color = self.sound_button_text_color
         self.settings.hotkey_new_set_1 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[0]
         self.settings.hotkey_new_set_2 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[1]

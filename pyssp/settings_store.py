@@ -111,6 +111,7 @@ class AppSettings:
     color_copied_to_cue: str = "#2E65FF"
     color_cue_indicator: str = "#61D6FF"
     color_volume_indicator: str = "#FFD45A"
+    color_midi_indicator: str = "#FF9E4A"
     sound_button_text_color: str = "#000000"
     hotkey_new_set_1: str = "Ctrl+N"
     hotkey_new_set_2: str = ""
@@ -370,6 +371,7 @@ def save_settings(settings: AppSettings) -> None:
         "color_copied_to_cue": settings.color_copied_to_cue,
         "color_cue_indicator": settings.color_cue_indicator,
         "color_volume_indicator": settings.color_volume_indicator,
+        "color_midi_indicator": settings.color_midi_indicator,
         "sound_button_text_color": settings.sound_button_text_color,
         "hotkey_new_set_1": settings.hotkey_new_set_1,
         "hotkey_new_set_2": settings.hotkey_new_set_2,
@@ -741,6 +743,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         color_copied_to_cue=_coerce_hex(str(section.get("color_copied_to_cue", "#2E65FF")), "#2E65FF"),
         color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
         color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),
+        color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
         hotkey_new_set_1=str(section.get("hotkey_new_set_1", "Ctrl+N")).strip(),
         hotkey_new_set_2=str(section.get("hotkey_new_set_2", "")).strip(),

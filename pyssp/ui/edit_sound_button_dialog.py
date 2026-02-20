@@ -20,6 +20,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyssp.i18n import localize_widget_tree
+from pyssp.midi_control import (
+    midi_binding_to_display,
+    midi_input_name_selector,
+    normalize_midi_binding,
+    split_midi_binding,
+)
 
 
 class SoundHotkeyEdit(QLineEdit):
@@ -70,6 +76,9 @@ class EditSoundButtonDialog(QDialog):
         notes: str,
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
+        sound_midi_hotkey: str = "",
+        available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
+        selected_midi_input_device_ids: Optional[list[str]] = None,
         start_dir: str = "",
         language: str = "en",
         parent: Optional[QWidget] = None,
@@ -108,6 +117,33 @@ class EditSoundButtonDialog(QDialog):
         hk_layout.addWidget(self.sound_hotkey_edit, 1)
         hk_layout.addWidget(clear_hk_btn)
         form.addRow("Sound Button Hot Key", hk_row)
+
+        midi_hk_row = QWidget()
+        midi_hk_layout = QHBoxLayout(midi_hk_row)
+        midi_hk_layout.setContentsMargins(0, 0, 0, 0)
+        self.sound_midi_hotkey_edit = QLineEdit()
+        self.sound_midi_hotkey_edit.setReadOnly(True)
+        self._set_midi_binding(sound_midi_hotkey)
+        learn_midi_btn = QPushButton("Learn")
+        clear_midi_btn = QPushButton("Clear")
+        learn_midi_btn.clicked.connect(self._start_midi_learn)
+        clear_midi_btn.clicked.connect(lambda _=False: self._set_midi_binding(""))
+        midi_hk_layout.addWidget(self.sound_midi_hotkey_edit, 1)
+        midi_hk_layout.addWidget(learn_midi_btn)
+        midi_hk_layout.addWidget(clear_midi_btn)
+        form.addRow("Sound Button MIDI Hot Key", midi_hk_row)
+
+        self._midi_binding = normalize_midi_binding(sound_midi_hotkey)
+        self._midi_learning = False
+        selected_ids = [str(v).strip() for v in (selected_midi_input_device_ids or []) if str(v).strip()]
+        available_by_id = {str(device_id).strip(): str(device_name).strip() for device_id, device_name in (available_midi_input_devices or [])}
+        allowed: set[str] = set()
+        for value in selected_ids:
+            if value.startswith("name::"):
+                allowed.add(value)
+            elif value in available_by_id:
+                allowed.add(midi_input_name_selector(available_by_id[value]))
+        self._allowed_midi_selectors = allowed
 
         vol_row = QWidget()
         vol_layout = QVBoxLayout(vol_row)
@@ -159,7 +195,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, Optional[int], str]:
+    def values(self) -> tuple[str, str, str, Optional[int], str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -169,4 +205,43 @@ class EditSoundButtonDialog(QDialog):
             self.notes_edit.text().strip(),
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
+            self._midi_binding,
         )
+
+    def _set_midi_binding(self, token: str) -> None:
+        normalized = normalize_midi_binding(token)
+        self._midi_binding = normalized
+        self.sound_midi_hotkey_edit.setText(midi_binding_to_display(normalized) if normalized else "")
+
+    def _start_midi_learn(self) -> None:
+        self._midi_learning = True
+        self.sound_midi_hotkey_edit.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+
+    def _on_midi_binding(self, token: str, source_selector: str = "") -> None:
+        if not self._midi_learning:
+            return
+        _prev_selector, normalized_token = split_midi_binding(token)
+        if source_selector:
+            self._set_midi_binding(f"{source_selector}|{normalized_token}")
+        else:
+            self._set_midi_binding(normalized_token)
+        self._midi_learning = False
+        self.sound_midi_hotkey_edit.setStyleSheet("")
+
+    def handle_midi_message(
+        self,
+        token: str,
+        source_selector: str = "",
+        status: int = 0,
+        data1: int = 0,
+        data2: int = 0,
+    ) -> bool:
+        if not self._midi_learning:
+            return False
+        if self._allowed_midi_selectors:
+            if not source_selector:
+                return False
+            if source_selector not in self._allowed_midi_selectors:
+                return False
+        self._on_midi_binding(token, source_selector)
+        return True

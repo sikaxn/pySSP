@@ -64,6 +64,13 @@ from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, load_settings, save_settings
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
+from pyssp.midi_control import (
+    MidiInputRouter,
+    list_midi_input_devices,
+    midi_input_name_selector,
+    normalize_midi_binding,
+    split_midi_binding,
+)
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,
@@ -113,6 +120,7 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "save_set_as": ("Ctrl+Shift+S", ""),
     "search": ("Ctrl+F", ""),
     "options": ("", ""),
+    "play_selected_pause": ("", ""),
     "play_selected": ("", ""),
     "pause_toggle": ("P", ""),
     "stop_playback": ("Space", "Return"),
@@ -139,6 +147,8 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "volume_down": ("", ""),
 }
 
+MIDI_HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {key: ("", "") for key in HOTKEY_DEFAULTS.keys()}
+
 SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "new_set",
     "open_set",
@@ -146,6 +156,7 @@ SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "save_set_as",
     "search",
     "options",
+    "play_selected_pause",
     "play_selected",
     "pause_toggle",
     "stop_playback",
@@ -191,6 +202,7 @@ class SoundButtonData:
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
     sound_hotkey: str = ""
+    sound_midi_hotkey: str = ""
 
     @property
     def assigned(self) -> bool:
@@ -803,6 +815,10 @@ class MainWindow(QMainWindow):
             "save_set_as": (self.settings.hotkey_save_set_as_1, self.settings.hotkey_save_set_as_2),
             "search": (self.settings.hotkey_search_1, self.settings.hotkey_search_2),
             "options": (self.settings.hotkey_options_1, self.settings.hotkey_options_2),
+            "play_selected_pause": (
+                self.settings.hotkey_play_selected_pause_1,
+                self.settings.hotkey_play_selected_pause_2,
+            ),
             "play_selected": (self.settings.hotkey_play_selected_1, self.settings.hotkey_play_selected_2),
             "pause_toggle": (self.settings.hotkey_pause_toggle_1, self.settings.hotkey_pause_toggle_2),
             "stop_playback": (self.settings.hotkey_stop_playback_1, self.settings.hotkey_stop_playback_2),
@@ -839,6 +855,67 @@ class MainWindow(QMainWindow):
             else "system_first"
         )
         self.sound_button_hotkey_go_to_playing = bool(self.settings.sound_button_hotkey_go_to_playing)
+        self.midi_input_device_ids: List[str] = [str(v).strip() for v in self.settings.midi_input_device_ids if str(v).strip()]
+        self.midi_input_device_ids = self._normalize_midi_input_selectors(self.midi_input_device_ids)
+        self.midi_hotkeys: Dict[str, tuple[str, str]] = {
+            "new_set": (self.settings.midi_hotkey_new_set_1, self.settings.midi_hotkey_new_set_2),
+            "open_set": (self.settings.midi_hotkey_open_set_1, self.settings.midi_hotkey_open_set_2),
+            "save_set": (self.settings.midi_hotkey_save_set_1, self.settings.midi_hotkey_save_set_2),
+            "save_set_as": (self.settings.midi_hotkey_save_set_as_1, self.settings.midi_hotkey_save_set_as_2),
+            "search": (self.settings.midi_hotkey_search_1, self.settings.midi_hotkey_search_2),
+            "options": (self.settings.midi_hotkey_options_1, self.settings.midi_hotkey_options_2),
+            "play_selected_pause": (
+                self.settings.midi_hotkey_play_selected_pause_1,
+                self.settings.midi_hotkey_play_selected_pause_2,
+            ),
+            "play_selected": (self.settings.midi_hotkey_play_selected_1, self.settings.midi_hotkey_play_selected_2),
+            "pause_toggle": (self.settings.midi_hotkey_pause_toggle_1, self.settings.midi_hotkey_pause_toggle_2),
+            "stop_playback": (self.settings.midi_hotkey_stop_playback_1, self.settings.midi_hotkey_stop_playback_2),
+            "talk": (self.settings.midi_hotkey_talk_1, self.settings.midi_hotkey_talk_2),
+            "next_group": (self.settings.midi_hotkey_next_group_1, self.settings.midi_hotkey_next_group_2),
+            "prev_group": (self.settings.midi_hotkey_prev_group_1, self.settings.midi_hotkey_prev_group_2),
+            "next_page": (self.settings.midi_hotkey_next_page_1, self.settings.midi_hotkey_next_page_2),
+            "prev_page": (self.settings.midi_hotkey_prev_page_1, self.settings.midi_hotkey_prev_page_2),
+            "next_sound_button": (self.settings.midi_hotkey_next_sound_button_1, self.settings.midi_hotkey_next_sound_button_2),
+            "prev_sound_button": (self.settings.midi_hotkey_prev_sound_button_1, self.settings.midi_hotkey_prev_sound_button_2),
+            "multi_play": (self.settings.midi_hotkey_multi_play_1, self.settings.midi_hotkey_multi_play_2),
+            "go_to_playing": (self.settings.midi_hotkey_go_to_playing_1, self.settings.midi_hotkey_go_to_playing_2),
+            "loop": (self.settings.midi_hotkey_loop_1, self.settings.midi_hotkey_loop_2),
+            "next": (self.settings.midi_hotkey_next_1, self.settings.midi_hotkey_next_2),
+            "rapid_fire": (self.settings.midi_hotkey_rapid_fire_1, self.settings.midi_hotkey_rapid_fire_2),
+            "shuffle": (self.settings.midi_hotkey_shuffle_1, self.settings.midi_hotkey_shuffle_2),
+            "reset_page": (self.settings.midi_hotkey_reset_page_1, self.settings.midi_hotkey_reset_page_2),
+            "play_list": (self.settings.midi_hotkey_play_list_1, self.settings.midi_hotkey_play_list_2),
+            "fade_in": (self.settings.midi_hotkey_fade_in_1, self.settings.midi_hotkey_fade_in_2),
+            "cross_fade": (self.settings.midi_hotkey_cross_fade_1, self.settings.midi_hotkey_cross_fade_2),
+            "fade_out": (self.settings.midi_hotkey_fade_out_1, self.settings.midi_hotkey_fade_out_2),
+            "mute": (self.settings.midi_hotkey_mute_1, self.settings.midi_hotkey_mute_2),
+            "volume_up": (self.settings.midi_hotkey_volume_up_1, self.settings.midi_hotkey_volume_up_2),
+            "volume_down": (self.settings.midi_hotkey_volume_down_1, self.settings.midi_hotkey_volume_down_2),
+        }
+        self.midi_quick_action_enabled = bool(self.settings.midi_quick_action_enabled)
+        self.midi_quick_action_bindings = [normalize_midi_binding(v) for v in self.settings.midi_quick_action_bindings[:48]]
+        if len(self.midi_quick_action_bindings) < 48:
+            self.midi_quick_action_bindings.extend(["" for _ in range(48 - len(self.midi_quick_action_bindings))])
+        self.midi_sound_button_hotkey_enabled = bool(self.settings.midi_sound_button_hotkey_enabled)
+        self.midi_sound_button_hotkey_priority = (
+            self.settings.midi_sound_button_hotkey_priority
+            if self.settings.midi_sound_button_hotkey_priority in {"system_first", "sound_button_first"}
+            else "system_first"
+        )
+        self.midi_sound_button_hotkey_go_to_playing = bool(self.settings.midi_sound_button_hotkey_go_to_playing)
+        self.midi_rotary_enabled = bool(getattr(self.settings, "midi_rotary_enabled", False))
+        self.midi_rotary_group_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_group_binding", ""))
+        self.midi_rotary_page_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_page_binding", ""))
+        self.midi_rotary_sound_button_binding = normalize_midi_binding(
+            getattr(self.settings, "midi_rotary_sound_button_binding", "")
+        )
+        self.midi_rotary_jog_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_jog_binding", ""))
+        self.midi_rotary_volume_binding = normalize_midi_binding(getattr(self.settings, "midi_rotary_volume_binding", ""))
+        mode = str(getattr(self.settings, "midi_rotary_volume_mode", "relative")).strip().lower()
+        self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
+        self.midi_rotary_volume_step = max(1, min(20, int(getattr(self.settings, "midi_rotary_volume_step", 2))))
+        self.midi_rotary_jog_step_ms = max(10, min(5000, int(getattr(self.settings, "midi_rotary_jog_step_ms", 250))))
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
 
@@ -943,6 +1020,11 @@ class MainWindow(QMainWindow):
         self._runtime_hotkey_shortcuts: List[QShortcut] = []
         self._modifier_hotkey_handlers: Dict[int, List[Callable[[], None]]] = {}
         self._modifier_hotkey_down: set[int] = set()
+        self._midi_router = MidiInputRouter(self._on_midi_binding_triggered)
+        self._midi_action_handlers: Dict[str, Callable[[], None]] = {}
+        self._midi_last_trigger_t: Dict[str, float] = {}
+        self._midi_context_handler = None
+        self._midi_context_block_actions = False
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
@@ -1026,6 +1108,10 @@ class MainWindow(QMainWindow):
         self.talk_blink_timer = QTimer(self)
         self.talk_blink_timer.timeout.connect(self._tick_talk_blink)
         self.talk_blink_timer.start(280)
+
+        self._midi_poll_timer = QTimer(self)
+        self._midi_poll_timer.timeout.connect(self._poll_midi_inputs)
+        self._midi_poll_timer.start(15)
 
         self.current_group = self.settings.last_group
         self.current_page = self.settings.last_page
@@ -1635,32 +1721,7 @@ class MainWindow(QMainWindow):
         self._modifier_hotkey_handlers = {}
         self._modifier_hotkey_down.clear()
 
-        runtime_handlers: Dict[str, Callable[[], None]] = {
-            "play_selected": self._hotkey_play_selected,
-            "pause_toggle": self._toggle_pause,
-            "stop_playback": self._handle_space_bar_action,
-            "talk": self._hotkey_toggle_talk,
-            "next_group": lambda: self._hotkey_select_group_delta(1),
-            "prev_group": lambda: self._hotkey_select_group_delta(-1),
-            "next_page": lambda: self._hotkey_select_page_delta(1),
-            "prev_page": lambda: self._hotkey_select_page_delta(-1),
-            "next_sound_button": lambda: self._hotkey_select_sound_button_delta(1),
-            "prev_sound_button": lambda: self._hotkey_select_sound_button_delta(-1),
-            "multi_play": lambda: self._toggle_control_button("Multi-Play"),
-            "go_to_playing": self._go_to_current_playing_page,
-            "loop": lambda: self._toggle_control_button("Loop"),
-            "next": self._play_next,
-            "rapid_fire": self._on_rapid_fire_clicked,
-            "shuffle": lambda: self._toggle_control_button("Shuffle"),
-            "reset_page": self._reset_current_page_state,
-            "play_list": lambda: self._toggle_control_button("Play List"),
-            "fade_in": lambda: self._toggle_control_button("Fade In"),
-            "cross_fade": lambda: self._toggle_control_button("X"),
-            "fade_out": lambda: self._toggle_control_button("Fade Out"),
-            "mute": self._toggle_mute_hotkey,
-            "volume_up": self._volume_up_hotkey,
-            "volume_down": self._volume_down_hotkey,
-        }
+        runtime_handlers = self._runtime_action_handlers()
         ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
 
         sound_bindings = self._collect_sound_button_hotkey_bindings() if self.sound_button_hotkey_enabled else {}
@@ -1720,6 +1781,94 @@ class MainWindow(QMainWindow):
                 shortcut.setContext(Qt.ApplicationShortcut)
                 shortcut.activated.connect(lambda sk=slot_key: self._sound_button_hotkey_trigger(sk))
                 self._runtime_hotkey_shortcuts.append(shortcut)
+        self._apply_midi_bindings()
+
+    def _runtime_action_handlers(self) -> Dict[str, Callable[[], None]]:
+        return {
+            "play_selected_pause": self._hotkey_play_selected_pause,
+            "play_selected": self._hotkey_play_selected,
+            "pause_toggle": self._toggle_pause,
+            "stop_playback": self._handle_space_bar_action,
+            "talk": self._hotkey_toggle_talk,
+            "next_group": lambda: self._hotkey_select_group_delta(1),
+            "prev_group": lambda: self._hotkey_select_group_delta(-1),
+            "next_page": lambda: self._hotkey_select_page_delta(1),
+            "prev_page": lambda: self._hotkey_select_page_delta(-1),
+            "next_sound_button": lambda: self._hotkey_select_sound_button_delta(1),
+            "prev_sound_button": lambda: self._hotkey_select_sound_button_delta(-1),
+            "multi_play": lambda: self._toggle_control_button("Multi-Play"),
+            "go_to_playing": self._go_to_current_playing_page,
+            "loop": lambda: self._toggle_control_button("Loop"),
+            "next": self._play_next,
+            "rapid_fire": self._on_rapid_fire_clicked,
+            "shuffle": lambda: self._toggle_control_button("Shuffle"),
+            "reset_page": self._reset_current_page_state,
+            "play_list": lambda: self._toggle_control_button("Play List"),
+            "fade_in": lambda: self._toggle_control_button("Fade In"),
+            "cross_fade": lambda: self._toggle_control_button("X"),
+            "fade_out": lambda: self._toggle_control_button("Fade Out"),
+            "mute": self._toggle_mute_hotkey,
+            "volume_up": self._volume_up_hotkey,
+            "volume_down": self._volume_down_hotkey,
+        }
+
+    def _normalized_midi_pair(self, action_key: str) -> tuple[str, str]:
+        raw1, raw2 = self.midi_hotkeys.get(action_key, MIDI_HOTKEY_DEFAULTS.get(action_key, ("", "")))
+        return normalize_midi_binding(raw1), normalize_midi_binding(raw2)
+
+    def _normalize_midi_input_selectors(self, selectors: List[str]) -> List[str]:
+        wanted: List[str] = []
+        seen: set[str] = set()
+        known_names_by_id = {str(device_id): str(device_name) for device_id, device_name in list_midi_input_devices()}
+        for raw in selectors:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            if token.isdigit() and token in known_names_by_id:
+                token = midi_input_name_selector(known_names_by_id[token])
+            if token in seen:
+                continue
+            seen.add(token)
+            wanted.append(token)
+        return wanted
+
+    def _apply_midi_bindings(self) -> None:
+        self._midi_action_handlers = {}
+        self._midi_last_trigger_t = {}
+        self._midi_router.set_devices(self.midi_input_device_ids)
+        runtime_handlers = self._runtime_action_handlers()
+        ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
+        sound_bindings = self._collect_sound_button_midi_bindings() if self.midi_sound_button_hotkey_enabled else {}
+        registered_tokens: set[str] = set()
+
+        for key in ordered_system_keys:
+            handler = runtime_handlers[key]
+            m1, m2 = self._normalized_midi_pair(key)
+            for token in [m1, m2]:
+                if not token:
+                    continue
+                if self.midi_sound_button_hotkey_enabled and self.midi_sound_button_hotkey_priority == "sound_button_first":
+                    if token in sound_bindings:
+                        continue
+                self._midi_action_handlers[token] = handler
+                registered_tokens.add(token)
+
+        if self.midi_quick_action_enabled:
+            for idx, raw in enumerate(self.midi_quick_action_bindings[:48]):
+                token = normalize_midi_binding(raw)
+                if not token:
+                    continue
+                if self.midi_sound_button_hotkey_enabled and self.midi_sound_button_hotkey_priority == "sound_button_first":
+                    if token in sound_bindings:
+                        continue
+                self._midi_action_handlers[token] = (lambda slot=idx: self._quick_action_trigger(slot))
+                registered_tokens.add(token)
+
+        if self.midi_sound_button_hotkey_enabled:
+            for token, slot_key in sound_bindings.items():
+                if self.midi_sound_button_hotkey_priority == "system_first" and token in registered_tokens:
+                    continue
+                self._midi_action_handlers[token] = (lambda sk=slot_key: self._sound_button_midi_hotkey_trigger(sk))
 
     def _load_project_text_file(self, filename: str) -> str:
         file_path = os.path.join(self._project_root_path(), filename)
@@ -2849,6 +2998,7 @@ class MainWindow(QMainWindow):
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
                     sound_hotkey=slot.sound_hotkey,
+                    sound_midi_hotkey=slot.sound_midi_hotkey,
                 )
                 for slot in source_page
             ],
@@ -2879,6 +3029,7 @@ class MainWindow(QMainWindow):
                 cue_start_ms=slot.cue_start_ms,
                 cue_end_ms=slot.cue_end_ms,
                 sound_hotkey=slot.sound_hotkey,
+                sound_midi_hotkey=slot.sound_midi_hotkey,
             )
             for slot in self._copied_page_buffer["slots"]
         ]
@@ -2992,6 +3143,9 @@ class MainWindow(QMainWindow):
             hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
             if hotkey_code:
                 lines.append(f"h{slot_index}={hotkey_code}")
+            midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+            if midi_hotkey_code:
+                lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
             lines.append(f"activity{slot_index}={'2' if slot.played else '8'}")
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
@@ -3075,6 +3229,7 @@ class MainWindow(QMainWindow):
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
                 sound_hotkey=sound_hotkey,
+                sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip()),
             )
         return {
             "page_name": page_name,
@@ -3583,6 +3738,7 @@ class MainWindow(QMainWindow):
             cue_start_ms=slot.cue_start_ms,
             cue_end_ms=slot.cue_end_ms,
             sound_hotkey=slot.sound_hotkey,
+            sound_midi_hotkey=slot.sound_midi_hotkey,
         )
 
     def _edit_sound_button(self, slot_index: int) -> None:
@@ -3598,13 +3754,21 @@ class MainWindow(QMainWindow):
             notes=slot.notes,
             volume_override_pct=slot.volume_override_pct,
             sound_hotkey=slot.sound_hotkey,
+            sound_midi_hotkey=slot.sound_midi_hotkey,
+            available_midi_input_devices=list_midi_input_devices(),
+            selected_midi_input_device_ids=self.midi_input_device_ids,
             start_dir=start_dir,
             language=self.ui_language,
             parent=self,
         )
-        if dialog.exec_() != QDialog.Accepted:
+        self._midi_context_handler = dialog
+        self._midi_context_block_actions = True
+        accepted = dialog.exec_() == QDialog.Accepted
+        self._midi_context_handler = None
+        self._midi_context_block_actions = False
+        if not accepted:
             return
-        file_path, caption, notes, volume_override_pct, sound_hotkey = dialog.values()
+        file_path, caption, notes, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
         if not file_path:
             QMessageBox.information(self, "Edit Sound Button", "File is required.")
             return
@@ -3614,6 +3778,17 @@ class MainWindow(QMainWindow):
                 self,
                 "Sound Button Hot Key",
                 f"Hot key {sound_hotkey} is already assigned to {self._format_button_key(conflict)}.",
+            )
+            return
+        midi_conflict = self._find_sound_midi_hotkey_conflict(
+            sound_midi_hotkey,
+            (self._view_group_key(), self.current_page, slot_index),
+        )
+        if midi_conflict is not None:
+            QMessageBox.warning(
+                self,
+                "Sound Button MIDI Hot Key",
+                f"MIDI key {sound_midi_hotkey} is already assigned to {self._format_button_key(midi_conflict)}.",
             )
             return
         previous_file_path = slot.file_path
@@ -3628,12 +3803,14 @@ class MainWindow(QMainWindow):
         slot.load_failed = False
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
+        slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
         if previous_file_path != file_path:
             slot.cue_start_ms = None
             slot.cue_end_ms = None
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+        self._apply_hotkeys()
 
     def _find_sound_hotkey_conflict(
         self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
@@ -3657,6 +3834,39 @@ class MainWindow(QMainWindow):
             if not slot.assigned or slot.marker:
                 continue
             if self._parse_sound_hotkey(slot.sound_hotkey) == token:
+                return key
+        return None
+
+    def _find_sound_midi_hotkey_conflict(
+        self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
+    ) -> Optional[Tuple[str, int, int]]:
+        token = self._parse_sound_midi_hotkey(sound_hotkey)
+        if not token:
+            return None
+        selector, message = split_midi_binding(token)
+
+        def _matches(existing: str) -> bool:
+            existing_selector, existing_message = split_midi_binding(existing)
+            if not existing_message or existing_message != message:
+                return False
+            return (not existing_selector) or (not selector) or (existing_selector == selector)
+
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if ignore_slot_key == (group, page_index, slot_index):
+                        continue
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if _matches(self._parse_sound_midi_hotkey(slot.sound_midi_hotkey)):
+                        return (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            key = ("Q", 0, slot_index)
+            if ignore_slot_key == key:
+                continue
+            if not slot.assigned or slot.marker:
+                continue
+            if _matches(self._parse_sound_midi_hotkey(slot.sound_midi_hotkey)):
                 return key
         return None
 
@@ -3788,6 +3998,12 @@ class MainWindow(QMainWindow):
         if not token:
             return ""
         return f"0{token}"
+
+    def _parse_sound_midi_hotkey(self, value: str) -> str:
+        return normalize_midi_binding(value)
+
+    def _encode_sound_midi_hotkey(self, value: str) -> str:
+        return self._parse_sound_midi_hotkey(value)
 
     def _parse_cue_points(self, start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
         start_raw = self._parse_non_negative_int(start_value)
@@ -4381,6 +4597,7 @@ class MainWindow(QMainWindow):
         self.current_page = max(0, min(PAGE_COUNT - 1, page_index))
         self._refresh_group_buttons()
         self._sync_playlist_shuffle_buttons()
+        self._apply_hotkeys()
         self._refresh_page_list()
         self._refresh_sound_grid()
         self._update_group_status()
@@ -4730,6 +4947,7 @@ class MainWindow(QMainWindow):
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
                     sound_hotkey=slot.sound_hotkey,
+                    sound_midi_hotkey=slot.sound_midi_hotkey,
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)
@@ -5068,7 +5286,7 @@ class MainWindow(QMainWindow):
 
     def _open_options_dialog(self, initial_page: Optional[str] = None) -> None:
         available_devices = sorted(list_output_devices(), key=lambda v: v.lower())
-        available_midi_devices = list_midi_output_devices()
+        available_midi_output_devices = list_midi_output_devices()
         total_ram_mb, _reserved_ram_mb, preload_cap_mb = get_preload_memory_limits_mb()
         dialog = OptionsDialog(
             active_group_color=self.active_group_color,
@@ -5096,7 +5314,7 @@ class MainWindow(QMainWindow):
             set_file_encoding=self.set_file_encoding,
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
-            available_midi_devices=available_midi_devices,
+            available_midi_devices=available_midi_output_devices,
             preload_audio_enabled=self.preload_audio_enabled,
             preload_current_page_audio=self.preload_current_page_audio,
             preload_audio_memory_limit_mb=self.preload_audio_memory_limit_mb,
@@ -5145,12 +5363,34 @@ class MainWindow(QMainWindow):
             sound_button_hotkey_enabled=self.sound_button_hotkey_enabled,
             sound_button_hotkey_priority=self.sound_button_hotkey_priority,
             sound_button_hotkey_go_to_playing=self.sound_button_hotkey_go_to_playing,
+            midi_input_device_ids=self.midi_input_device_ids,
+            midi_hotkeys=self.midi_hotkeys,
+            midi_quick_action_enabled=self.midi_quick_action_enabled,
+            midi_quick_action_bindings=self.midi_quick_action_bindings,
+            midi_sound_button_hotkey_enabled=self.midi_sound_button_hotkey_enabled,
+            midi_sound_button_hotkey_priority=self.midi_sound_button_hotkey_priority,
+            midi_sound_button_hotkey_go_to_playing=self.midi_sound_button_hotkey_go_to_playing,
+            midi_rotary_enabled=self.midi_rotary_enabled,
+            midi_rotary_group_binding=self.midi_rotary_group_binding,
+            midi_rotary_page_binding=self.midi_rotary_page_binding,
+            midi_rotary_sound_button_binding=self.midi_rotary_sound_button_binding,
+            midi_rotary_jog_binding=self.midi_rotary_jog_binding,
+            midi_rotary_volume_binding=self.midi_rotary_volume_binding,
+            midi_rotary_volume_mode=self.midi_rotary_volume_mode,
+            midi_rotary_volume_step=self.midi_rotary_volume_step,
+            midi_rotary_jog_step_ms=self.midi_rotary_jog_step_ms,
             ui_language=self.ui_language,
             initial_page=initial_page,
             parent=self,
         )
+        self._midi_context_handler = dialog
+        self._midi_context_block_actions = True
         if dialog.exec_() != QDialog.Accepted:
+            self._midi_context_handler = None
+            self._midi_context_block_actions = False
             return
+        self._midi_context_handler = None
+        self._midi_context_block_actions = False
         self.active_group_color = dialog.active_group_color
         self.inactive_group_color = dialog.inactive_group_color
         self.title_char_limit = dialog.title_limit_spin.value()
@@ -5226,6 +5466,25 @@ class MainWindow(QMainWindow):
         self.sound_button_hotkey_enabled = dialog.selected_sound_button_hotkey_enabled()
         self.sound_button_hotkey_priority = dialog.selected_sound_button_hotkey_priority()
         self.sound_button_hotkey_go_to_playing = dialog.selected_sound_button_hotkey_go_to_playing()
+        self.midi_input_device_ids = dialog.selected_midi_input_devices()
+        self.midi_hotkeys = dialog.selected_midi_hotkeys()
+        self.midi_quick_action_enabled = dialog.selected_midi_quick_action_enabled()
+        self.midi_quick_action_bindings = dialog.selected_midi_quick_action_bindings()[:48]
+        if len(self.midi_quick_action_bindings) < 48:
+            self.midi_quick_action_bindings.extend(["" for _ in range(48 - len(self.midi_quick_action_bindings))])
+        self.midi_sound_button_hotkey_enabled = dialog.selected_midi_sound_button_hotkey_enabled()
+        self.midi_sound_button_hotkey_priority = dialog.selected_midi_sound_button_hotkey_priority()
+        self.midi_sound_button_hotkey_go_to_playing = dialog.selected_midi_sound_button_hotkey_go_to_playing()
+        self.midi_rotary_enabled = dialog.selected_midi_rotary_enabled()
+        self.midi_rotary_group_binding = normalize_midi_binding(dialog.selected_midi_rotary_group_binding())
+        self.midi_rotary_page_binding = normalize_midi_binding(dialog.selected_midi_rotary_page_binding())
+        self.midi_rotary_sound_button_binding = normalize_midi_binding(dialog.selected_midi_rotary_sound_button_binding())
+        self.midi_rotary_jog_binding = normalize_midi_binding(dialog.selected_midi_rotary_jog_binding())
+        self.midi_rotary_volume_binding = normalize_midi_binding(dialog.selected_midi_rotary_volume_binding())
+        mode = str(dialog.selected_midi_rotary_volume_mode()).strip().lower()
+        self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
+        self.midi_rotary_volume_step = max(1, min(20, int(dialog.selected_midi_rotary_volume_step())))
+        self.midi_rotary_jog_step_ms = max(10, min(5000, int(dialog.selected_midi_rotary_jog_step_ms())))
         selected_ui_language = dialog.selected_ui_language()
         if selected_ui_language != self.ui_language:
             self.ui_language = selected_ui_language
@@ -6939,6 +7198,9 @@ class MainWindow(QMainWindow):
                         hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
                         if hotkey_code:
                             lines.append(f"h{slot_index}={hotkey_code}")
+                        midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                        if midi_hotkey_code:
+                            lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
                         cue_start, cue_end = self._cue_fields_for_set(slot)
                         if cue_start is not None:
                             lines.append(f"cs{slot_index}={cue_start}")
@@ -7011,6 +7273,7 @@ class MainWindow(QMainWindow):
                         cue_start_ms=src.cue_start_ms,
                         cue_end_ms=src.cue_end_ms,
                         sound_hotkey=src.sound_hotkey,
+                        sound_midi_hotkey=src.sound_midi_hotkey,
                     )
 
         self.current_set_path = file_path
@@ -7141,6 +7404,8 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_search_2 = self.hotkeys.get("search", ("Ctrl+F", ""))[1]
         self.settings.hotkey_options_1 = self.hotkeys.get("options", ("", ""))[0]
         self.settings.hotkey_options_2 = self.hotkeys.get("options", ("", ""))[1]
+        self.settings.hotkey_play_selected_pause_1 = self.hotkeys.get("play_selected_pause", ("", ""))[0]
+        self.settings.hotkey_play_selected_pause_2 = self.hotkeys.get("play_selected_pause", ("", ""))[1]
         self.settings.hotkey_play_selected_1 = self.hotkeys.get("play_selected", ("", ""))[0]
         self.settings.hotkey_play_selected_2 = self.hotkeys.get("play_selected", ("", ""))[1]
         self.settings.hotkey_pause_toggle_1 = self.hotkeys.get("pause_toggle", ("P", ""))[0]
@@ -7194,6 +7459,83 @@ class MainWindow(QMainWindow):
         self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
         self.settings.sound_button_hotkey_priority = self.sound_button_hotkey_priority
         self.settings.sound_button_hotkey_go_to_playing = bool(self.sound_button_hotkey_go_to_playing)
+        self.settings.midi_input_device_ids = list(self.midi_input_device_ids)
+        self.settings.midi_hotkey_new_set_1 = self.midi_hotkeys.get("new_set", ("", ""))[0]
+        self.settings.midi_hotkey_new_set_2 = self.midi_hotkeys.get("new_set", ("", ""))[1]
+        self.settings.midi_hotkey_open_set_1 = self.midi_hotkeys.get("open_set", ("", ""))[0]
+        self.settings.midi_hotkey_open_set_2 = self.midi_hotkeys.get("open_set", ("", ""))[1]
+        self.settings.midi_hotkey_save_set_1 = self.midi_hotkeys.get("save_set", ("", ""))[0]
+        self.settings.midi_hotkey_save_set_2 = self.midi_hotkeys.get("save_set", ("", ""))[1]
+        self.settings.midi_hotkey_save_set_as_1 = self.midi_hotkeys.get("save_set_as", ("", ""))[0]
+        self.settings.midi_hotkey_save_set_as_2 = self.midi_hotkeys.get("save_set_as", ("", ""))[1]
+        self.settings.midi_hotkey_search_1 = self.midi_hotkeys.get("search", ("", ""))[0]
+        self.settings.midi_hotkey_search_2 = self.midi_hotkeys.get("search", ("", ""))[1]
+        self.settings.midi_hotkey_options_1 = self.midi_hotkeys.get("options", ("", ""))[0]
+        self.settings.midi_hotkey_options_2 = self.midi_hotkeys.get("options", ("", ""))[1]
+        self.settings.midi_hotkey_play_selected_pause_1 = self.midi_hotkeys.get("play_selected_pause", ("", ""))[0]
+        self.settings.midi_hotkey_play_selected_pause_2 = self.midi_hotkeys.get("play_selected_pause", ("", ""))[1]
+        self.settings.midi_hotkey_play_selected_1 = self.midi_hotkeys.get("play_selected", ("", ""))[0]
+        self.settings.midi_hotkey_play_selected_2 = self.midi_hotkeys.get("play_selected", ("", ""))[1]
+        self.settings.midi_hotkey_pause_toggle_1 = self.midi_hotkeys.get("pause_toggle", ("", ""))[0]
+        self.settings.midi_hotkey_pause_toggle_2 = self.midi_hotkeys.get("pause_toggle", ("", ""))[1]
+        self.settings.midi_hotkey_stop_playback_1 = self.midi_hotkeys.get("stop_playback", ("", ""))[0]
+        self.settings.midi_hotkey_stop_playback_2 = self.midi_hotkeys.get("stop_playback", ("", ""))[1]
+        self.settings.midi_hotkey_talk_1 = self.midi_hotkeys.get("talk", ("", ""))[0]
+        self.settings.midi_hotkey_talk_2 = self.midi_hotkeys.get("talk", ("", ""))[1]
+        self.settings.midi_hotkey_next_group_1 = self.midi_hotkeys.get("next_group", ("", ""))[0]
+        self.settings.midi_hotkey_next_group_2 = self.midi_hotkeys.get("next_group", ("", ""))[1]
+        self.settings.midi_hotkey_prev_group_1 = self.midi_hotkeys.get("prev_group", ("", ""))[0]
+        self.settings.midi_hotkey_prev_group_2 = self.midi_hotkeys.get("prev_group", ("", ""))[1]
+        self.settings.midi_hotkey_next_page_1 = self.midi_hotkeys.get("next_page", ("", ""))[0]
+        self.settings.midi_hotkey_next_page_2 = self.midi_hotkeys.get("next_page", ("", ""))[1]
+        self.settings.midi_hotkey_prev_page_1 = self.midi_hotkeys.get("prev_page", ("", ""))[0]
+        self.settings.midi_hotkey_prev_page_2 = self.midi_hotkeys.get("prev_page", ("", ""))[1]
+        self.settings.midi_hotkey_next_sound_button_1 = self.midi_hotkeys.get("next_sound_button", ("", ""))[0]
+        self.settings.midi_hotkey_next_sound_button_2 = self.midi_hotkeys.get("next_sound_button", ("", ""))[1]
+        self.settings.midi_hotkey_prev_sound_button_1 = self.midi_hotkeys.get("prev_sound_button", ("", ""))[0]
+        self.settings.midi_hotkey_prev_sound_button_2 = self.midi_hotkeys.get("prev_sound_button", ("", ""))[1]
+        self.settings.midi_hotkey_multi_play_1 = self.midi_hotkeys.get("multi_play", ("", ""))[0]
+        self.settings.midi_hotkey_multi_play_2 = self.midi_hotkeys.get("multi_play", ("", ""))[1]
+        self.settings.midi_hotkey_go_to_playing_1 = self.midi_hotkeys.get("go_to_playing", ("", ""))[0]
+        self.settings.midi_hotkey_go_to_playing_2 = self.midi_hotkeys.get("go_to_playing", ("", ""))[1]
+        self.settings.midi_hotkey_loop_1 = self.midi_hotkeys.get("loop", ("", ""))[0]
+        self.settings.midi_hotkey_loop_2 = self.midi_hotkeys.get("loop", ("", ""))[1]
+        self.settings.midi_hotkey_next_1 = self.midi_hotkeys.get("next", ("", ""))[0]
+        self.settings.midi_hotkey_next_2 = self.midi_hotkeys.get("next", ("", ""))[1]
+        self.settings.midi_hotkey_rapid_fire_1 = self.midi_hotkeys.get("rapid_fire", ("", ""))[0]
+        self.settings.midi_hotkey_rapid_fire_2 = self.midi_hotkeys.get("rapid_fire", ("", ""))[1]
+        self.settings.midi_hotkey_shuffle_1 = self.midi_hotkeys.get("shuffle", ("", ""))[0]
+        self.settings.midi_hotkey_shuffle_2 = self.midi_hotkeys.get("shuffle", ("", ""))[1]
+        self.settings.midi_hotkey_reset_page_1 = self.midi_hotkeys.get("reset_page", ("", ""))[0]
+        self.settings.midi_hotkey_reset_page_2 = self.midi_hotkeys.get("reset_page", ("", ""))[1]
+        self.settings.midi_hotkey_play_list_1 = self.midi_hotkeys.get("play_list", ("", ""))[0]
+        self.settings.midi_hotkey_play_list_2 = self.midi_hotkeys.get("play_list", ("", ""))[1]
+        self.settings.midi_hotkey_fade_in_1 = self.midi_hotkeys.get("fade_in", ("", ""))[0]
+        self.settings.midi_hotkey_fade_in_2 = self.midi_hotkeys.get("fade_in", ("", ""))[1]
+        self.settings.midi_hotkey_cross_fade_1 = self.midi_hotkeys.get("cross_fade", ("", ""))[0]
+        self.settings.midi_hotkey_cross_fade_2 = self.midi_hotkeys.get("cross_fade", ("", ""))[1]
+        self.settings.midi_hotkey_fade_out_1 = self.midi_hotkeys.get("fade_out", ("", ""))[0]
+        self.settings.midi_hotkey_fade_out_2 = self.midi_hotkeys.get("fade_out", ("", ""))[1]
+        self.settings.midi_hotkey_mute_1 = self.midi_hotkeys.get("mute", ("", ""))[0]
+        self.settings.midi_hotkey_mute_2 = self.midi_hotkeys.get("mute", ("", ""))[1]
+        self.settings.midi_hotkey_volume_up_1 = self.midi_hotkeys.get("volume_up", ("", ""))[0]
+        self.settings.midi_hotkey_volume_up_2 = self.midi_hotkeys.get("volume_up", ("", ""))[1]
+        self.settings.midi_hotkey_volume_down_1 = self.midi_hotkeys.get("volume_down", ("", ""))[0]
+        self.settings.midi_hotkey_volume_down_2 = self.midi_hotkeys.get("volume_down", ("", ""))[1]
+        self.settings.midi_quick_action_enabled = bool(self.midi_quick_action_enabled)
+        self.settings.midi_quick_action_bindings = list(self.midi_quick_action_bindings[:48])
+        self.settings.midi_sound_button_hotkey_enabled = bool(self.midi_sound_button_hotkey_enabled)
+        self.settings.midi_sound_button_hotkey_priority = self.midi_sound_button_hotkey_priority
+        self.settings.midi_sound_button_hotkey_go_to_playing = bool(self.midi_sound_button_hotkey_go_to_playing)
+        self.settings.midi_rotary_enabled = bool(self.midi_rotary_enabled)
+        self.settings.midi_rotary_group_binding = self.midi_rotary_group_binding
+        self.settings.midi_rotary_page_binding = self.midi_rotary_page_binding
+        self.settings.midi_rotary_sound_button_binding = self.midi_rotary_sound_button_binding
+        self.settings.midi_rotary_jog_binding = self.midi_rotary_jog_binding
+        self.settings.midi_rotary_volume_binding = self.midi_rotary_volume_binding
+        self.settings.midi_rotary_volume_mode = self.midi_rotary_volume_mode
+        self.settings.midi_rotary_volume_step = int(self.midi_rotary_volume_step)
+        self.settings.midi_rotary_jog_step_ms = int(self.midi_rotary_jog_step_ms)
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:
@@ -7308,6 +7650,43 @@ class MainWindow(QMainWindow):
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         self._play_slot(slot_index)
 
+    def _hotkey_play_selected_pause(self) -> None:
+        slot_index: Optional[int] = None
+        key = self._hotkey_selected_slot_key
+        if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
+            slot_index = key[2]
+        else:
+            for i, btn in enumerate(self.sound_buttons):
+                if btn.hasFocus():
+                    slot_index = i
+                    break
+        if slot_index is None:
+            return
+        selected_key = (self._view_group_key(), self.current_page, slot_index)
+        self._hotkey_selected_slot_key = selected_key
+
+        selected_playing: List[ExternalMediaPlayer] = []
+        selected_paused: List[ExternalMediaPlayer] = []
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if self._player_slot_key_map.get(id(player)) != selected_key:
+                continue
+            state = player.state()
+            if state == ExternalMediaPlayer.PlayingState:
+                selected_playing.append(player)
+            elif state == ExternalMediaPlayer.PausedState:
+                selected_paused.append(player)
+
+        if selected_playing:
+            self._pause_players(selected_playing)
+            self._timecode_on_playback_pause()
+            self._update_pause_button_label()
+            return
+        if selected_paused:
+            self._resume_players(selected_paused)
+            self._update_pause_button_label()
+            return
+        self._play_slot(slot_index)
+
     def _quick_action_trigger(self, slot_index: int) -> None:
         if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
             return
@@ -7393,6 +7772,26 @@ class MainWindow(QMainWindow):
             bindings[token] = ("Q", 0, slot_index)
         return bindings
 
+    def _collect_sound_button_midi_bindings(self) -> Dict[str, Tuple[str, int, int]]:
+        bindings: Dict[str, Tuple[str, int, int]] = {}
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    token = normalize_midi_binding(slot.sound_midi_hotkey)
+                    if not token or token in bindings:
+                        continue
+                    bindings[token] = (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            token = normalize_midi_binding(slot.sound_midi_hotkey)
+            if not token or token in bindings:
+                continue
+            bindings[token] = ("Q", 0, slot_index)
+        return bindings
+
     def _sound_button_hotkey_trigger(self, slot_key: Tuple[str, int, int]) -> None:
         if self._is_button_drag_enabled():
             return
@@ -7424,6 +7823,147 @@ class MainWindow(QMainWindow):
                 self._toggle_cue_mode(False)
             self._select_group(old_group)
             self._select_page(old_page)
+
+    def _sound_button_midi_hotkey_trigger(self, slot_key: Tuple[str, int, int]) -> None:
+        self._sound_button_hotkey_trigger(slot_key)
+        if self.midi_sound_button_hotkey_go_to_playing:
+            self._go_to_current_playing_page()
+
+    def _poll_midi_inputs(self) -> None:
+        try:
+            self._midi_router.poll()
+        except Exception:
+            pass
+
+    def _cc_binding_matches(self, configured: str, source_selector: str, cc_token: str) -> bool:
+        selector, token = split_midi_binding(configured)
+        if not token or token != cc_token:
+            return False
+        if not selector:
+            return True
+        return selector == source_selector
+
+    @staticmethod
+    def _midi_cc_relative_delta(value: int) -> int:
+        v = int(value) & 0x7F
+        if v == 64:
+            return 0
+        if 1 <= v <= 63:
+            return v
+        if 65 <= v <= 127:
+            return v - 128
+        return 0
+
+    @staticmethod
+    def _midi_pitch_relative_delta(data1: int, data2: int) -> int:
+        # Many controllers encode relative pitch as 7-bit value in data2.
+        if int(data1) == 0:
+            return MainWindow._midi_cc_relative_delta(data2)
+        # Fallback to signed delta around center for full 14-bit pitch bend.
+        value14 = (int(data1) & 0x7F) | ((int(data2) & 0x7F) << 7)
+        if value14 == 8192:
+            return 0
+        return 1 if value14 > 8192 else -1
+
+    def _apply_midi_rotary(self, source_selector: str, status: int, data1: int, data2: int) -> bool:
+        if not self.midi_rotary_enabled:
+            return False
+        status = int(status) & 0xFF
+        data1 = int(data1) & 0xFF
+        data2 = int(data2) & 0xFF
+        high = status & 0xF0
+        if high not in {0xB0, 0xE0}:
+            return False
+        source_token = ""
+        raw_delta = 0
+        if high == 0xB0:
+            source_token = normalize_midi_binding(f"{status:02X}:{data1:02X}")
+            raw_delta = self._midi_cc_relative_delta(data2)
+        elif high == 0xE0:
+            source_token = normalize_midi_binding(f"{status:02X}")
+            raw_delta = self._midi_pitch_relative_delta(data1, data2)
+        if not source_token:
+            return False
+        step_delta = 1 if raw_delta > 0 else (-1 if raw_delta < 0 else 0)
+
+        if self._cc_binding_matches(self.midi_rotary_group_binding, source_selector, source_token):
+            if step_delta != 0:
+                self._hotkey_select_group_delta(step_delta)
+                return True
+            return False
+        if self._cc_binding_matches(self.midi_rotary_page_binding, source_selector, source_token):
+            if step_delta != 0:
+                self._hotkey_select_page_delta(step_delta)
+                return True
+            return False
+        if self._cc_binding_matches(self.midi_rotary_sound_button_binding, source_selector, source_token):
+            if step_delta != 0:
+                self._hotkey_select_sound_button_delta(step_delta)
+                return True
+            return False
+        if self._cc_binding_matches(self.midi_rotary_volume_binding, source_selector, source_token):
+            if self.midi_rotary_volume_mode == "absolute":
+                if high == 0xB0:
+                    level = int(round((max(0, min(127, int(data2))) / 127.0) * 100.0))
+                else:
+                    value14 = (int(data1) & 0x7F) | ((int(data2) & 0x7F) << 7)
+                    level = int(round((max(0, min(16383, value14)) / 16383.0) * 100.0))
+                self.volume_slider.setValue(max(0, min(100, level)))
+                return True
+            if raw_delta != 0:
+                current = int(self.volume_slider.value())
+                next_level = current + (int(self.midi_rotary_volume_step) * raw_delta)
+                self.volume_slider.setValue(max(0, min(100, next_level)))
+                return True
+            return False
+        if self._cc_binding_matches(self.midi_rotary_jog_binding, source_selector, source_token):
+            if raw_delta != 0:
+                current = int(self.seek_slider.value())
+                total_ms = self._transport_total_ms()
+                next_value = current + (int(self.midi_rotary_jog_step_ms) * raw_delta)
+                self.seek_slider.setValue(max(0, min(total_ms, next_value)))
+                return True
+            return False
+        return False
+
+    def _on_midi_binding_triggered(
+        self,
+        token: str,
+        source_selector: str = "",
+        status: int = 0,
+        data1: int = 0,
+        data2: int = 0,
+    ) -> None:
+        context_handler = self._midi_context_handler
+        if context_handler is not None:
+            try:
+                if bool(context_handler.handle_midi_message(token, source_selector, status, data1, data2)):
+                    return
+            except Exception:
+                pass
+        if self._midi_context_block_actions:
+            return
+        if self._apply_midi_rotary(source_selector, status, data1, data2):
+            return
+        _selector, normalized_token = split_midi_binding(token)
+        if not normalized_token:
+            return
+        key_from_source = (
+            normalize_midi_binding(f"{source_selector}|{normalized_token}")
+            if source_selector
+            else normalized_token
+        )
+        # Prefer device-specific bindings, then fall back to generic bindings.
+        handler = self._midi_action_handlers.get(key_from_source) or self._midi_action_handlers.get(normalized_token)
+        if handler is None:
+            return
+        now = time.perf_counter()
+        dedupe_key = key_from_source if key_from_source in self._midi_action_handlers else normalized_token
+        last = self._midi_last_trigger_t.get(dedupe_key, 0.0)
+        if (now - last) < 0.06:
+            return
+        self._midi_last_trigger_t[dedupe_key] = now
+        handler()
 
     def _toggle_mute_hotkey(self) -> None:
         current = int(self.volume_slider.value())
@@ -7490,6 +8030,14 @@ class MainWindow(QMainWindow):
             pass
         try:
             shutdown_audio_preload()
+        except Exception:
+            pass
+        try:
+            self._midi_poll_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._midi_router.close()
         except Exception:
             pass
         self._stop_web_remote_service()

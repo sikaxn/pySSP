@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from pyssp.midi_control import normalize_midi_binding
+
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
 SLOTS_PER_PAGE = 48
@@ -29,6 +31,7 @@ class SetSlotData:
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
     sound_hotkey: str = ""
+    sound_midi_hotkey: str = ""
 
 
 @dataclass
@@ -96,6 +99,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 duration,
             )
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
+            sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
             marker = False
 
             if caption.endswith("%%"):
@@ -126,6 +130,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
                 sound_hotkey=sound_hotkey,
+                sound_midi_hotkey=sound_midi_hotkey,
             )
             loaded_slots += 1
 
@@ -292,3 +297,7 @@ def _parse_sound_hotkey(value: str) -> str:
     if re.fullmatch(r"[A-OQ-Z]", raw):
         return raw
     return ""
+
+
+def _parse_sound_midi_hotkey(value: str) -> str:
+    return normalize_midi_binding(value)

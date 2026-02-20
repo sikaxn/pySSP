@@ -37,6 +37,14 @@ from PyQt5.QtWidgets import (
 
 from pyssp.settings_store import default_quick_action_keys
 from pyssp.i18n import localize_widget_tree, normalize_language, tr
+from pyssp.midi_control import (
+    list_midi_input_devices,
+    midi_binding_to_display,
+    midi_input_name_selector,
+    midi_input_selector_name,
+    normalize_midi_binding,
+    split_midi_binding,
+)
 from pyssp.timecode import (
     MIDI_OUTPUT_DEVICE_NONE,
     MTC_IDLE_KEEP_STREAM,
@@ -48,6 +56,7 @@ from pyssp.timecode import (
     TIME_CODE_FPS_CHOICES,
     TIME_CODE_MTC_FPS_CHOICES,
     TIME_CODE_SAMPLE_RATES,
+    list_midi_output_devices,
 )
 
 
@@ -110,6 +119,21 @@ class HotkeyCaptureEdit(QLineEdit):
         return normalized or raw
 
 
+class MidiCaptureEdit(QLineEdit):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("Unassigned")
+        self.setReadOnly(True)
+        self._binding = ""
+
+    def binding(self) -> str:
+        return self._binding
+
+    def setBinding(self, value: str) -> None:
+        token = normalize_midi_binding(value)
+        self._binding = token
+        self.setText(midi_binding_to_display(token) if token else "")
+
 class OptionsDialog(QDialog):
     _HOTKEY_ROWS = [
         ("new_set", "New Set"),
@@ -118,6 +142,7 @@ class OptionsDialog(QDialog):
         ("save_set_as", "Save Set As"),
         ("search", "Search"),
         ("options", "Options"),
+        ("play_selected_pause", "Play Selected / Pause"),
         ("play_selected", "Play Selected"),
         ("pause_toggle", "Pause/Resume"),
         ("stop_playback", "Stop Playback"),
@@ -215,6 +240,7 @@ class OptionsDialog(QDialog):
             "save_set_as": ("Ctrl+Shift+S", ""),
             "search": ("Ctrl+F", ""),
             "options": ("", ""),
+            "play_selected_pause": ("", ""),
             "play_selected": ("", ""),
             "pause_toggle": ("P", ""),
             "stop_playback": ("Space", "Return"),
@@ -243,6 +269,22 @@ class OptionsDialog(QDialog):
         "sound_button_hotkey_enabled": False,
         "sound_button_hotkey_priority": "system_first",
         "sound_button_hotkey_go_to_playing": False,
+        "midi_input_device_ids": [],
+        "midi_hotkeys": {},
+        "midi_quick_action_enabled": False,
+        "midi_quick_action_bindings": ["" for _ in range(48)],
+        "midi_sound_button_hotkey_enabled": False,
+        "midi_sound_button_hotkey_priority": "system_first",
+        "midi_sound_button_hotkey_go_to_playing": False,
+        "midi_rotary_enabled": False,
+        "midi_rotary_group_binding": "",
+        "midi_rotary_page_binding": "",
+        "midi_rotary_sound_button_binding": "",
+        "midi_rotary_jog_binding": "",
+        "midi_rotary_volume_binding": "",
+        "midi_rotary_volume_mode": "relative",
+        "midi_rotary_volume_step": 2,
+        "midi_rotary_jog_step_ms": 250,
     }
 
     def __init__(
@@ -309,6 +351,22 @@ class OptionsDialog(QDialog):
         sound_button_hotkey_enabled: bool,
         sound_button_hotkey_priority: str,
         sound_button_hotkey_go_to_playing: bool,
+        midi_input_device_ids: List[str],
+        midi_hotkeys: Dict[str, tuple[str, str]],
+        midi_quick_action_enabled: bool,
+        midi_quick_action_bindings: List[str],
+        midi_sound_button_hotkey_enabled: bool,
+        midi_sound_button_hotkey_priority: str,
+        midi_sound_button_hotkey_go_to_playing: bool,
+        midi_rotary_enabled: bool,
+        midi_rotary_group_binding: str,
+        midi_rotary_page_binding: str,
+        midi_rotary_sound_button_binding: str,
+        midi_rotary_jog_binding: str,
+        midi_rotary_volume_binding: str,
+        midi_rotary_volume_mode: str,
+        midi_rotary_volume_step: int,
+        midi_rotary_jog_step_ms: int,
         ui_language: str,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -334,6 +392,37 @@ class OptionsDialog(QDialog):
             sound_button_hotkey_priority if sound_button_hotkey_priority in {"system_first", "sound_button_first"} else "system_first"
         )
         self._sound_button_hotkey_go_to_playing = bool(sound_button_hotkey_go_to_playing)
+        self._midi_input_device_ids = [str(v).strip() for v in midi_input_device_ids if str(v).strip()]
+        self._midi_hotkeys = dict(midi_hotkeys)
+        self._midi_hotkey_edits: Dict[str, tuple[MidiCaptureEdit, MidiCaptureEdit]] = {}
+        self._midi_quick_action_enabled = bool(midi_quick_action_enabled)
+        self._midi_quick_action_edits: List[MidiCaptureEdit] = []
+        self._midi_quick_action_bindings = [normalize_midi_binding(v) for v in list(midi_quick_action_bindings)[:48]]
+        if len(self._midi_quick_action_bindings) < 48:
+            self._midi_quick_action_bindings.extend(["" for _ in range(48 - len(self._midi_quick_action_bindings))])
+        self._midi_sound_button_hotkey_enabled = bool(midi_sound_button_hotkey_enabled)
+        self._midi_sound_button_hotkey_priority = (
+            midi_sound_button_hotkey_priority
+            if midi_sound_button_hotkey_priority in {"system_first", "sound_button_first"}
+            else "system_first"
+        )
+        self._midi_sound_button_hotkey_go_to_playing = bool(midi_sound_button_hotkey_go_to_playing)
+        self._midi_rotary_enabled = bool(midi_rotary_enabled)
+        self._midi_rotary_group_binding = normalize_midi_binding(midi_rotary_group_binding)
+        self._midi_rotary_page_binding = normalize_midi_binding(midi_rotary_page_binding)
+        self._midi_rotary_sound_button_binding = normalize_midi_binding(midi_rotary_sound_button_binding)
+        self._midi_rotary_jog_binding = normalize_midi_binding(midi_rotary_jog_binding)
+        self._midi_rotary_volume_binding = normalize_midi_binding(midi_rotary_volume_binding)
+        self._midi_rotary_volume_mode = (
+            str(midi_rotary_volume_mode).strip().lower()
+            if str(midi_rotary_volume_mode).strip().lower() in {"absolute", "relative"}
+            else "relative"
+        )
+        self._midi_rotary_volume_step = max(1, min(20, int(midi_rotary_volume_step)))
+        self._midi_rotary_jog_step_ms = max(10, min(5000, int(midi_rotary_jog_step_ms)))
+        self._learning_midi_rotary_target: Optional[MidiCaptureEdit] = None
+        self._midi_warning_label: Optional[QLabel] = None
+        self._learning_midi_target: Optional[MidiCaptureEdit] = None
         self._ui_language = normalize_language(ui_language)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
@@ -378,6 +467,11 @@ class OptionsDialog(QDialog):
             "Hotkey",
             self._mono_icon("keyboard"),
             self._build_hotkey_page(),
+        )
+        self._add_page(
+            "Midi Control",
+            self._mono_icon("piano"),
+            self._build_midi_control_page(),
         )
         self._add_page(
             "Colour",
@@ -477,6 +571,7 @@ class OptionsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
         self._validate_hotkey_conflicts()
+        self._validate_midi_conflicts()
         localize_widget_tree(self, self._ui_language)
 
     def _add_page(self, title: str, icon, page: QWidget) -> None:
@@ -560,6 +655,15 @@ class OptionsDialog(QDialog):
             p.drawLine(3, 11, 19, 11)
             p.drawArc(QRectF(3, 6, 16, 10), 0, 180 * 16)
             p.drawArc(QRectF(3, 6, 16, 10), 180 * 16, 180 * 16)
+        elif kind == "piano":
+            p.drawRoundedRect(QRectF(3, 4, 16, 14), 1.5, 1.5)
+            p.drawLine(6, 4, 6, 18)
+            p.drawLine(10, 4, 10, 18)
+            p.drawLine(14, 4, 14, 18)
+            p.setBrush(QColor("#000000"))
+            p.drawRect(QRectF(5, 4, 2, 7))
+            p.drawRect(QRectF(9, 4, 2, 7))
+            p.drawRect(QRectF(13, 4, 2, 7))
 
         p.end()
         return QIcon(pix)
@@ -671,6 +775,225 @@ class OptionsDialog(QDialog):
         note.setWordWrap(True)
         layout.addWidget(note)
         return page
+
+    def _build_midi_control_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        tabs = QTabWidget()
+        tabs.addTab(self._build_midi_settings_tab(), "Midi Setting")
+        tabs.addTab(self._build_midi_system_hotkey_tab(), "System Hotkey")
+        tabs.addTab(self._build_midi_system_rotary_tab(), "System Rotary")
+        tabs.addTab(self._build_midi_quick_action_tab(), "Quick Action Key")
+        tabs.addTab(self._build_midi_sound_button_hotkey_tab(), "Sound Button Hot Key")
+        layout.addWidget(tabs, 1)
+        self._midi_warning_label = QLabel("")
+        self._midi_warning_label.setWordWrap(True)
+        self._midi_warning_label.setStyleSheet("color:#B00020; font-weight:bold;")
+        self._midi_warning_label.setVisible(False)
+        layout.addWidget(self._midi_warning_label)
+        return page
+
+    def _build_midi_settings_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        hint = QLabel("Select one or more MIDI input devices. pySSP will listen on all selected devices.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.midi_input_list = QListWidget()
+        self.midi_input_list.setSelectionMode(QListWidget.NoSelection)
+        layout.addWidget(self.midi_input_list, 1)
+        button_row = QHBoxLayout()
+        self.midi_refresh_btn = QPushButton("Refresh")
+        self.midi_refresh_btn.clicked.connect(lambda: self._refresh_midi_input_devices(force_refresh=True))
+        button_row.addWidget(self.midi_refresh_btn)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        mtc_group = QGroupBox("MIDI Timecode (MTC)")
+        mtc_group.setEnabled(False)
+        mtc_layout = QVBoxLayout(mtc_group)
+        mtc_note = QLabel("Configure MTC output in Audio Device / Timecode.")
+        mtc_note.setWordWrap(True)
+        mtc_layout.addWidget(mtc_note)
+        layout.addWidget(mtc_group)
+        self._refresh_midi_input_devices()
+        return page
+
+    def _build_midi_system_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for key, label in self._HOTKEY_ROWS:
+            self._add_midi_row(form, key, label)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_midi_system_rotary_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.midi_rotary_enabled_checkbox = QCheckBox("Enable System Rotary MIDI Control")
+        self.midi_rotary_enabled_checkbox.setChecked(self._midi_rotary_enabled)
+        layout.addWidget(self.midi_rotary_enabled_checkbox)
+
+        form = QFormLayout()
+        self.midi_rotary_group_edit = MidiCaptureEdit()
+        self.midi_rotary_group_edit.setBinding(self._midi_rotary_group_binding)
+        form.addRow("Group Rotary:", self._build_midi_learn_row(self.midi_rotary_group_edit, rotary=True))
+
+        self.midi_rotary_page_edit = MidiCaptureEdit()
+        self.midi_rotary_page_edit.setBinding(self._midi_rotary_page_binding)
+        form.addRow("Page Rotary:", self._build_midi_learn_row(self.midi_rotary_page_edit, rotary=True))
+
+        self.midi_rotary_sound_button_edit = MidiCaptureEdit()
+        self.midi_rotary_sound_button_edit.setBinding(self._midi_rotary_sound_button_binding)
+        form.addRow("Sound Button Rotary:", self._build_midi_learn_row(self.midi_rotary_sound_button_edit, rotary=True))
+
+        self.midi_rotary_volume_edit = MidiCaptureEdit()
+        self.midi_rotary_volume_edit.setBinding(self._midi_rotary_volume_binding)
+        form.addRow("Volume Control:", self._build_midi_learn_row(self.midi_rotary_volume_edit, rotary=True))
+
+        self.midi_rotary_jog_edit = MidiCaptureEdit()
+        self.midi_rotary_jog_edit.setBinding(self._midi_rotary_jog_binding)
+        form.addRow("Jog Control:", self._build_midi_learn_row(self.midi_rotary_jog_edit, rotary=True))
+
+        self.midi_rotary_volume_mode_combo = QComboBox()
+        self.midi_rotary_volume_mode_combo.addItem("Relative (rotary encoder)", "relative")
+        self.midi_rotary_volume_mode_combo.addItem("Absolute (slider/fader)", "absolute")
+        self._set_combo_data_or_default(self.midi_rotary_volume_mode_combo, self._midi_rotary_volume_mode, "relative")
+        form.addRow("Volume Mode:", self.midi_rotary_volume_mode_combo)
+
+        self.midi_rotary_volume_step_spin = QSpinBox()
+        self.midi_rotary_volume_step_spin.setRange(1, 20)
+        self.midi_rotary_volume_step_spin.setValue(self._midi_rotary_volume_step)
+        form.addRow("Volume Relative Step:", self.midi_rotary_volume_step_spin)
+
+        self.midi_rotary_jog_step_spin = QSpinBox()
+        self.midi_rotary_jog_step_spin.setRange(10, 5000)
+        self.midi_rotary_jog_step_spin.setSuffix(" ms")
+        self.midi_rotary_jog_step_spin.setValue(self._midi_rotary_jog_step_ms)
+        form.addRow("Jog Relative Step:", self.midi_rotary_jog_step_spin)
+
+        layout.addLayout(form)
+        note = QLabel("Rotary learns Control Change (CC) by control number. For direction, pySSP uses CC value.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _build_midi_learn_row(self, edit: MidiCaptureEdit, rotary: bool = False) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        learn_btn = QPushButton("Learn")
+        clear_btn = QPushButton("Clear")
+        learn_btn.setFixedWidth(62)
+        clear_btn.setFixedWidth(56)
+        if rotary:
+            learn_btn.clicked.connect(lambda _=False, e=edit: self._start_midi_rotary_learning(e))
+        else:
+            learn_btn.clicked.connect(lambda _=False, e=edit: self._start_midi_learning(e))
+        clear_btn.clicked.connect(lambda _=False, e=edit: e.setBinding(""))
+        row_layout.addWidget(edit, 1)
+        row_layout.addWidget(learn_btn)
+        row_layout.addWidget(clear_btn)
+        return row
+
+    def _build_midi_quick_action_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.midi_quick_action_enabled_checkbox = QCheckBox("Enable MIDI Quick Action")
+        self.midi_quick_action_enabled_checkbox.setChecked(self._midi_quick_action_enabled)
+        self.midi_quick_action_enabled_checkbox.toggled.connect(self._validate_midi_conflicts)
+        layout.addWidget(self.midi_quick_action_enabled_checkbox)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for i in range(48):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            edit = MidiCaptureEdit()
+            edit.setBinding(self._midi_quick_action_bindings[i])
+            edit.textChanged.connect(self._validate_midi_conflicts)
+            learn_btn = QPushButton("Learn")
+            clear_btn = QPushButton("Clear")
+            learn_btn.setFixedWidth(62)
+            clear_btn.setFixedWidth(56)
+            learn_btn.clicked.connect(lambda _=False, e=edit: self._start_midi_learning(e))
+            clear_btn.clicked.connect(lambda _=False, e=edit: e.setBinding(""))
+            row_layout.addWidget(edit, 1)
+            row_layout.addWidget(learn_btn)
+            row_layout.addWidget(clear_btn)
+            self._midi_quick_action_edits.append(edit)
+            form.addRow(f"Button {i + 1}:", row)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_midi_sound_button_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.midi_sound_button_hotkey_enabled_checkbox = QCheckBox("Enable Sound Button MIDI Hot Key")
+        self.midi_sound_button_hotkey_enabled_checkbox.setChecked(self._midi_sound_button_hotkey_enabled)
+        layout.addWidget(self.midi_sound_button_hotkey_enabled_checkbox)
+
+        prio_group = QGroupBox("Priority")
+        prio_layout = QVBoxLayout(prio_group)
+        self.midi_sound_hotkey_priority_sound_first_radio = QRadioButton("Sound Button MIDI Hot Key has highest priority")
+        self.midi_sound_hotkey_priority_system_first_radio = QRadioButton(
+            "System MIDI Hotkey and Quick Action have highest priority"
+        )
+        if self._midi_sound_button_hotkey_priority == "sound_button_first":
+            self.midi_sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.midi_sound_hotkey_priority_system_first_radio.setChecked(True)
+        prio_layout.addWidget(self.midi_sound_hotkey_priority_sound_first_radio)
+        prio_layout.addWidget(self.midi_sound_hotkey_priority_system_first_radio)
+        layout.addWidget(prio_group)
+
+        self.midi_sound_button_go_to_playing_checkbox = QCheckBox("Go To Playing after trigger")
+        self.midi_sound_button_go_to_playing_checkbox.setChecked(self._midi_sound_button_hotkey_go_to_playing)
+        layout.addWidget(self.midi_sound_button_go_to_playing_checkbox)
+        note = QLabel("Assign per-button MIDI hotkeys in Edit Sound Button.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _add_midi_row(self, form: QFormLayout, key: str, label: str) -> None:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        edit1 = MidiCaptureEdit()
+        edit2 = MidiCaptureEdit()
+        v1, v2 = self._midi_hotkeys.get(key, ("", ""))
+        edit1.setBinding(v1)
+        edit2.setBinding(v2)
+        learn1 = QPushButton("Learn")
+        clear1 = QPushButton("Clear")
+        learn2 = QPushButton("Learn")
+        clear2 = QPushButton("Clear")
+        for btn in (learn1, clear1, learn2, clear2):
+            btn.setFixedWidth(56 if btn.text() == "Clear" else 62)
+        learn1.clicked.connect(lambda _=False, e=edit1: self._start_midi_learning(e))
+        clear1.clicked.connect(lambda _=False, e=edit1: e.setBinding(""))
+        learn2.clicked.connect(lambda _=False, e=edit2: self._start_midi_learning(e))
+        clear2.clicked.connect(lambda _=False, e=edit2: e.setBinding(""))
+        edit1.textChanged.connect(self._validate_midi_conflicts)
+        edit2.textChanged.connect(self._validate_midi_conflicts)
+        row_layout.addWidget(edit1, 1)
+        row_layout.addWidget(learn1)
+        row_layout.addWidget(clear1)
+        row_layout.addWidget(edit2, 1)
+        row_layout.addWidget(learn2)
+        row_layout.addWidget(clear2)
+        self._midi_hotkey_edits[key] = (edit1, edit2)
+        form.addRow(f"{label}:", row)
 
     def _build_system_hotkey_tab(self) -> QWidget:
         page = QWidget()
@@ -1472,6 +1795,59 @@ class OptionsDialog(QDialog):
             result[key] = (s1, s2)
         return result
 
+    def selected_midi_input_devices(self) -> List[str]:
+        return self._checked_midi_input_device_ids()
+
+    def selected_midi_hotkeys(self) -> Dict[str, tuple[str, str]]:
+        result: Dict[str, tuple[str, str]] = {}
+        for key, (edit1, edit2) in self._midi_hotkey_edits.items():
+            result[key] = (edit1.binding(), edit2.binding())
+        return result
+
+    def selected_midi_quick_action_enabled(self) -> bool:
+        return bool(self.midi_quick_action_enabled_checkbox.isChecked())
+
+    def selected_midi_quick_action_bindings(self) -> List[str]:
+        return [edit.binding() for edit in self._midi_quick_action_edits]
+
+    def selected_midi_sound_button_hotkey_enabled(self) -> bool:
+        return bool(self.midi_sound_button_hotkey_enabled_checkbox.isChecked())
+
+    def selected_midi_sound_button_hotkey_priority(self) -> str:
+        if self.midi_sound_hotkey_priority_sound_first_radio.isChecked():
+            return "sound_button_first"
+        return "system_first"
+
+    def selected_midi_sound_button_hotkey_go_to_playing(self) -> bool:
+        return bool(self.midi_sound_button_go_to_playing_checkbox.isChecked())
+
+    def selected_midi_rotary_enabled(self) -> bool:
+        return bool(self.midi_rotary_enabled_checkbox.isChecked())
+
+    def selected_midi_rotary_group_binding(self) -> str:
+        return self.midi_rotary_group_edit.binding()
+
+    def selected_midi_rotary_page_binding(self) -> str:
+        return self.midi_rotary_page_edit.binding()
+
+    def selected_midi_rotary_sound_button_binding(self) -> str:
+        return self.midi_rotary_sound_button_edit.binding()
+
+    def selected_midi_rotary_jog_binding(self) -> str:
+        return self.midi_rotary_jog_edit.binding()
+
+    def selected_midi_rotary_volume_binding(self) -> str:
+        return self.midi_rotary_volume_edit.binding()
+
+    def selected_midi_rotary_volume_mode(self) -> str:
+        return str(self.midi_rotary_volume_mode_combo.currentData() or "relative")
+
+    def selected_midi_rotary_volume_step(self) -> int:
+        return int(self.midi_rotary_volume_step_spin.value())
+
+    def selected_midi_rotary_jog_step_ms(self) -> int:
+        return int(self.midi_rotary_jog_step_spin.value())
+
     def selected_quick_action_enabled(self) -> bool:
         return bool(self.quick_action_enabled_checkbox.isChecked())
 
@@ -1492,6 +1868,128 @@ class OptionsDialog(QDialog):
     def _sync_jog_outside_group_enabled(self) -> None:
         enabled = self.cue_timeline_audio_file_radio.isChecked()
         self.jog_outside_group.setEnabled(enabled)
+
+    def _refresh_midi_input_devices(self, force_refresh: bool = False) -> None:
+        current_ids = set(self._checked_midi_input_device_ids() or self._midi_input_device_ids)
+        current_names = set(self._checked_midi_input_device_names())
+        for selector in current_ids:
+            name = midi_input_selector_name(selector)
+            if name:
+                current_names.add(name)
+        try:
+            self.midi_input_list.itemChanged.disconnect(self._on_midi_input_selection_changed)
+        except Exception:
+            pass
+        self.midi_input_list.clear()
+        for device_id, device_name in list_midi_input_devices(force_refresh=force_refresh):
+            selector = midi_input_name_selector(device_name)
+            item = QListWidgetItem(device_name)
+            item.setData(Qt.UserRole, selector)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            checked = (selector in current_ids) or (str(device_name).strip() in current_names) or (str(device_id) in current_ids)
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            self.midi_input_list.addItem(item)
+        self.midi_input_list.itemChanged.connect(self._on_midi_input_selection_changed)
+        self._on_midi_input_selection_changed()
+
+    def _checked_midi_input_device_ids(self) -> List[str]:
+        selected: List[str] = []
+        seen: set[str] = set()
+        if not hasattr(self, "midi_input_list"):
+            return selected
+        for i in range(self.midi_input_list.count()):
+            item = self.midi_input_list.item(i)
+            if item is None:
+                continue
+            if item.checkState() == Qt.Checked:
+                device_id = str(item.data(Qt.UserRole) or "").strip()
+                if device_id and device_id not in seen:
+                    seen.add(device_id)
+                    selected.append(device_id)
+        return selected
+
+    def _checked_midi_input_device_names(self) -> List[str]:
+        selected: List[str] = []
+        if not hasattr(self, "midi_input_list"):
+            return selected
+        for i in range(self.midi_input_list.count()):
+            item = self.midi_input_list.item(i)
+            if item is None:
+                continue
+            if item.checkState() == Qt.Checked:
+                name = str(item.text() or "").strip()
+                if name:
+                    selected.append(name)
+        return selected
+
+    def _on_midi_input_selection_changed(self, _item=None) -> None:
+        ids = self._checked_midi_input_device_ids()
+        self._midi_input_device_ids = ids
+
+    def _start_midi_learning(self, target: MidiCaptureEdit) -> None:
+        if self._learning_midi_rotary_target is not None and self._learning_midi_rotary_target is not target:
+            self._learning_midi_rotary_target.setStyleSheet("")
+            self._learning_midi_rotary_target = None
+        if self._learning_midi_target is not None and self._learning_midi_target is not target:
+            self._learning_midi_target.setStyleSheet("")
+        self._learning_midi_target = target
+        target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+
+    def _start_midi_rotary_learning(self, target: MidiCaptureEdit) -> None:
+        if self._learning_midi_target is not None and self._learning_midi_target is not target:
+            self._learning_midi_target.setStyleSheet("")
+            self._learning_midi_target = None
+        if self._learning_midi_rotary_target is not None and self._learning_midi_rotary_target is not target:
+            self._learning_midi_rotary_target.setStyleSheet("")
+        self._learning_midi_rotary_target = target
+        target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+
+    def _on_midi_binding_captured(self, token: str, source_selector: str = "") -> None:
+        if self._learning_midi_target is None:
+            return
+        _prev_selector, normalized_token = split_midi_binding(token)
+        if source_selector:
+            self._learning_midi_target.setBinding(f"{source_selector}|{normalized_token}")
+        else:
+            self._learning_midi_target.setBinding(normalized_token)
+        self._learning_midi_target.setStyleSheet("")
+        self._learning_midi_target = None
+        self._validate_midi_conflicts()
+
+    def handle_midi_message(
+        self,
+        token: str,
+        source_selector: str = "",
+        status: int = 0,
+        data1: int = 0,
+        data2: int = 0,
+    ) -> bool:
+        if self._learning_midi_rotary_target is not None:
+            status = int(status) & 0xFF
+            data1 = int(data1) & 0xFF
+            base = ""
+            if (status & 0xF0) == 0xB0:
+                base = normalize_midi_binding(f"{status:02X}:{data1:02X}")
+            elif (status & 0xF0) == 0xE0:
+                # Pitch Bend encoders/wheels: bind by status(channel).
+                base = normalize_midi_binding(f"{status:02X}")
+            if base:
+                value = f"{source_selector}|{base}" if source_selector else base
+                self._learning_midi_rotary_target.setBinding(value)
+                self._learning_midi_rotary_target.setStyleSheet("")
+                self._learning_midi_rotary_target = None
+                return True
+            return False
+        if self._learning_midi_target is None:
+            return False
+        selected = set(self._midi_input_device_ids)
+        if selected:
+            if not source_selector:
+                return False
+            if source_selector not in selected:
+                return False
+        self._on_midi_binding_captured(token, source_selector)
+        return True
 
     def _set_combo_data_or_default(self, combo: QComboBox, selected_data, default_data) -> None:
         index = combo.findData(selected_data)
@@ -1543,6 +2041,7 @@ class OptionsDialog(QDialog):
     def _refresh_audio_devices(self) -> None:
         selected = self.selected_audio_output_device()
         selected_timecode = self.selected_timecode_audio_output_device()
+        selected_timecode_midi = self.selected_timecode_midi_output_device()
         try:
             from pyssp.audio_engine import list_output_devices
 
@@ -1558,6 +2057,15 @@ class OptionsDialog(QDialog):
         for name in self._available_audio_devices:
             self.timecode_output_combo.addItem(name, name)
         self._set_combo_data_or_default(self.timecode_output_combo, selected_timecode, "none")
+        self.timecode_midi_output_combo.clear()
+        self.timecode_midi_output_combo.addItem("None (disabled)", MIDI_OUTPUT_DEVICE_NONE)
+        for device_id, device_name in list_midi_output_devices():
+            self.timecode_midi_output_combo.addItem(device_name, device_id)
+        self._set_combo_data_or_default(
+            self.timecode_midi_output_combo,
+            selected_timecode_midi,
+            MIDI_OUTPUT_DEVICE_NONE,
+        )
         localize_widget_tree(self, self._ui_language)
 
     def _refresh_color_button(self, button: QPushButton, color_hex: str) -> None:
@@ -1608,24 +2116,27 @@ class OptionsDialog(QDialog):
             self._restore_hotkey_defaults()
             return
         if idx == 3:
-            self._restore_color_defaults()
+            self._restore_midi_defaults()
             return
         if idx == 4:
-            self._restore_delay_defaults()
+            self._restore_color_defaults()
             return
         if idx == 5:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 6:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 7:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 8:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 9:
+            self._restore_talk_defaults()
+            return
+        if idx == 10:
             self._restore_web_remote_defaults()
             return
 
@@ -1685,6 +2196,36 @@ class OptionsDialog(QDialog):
             self.sound_hotkey_priority_system_first_radio.setChecked(True)
         self.sound_button_go_to_playing_checkbox.setChecked(bool(d["sound_button_hotkey_go_to_playing"]))
         self._validate_hotkey_conflicts()
+
+    def _restore_midi_defaults(self) -> None:
+        d = self._DEFAULTS
+        self._midi_input_device_ids = list(d.get("midi_input_device_ids", []))
+        self._refresh_midi_input_devices()
+        defaults = dict(d.get("midi_hotkeys", {}))
+        for key, (edit1, edit2) in self._midi_hotkey_edits.items():
+            v1, v2 = defaults.get(key, ("", ""))
+            edit1.setBinding(v1)
+            edit2.setBinding(v2)
+        self.midi_quick_action_enabled_checkbox.setChecked(bool(d.get("midi_quick_action_enabled", False)))
+        midi_quick_defaults = list(d.get("midi_quick_action_bindings", [""] * 48))
+        for i, edit in enumerate(self._midi_quick_action_edits):
+            edit.setBinding(midi_quick_defaults[i] if i < len(midi_quick_defaults) else "")
+        self.midi_sound_button_hotkey_enabled_checkbox.setChecked(bool(d.get("midi_sound_button_hotkey_enabled", False)))
+        if str(d.get("midi_sound_button_hotkey_priority", "system_first")) == "sound_button_first":
+            self.midi_sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.midi_sound_hotkey_priority_system_first_radio.setChecked(True)
+        self.midi_sound_button_go_to_playing_checkbox.setChecked(bool(d.get("midi_sound_button_hotkey_go_to_playing", False)))
+        self.midi_rotary_enabled_checkbox.setChecked(bool(d.get("midi_rotary_enabled", False)))
+        self.midi_rotary_group_edit.setBinding(str(d.get("midi_rotary_group_binding", "")))
+        self.midi_rotary_page_edit.setBinding(str(d.get("midi_rotary_page_binding", "")))
+        self.midi_rotary_sound_button_edit.setBinding(str(d.get("midi_rotary_sound_button_binding", "")))
+        self.midi_rotary_jog_edit.setBinding(str(d.get("midi_rotary_jog_binding", "")))
+        self.midi_rotary_volume_edit.setBinding(str(d.get("midi_rotary_volume_binding", "")))
+        self._set_combo_data_or_default(self.midi_rotary_volume_mode_combo, str(d.get("midi_rotary_volume_mode", "relative")), "relative")
+        self.midi_rotary_volume_step_spin.setValue(int(d.get("midi_rotary_volume_step", 2)))
+        self.midi_rotary_jog_step_spin.setValue(int(d.get("midi_rotary_jog_step_ms", 250)))
+        self._validate_midi_conflicts()
 
     def _normalize_hotkey_for_conflict(self, raw: str) -> str:
         text = str(raw or "").strip()
@@ -1759,7 +2300,8 @@ class OptionsDialog(QDialog):
 
         has_conflict = bool(conflicts)
         if self.ok_button is not None:
-            self.ok_button.setEnabled(not has_conflict)
+            midi_conflict = bool(self._midi_warning_label is not None and self._midi_warning_label.isVisible())
+            self.ok_button.setEnabled((not has_conflict) and (not midi_conflict))
         if self.hotkey_warning_label is None:
             return
         if not has_conflict:
@@ -1772,8 +2314,86 @@ class OptionsDialog(QDialog):
         self.hotkey_warning_label.setText(f"{tr('Hotkey conflict detected. Fix duplicates before saving.')} {display}")
         self.hotkey_warning_label.setVisible(True)
 
+    def _validate_midi_conflicts(self) -> None:
+        seen: Dict[str, List[tuple[str, int, str]]] = {}
+        conflicts: List[str] = []
+        conflict_cells: set[tuple[str, int]] = set()
+        for key, (edit1, edit2) in self._midi_hotkey_edits.items():
+            for slot_index, edit in enumerate((edit1, edit2), start=1):
+                token = normalize_midi_binding(edit.binding())
+                if not token:
+                    continue
+                selector, msg = split_midi_binding(token)
+                entries = seen.setdefault(msg, [])
+                for prev_key, prev_slot_index, prev_selector in entries:
+                    if (
+                        (not prev_selector)
+                        or (not selector)
+                        or (prev_selector == selector)
+                    ):
+                        conflict_cells.add((prev_key, prev_slot_index))
+                        conflict_cells.add((key, slot_index))
+                        left = f"{tr(self._hotkey_labels.get(prev_key, prev_key))} ({prev_slot_index})"
+                        right = f"{tr(self._hotkey_labels.get(key, key))} ({slot_index})"
+                        conflicts.append(f"{token}: {left} {tr('and')} {right}")
+                entries.append((key, slot_index, selector))
+
+        quick_enabled = bool(self.midi_quick_action_enabled_checkbox.isChecked())
+        quick_conflict_rows: set[int] = set()
+        if quick_enabled:
+            for idx, edit in enumerate(self._midi_quick_action_edits):
+                token = normalize_midi_binding(edit.binding())
+                if not token:
+                    continue
+                selector, msg = split_midi_binding(token)
+                entries = seen.setdefault(msg, [])
+                row_has_conflict = False
+                for prev_key, prev_slot_index, prev_selector in entries:
+                    if (
+                        (not prev_selector)
+                        or (not selector)
+                        or (prev_selector == selector)
+                    ):
+                        conflict_cells.add((prev_key, prev_slot_index))
+                        conflicts.append(
+                            f"{token}: {self._describe_conflict_target(prev_key, prev_slot_index)} {tr('and')} {tr('Quick Action')} ({idx + 1})"
+                        )
+                        row_has_conflict = True
+                        if prev_key == "midi_quick_action":
+                            quick_conflict_rows.add(max(0, prev_slot_index - 1))
+                if row_has_conflict:
+                    quick_conflict_rows.add(idx)
+                entries.append(("midi_quick_action", idx + 1, selector))
+
+        for idx, edit in enumerate(self._midi_quick_action_edits):
+            if quick_enabled and idx in quick_conflict_rows:
+                edit.setStyleSheet("QLineEdit{border:2px solid #B00020;}")
+            elif self._learning_midi_target is not edit:
+                edit.setStyleSheet("")
+        for key, (edit1, edit2) in self._midi_hotkey_edits.items():
+            for slot_index, edit in enumerate((edit1, edit2), start=1):
+                if (key, slot_index) in conflict_cells:
+                    edit.setStyleSheet("QLineEdit{border:2px solid #B00020;}")
+                elif self._learning_midi_target is not edit:
+                    edit.setStyleSheet("")
+
+        has_conflict = bool(conflicts)
+        if self._midi_warning_label is not None:
+            if has_conflict:
+                display = "; ".join(conflicts[:4])
+                if len(conflicts) > 4:
+                    display += f"; +{len(conflicts) - 4} {tr('more')}"
+                self._midi_warning_label.setText(f"MIDI conflict detected. Fix duplicates before saving. {display}")
+                self._midi_warning_label.setVisible(True)
+            else:
+                self._midi_warning_label.setVisible(False)
+                self._midi_warning_label.setText("")
+        if self.ok_button is not None and self.hotkey_warning_label is not None:
+            keyboard_conflict = self.hotkey_warning_label.isVisible()
+            self.ok_button.setEnabled((not keyboard_conflict) and (not has_conflict))
+
     def _describe_conflict_target(self, key: str, slot_index: int) -> str:
-        if key == "quick_action":
+        if key in {"quick_action", "midi_quick_action"}:
             return f"{tr('Quick Action')} ({slot_index})"
         return f"{tr(self._hotkey_labels.get(key, key))} ({slot_index})"
 

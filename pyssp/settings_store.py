@@ -26,6 +26,17 @@ def _normalize_quick_action_keys(values: list[str]) -> list[str]:
     return output[:48]
 
 
+def default_midi_quick_action_bindings() -> list[str]:
+    return ["" for _ in range(48)]
+
+
+def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
+    output = [str(v or "").strip() for v in values[:48]]
+    if len(output) < 48:
+        output.extend(["" for _ in range(48 - len(output))])
+    return output[:48]
+
+
 @dataclass
 class AppSettings:
     last_open_dir: str = ""
@@ -113,6 +124,8 @@ class AppSettings:
     hotkey_search_2: str = ""
     hotkey_options_1: str = ""
     hotkey_options_2: str = ""
+    hotkey_play_selected_pause_1: str = ""
+    hotkey_play_selected_pause_2: str = ""
     hotkey_play_selected_1: str = ""
     hotkey_play_selected_2: str = ""
     hotkey_pause_toggle_1: str = "P"
@@ -167,6 +180,83 @@ class AppSettings:
     sound_button_hotkey_priority: str = "system_first"
     sound_button_hotkey_go_to_playing: bool = False
     sound_button_hotkey_system_order: list[str] = field(default_factory=list)
+    midi_input_device_ids: list[str] = field(default_factory=list)
+    midi_hotkey_new_set_1: str = ""
+    midi_hotkey_new_set_2: str = ""
+    midi_hotkey_open_set_1: str = ""
+    midi_hotkey_open_set_2: str = ""
+    midi_hotkey_save_set_1: str = ""
+    midi_hotkey_save_set_2: str = ""
+    midi_hotkey_save_set_as_1: str = ""
+    midi_hotkey_save_set_as_2: str = ""
+    midi_hotkey_search_1: str = ""
+    midi_hotkey_search_2: str = ""
+    midi_hotkey_options_1: str = ""
+    midi_hotkey_options_2: str = ""
+    midi_hotkey_play_selected_pause_1: str = ""
+    midi_hotkey_play_selected_pause_2: str = ""
+    midi_hotkey_play_selected_1: str = ""
+    midi_hotkey_play_selected_2: str = ""
+    midi_hotkey_pause_toggle_1: str = ""
+    midi_hotkey_pause_toggle_2: str = ""
+    midi_hotkey_stop_playback_1: str = ""
+    midi_hotkey_stop_playback_2: str = ""
+    midi_hotkey_talk_1: str = ""
+    midi_hotkey_talk_2: str = ""
+    midi_hotkey_next_group_1: str = ""
+    midi_hotkey_next_group_2: str = ""
+    midi_hotkey_prev_group_1: str = ""
+    midi_hotkey_prev_group_2: str = ""
+    midi_hotkey_next_page_1: str = ""
+    midi_hotkey_next_page_2: str = ""
+    midi_hotkey_prev_page_1: str = ""
+    midi_hotkey_prev_page_2: str = ""
+    midi_hotkey_next_sound_button_1: str = ""
+    midi_hotkey_next_sound_button_2: str = ""
+    midi_hotkey_prev_sound_button_1: str = ""
+    midi_hotkey_prev_sound_button_2: str = ""
+    midi_hotkey_multi_play_1: str = ""
+    midi_hotkey_multi_play_2: str = ""
+    midi_hotkey_go_to_playing_1: str = ""
+    midi_hotkey_go_to_playing_2: str = ""
+    midi_hotkey_loop_1: str = ""
+    midi_hotkey_loop_2: str = ""
+    midi_hotkey_next_1: str = ""
+    midi_hotkey_next_2: str = ""
+    midi_hotkey_rapid_fire_1: str = ""
+    midi_hotkey_rapid_fire_2: str = ""
+    midi_hotkey_shuffle_1: str = ""
+    midi_hotkey_shuffle_2: str = ""
+    midi_hotkey_reset_page_1: str = ""
+    midi_hotkey_reset_page_2: str = ""
+    midi_hotkey_play_list_1: str = ""
+    midi_hotkey_play_list_2: str = ""
+    midi_hotkey_fade_in_1: str = ""
+    midi_hotkey_fade_in_2: str = ""
+    midi_hotkey_cross_fade_1: str = ""
+    midi_hotkey_cross_fade_2: str = ""
+    midi_hotkey_fade_out_1: str = ""
+    midi_hotkey_fade_out_2: str = ""
+    midi_hotkey_mute_1: str = ""
+    midi_hotkey_mute_2: str = ""
+    midi_hotkey_volume_up_1: str = ""
+    midi_hotkey_volume_up_2: str = ""
+    midi_hotkey_volume_down_1: str = ""
+    midi_hotkey_volume_down_2: str = ""
+    midi_quick_action_enabled: bool = False
+    midi_quick_action_bindings: list[str] = field(default_factory=default_midi_quick_action_bindings)
+    midi_sound_button_hotkey_enabled: bool = False
+    midi_sound_button_hotkey_priority: str = "system_first"
+    midi_sound_button_hotkey_go_to_playing: bool = False
+    midi_rotary_enabled: bool = False
+    midi_rotary_group_binding: str = ""
+    midi_rotary_page_binding: str = ""
+    midi_rotary_sound_button_binding: str = ""
+    midi_rotary_jog_binding: str = ""
+    midi_rotary_volume_binding: str = ""
+    midi_rotary_volume_mode: str = "relative"
+    midi_rotary_volume_step: int = 2
+    midi_rotary_jog_step_ms: int = 250
 
 
 def get_settings_path() -> Path:
@@ -280,6 +370,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_search_2": settings.hotkey_search_2,
         "hotkey_options_1": settings.hotkey_options_1,
         "hotkey_options_2": settings.hotkey_options_2,
+        "hotkey_play_selected_pause_1": settings.hotkey_play_selected_pause_1,
+        "hotkey_play_selected_pause_2": settings.hotkey_play_selected_pause_2,
         "hotkey_play_selected_1": settings.hotkey_play_selected_1,
         "hotkey_play_selected_2": settings.hotkey_play_selected_2,
         "hotkey_pause_toggle_1": settings.hotkey_pause_toggle_1,
@@ -334,6 +426,83 @@ def save_settings(settings: AppSettings) -> None:
         "sound_button_hotkey_priority": settings.sound_button_hotkey_priority,
         "sound_button_hotkey_go_to_playing": "1" if settings.sound_button_hotkey_go_to_playing else "0",
         "sound_button_hotkey_system_order": "\t".join(settings.sound_button_hotkey_system_order),
+        "midi_input_device_ids": "\t".join(settings.midi_input_device_ids),
+        "midi_hotkey_new_set_1": settings.midi_hotkey_new_set_1,
+        "midi_hotkey_new_set_2": settings.midi_hotkey_new_set_2,
+        "midi_hotkey_open_set_1": settings.midi_hotkey_open_set_1,
+        "midi_hotkey_open_set_2": settings.midi_hotkey_open_set_2,
+        "midi_hotkey_save_set_1": settings.midi_hotkey_save_set_1,
+        "midi_hotkey_save_set_2": settings.midi_hotkey_save_set_2,
+        "midi_hotkey_save_set_as_1": settings.midi_hotkey_save_set_as_1,
+        "midi_hotkey_save_set_as_2": settings.midi_hotkey_save_set_as_2,
+        "midi_hotkey_search_1": settings.midi_hotkey_search_1,
+        "midi_hotkey_search_2": settings.midi_hotkey_search_2,
+        "midi_hotkey_options_1": settings.midi_hotkey_options_1,
+        "midi_hotkey_options_2": settings.midi_hotkey_options_2,
+        "midi_hotkey_play_selected_pause_1": settings.midi_hotkey_play_selected_pause_1,
+        "midi_hotkey_play_selected_pause_2": settings.midi_hotkey_play_selected_pause_2,
+        "midi_hotkey_play_selected_1": settings.midi_hotkey_play_selected_1,
+        "midi_hotkey_play_selected_2": settings.midi_hotkey_play_selected_2,
+        "midi_hotkey_pause_toggle_1": settings.midi_hotkey_pause_toggle_1,
+        "midi_hotkey_pause_toggle_2": settings.midi_hotkey_pause_toggle_2,
+        "midi_hotkey_stop_playback_1": settings.midi_hotkey_stop_playback_1,
+        "midi_hotkey_stop_playback_2": settings.midi_hotkey_stop_playback_2,
+        "midi_hotkey_talk_1": settings.midi_hotkey_talk_1,
+        "midi_hotkey_talk_2": settings.midi_hotkey_talk_2,
+        "midi_hotkey_next_group_1": settings.midi_hotkey_next_group_1,
+        "midi_hotkey_next_group_2": settings.midi_hotkey_next_group_2,
+        "midi_hotkey_prev_group_1": settings.midi_hotkey_prev_group_1,
+        "midi_hotkey_prev_group_2": settings.midi_hotkey_prev_group_2,
+        "midi_hotkey_next_page_1": settings.midi_hotkey_next_page_1,
+        "midi_hotkey_next_page_2": settings.midi_hotkey_next_page_2,
+        "midi_hotkey_prev_page_1": settings.midi_hotkey_prev_page_1,
+        "midi_hotkey_prev_page_2": settings.midi_hotkey_prev_page_2,
+        "midi_hotkey_next_sound_button_1": settings.midi_hotkey_next_sound_button_1,
+        "midi_hotkey_next_sound_button_2": settings.midi_hotkey_next_sound_button_2,
+        "midi_hotkey_prev_sound_button_1": settings.midi_hotkey_prev_sound_button_1,
+        "midi_hotkey_prev_sound_button_2": settings.midi_hotkey_prev_sound_button_2,
+        "midi_hotkey_multi_play_1": settings.midi_hotkey_multi_play_1,
+        "midi_hotkey_multi_play_2": settings.midi_hotkey_multi_play_2,
+        "midi_hotkey_go_to_playing_1": settings.midi_hotkey_go_to_playing_1,
+        "midi_hotkey_go_to_playing_2": settings.midi_hotkey_go_to_playing_2,
+        "midi_hotkey_loop_1": settings.midi_hotkey_loop_1,
+        "midi_hotkey_loop_2": settings.midi_hotkey_loop_2,
+        "midi_hotkey_next_1": settings.midi_hotkey_next_1,
+        "midi_hotkey_next_2": settings.midi_hotkey_next_2,
+        "midi_hotkey_rapid_fire_1": settings.midi_hotkey_rapid_fire_1,
+        "midi_hotkey_rapid_fire_2": settings.midi_hotkey_rapid_fire_2,
+        "midi_hotkey_shuffle_1": settings.midi_hotkey_shuffle_1,
+        "midi_hotkey_shuffle_2": settings.midi_hotkey_shuffle_2,
+        "midi_hotkey_reset_page_1": settings.midi_hotkey_reset_page_1,
+        "midi_hotkey_reset_page_2": settings.midi_hotkey_reset_page_2,
+        "midi_hotkey_play_list_1": settings.midi_hotkey_play_list_1,
+        "midi_hotkey_play_list_2": settings.midi_hotkey_play_list_2,
+        "midi_hotkey_fade_in_1": settings.midi_hotkey_fade_in_1,
+        "midi_hotkey_fade_in_2": settings.midi_hotkey_fade_in_2,
+        "midi_hotkey_cross_fade_1": settings.midi_hotkey_cross_fade_1,
+        "midi_hotkey_cross_fade_2": settings.midi_hotkey_cross_fade_2,
+        "midi_hotkey_fade_out_1": settings.midi_hotkey_fade_out_1,
+        "midi_hotkey_fade_out_2": settings.midi_hotkey_fade_out_2,
+        "midi_hotkey_mute_1": settings.midi_hotkey_mute_1,
+        "midi_hotkey_mute_2": settings.midi_hotkey_mute_2,
+        "midi_hotkey_volume_up_1": settings.midi_hotkey_volume_up_1,
+        "midi_hotkey_volume_up_2": settings.midi_hotkey_volume_up_2,
+        "midi_hotkey_volume_down_1": settings.midi_hotkey_volume_down_1,
+        "midi_hotkey_volume_down_2": settings.midi_hotkey_volume_down_2,
+        "midi_quick_action_enabled": "1" if settings.midi_quick_action_enabled else "0",
+        "midi_quick_action_bindings": "\t".join(_normalize_midi_quick_action_bindings(settings.midi_quick_action_bindings)),
+        "midi_sound_button_hotkey_enabled": "1" if settings.midi_sound_button_hotkey_enabled else "0",
+        "midi_sound_button_hotkey_priority": settings.midi_sound_button_hotkey_priority,
+        "midi_sound_button_hotkey_go_to_playing": "1" if settings.midi_sound_button_hotkey_go_to_playing else "0",
+        "midi_rotary_enabled": "1" if settings.midi_rotary_enabled else "0",
+        "midi_rotary_group_binding": settings.midi_rotary_group_binding,
+        "midi_rotary_page_binding": settings.midi_rotary_page_binding,
+        "midi_rotary_sound_button_binding": settings.midi_rotary_sound_button_binding,
+        "midi_rotary_jog_binding": settings.midi_rotary_jog_binding,
+        "midi_rotary_volume_binding": settings.midi_rotary_volume_binding,
+        "midi_rotary_volume_mode": settings.midi_rotary_volume_mode,
+        "midi_rotary_volume_step": str(settings.midi_rotary_volume_step),
+        "midi_rotary_jog_step_ms": str(settings.midi_rotary_jog_step_ms),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -440,6 +609,20 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         quick_action_keys = _normalize_quick_action_keys(quick_action_raw.split("\t"))
     else:
         quick_action_keys = default_quick_action_keys()
+    midi_input_device_ids = [item.strip() for item in str(section.get("midi_input_device_ids", "")).split("\t") if item.strip()]
+    midi_quick_action_raw = str(section.get("midi_quick_action_bindings", "")).strip()
+    if midi_quick_action_raw:
+        midi_quick_action_bindings = _normalize_midi_quick_action_bindings(midi_quick_action_raw.split("\t"))
+    else:
+        midi_quick_action_bindings = default_midi_quick_action_bindings()
+    midi_sound_button_hotkey_priority = str(section.get("midi_sound_button_hotkey_priority", "system_first")).strip().lower()
+    if midi_sound_button_hotkey_priority not in {"system_first", "sound_button_first"}:
+        midi_sound_button_hotkey_priority = "system_first"
+    midi_rotary_volume_mode = str(section.get("midi_rotary_volume_mode", "relative")).strip().lower()
+    if midi_rotary_volume_mode not in {"absolute", "relative"}:
+        midi_rotary_volume_mode = "relative"
+    midi_rotary_volume_step = _clamp_int(_get_int(section, "midi_rotary_volume_step", 2), 1, 20)
+    midi_rotary_jog_step_ms = _clamp_int(_get_int(section, "midi_rotary_jog_step_ms", 250), 10, 5000)
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -526,6 +709,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_search_2=str(section.get("hotkey_search_2", "")).strip(),
         hotkey_options_1=str(section.get("hotkey_options_1", "")).strip(),
         hotkey_options_2=str(section.get("hotkey_options_2", "")).strip(),
+        hotkey_play_selected_pause_1=str(section.get("hotkey_play_selected_pause_1", "")).strip(),
+        hotkey_play_selected_pause_2=str(section.get("hotkey_play_selected_pause_2", "")).strip(),
         hotkey_play_selected_1=str(section.get("hotkey_play_selected_1", "")).strip(),
         hotkey_play_selected_2=str(section.get("hotkey_play_selected_2", "")).strip(),
         hotkey_pause_toggle_1=str(section.get("hotkey_pause_toggle_1", "P")).strip(),
@@ -580,6 +765,83 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         sound_button_hotkey_priority=sound_button_hotkey_priority,
         sound_button_hotkey_go_to_playing=_get_bool(section, "sound_button_hotkey_go_to_playing", False),
         sound_button_hotkey_system_order=sound_button_hotkey_system_order,
+        midi_input_device_ids=midi_input_device_ids,
+        midi_hotkey_new_set_1=str(section.get("midi_hotkey_new_set_1", "")).strip(),
+        midi_hotkey_new_set_2=str(section.get("midi_hotkey_new_set_2", "")).strip(),
+        midi_hotkey_open_set_1=str(section.get("midi_hotkey_open_set_1", "")).strip(),
+        midi_hotkey_open_set_2=str(section.get("midi_hotkey_open_set_2", "")).strip(),
+        midi_hotkey_save_set_1=str(section.get("midi_hotkey_save_set_1", "")).strip(),
+        midi_hotkey_save_set_2=str(section.get("midi_hotkey_save_set_2", "")).strip(),
+        midi_hotkey_save_set_as_1=str(section.get("midi_hotkey_save_set_as_1", "")).strip(),
+        midi_hotkey_save_set_as_2=str(section.get("midi_hotkey_save_set_as_2", "")).strip(),
+        midi_hotkey_search_1=str(section.get("midi_hotkey_search_1", "")).strip(),
+        midi_hotkey_search_2=str(section.get("midi_hotkey_search_2", "")).strip(),
+        midi_hotkey_options_1=str(section.get("midi_hotkey_options_1", "")).strip(),
+        midi_hotkey_options_2=str(section.get("midi_hotkey_options_2", "")).strip(),
+        midi_hotkey_play_selected_pause_1=str(section.get("midi_hotkey_play_selected_pause_1", "")).strip(),
+        midi_hotkey_play_selected_pause_2=str(section.get("midi_hotkey_play_selected_pause_2", "")).strip(),
+        midi_hotkey_play_selected_1=str(section.get("midi_hotkey_play_selected_1", "")).strip(),
+        midi_hotkey_play_selected_2=str(section.get("midi_hotkey_play_selected_2", "")).strip(),
+        midi_hotkey_pause_toggle_1=str(section.get("midi_hotkey_pause_toggle_1", "")).strip(),
+        midi_hotkey_pause_toggle_2=str(section.get("midi_hotkey_pause_toggle_2", "")).strip(),
+        midi_hotkey_stop_playback_1=str(section.get("midi_hotkey_stop_playback_1", "")).strip(),
+        midi_hotkey_stop_playback_2=str(section.get("midi_hotkey_stop_playback_2", "")).strip(),
+        midi_hotkey_talk_1=str(section.get("midi_hotkey_talk_1", "")).strip(),
+        midi_hotkey_talk_2=str(section.get("midi_hotkey_talk_2", "")).strip(),
+        midi_hotkey_next_group_1=str(section.get("midi_hotkey_next_group_1", "")).strip(),
+        midi_hotkey_next_group_2=str(section.get("midi_hotkey_next_group_2", "")).strip(),
+        midi_hotkey_prev_group_1=str(section.get("midi_hotkey_prev_group_1", "")).strip(),
+        midi_hotkey_prev_group_2=str(section.get("midi_hotkey_prev_group_2", "")).strip(),
+        midi_hotkey_next_page_1=str(section.get("midi_hotkey_next_page_1", "")).strip(),
+        midi_hotkey_next_page_2=str(section.get("midi_hotkey_next_page_2", "")).strip(),
+        midi_hotkey_prev_page_1=str(section.get("midi_hotkey_prev_page_1", "")).strip(),
+        midi_hotkey_prev_page_2=str(section.get("midi_hotkey_prev_page_2", "")).strip(),
+        midi_hotkey_next_sound_button_1=str(section.get("midi_hotkey_next_sound_button_1", "")).strip(),
+        midi_hotkey_next_sound_button_2=str(section.get("midi_hotkey_next_sound_button_2", "")).strip(),
+        midi_hotkey_prev_sound_button_1=str(section.get("midi_hotkey_prev_sound_button_1", "")).strip(),
+        midi_hotkey_prev_sound_button_2=str(section.get("midi_hotkey_prev_sound_button_2", "")).strip(),
+        midi_hotkey_multi_play_1=str(section.get("midi_hotkey_multi_play_1", "")).strip(),
+        midi_hotkey_multi_play_2=str(section.get("midi_hotkey_multi_play_2", "")).strip(),
+        midi_hotkey_go_to_playing_1=str(section.get("midi_hotkey_go_to_playing_1", "")).strip(),
+        midi_hotkey_go_to_playing_2=str(section.get("midi_hotkey_go_to_playing_2", "")).strip(),
+        midi_hotkey_loop_1=str(section.get("midi_hotkey_loop_1", "")).strip(),
+        midi_hotkey_loop_2=str(section.get("midi_hotkey_loop_2", "")).strip(),
+        midi_hotkey_next_1=str(section.get("midi_hotkey_next_1", "")).strip(),
+        midi_hotkey_next_2=str(section.get("midi_hotkey_next_2", "")).strip(),
+        midi_hotkey_rapid_fire_1=str(section.get("midi_hotkey_rapid_fire_1", "")).strip(),
+        midi_hotkey_rapid_fire_2=str(section.get("midi_hotkey_rapid_fire_2", "")).strip(),
+        midi_hotkey_shuffle_1=str(section.get("midi_hotkey_shuffle_1", "")).strip(),
+        midi_hotkey_shuffle_2=str(section.get("midi_hotkey_shuffle_2", "")).strip(),
+        midi_hotkey_reset_page_1=str(section.get("midi_hotkey_reset_page_1", "")).strip(),
+        midi_hotkey_reset_page_2=str(section.get("midi_hotkey_reset_page_2", "")).strip(),
+        midi_hotkey_play_list_1=str(section.get("midi_hotkey_play_list_1", "")).strip(),
+        midi_hotkey_play_list_2=str(section.get("midi_hotkey_play_list_2", "")).strip(),
+        midi_hotkey_fade_in_1=str(section.get("midi_hotkey_fade_in_1", "")).strip(),
+        midi_hotkey_fade_in_2=str(section.get("midi_hotkey_fade_in_2", "")).strip(),
+        midi_hotkey_cross_fade_1=str(section.get("midi_hotkey_cross_fade_1", "")).strip(),
+        midi_hotkey_cross_fade_2=str(section.get("midi_hotkey_cross_fade_2", "")).strip(),
+        midi_hotkey_fade_out_1=str(section.get("midi_hotkey_fade_out_1", "")).strip(),
+        midi_hotkey_fade_out_2=str(section.get("midi_hotkey_fade_out_2", "")).strip(),
+        midi_hotkey_mute_1=str(section.get("midi_hotkey_mute_1", "")).strip(),
+        midi_hotkey_mute_2=str(section.get("midi_hotkey_mute_2", "")).strip(),
+        midi_hotkey_volume_up_1=str(section.get("midi_hotkey_volume_up_1", "")).strip(),
+        midi_hotkey_volume_up_2=str(section.get("midi_hotkey_volume_up_2", "")).strip(),
+        midi_hotkey_volume_down_1=str(section.get("midi_hotkey_volume_down_1", "")).strip(),
+        midi_hotkey_volume_down_2=str(section.get("midi_hotkey_volume_down_2", "")).strip(),
+        midi_quick_action_enabled=_get_bool(section, "midi_quick_action_enabled", False),
+        midi_quick_action_bindings=midi_quick_action_bindings,
+        midi_sound_button_hotkey_enabled=_get_bool(section, "midi_sound_button_hotkey_enabled", False),
+        midi_sound_button_hotkey_priority=midi_sound_button_hotkey_priority,
+        midi_sound_button_hotkey_go_to_playing=_get_bool(section, "midi_sound_button_hotkey_go_to_playing", False),
+        midi_rotary_enabled=_get_bool(section, "midi_rotary_enabled", False),
+        midi_rotary_group_binding=str(section.get("midi_rotary_group_binding", "")).strip(),
+        midi_rotary_page_binding=str(section.get("midi_rotary_page_binding", "")).strip(),
+        midi_rotary_sound_button_binding=str(section.get("midi_rotary_sound_button_binding", "")).strip(),
+        midi_rotary_jog_binding=str(section.get("midi_rotary_jog_binding", "")).strip(),
+        midi_rotary_volume_binding=str(section.get("midi_rotary_volume_binding", "")).strip(),
+        midi_rotary_volume_mode=midi_rotary_volume_mode,
+        midi_rotary_volume_step=midi_rotary_volume_step,
+        midi_rotary_jog_step_ms=midi_rotary_jog_step_ms,
     )
 
 

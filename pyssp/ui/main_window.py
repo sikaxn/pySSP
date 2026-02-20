@@ -52,6 +52,7 @@ from pyssp.audio_engine import (
     ExternalMediaPlayer,
     configure_audio_preload_cache_policy,
     enforce_audio_preload_limits,
+    get_audio_preload_capacity_bytes,
     get_audio_preload_runtime_status,
     get_preload_memory_limits_mb,
     get_media_ssp_units,
@@ -570,7 +571,7 @@ class StageDisplayWindow(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent, Qt.Window)
-        self.setWindowTitle("Stage Display")
+        self.setWindowTitle(tr("Stage Display"))
         self.resize(980, 600)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setStyleSheet("background:#000000; color:#FFFFFF;")
@@ -600,6 +601,7 @@ class StageDisplayWindow(QWidget):
         self._song_raw_values: Dict[str, str] = {"song_name": "-", "next_song": "-"}
         self._song_base_pt = 48
         self._song_text_boxes: Dict[str, QFrame] = {}
+        self._status_state = "not_playing"
 
         times_row = QWidget(center)
         times_layout = QHBoxLayout(times_row)
@@ -652,7 +654,7 @@ class StageDisplayWindow(QWidget):
             row_layout = QVBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
-            title_text = "Now Playing" if key == "song_name" else "Next Playing"
+            title_text = tr("Now Playing") if key == "song_name" else tr("Next Playing")
             title_label = QLabel(title_text, row)
             title_label.setAlignment(Qt.AlignCenter)
             title_label.setStyleSheet("font-size:20pt; font-weight:bold; color:#D0D0D0;")
@@ -681,7 +683,7 @@ class StageDisplayWindow(QWidget):
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.addStretch(1)
-        self._status_value = QPushButton("Not Playing", footer)
+        self._status_value = QPushButton(tr("Not Playing"), footer)
         self._status_value.setEnabled(False)
         self._status_base_style = (
             "QPushButton{font-size:16pt; font-weight:bold; color:#F5F5F5; border:1px solid #6A6A6A; border-radius:8px; padding:4px 12px; background:#0E0E0E;}"
@@ -698,6 +700,7 @@ class StageDisplayWindow(QWidget):
         self._update_datetime()
         self._apply_layout()
         self._apply_responsive_sizes()
+        self.retranslate_ui()
 
     def configure_layout(self, order: List[str], visibility: Dict[str, bool]) -> None:
         valid = [key for key in order if key in self._rows]
@@ -833,24 +836,38 @@ class StageDisplayWindow(QWidget):
 
     def set_playback_status(self, state: str) -> None:
         token = str(state or "").strip().lower()
+        self._status_state = token
         if token == "playing":
-            self._status_value.setText("> Playing")
+            self._status_value.setText(f"> {tr('Playing')}")
             self._status_value.setStyleSheet(
                 self._status_base_style
                 + "QPushButton{background:#1E5E2D;border-color:#4FBF6A;}"
             )
         elif token == "paused":
-            self._status_value.setText("|| Paused")
+            self._status_value.setText(f"|| {tr('Paused')}")
             self._status_value.setStyleSheet(
                 self._status_base_style
                 + "QPushButton{background:#5A4A12;border-color:#E0C14A;}"
             )
         else:
-            self._status_value.setText("[] Not Playing")
+            self._status_value.setText(f"[] {tr('Not Playing')}")
             self._status_value.setStyleSheet(
                 self._status_base_style
                 + "QPushButton{background:#3C1B1B;border-color:#B56161;}"
             )
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Stage Display"))
+        for key, label in self._title_labels.items():
+            if key == "song_name":
+                label.setText(tr("Now Playing"))
+                continue
+            if key == "next_song":
+                label.setText(tr("Next Playing"))
+                continue
+            source = self.DISPLAY_LABELS.get(key, key)
+            label.setText(tr(source))
+        self.set_playback_status(self._status_state)
 
     def _apply_song_text_fit(self) -> None:
         for key in ["song_name", "next_song"]:
@@ -1588,6 +1605,8 @@ class MainWindow(QMainWindow):
             localize_widget_tree(self._about_window, self.ui_language)
         if self._help_window is not None:
             localize_widget_tree(self._help_window, self.ui_language)
+        if self._stage_display_window is not None:
+            self._stage_display_window.retranslate_ui()
 
     def _build_timecode_dock(self) -> None:
         self.timecode_dock = QDockWidget("Timecode", self)
@@ -5770,6 +5789,7 @@ class MainWindow(QMainWindow):
         if self._stage_display_window is None:
             self._stage_display_window = StageDisplayWindow(self)
             self._stage_display_window.destroyed.connect(self._on_stage_display_destroyed)
+        self._stage_display_window.retranslate_ui()
         self._stage_display_window.configure_layout(self.stage_display_layout, self.stage_display_visibility)
         self._refresh_stage_display()
         self._stage_display_window.show()
@@ -5903,14 +5923,30 @@ class MainWindow(QMainWindow):
     def _queue_current_page_audio_preload(self) -> None:
         if not self.preload_audio_enabled or not self.preload_current_page_audio:
             return
-        paths: List[str] = []
+        # Cache stores float32 stereo PCM (~352.8 bytes/ms @ 44.1kHz), use this as a practical estimate.
+        bytes_per_ms = 352.8
+        fallback_bytes = 5 * 1024 * 1024
+        candidates: List[Tuple[str, int]] = []
         for slot in self._current_page_slots():
             if not slot.assigned or slot.marker:
                 continue
             path = str(slot.file_path or "").strip()
             if not path or not os.path.exists(path):
                 continue
-            paths.append(path)
+            if is_audio_preloaded(path):
+                continue
+            duration_ms = max(0, int(slot.duration_ms))
+            estimated = int(duration_ms * bytes_per_ms) if duration_ms > 0 else fallback_bytes
+            candidates.append((path, max(1, estimated)))
+        if not candidates:
+            return
+        remaining_bytes, _effective_limit, _used_bytes = get_audio_preload_capacity_bytes()
+        total_estimated = sum(size for _path, size in candidates)
+        if remaining_bytes < total_estimated:
+            # Constrained RAM: prioritize first couple tracks on the page.
+            paths = [path for path, _size in candidates[:2]]
+        else:
+            paths = [path for path, _size in candidates]
         if paths:
             request_audio_preload(paths, prioritize=True)
 

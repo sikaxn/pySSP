@@ -240,6 +240,14 @@ def get_audio_preload_runtime_status() -> Tuple[bool, int]:
         return bool(_PRELOAD_ENABLED), int(active)
 
 
+def get_audio_preload_capacity_bytes() -> Tuple[int, int, int]:
+    with _PRELOAD_LOCK:
+        effective_limit = _effective_limit_bytes_locked()
+        used = max(0, int(_PRELOAD_CACHE_BYTES))
+        remaining = max(0, int(effective_limit) - used)
+        return remaining, int(effective_limit), used
+
+
 def is_audio_preloaded(file_path: str) -> bool:
     path = _normalize_cache_key(file_path)
     if not path:
@@ -336,15 +344,20 @@ def _store_preload_entry(file_path: str, frames: np.ndarray, duration_ms: int) -
 
 def _evict_preload_cache_locked() -> None:
     global _PRELOAD_CACHE_BYTES
+    effective_limit = _effective_limit_bytes_locked()
+    while _PRELOAD_CACHE and _PRELOAD_CACHE_BYTES > effective_limit:
+        _old_path, (_old_frames, _old_duration_ms, old_size) = _PRELOAD_CACHE.popitem(last=False)
+        _PRELOAD_CACHE_BYTES = max(0, _PRELOAD_CACHE_BYTES - int(old_size))
+
+
+def _effective_limit_bytes_locked() -> int:
     effective_limit = int(_PRELOAD_LIMIT_BYTES)
     if _PRELOAD_PRESSURE_ENABLED:
         total_bytes, available_bytes = _system_memory_bytes()
         reserve_bytes = _memory_reserve_bytes(total_bytes)
         pressure_limit = max(0, int(available_bytes - reserve_bytes))
         effective_limit = min(effective_limit, pressure_limit)
-    while _PRELOAD_CACHE and _PRELOAD_CACHE_BYTES > effective_limit:
-        _old_path, (_old_frames, _old_duration_ms, old_size) = _PRELOAD_CACHE.popitem(last=False)
-        _PRELOAD_CACHE_BYTES = max(0, _PRELOAD_CACHE_BYTES - int(old_size))
+    return max(0, int(effective_limit))
 
 
 def _memory_reserve_bytes(total_bytes: int) -> int:

@@ -134,6 +134,23 @@ Build outputs:
 - Windows: `dist\pySSP\pySSP.exe`, `dist\pySSP\pySSP_cleanstart.bat`, `dist\pySSP\pySSP_debug.bat`
 - macOS: `dist/pySSP.app`, `dist/pySSP_cleanstart.app`, `dist/pySSP_debug.app`
 
+## Build DMG (macOS)
+
+Use:
+
+```bash
+./build_dmg_mac.sh
+```
+
+This script:
+- Packages `pySSP.app`, `pySSP_cleanstart.app`, and `pySSP_debug.app`
+- Places them in a `pyssp/` folder inside the DMG
+- Uses `logo.png` as the DMG background
+- Adds `INSTALL.txt` with drag-to-Applications instructions
+
+Output:
+- `dist/pySSP-macOS.dmg`
+
 ## License
 
 `pySSP` is licensed under GPL-3.0. See `LICENSE`.

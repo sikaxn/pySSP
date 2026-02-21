@@ -183,3 +183,4 @@ cython_debug/
 # Node.js dependencies
 node_modules/
 Pipfile.lock
+.DS_Store

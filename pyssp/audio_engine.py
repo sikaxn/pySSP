@@ -354,9 +354,12 @@ def _effective_limit_bytes_locked() -> int:
     effective_limit = int(_PRELOAD_LIMIT_BYTES)
     if _PRELOAD_PRESSURE_ENABLED:
         total_bytes, available_bytes = _system_memory_bytes()
-        reserve_bytes = _memory_reserve_bytes(total_bytes)
-        pressure_limit = max(0, int(available_bytes - reserve_bytes))
-        effective_limit = min(effective_limit, pressure_limit)
+        # If runtime memory metrics are unavailable (observed on some macOS environments),
+        # keep the configured preload limit instead of forcing it to zero.
+        if total_bytes > 0 and available_bytes > 0:
+            reserve_bytes = _memory_reserve_bytes(total_bytes)
+            pressure_limit = max(0, int(available_bytes - reserve_bytes))
+            effective_limit = min(effective_limit, pressure_limit)
     return max(0, int(effective_limit))
 
 

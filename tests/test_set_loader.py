@@ -130,3 +130,30 @@ def test_load_set_cue_points_scaled_from_large_values(tmp_path):
     slot = result.pages["A"][0][0]
     assert slot.cue_start_ms == 6000
     assert slot.cue_end_ms == 240000
+
+
+def test_load_set_cue_start_scaled_when_end_missing(tmp_path):
+    set_path = tmp_path / "cue_cs_only_scaled.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "t1=03:20",
+                "cs1=335161",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.cue_start_ms == 1900
+    assert slot.cue_end_ms is None

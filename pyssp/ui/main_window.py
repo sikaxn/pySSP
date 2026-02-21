@@ -4976,6 +4976,7 @@ class MainWindow(QMainWindow):
         return self._parse_sound_midi_hotkey(value)
 
     def _parse_cue_points(self, start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
+        fallback_units_per_ms = 176.4
         start_raw = self._parse_non_negative_int(start_value)
         end_raw = self._parse_non_negative_int(end_value)
         if start_raw is None and end_raw is None:
@@ -4988,6 +4989,11 @@ class MainWindow(QMainWindow):
             if start_raw is not None:
                 start_ms = int(round(start_raw * scale))
             end_ms = duration_ms
+        elif duration_ms > 0 and end_raw is None and start_raw is not None and start_raw > duration_ms:
+            # Handle cs-only files where cue values are stored in SSP units.
+            inferred_start_ms = int(round(start_raw / fallback_units_per_ms))
+            if 0 <= inferred_start_ms <= duration_ms:
+                start_ms = inferred_start_ms
 
         if start_ms is not None:
             start_ms = max(0, start_ms)
@@ -9382,5 +9388,4 @@ def elide_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 3] + "..."
-
 

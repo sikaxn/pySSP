@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import QLockFile
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QColor, QIcon, QPalette
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
@@ -20,6 +20,26 @@ _INSTANCE_LOCK: Optional[QLockFile] = None
 _STDOUT_FALLBACK = None
 _STDERR_FALLBACK = None
 _STDIN_FALLBACK = None
+
+
+def _force_light_qt_theme(app: QApplication) -> None:
+    # Use Fusion + explicit light palette to avoid inheriting OS dark appearance.
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.WindowText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.AlternateBase, QColor(245, 245, 245))
+    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Text, QColor(0, 0, 0))
+    palette.setColor(QPalette.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ButtonText, QColor(0, 0, 0))
+    palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
+    palette.setColor(QPalette.Link, QColor(0, 102, 204))
+    palette.setColor(QPalette.Highlight, QColor(0, 120, 215))
+    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+    app.setPalette(palette)
 
 
 def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool]:
@@ -193,6 +213,7 @@ def main() -> int:
     _enable_debug_console(debug_requested)
     _ensure_standard_streams(debug_requested)
     app = QApplication(qt_argv)
+    _force_light_qt_theme(app)
     install_auto_localization(app)
     preferred_language: Optional[str] = None
     if cleanstart_requested:

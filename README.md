@@ -112,19 +112,27 @@ python -m pytest
 
 ## Build executable (PyInstaller)
 
-Use:
+Windows:
 
 ```bat
 build_pyinstaller.bat
 ```
 
-This script:
+macOS:
+
+```bash
+./build_pyinstaller_mac.sh
+```
+
+These scripts:
 - Ensures a Python 3.12 `pipenv` environment
 - Installs dependencies
-- Builds `dist\pySSP\pySSP.exe`
-- Generates helper launchers
-- `dist\pySSP\pySSP_cleanstart.bat`
-- `dist\pySSP\pySSP_debug.bat`
+- Builds the application with PyInstaller
+- Generates helper launchers for cleanstart/debug
+
+Build outputs:
+- Windows: `dist\pySSP\pySSP.exe`, `dist\pySSP\pySSP_cleanstart.bat`, `dist\pySSP\pySSP_debug.bat`
+- macOS: `dist/pySSP.app`, `dist/pySSP_cleanstart.app`, `dist/pySSP_debug.app`
 
 ## License
 

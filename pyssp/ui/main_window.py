@@ -4086,11 +4086,11 @@ class MainWindow(QMainWindow):
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
                 lines.append(f"ci{slot_index}=Y")
-            cue_start, cue_end = self._cue_fields_for_set(slot)
+            cue_start, cue_end = self._cue_time_fields_for_set(slot)
             if cue_start is not None:
-                lines.append(f"cs{slot_index}={cue_start}")
+                lines.append(f"pysspcuestart{slot_index}={cue_start}")
             if cue_end is not None:
-                lines.append(f"ce{slot_index}={cue_end}")
+                lines.append(f"pysspcueend{slot_index}={cue_end}")
         lines.append("")
         payload = "\r\n".join(lines)
         with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
@@ -4144,11 +4144,18 @@ class MainWindow(QMainWindow):
             color = parse_delphi_color(section.get(f"co{i}", "").strip())
             volume_override_pct = self._parse_volume_override_pct(section.get(f"v{i}", "").strip())
             sound_hotkey = self._parse_sound_hotkey(section.get(f"h{i}", "").strip())
-            cue_start_ms, cue_end_ms = self._parse_cue_points(
-                section.get(f"cs{i}", "").strip(),
-                section.get(f"ce{i}", "").strip(),
-                duration,
-            )
+            cue_start_raw = section.get(f"pysspcuestart{i}", "").strip()
+            cue_end_raw = section.get(f"pysspcueend{i}", "").strip()
+            if cue_start_raw or cue_end_raw:
+                cue_start_ms = self._parse_cue_time_string_to_ms(cue_start_raw)
+                cue_end_ms = self._parse_cue_time_string_to_ms(cue_end_raw)
+                cue_start_ms, cue_end_ms = self._normalize_cue_points(cue_start_ms, cue_end_ms, duration)
+            else:
+                cue_start_ms, cue_end_ms = self._parse_cue_points(
+                    section.get(f"cs{i}", "").strip(),
+                    section.get(f"ce{i}", "").strip(),
+                    duration,
+                )
             played = activity_code == "2"
             copied = section.get(f"ci{i}", "").strip().upper() == "Y"
             slots[i - 1] = SoundButtonData(
@@ -5058,25 +5065,53 @@ class MainWindow(QMainWindow):
         self._ssp_unit_cache[file_path] = (duration_ms, total_units)
         return self._ssp_unit_cache[file_path]
 
-    def _cue_fields_for_set(self, slot: SoundButtonData) -> tuple[Optional[int], Optional[int]]:
+    def _normalize_cue_points(
+        self, start_ms: Optional[int], end_ms: Optional[int], duration_ms: int
+    ) -> tuple[Optional[int], Optional[int]]:
+        if start_ms is not None:
+            start_ms = max(0, int(start_ms))
+        if end_ms is not None:
+            end_ms = max(0, int(end_ms))
+        if duration_ms > 0:
+            if start_ms is not None:
+                start_ms = min(duration_ms, start_ms)
+            if end_ms is not None:
+                end_ms = min(duration_ms, end_ms)
+        if start_ms is not None and end_ms is not None and end_ms < start_ms:
+            end_ms = start_ms
+        return start_ms, end_ms
+
+    def _parse_cue_time_string_to_ms(self, value: str) -> Optional[int]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        parts = text.split(":")
+        if len(parts) == 2:
+            mm, ss = parts
+            if mm.isdigit() and ss.isdigit():
+                return (int(mm) * 60 + int(ss)) * 1000
+            return None
+        if len(parts) == 3:
+            first, second, third = parts
+            if not (first.isdigit() and second.isdigit() and third.isdigit()):
+                return None
+            minutes = int(first)
+            seconds = int(second)
+            frames_or_seconds = int(third)
+            if frames_or_seconds < 30:
+                return ((minutes * 60) + seconds) * 1000 + int((frames_or_seconds / 30.0) * 1000)
+            return (minutes * 3600 + seconds * 60 + frames_or_seconds) * 1000
+        return None
+
+    def _format_cue_time_string(self, ms: int) -> str:
+        return format_clock_time(max(0, int(ms)))
+
+    def _cue_time_fields_for_set(self, slot: SoundButtonData) -> tuple[Optional[str], Optional[str]]:
         start_ms, end_ms = self._normalized_slot_cues(slot, max(0, int(slot.duration_ms)))
         if start_ms is None and end_ms is None:
             return None, None
-        cue_start = start_ms
-        cue_end = end_ms
-        scale = self._slot_ssp_unit_scale(slot)
-        if scale is not None:
-            duration_ms, total_units = scale
-            if cue_start is not None:
-                cue_start = int(round((cue_start / float(duration_ms)) * total_units))
-            if cue_end is not None:
-                cue_end = int(round((cue_end / float(duration_ms)) * total_units))
-        else:
-            fallback_units_per_ms = 176.4
-            if cue_start is not None:
-                cue_start = int(round(cue_start * fallback_units_per_ms))
-            if cue_end is not None:
-                cue_end = int(round(cue_end * fallback_units_per_ms))
+        cue_start = None if start_ms is None else self._format_cue_time_string(start_ms)
+        cue_end = None if end_ms is None else self._format_cue_time_string(end_ms)
         return cue_start, cue_end
 
     def _cue_start_for_playback(self, slot: SoundButtonData, duration_ms: int) -> int:
@@ -8319,6 +8354,7 @@ class MainWindow(QMainWindow):
         self._write_set_file(file_path)
 
     def _write_set_file(self, file_path: str) -> None:
+        has_custom_cues = self._has_any_custom_cues()
         try:
             lines: List[str] = [
                 "[Main]",
@@ -8367,11 +8403,11 @@ class MainWindow(QMainWindow):
                         midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
                         if midi_hotkey_code:
                             lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
-                        cue_start, cue_end = self._cue_fields_for_set(slot)
+                        cue_start, cue_end = self._cue_time_fields_for_set(slot)
                         if cue_start is not None:
-                            lines.append(f"cs{slot_index}={cue_start}")
+                            lines.append(f"pysspcuestart{slot_index}={cue_start}")
                         if cue_end is not None:
-                            lines.append(f"ce{slot_index}={cue_end}")
+                            lines.append(f"pysspcueend{slot_index}={cue_end}")
                     lines.append("")
 
             lines.extend(
@@ -8401,6 +8437,11 @@ class MainWindow(QMainWindow):
         self.settings.last_open_dir = os.path.dirname(file_path)
         self._save_settings()
         self._show_save_notice_banner(f"Set Saved: {file_path}")
+        if has_custom_cues:
+            self._show_save_notice_banner(
+                "Reminder: Custom cue points saved by pySSP are not supported by original Sports Sounds Pro.",
+                timeout_ms=9000,
+            )
 
     def _load_set(self, file_path: str, show_message: bool = True, restore_last_position: bool = False) -> None:
         try:
@@ -8466,7 +8507,7 @@ class MainWindow(QMainWindow):
         self._update_group_status()
         self._update_page_status()
         self._update_now_playing_label("")
-        self._set_dirty(False)
+        self._set_dirty(bool(result.migrated_legacy_cues))
         self.settings.last_set_path = file_path
         self.settings.last_open_dir = os.path.dirname(file_path)
         self.settings.last_group = self.current_group
@@ -8489,6 +8530,14 @@ class MainWindow(QMainWindow):
             return
         self._load_set(last_set_path, show_message=False, restore_last_position=True)
         self._queue_current_page_audio_preload()
+
+    def _has_any_custom_cues(self) -> bool:
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot in self.data[group][page_index]:
+                    if self._slot_has_custom_cue(slot):
+                        return True
+        return False
 
     def _save_settings(self) -> None:
         self.settings.active_group_color = self.active_group_color

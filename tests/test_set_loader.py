@@ -102,6 +102,7 @@ def test_load_set_cue_points_in_ms(tmp_path):
     slot = result.pages["A"][0][0]
     assert slot.cue_start_ms == 12000
     assert slot.cue_end_ms == 30000
+    assert result.migrated_legacy_cues is True
 
 
 def test_load_set_cue_points_scaled_from_large_values(tmp_path):
@@ -130,6 +131,7 @@ def test_load_set_cue_points_scaled_from_large_values(tmp_path):
     slot = result.pages["A"][0][0]
     assert slot.cue_start_ms == 6000
     assert slot.cue_end_ms == 240000
+    assert result.migrated_legacy_cues is True
 
 
 def test_load_set_cue_start_scaled_when_end_missing(tmp_path):
@@ -157,3 +159,64 @@ def test_load_set_cue_start_scaled_when_end_missing(tmp_path):
     slot = result.pages["A"][0][0]
     assert slot.cue_start_ms == 1900
     assert slot.cue_end_ms is None
+    assert result.migrated_legacy_cues is True
+
+
+def test_load_set_cue_points_from_pyssp_time_fields(tmp_path):
+    set_path = tmp_path / "cue_pyssp_time.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "t1=03:20",
+                "pysspcuestart1=00:12:15",
+                "pysspcueend1=00:30:00",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.cue_start_ms == 12500
+    assert slot.cue_end_ms == 30000
+    assert result.migrated_legacy_cues is False
+
+
+def test_load_set_prefers_pyssp_cue_fields_over_legacy_cs_ce(tmp_path):
+    set_path = tmp_path / "cue_pyssp_preferred.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "t1=03:20",
+                "pysspcuestart1=00:01:00",
+                "pysspcueend1=00:10:00",
+                "cs1=12000",
+                "ce1=30000",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.cue_start_ms == 1000
+    assert slot.cue_end_ms == 10000
+    assert result.migrated_legacy_cues is False

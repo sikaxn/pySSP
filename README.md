@@ -57,6 +57,9 @@ python -m venv .venv
 
 - Load and save Sports Sounds Pro  `.set` files
 - Page names, page colors, playlist/shuffle flags, button metadata, cue data
+- Custom cue points are saved by pySSP as `pysspcuestartX` / `pysspcueendX` time fields.
+- Important: after a set is saved in pySSP with custom cues, those custom cues will not work in original Sports Sounds Pro.
+- On load, pySSP still reads legacy `csX` / `ceX` cue fields and converts them automatically.
 
 ### Playback and control
 

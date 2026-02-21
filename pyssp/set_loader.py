@@ -44,6 +44,7 @@ class SetLoadResult:
     page_playlist_enabled: Dict[str, List[bool]]
     page_shuffle_enabled: Dict[str, List[bool]]
     loaded_slots: int = 0
+    migrated_legacy_cues: bool = False
 
 
 def load_set_file(file_path: str) -> SetLoadResult:
@@ -63,6 +64,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
     page_shuffle_enabled = {group: [False for _ in range(PAGE_COUNT)] for group in GROUPS}
 
     loaded_slots = 0
+    migrated_legacy_cues = False
     for section_name in parser.sections():
         if CUE_SECTION_RE.match(section_name):
             continue
@@ -93,11 +95,8 @@ def load_set_file(file_path: str) -> SetLoadResult:
             activity_code = section.get(f"activity{i}", "").strip()
             played = _is_played_activity(activity_code)
             volume_override_pct = _parse_volume_pct(section.get(f"v{i}", "").strip())
-            cue_start_ms, cue_end_ms = _parse_cue_points(
-                section.get(f"cs{i}", "").strip(),
-                section.get(f"ce{i}", "").strip(),
-                duration,
-            )
+            cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(section, i, duration)
+            migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
             marker = False
@@ -143,6 +142,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
         page_playlist_enabled=page_playlist_enabled,
         page_shuffle_enabled=page_shuffle_enabled,
         loaded_slots=loaded_slots,
+        migrated_legacy_cues=migrated_legacy_cues,
     )
 
 
@@ -261,10 +261,35 @@ def _parse_cue_points(start_value: str, end_value: str, duration_ms: int) -> tup
         if 0 <= inferred_start_ms <= duration_ms:
             start_ms = inferred_start_ms
 
+    return _normalize_cue_points(start_ms, end_ms, duration_ms)
+
+
+def _parse_cue_points_from_section(
+    section: configparser.SectionProxy, slot_index: int, duration_ms: int
+) -> tuple[Optional[int], Optional[int], bool]:
+    start_time_value = section.get(f"pysspcuestart{slot_index}", "").strip()
+    end_time_value = section.get(f"pysspcueend{slot_index}", "").strip()
+    if start_time_value or end_time_value:
+        start_ms = _parse_cue_time_string_to_ms(start_time_value)
+        end_ms = _parse_cue_time_string_to_ms(end_time_value)
+        start_ms, end_ms = _normalize_cue_points(start_ms, end_ms, duration_ms)
+        return start_ms, end_ms, False
+
+    start_ms, end_ms = _parse_cue_points(
+        section.get(f"cs{slot_index}", "").strip(),
+        section.get(f"ce{slot_index}", "").strip(),
+        duration_ms,
+    )
+    return start_ms, end_ms, (start_ms is not None or end_ms is not None)
+
+
+def _normalize_cue_points(
+    start_ms: Optional[int], end_ms: Optional[int], duration_ms: int
+) -> tuple[Optional[int], Optional[int]]:
     if start_ms is not None:
-        start_ms = max(0, start_ms)
+        start_ms = max(0, int(start_ms))
     if end_ms is not None:
-        end_ms = max(0, end_ms)
+        end_ms = max(0, int(end_ms))
 
     if duration_ms > 0:
         if start_ms is not None:
@@ -275,6 +300,30 @@ def _parse_cue_points(start_value: str, end_value: str, duration_ms: int) -> tup
     if start_ms is not None and end_ms is not None and end_ms < start_ms:
         end_ms = start_ms
     return start_ms, end_ms
+
+
+def _parse_cue_time_string_to_ms(value: str) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) == 2:
+        mm, ss = parts
+        if mm.isdigit() and ss.isdigit():
+            return (int(mm) * 60 + int(ss)) * 1000
+        return None
+    if len(parts) == 3:
+        first, second, third = parts
+        if not (first.isdigit() and second.isdigit() and third.isdigit()):
+            return None
+        minutes = int(first)
+        seconds = int(second)
+        frames_or_seconds = int(third)
+        # Prefer mm:ss:ff at 30 fps for pyssp cue fields, then fall back to hh:mm:ss.
+        if frames_or_seconds < 30:
+            return ((minutes * 60) + seconds) * 1000 + int((frames_or_seconds / 30.0) * 1000)
+        return (minutes * 3600 + seconds * 60 + frames_or_seconds) * 1000
+    return None
 
 
 def _parse_non_negative_int(value: str) -> Optional[int]:

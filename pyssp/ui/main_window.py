@@ -4557,19 +4557,25 @@ class MainWindow(QMainWindow):
 
     def _on_sound_button_hover(self, slot_index: Optional[int]) -> None:
         self._hover_slot_index = None
+        if slot_index is not None and 0 <= slot_index < SLOTS_PER_PAGE:
+            self._hover_slot_index = slot_index
+        self._refresh_status_hover_label()
+        self._refresh_stage_display()
+        if self._stage_display_window is not None and self._stage_display_window.isVisible():
+            self._stage_display_window.repaint()
+
+    def _refresh_status_hover_label(self) -> None:
+        slot_index: Optional[int] = None
+        if self._hover_slot_index is not None and 0 <= self._hover_slot_index < SLOTS_PER_PAGE:
+            slot_index = self._hover_slot_index
+        elif (not self.cue_mode) and (not self.page_playlist_enabled[self.current_group][self.current_page]):
+            slot_index = self._next_slot_for_next_action(blocked=None)
         if slot_index is None:
             self.status_hover_label.setText(tr("Button: -"))
-            self._refresh_stage_display()
             return
-        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
-            self.status_hover_label.setText(tr("Button: -"))
-            self._refresh_stage_display()
-            return
-        self._hover_slot_index = slot_index
         group = self._view_group_key()
         group_text = group if group == "Q" else group.upper()
         self.status_hover_label.setText(f"{tr('Button: ')}{group_text}-{self.current_page + 1}-{slot_index + 1}")
-        self._refresh_stage_display()
 
     def _format_button_key(self, slot_key: Tuple[str, int, int]) -> str:
         group, page_index, slot_index = slot_key
@@ -6300,17 +6306,14 @@ class MainWindow(QMainWindow):
     def _next_stage_song_name(self) -> str:
         if self.cue_mode:
             return "-"
-        playlist_enabled = self.page_playlist_enabled[self.current_group][self.current_page]
-        if playlist_enabled:
-            next_slot = self._next_playlist_slot(for_auto_advance=False)
-        else:
-            hovered = self._next_stage_from_hover()
-            if hovered is not None:
-                return hovered
-            if self.next_play_mode == "any_available":
-                next_slot = self._next_available_slot_on_current_page()
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if not playlist_enabled:
+            if self._hover_slot_index is not None and 0 <= self._hover_slot_index < SLOTS_PER_PAGE:
+                next_slot = self._hover_slot_index
             else:
-                next_slot = self._next_unplayed_slot_on_current_page()
+                next_slot = self._next_slot_for_next_action(blocked=None)
+        else:
+            next_slot = self._next_slot_for_next_action(blocked=None)
         if next_slot is None:
             return "-"
         slots = self.data[self.current_group][self.current_page]
@@ -6320,6 +6323,15 @@ class MainWindow(QMainWindow):
         if not slot.assigned or slot.marker:
             return "-"
         return self._build_stage_slot_text(slot) or "-"
+
+    def _next_slot_for_next_action(self, blocked: Optional[set[int]] = None) -> Optional[int]:
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        blocked = blocked or set()
+        if playlist_enabled:
+            return self._next_playlist_slot(for_auto_advance=False, blocked=blocked)
+        if self.next_play_mode == "any_available":
+            return self._next_available_slot_on_current_page(blocked=blocked)
+        return self._next_unplayed_slot_on_current_page(blocked=blocked)
 
     def _next_stage_from_hover(self) -> Optional[str]:
         slot_index = self._hover_slot_index
@@ -8261,16 +8273,9 @@ class MainWindow(QMainWindow):
         self._player_b_slot_volume_pct = 75
 
     def _play_next(self) -> None:
-        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         blocked: set[int] = set()
         while True:
-            if playlist_enabled:
-                next_slot = self._next_playlist_slot(for_auto_advance=False, blocked=blocked)
-            else:
-                if self.next_play_mode == "any_available":
-                    next_slot = self._next_available_slot_on_current_page(blocked=blocked)
-                else:
-                    next_slot = self._next_unplayed_slot_on_current_page(blocked=blocked)
+            next_slot = self._next_slot_for_next_action(blocked=blocked)
             if next_slot is None:
                 self._update_next_button_enabled()
                 return

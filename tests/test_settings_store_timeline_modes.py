@@ -25,3 +25,25 @@ def test_timecode_timeline_mode_falls_back_to_main_when_missing():
     }
     settings = _from_parser(parser)
     assert settings.timecode_timeline_mode == "audio_file"
+
+
+def test_main_progress_display_mode_is_loaded_and_validated():
+    parser = configparser.ConfigParser()
+    parser["main"] = {"main_progress_display_mode": "waveform"}
+    settings = _from_parser(parser)
+    assert settings.main_progress_display_mode == "waveform"
+
+    parser["main"]["main_progress_display_mode"] = "invalid-mode"
+    settings = _from_parser(parser)
+    assert settings.main_progress_display_mode == "progress_bar"
+
+
+def test_main_progress_show_text_defaults_true_and_loads_false():
+    parser = configparser.ConfigParser()
+    parser["main"] = {}
+    settings = _from_parser(parser)
+    assert settings.main_progress_show_text is True
+
+    parser["main"]["main_progress_show_text"] = "0"
+    settings = _from_parser(parser)
+    assert settings.main_progress_show_text is False

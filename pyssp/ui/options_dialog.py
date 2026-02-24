@@ -186,6 +186,8 @@ class OptionsDialog(QDialog):
         "click_playing_action": "play_it_again",
         "search_double_click_action": "find_highlight",
         "set_file_encoding": "utf8",
+        "main_progress_display_mode": "progress_bar",
+        "main_progress_show_text": True,
         "ui_language": "en",
         "preload_audio_enabled": False,
         "preload_current_page_audio": True,
@@ -356,6 +358,8 @@ class OptionsDialog(QDialog):
         click_playing_action: str,
         search_double_click_action: str,
         set_file_encoding: str,
+        main_progress_display_mode: str,
+        main_progress_show_text: bool,
         audio_output_device: str,
         available_audio_devices: List[str],
         available_midi_devices: List[tuple[str, str]],
@@ -544,6 +548,8 @@ class OptionsDialog(QDialog):
                 click_playing_action=click_playing_action,
                 search_double_click_action=search_double_click_action,
                 set_file_encoding=set_file_encoding,
+                main_progress_display_mode=main_progress_display_mode,
+                main_progress_show_text=main_progress_show_text,
             ),
         )
         self._add_page(
@@ -776,6 +782,8 @@ class OptionsDialog(QDialog):
         click_playing_action: str,
         search_double_click_action: str,
         set_file_encoding: str,
+        main_progress_display_mode: str,
+        main_progress_show_text: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -837,6 +845,31 @@ class OptionsDialog(QDialog):
         search_layout.addWidget(self.search_dbl_play_radio)
         layout.addWidget(search_group)
 
+        transport_group = QGroupBox("Main Transport Display")
+        transport_layout = QVBoxLayout(transport_group)
+        self.main_progress_display_progress_bar_radio = QRadioButton("Display Progress Bar")
+        self.main_progress_display_waveform_radio = QRadioButton("Display Waveform")
+        mode_token = str(main_progress_display_mode or "").strip().lower()
+        if mode_token not in {"progress_bar", "waveform"}:
+            mode_token = "progress_bar"
+        if mode_token == "waveform":
+            self.main_progress_display_waveform_radio.setChecked(True)
+        else:
+            self.main_progress_display_progress_bar_radio.setChecked(True)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(self.main_progress_display_progress_bar_radio)
+        mode_row.addWidget(self.main_progress_display_waveform_radio)
+        mode_row.addStretch(1)
+        transport_layout.addLayout(mode_row)
+        waveform_note = QLabel(
+            "If Main Transport uses Waveform display, it is recommended to enable Audio Preload for better performance."
+        )
+        waveform_note.setWordWrap(True)
+        transport_layout.addWidget(waveform_note)
+        self.main_progress_show_text_checkbox = QCheckBox("Show transport text on progress display")
+        self.main_progress_show_text_checkbox.setChecked(bool(main_progress_show_text))
+        transport_layout.addWidget(self.main_progress_show_text_checkbox)
+        layout.addWidget(transport_group)
         layout.addStretch(1)
         return page
 
@@ -2027,6 +2060,14 @@ class OptionsDialog(QDialog):
             return "gbk"
         return "utf8"
 
+    def selected_main_progress_display_mode(self) -> str:
+        if self.main_progress_display_waveform_radio.isChecked():
+            return "waveform"
+        return "progress_bar"
+
+    def selected_main_progress_show_text(self) -> bool:
+        return bool(self.main_progress_show_text_checkbox.isChecked())
+
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
 
@@ -2733,6 +2774,12 @@ class OptionsDialog(QDialog):
             self.search_dbl_play_radio.setChecked(True)
         else:
             self.search_dbl_find_radio.setChecked(True)
+        mode_token = str(d.get("main_progress_display_mode", "progress_bar")).strip().lower()
+        if mode_token == "waveform":
+            self.main_progress_display_waveform_radio.setChecked(True)
+        else:
+            self.main_progress_display_progress_bar_radio.setChecked(True)
+        self.main_progress_show_text_checkbox.setChecked(bool(d.get("main_progress_show_text", True)))
 
     def _restore_color_defaults(self) -> None:
         d = self._DEFAULTS

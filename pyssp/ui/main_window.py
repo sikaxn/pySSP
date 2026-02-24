@@ -979,6 +979,145 @@ class NoAudioPlayer(QObject):
     def meterLevels(self) -> Tuple[float, float]:
         return (0.0, 0.0)
 
+    def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
+        _ = sample_count
+        return []
+
+
+class TransportProgressDisplay(QLabel):
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self._display_mode = "progress_bar"
+        self._progress_ratio = 0.0
+        self._cue_in_ratio = 0.0
+        self._cue_out_ratio = 1.0
+        self._audio_file_mode = False
+        self._waveform: List[float] = []
+
+    def set_display_mode(self, mode: str) -> None:
+        token = str(mode or "").strip().lower()
+        if token not in {"progress_bar", "waveform"}:
+            token = "progress_bar"
+        if token == self._display_mode:
+            return
+        self._display_mode = token
+        self.update()
+
+    def display_mode(self) -> str:
+        return self._display_mode
+
+    def set_waveform(self, peaks: List[float]) -> None:
+        cleaned: List[float] = []
+        for value in list(peaks or []):
+            try:
+                amp = float(value)
+            except Exception:
+                amp = 0.0
+            cleaned.append(max(0.0, min(1.0, amp)))
+        self._waveform = cleaned
+        if self._display_mode == "waveform":
+            self.update()
+
+    def set_transport_state(
+        self,
+        progress_ratio: float,
+        cue_in_ratio: float,
+        cue_out_ratio: float,
+        audio_file_mode: bool,
+    ) -> None:
+        self._progress_ratio = max(0.0, min(1.0, float(progress_ratio)))
+        in_ratio = max(0.0, min(1.0, float(cue_in_ratio)))
+        out_ratio = max(0.0, min(1.0, float(cue_out_ratio)))
+        if out_ratio < in_ratio:
+            out_ratio = in_ratio
+        self._cue_in_ratio = in_ratio
+        self._cue_out_ratio = out_ratio
+        self._audio_file_mode = bool(audio_file_mode)
+        if self._display_mode == "waveform":
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        if self._display_mode != "waveform":
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        w = max(1, self.width())
+        h = max(1, self.height())
+        center = h // 2
+        max_half = max(1, (h // 2) - 3)
+
+        playable_bg = QColor("#1A222A")
+        unplayable_bg = QColor("#11161B")
+        played_bg = QColor("#1B3724")
+        played_wave = QColor("#2ECC40")
+        playable_wave = QColor("#B9D7EA")
+        unplayable_wave = QColor("#5E7586")
+        border = QColor("#3C4E58")
+
+        in_x = int(round(self._cue_in_ratio * (w - 1)))
+        out_x = int(round(self._cue_out_ratio * (w - 1)))
+        play_x = int(round(self._progress_ratio * (w - 1)))
+        if out_x < in_x:
+            out_x = in_x
+
+        painter.fillRect(0, 0, w, h, unplayable_bg if self._audio_file_mode else playable_bg)
+        if self._audio_file_mode:
+            painter.fillRect(in_x, 0, max(1, out_x - in_x + 1), h, playable_bg)
+
+        if self._audio_file_mode:
+            played_left = max(in_x, 0)
+            played_right = min(out_x, play_x)
+        else:
+            played_left = 0
+            played_right = max(0, play_x)
+        if played_right >= played_left:
+            painter.fillRect(played_left, 0, max(1, played_right - played_left + 1), h, played_bg)
+
+        wave = self._waveform
+        wave_count = len(wave)
+        for x in range(w):
+            if wave_count > 0:
+                idx = int((x / float(max(1, w - 1))) * float(max(0, wave_count - 1)))
+                amp = wave[idx]
+            else:
+                amp = 0.0
+            half = max(1, int(round(amp * max_half)))
+            if self._audio_file_mode and (x < in_x or x > out_x):
+                wave_color = unplayable_wave
+            elif x <= play_x:
+                wave_color = played_wave
+            else:
+                wave_color = playable_wave
+            painter.setPen(wave_color)
+            painter.drawLine(x, center - half, x, center + half)
+
+        painter.setPen(QColor("#FFD54F"))
+        painter.drawLine(play_x, 0, play_x, h - 1)
+        painter.setPen(border)
+        painter.drawRect(0, 0, w - 1, h - 1)
+        text = self.text()
+        if text:
+            text_rect = self.rect().adjusted(6, 2, -6, -2)
+            metrics = painter.fontMetrics()
+            width = min(text_rect.width(), metrics.horizontalAdvance(text) + 14)
+            height = min(text_rect.height(), metrics.height() + 8)
+            bubble = QRect(
+                text_rect.center().x() - (width // 2),
+                text_rect.center().y() - (height // 2),
+                max(1, width),
+                max(1, height),
+            )
+            painter.fillRect(bubble, QColor(0, 0, 0, 150))
+
+            painter.setPen(QColor(0, 0, 0, 220))
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                painter.drawText(text_rect.translated(dx, dy), int(self.alignment()), text)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(text_rect, int(self.alignment()), text)
+        painter.end()
+
 
 class MainThreadExecutor(QObject):
     _execute = pyqtSignal(object, object)
@@ -1024,6 +1163,8 @@ class MainWindow(QMainWindow):
         self._pending_start_request: Optional[Tuple[str, int, int]] = None
         self._pending_start_token = 0
         self.current_duration_ms = 0
+        self._main_progress_waveform: List[float] = []
+        self._main_waveform_request_token = 0
         self.loop_enabled = False
         self._manual_stop_requested = False
         self.talk_active = False
@@ -1145,6 +1286,10 @@ class MainWindow(QMainWindow):
             if self.settings.main_transport_timeline_mode in {"cue_region", "audio_file"}
             else "cue_region"
         )
+        self.main_progress_display_mode = str(getattr(self.settings, "main_progress_display_mode", "progress_bar")).strip().lower()
+        if self.main_progress_display_mode not in {"progress_bar", "waveform"}:
+            self.main_progress_display_mode = "progress_bar"
+        self.main_progress_show_text = bool(getattr(self.settings, "main_progress_show_text", True))
         self._timecode_follow_frozen_ms = 0
         if self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
             self._timecode_follow_frozen_ms = 0
@@ -1399,7 +1544,7 @@ class MainWindow(QMainWindow):
         self.preload_status_icon = QLabel("RAM")
         self.elapsed_time = QLabel("00:00:00")
         self.remaining_time = QLabel("00:00:00")
-        self.progress_label = QLabel("0%")
+        self.progress_label = TransportProgressDisplay("0%")
         self.jog_in_label = QLabel("In 00:00:00")
         self.jog_percent_label = QLabel("0%")
         self.jog_out_label = QLabel("Out 00:00:00")
@@ -1467,7 +1612,7 @@ class MainWindow(QMainWindow):
         self._preload_icon_blink_on = False
         self._playback_warning_token = 0
         self._save_notice_token = 0
-        self._stage_display_window: Optional[StageDisplayWindow] = None
+        self._stage_display_window: Optional[GadgetStageDisplayWindow] = None
         self._hover_slot_index: Optional[int] = None
         self._stage_alert_dialog: Optional[QDialog] = None
         self._stage_alert_text_edit: Optional[QPlainTextEdit] = None
@@ -3761,6 +3906,7 @@ class MainWindow(QMainWindow):
         self.progress_label.setAlignment(Qt.AlignCenter)
         self.progress_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: white;")
         self.progress_label.setMinimumHeight(28)
+        self.progress_label.set_display_mode(self.main_progress_display_mode)
         self.progress_label.setVisible(True)
         right_layout.addWidget(self.progress_label)
 
@@ -5657,6 +5803,10 @@ class MainWindow(QMainWindow):
 
     def _try_load_media(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> bool:
         try:
+            if player is self.player:
+                self._main_waveform_request_token += 1
+                self._main_progress_waveform = []
+                self.progress_label.set_waveform([])
             player.setMedia(slot.file_path, dsp_config=self._dsp_config)
             slot.load_failed = False
             self._hide_playback_warning_banner()
@@ -5748,6 +5898,12 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, duration: int) -> None:
         self.current_duration_ms = duration
+        if duration > 0 and self.main_progress_display_mode == "waveform":
+            self._schedule_main_waveform_refresh(120)
+        else:
+            self._main_waveform_request_token += 1
+            self._main_progress_waveform = []
+            self.progress_label.set_waveform([])
         self._last_ui_position_ms = -1
         total_ms = self._transport_total_ms()
         self.seek_slider.setRange(0, total_ms)
@@ -5762,6 +5918,34 @@ class MainWindow(QMainWindow):
             self._refresh_sound_grid()
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+
+    def _schedule_main_waveform_refresh(self, delay_ms: int = 0) -> None:
+        if self.current_duration_ms <= 0:
+            return
+        if self.current_playing is None:
+            return
+        token = self._main_waveform_request_token + 1
+        self._main_waveform_request_token = token
+        expected_key = self.current_playing
+        QTimer.singleShot(max(0, int(delay_ms)), lambda t=token, k=expected_key: self._refresh_main_waveform_if_current(t, k))
+
+    def _refresh_main_waveform_if_current(self, token: int, expected_key: Optional[Tuple[str, int, int]]) -> None:
+        if token != self._main_waveform_request_token:
+            return
+        if expected_key is None or self.current_playing != expected_key:
+            return
+        if self.current_duration_ms <= 0:
+            return
+        try:
+            peaks = self.player.waveformPeaks(1800)
+        except Exception:
+            peaks = []
+        if token != self._main_waveform_request_token:
+            return
+        if expected_key is None or self.current_playing != expected_key:
+            return
+        self._main_progress_waveform = list(peaks)
+        self.progress_label.set_waveform(self._main_progress_waveform)
 
     def _on_state_changed(self, _state: int) -> None:
         print(
@@ -6058,6 +6242,8 @@ class MainWindow(QMainWindow):
         except Exception:
             display_pos = 0
         progress = 0 if total_ms <= 0 else int((display_pos / float(total_ms)) * 100)
+        progress_ratio = 0.0 if total_ms <= 0 else max(0.0, min(1.0, display_pos / float(total_ms)))
+        cue_in_ms, cue_out_ms = self._current_transport_cue_bounds()
         song_name = "-"
         if self.current_playing is not None:
             slot = self._slot_for_key(self.current_playing)
@@ -6072,7 +6258,7 @@ class MainWindow(QMainWindow):
             song_name=song_name,
             next_song=next_song,
             progress_text=self.progress_label.text().strip(),
-            progress_style=self.progress_label.styleSheet(),
+            progress_style=self._build_progress_bar_stylesheet(progress_ratio, cue_in_ms, cue_out_ms),
         )
         self._stage_display_window.set_alert(self._stage_alert_message, self._stage_alert_active())
         self._stage_display_window.set_playback_status(self._stage_playback_status())
@@ -6667,6 +6853,8 @@ class MainWindow(QMainWindow):
             click_playing_action=self.click_playing_action,
             search_double_click_action=self.search_double_click_action,
             set_file_encoding=self.set_file_encoding,
+            main_progress_display_mode=self.main_progress_display_mode,
+            main_progress_show_text=self.main_progress_show_text,
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
             available_midi_devices=available_midi_output_devices,
@@ -6799,7 +6987,13 @@ class MainWindow(QMainWindow):
         self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
         self.candidate_error_action = dialog.selected_candidate_error_action()
         self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
+        self.main_progress_display_mode = dialog.selected_main_progress_display_mode()
+        self.main_progress_show_text = dialog.selected_main_progress_show_text()
+        self.progress_label.set_display_mode(self.main_progress_display_mode)
+        if self.main_progress_display_mode == "waveform":
+            self._schedule_main_waveform_refresh(0)
         self.main_jog_outside_cue_action = dialog.selected_main_jog_outside_cue_action()
+        self._refresh_main_jog_meta(self.seek_slider.value(), self._transport_total_ms())
         self.timecode_timeline_mode = dialog.selected_timecode_timeline_mode()
         self.timecode_audio_output_device = dialog.selected_timecode_audio_output_device()
         self.timecode_midi_output_device = dialog.selected_timecode_midi_output_device()
@@ -8377,6 +8571,16 @@ class MainWindow(QMainWindow):
         self._refresh_stage_display()
 
     def _refresh_main_jog_meta(self, display_ms: int, total_ms: int) -> None:
+        cue_in_ms, cue_out_ms = self._current_transport_cue_bounds()
+        self.jog_in_label.setText(f"In {format_clock_time(cue_in_ms)}")
+        self.jog_out_label.setText(f"Out {format_clock_time(cue_out_ms)}")
+        clamped = max(0, min(total_ms, int(display_ms)))
+        ratio = 0.0 if total_ms == 0 else (clamped / float(total_ms))
+        pct = int(ratio * 100)
+        self.jog_percent_label.setText(f"{pct}%")
+        self._set_progress_display(ratio, cue_in_ms, cue_out_ms)
+
+    def _current_transport_cue_bounds(self) -> tuple[int, int]:
         low, high = self._main_transport_bounds()
         cue_in_ms = low
         cue_out_ms = high
@@ -8389,28 +8593,22 @@ class MainWindow(QMainWindow):
                     cue_in_ms = self._cue_start_for_playback(slot, self.current_duration_ms)
                     cue_end = self._cue_end_for_playback(slot, self.current_duration_ms)
                     cue_out_ms = self.current_duration_ms if cue_end is None else cue_end
-        self.jog_in_label.setText(f"In {format_clock_time(cue_in_ms)}")
-        self.jog_out_label.setText(f"Out {format_clock_time(cue_out_ms)}")
-        clamped = max(0, min(total_ms, int(display_ms)))
-        ratio = 0.0 if total_ms == 0 else (clamped / float(total_ms))
-        pct = int(ratio * 100)
-        self.jog_percent_label.setText(f"{pct}%")
-        self._set_progress_display(ratio, cue_in_ms, cue_out_ms)
+        return cue_in_ms, cue_out_ms
 
-    def _set_progress_display(
+    def _build_progress_bar_stylesheet(
         self,
         progress_ratio: float,
         cue_in_ms: Optional[int] = None,
         cue_out_ms: Optional[int] = None,
-    ) -> None:
+    ) -> str:
         fill_stop = max(0.0, min(1.0, float(progress_ratio)))
-        pct = int(fill_stop * 100)
         base_style_prefix = (
             "QLabel{"
             "font-size:12pt;font-weight:bold;color:white;"
             "border:1px solid #3C4E58;border-radius:4px;padding:2px 8px;"
         )
-        if self.main_transport_timeline_mode == "audio_file" and self.current_duration_ms > 0:
+        audio_file_mode = self.main_transport_timeline_mode == "audio_file" and self.current_duration_ms > 0
+        if audio_file_mode:
             in_ms = 0 if cue_in_ms is None else max(0, min(self.current_duration_ms, int(cue_in_ms)))
             out_ms = self.current_duration_ms if cue_out_ms is None else max(0, min(self.current_duration_ms, int(cue_out_ms)))
             if out_ms < in_ms:
@@ -8441,26 +8639,60 @@ class MainWindow(QMainWindow):
                     f"stop:{min(1.0, played + eps):.4f} #111111, stop:{out_ratio:.4f} #111111, "
                     f"stop:{min(1.0, out_ratio + eps):.4f} #747474, stop:1 #747474);"
                 )
-            self.progress_label.setStyleSheet(base_style_prefix + grad + "}")
-        else:
-            boundary = min(1.0, fill_stop + 0.002)
-            self.progress_label.setStyleSheet(
-                base_style_prefix
-                + (
-                    "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                    f"stop:0 #2ECC40, stop:{fill_stop:.4f} #2ECC40, "
-                    f"stop:{boundary:.4f} #111111, stop:1 #111111);"
-                )
-                + "}"
+            return base_style_prefix + grad + "}"
+        boundary = min(1.0, fill_stop + 0.002)
+        return (
+            base_style_prefix
+            + (
+                "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                f"stop:0 #2ECC40, stop:{fill_stop:.4f} #2ECC40, "
+                f"stop:{boundary:.4f} #111111, stop:1 #111111);"
             )
-        if self.main_transport_timeline_mode == "audio_file":
-            in_ms = 0 if cue_in_ms is None else max(0, int(cue_in_ms))
-            out_ms = self.current_duration_ms if cue_out_ms is None else max(0, int(cue_out_ms))
-            self.progress_label.setText(
-                f"{pct}%   In {format_clock_time(in_ms)}   Out {format_clock_time(out_ms)}"
+            + "}"
+        )
+
+    def _set_progress_display(
+        self,
+        progress_ratio: float,
+        cue_in_ms: Optional[int] = None,
+        cue_out_ms: Optional[int] = None,
+    ) -> None:
+        if self.current_duration_ms <= 0 and self._main_progress_waveform:
+            self._main_progress_waveform = []
+        fill_stop = max(0.0, min(1.0, float(progress_ratio)))
+        pct = int(fill_stop * 100)
+        in_ratio = 0.0
+        out_ratio = 1.0
+        in_ms = 0 if cue_in_ms is None else max(0, int(cue_in_ms))
+        out_ms = self.current_duration_ms if cue_out_ms is None else max(0, int(cue_out_ms))
+        audio_file_mode = self.main_transport_timeline_mode == "audio_file" and self.current_duration_ms > 0
+        if audio_file_mode:
+            in_ms = max(0, min(self.current_duration_ms, in_ms))
+            out_ms = max(0, min(self.current_duration_ms, out_ms))
+            if out_ms < in_ms:
+                out_ms = in_ms
+            in_ratio = in_ms / float(self.current_duration_ms)
+            out_ratio = out_ms / float(self.current_duration_ms)
+
+        self.progress_label.set_transport_state(fill_stop, in_ratio, out_ratio, audio_file_mode)
+        self.progress_label.set_waveform(self._main_progress_waveform)
+
+        if self.main_progress_show_text:
+            if self.main_transport_timeline_mode == "audio_file":
+                self.progress_label.setText(f"{pct}%   In {format_clock_time(in_ms)}   Out {format_clock_time(out_ms)}")
+            else:
+                self.progress_label.setText(f"{pct}%")
+        else:
+            self.progress_label.setText("")
+
+        if self.main_progress_display_mode == "waveform":
+            self.progress_label.setStyleSheet(
+                "font-size:12pt;font-weight:bold;color:white;"
+                "border:1px solid #3C4E58;border-radius:4px;padding:2px 8px;"
             )
             return
-        self.progress_label.setText(f"{pct}%")
+
+        self.progress_label.setStyleSheet(self._build_progress_bar_stylesheet(fill_stop, cue_in_ms, cue_out_ms))
 
     def _on_volume_changed(self, value: int) -> None:
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
@@ -8802,6 +9034,8 @@ class MainWindow(QMainWindow):
         self.settings.show_timecode_panel = bool(self.show_timecode_panel)
         self.settings.timecode_timeline_mode = self.timecode_timeline_mode
         self.settings.main_transport_timeline_mode = self.main_transport_timeline_mode
+        self.settings.main_progress_display_mode = self.main_progress_display_mode
+        self.settings.main_progress_show_text = bool(self.main_progress_show_text)
         self.settings.main_jog_outside_cue_action = self.main_jog_outside_cue_action
         self.settings.color_empty = self.state_colors["empty"]
         self.settings.color_unplayed = self.state_colors["assigned"]

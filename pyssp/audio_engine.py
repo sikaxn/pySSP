@@ -612,6 +612,40 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             return self._meter_levels
 
+    def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
+        with self._lock:
+            frames = self._source_frames
+        points = max(1, int(sample_count))
+        if frames is None or len(frames) <= 0:
+            return []
+
+        if frames.shape[1] > 1:
+            mono = np.max(np.abs(frames), axis=1)
+        else:
+            mono = np.abs(frames[:, 0])
+        frame_count = int(len(mono))
+        if frame_count <= 0:
+            return []
+
+        peaks = np.zeros(points, dtype=np.float32)
+        if frame_count <= points:
+            for i in range(frame_count):
+                peaks[i] = float(mono[i])
+        else:
+            edges = np.linspace(0, frame_count, points + 1, dtype=np.int64)
+            for i in range(points):
+                start = int(edges[i])
+                end = int(edges[i + 1])
+                if end <= start:
+                    end = min(frame_count, start + 1)
+                segment = mono[start:end]
+                peaks[i] = float(np.max(segment)) if len(segment) > 0 else 0.0
+
+        peak_max = float(np.max(peaks)) if len(peaks) > 0 else 0.0
+        if peak_max > 0.0:
+            peaks /= peak_max
+        return peaks.tolist()
+
     def _create_stream(self):
         device_index = None
         if _REQUESTED_DEVICE:

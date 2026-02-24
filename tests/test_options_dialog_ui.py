@@ -50,6 +50,8 @@ def _build_dialog(**overrides):
         click_playing_action=defaults["click_playing_action"],
         search_double_click_action=defaults["search_double_click_action"],
         set_file_encoding=defaults["set_file_encoding"],
+        main_progress_display_mode=defaults["main_progress_display_mode"],
+        main_progress_show_text=defaults["main_progress_show_text"],
         audio_output_device="",
         available_audio_devices=["Device A", "Device B"],
         available_midi_devices=[(MIDI_OUTPUT_DEVICE_NONE, "None")],
@@ -190,6 +192,8 @@ def test_selected_value_methods_follow_toggles(qapp):
     dialog.candidate_error_keep_radio.setChecked(True)
     dialog.timecode_timeline_audio_file_radio.setChecked(True)
     dialog.timecode_mode_combo.setCurrentIndex(dialog.timecode_mode_combo.findData(TIMECODE_MODE_FOLLOW))
+    dialog.main_progress_display_waveform_radio.setChecked(True)
+    dialog.main_progress_show_text_checkbox.setChecked(False)
 
     assert dialog.selected_search_double_click_action() == "play_highlight"
     assert dialog.selected_click_playing_action() == "stop_it"
@@ -201,6 +205,8 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_multi_play_limit_action() == "disallow_more_play"
     assert dialog.selected_candidate_error_action() == "keep_playing"
     assert dialog.selected_timecode_timeline_mode() == "audio_file"
+    assert dialog.selected_main_progress_display_mode() == "waveform"
+    assert dialog.selected_main_progress_show_text() is False
 
 
 def test_display_page_layout_and_visibility_round_trip(qapp):

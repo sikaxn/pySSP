@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Callable, Optional
 
+import numpy as np
 from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -17,7 +19,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from pyssp.audio_engine import ExternalMediaPlayer
+from pyssp.audio_engine import (
+    ExternalMediaPlayer,
+    get_audio_preload_runtime_status,
+    is_audio_preloaded,
+    request_audio_preload,
+)
 from pyssp.i18n import localize_widget_tree
 
 
@@ -27,15 +34,40 @@ class CueRangeIndicator(QWidget):
         self._duration_ms = 0
         self._start_ms: Optional[int] = None
         self._end_ms: Optional[int] = None
-        self.setMinimumHeight(12)
+        self._position_ms = 0
+        self._waveform = np.array([], dtype=np.float32)
+        self._loading = False
+        self._loading_text = "Loading waveform..."
+        self.setMinimumHeight(72)
 
     def sizeHint(self) -> QSize:
-        return QSize(360, 14)
+        return QSize(360, 80)
 
     def set_values(self, duration_ms: int, start_ms: Optional[int], end_ms: Optional[int]) -> None:
         self._duration_ms = max(0, int(duration_ms))
         self._start_ms = None if start_ms is None else max(0, int(start_ms))
         self._end_ms = None if end_ms is None else max(0, int(end_ms))
+        self.update()
+
+    def set_position(self, position_ms: int) -> None:
+        self._position_ms = max(0, int(position_ms))
+        self.update()
+
+    def set_waveform(self, peaks: list[float]) -> None:
+        if not peaks:
+            self._waveform = np.array([], dtype=np.float32)
+            self.update()
+            return
+        arr = np.asarray(peaks, dtype=np.float32)
+        if arr.ndim != 1:
+            arr = arr.reshape(-1)
+        arr = np.clip(arr, 0.0, 1.0)
+        self._waveform = arr
+        self.update()
+
+    def set_loading(self, loading: bool, text: str = "Loading waveform...") -> None:
+        self._loading = bool(loading)
+        self._loading_text = str(text or "").strip() or "Loading waveform..."
         self.update()
 
     def _x_for_ms(self, value_ms: int, width: int) -> int:
@@ -50,32 +82,79 @@ class CueRangeIndicator(QWidget):
         w = max(1, self.width())
         h = max(1, self.height())
 
-        painter.fillRect(0, 0, w, h, QColor("#D7DEE2"))
+        painter.fillRect(0, 0, w, h, QColor("#141A1F"))
+        if self._loading:
+            painter.setPen(QColor("#8AA6B8"))
+            painter.drawRect(0, 0, w - 1, h - 1)
+            painter.setPen(QColor("#D8E3EA"))
+            painter.drawText(self.rect(), int(Qt.AlignCenter), self._loading_text)
+            painter.end()
+            return
         if self._duration_ms <= 0:
             painter.end()
             return
 
-        start = self._start_ms
-        end = self._end_ms
-        if start is not None and end is not None and end < start:
+        start = 0 if self._start_ms is None else max(0, int(self._start_ms))
+        end = self._duration_ms if self._end_ms is None else max(0, int(self._end_ms))
+        if end < start:
             end = start
+        start = min(start, self._duration_ms)
+        end = min(end, self._duration_ms)
+        x1 = self._x_for_ms(start, w)
+        x2 = self._x_for_ms(end, w)
+        if x2 < x1:
+            x2 = x1
 
-        if start is not None and end is not None:
-            x1 = self._x_for_ms(start, w)
-            x2 = self._x_for_ms(end, w)
-            if x2 < x1:
-                x2 = x1
-            painter.fillRect(x1, 0, max(1, x2 - x1 + 1), h, QColor("#BFEFFF"))
+        # Playable area is brighter; outside cue range remains darker.
+        painter.fillRect(x1, 0, max(1, x2 - x1 + 1), h, QColor("#253B4B"))
 
-        pen = QPen(QColor("#00A4D8"))
-        pen.setWidth(2)
-        painter.setPen(pen)
-        if start is not None:
+        if len(self._waveform) > 0:
+            center = h // 2
+            max_half = max(1, (h // 2) - 2)
+            bright_wave_pen = QPen(QColor("#B9D7EA"))
+            bright_wave_pen.setWidth(1)
+            dim_wave_pen = QPen(QColor("#5E7586"))
+            dim_wave_pen.setWidth(1)
+            wave_count = len(self._waveform)
+            for x in range(w):
+                painter.setPen(bright_wave_pen if x1 <= x <= x2 else dim_wave_pen)
+                idx = int((x / float(max(1, w - 1))) * float(max(0, wave_count - 1)))
+                amp = float(self._waveform[idx])
+                half = max(1, int(round(amp * max_half)))
+                painter.drawLine(x, center - half, x, center + half)
+
+        if self._start_ms is not None:
             x = self._x_for_ms(start, w)
+            in_pen = QPen(QColor("#00C853"))
+            in_pen.setWidth(2)
+            painter.setPen(in_pen)
             painter.drawLine(x, 0, x, h - 1)
-        if end is not None:
+        if self._end_ms is not None:
             x = self._x_for_ms(end, w)
+            out_pen = QPen(QColor("#FF5252"))
+            out_pen.setWidth(2)
+            painter.setPen(out_pen)
             painter.drawLine(x, 0, x, h - 1)
+
+        playhead_x = self._x_for_ms(self._position_ms, w)
+        playhead_pen = QPen(QColor("#FFD54F"))
+        playhead_pen.setWidth(1)
+        painter.setPen(playhead_pen)
+        painter.drawLine(playhead_x, 0, playhead_x, h - 1)
+
+        border_pen = QPen(QColor("#45535E"))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.drawRect(0, 0, w - 1, h - 1)
+
+        if self._start_ms is not None:
+            painter.setPen(QColor("#00C853"))
+            painter.drawText(4, 14, "In")
+        if self._end_ms is not None:
+            text = "Out"
+            text_w = painter.fontMetrics().horizontalAdvance(text)
+            painter.setPen(QColor("#FF5252"))
+            painter.drawText(max(2, w - text_w - 4), 14, text)
         painter.end()
 
 
@@ -107,6 +186,10 @@ class CuePointDialog(QDialog):
         self._mode = "idle"
         self._timeline_mode = "audio_file"
         self._load_error: Optional[str] = None
+        self._is_loading_media = False
+        self._file_path = file_path
+        self._load_wait_started = 0.0
+        self._load_wait_timeout_sec = 20.0
         self._stop_host_playback = stop_host_playback
 
         root = QVBoxLayout(self)
@@ -217,44 +300,109 @@ class CuePointDialog(QDialog):
         self._limit_timer.setInterval(30)
         self._limit_timer.timeout.connect(self._enforce_end_limit)
         self._limit_timer.start()
-
-        try:
-            self._player.setMedia(file_path)
-            self._duration_ms = max(0, int(self._player.duration()))
-            self.jog_slider.setRange(0, self._duration_ms)
-        except Exception as exc:
-            self._load_error = str(exc)
-            self.error_label.setText(f"Could not load audio preview: {exc}")
-            self.play_btn.setEnabled(False)
-            self.stop_btn.setEnabled(False)
-            self.preview_btn.setEnabled(False)
-            self.jog_slider.setEnabled(False)
-            self.start_set_btn.setEnabled(False)
-            self.end_set_btn.setEnabled(False)
-            self.clear_cue_btn.setEnabled(False)
-            self.save_btn.setEnabled(False)
+        self._load_poll_timer = QTimer(self)
+        self._load_poll_timer.setInterval(80)
+        self._load_poll_timer.timeout.connect(self._poll_media_preload_state)
 
         self._normalize_cues()
         self._refresh_timecode_edits()
         self._refresh_cue_indicator()
         self._apply_jog_bounds()
         self._refresh_transport_times(0)
+        self._set_loading_state(True)
         self._refresh_transport_buttons()
         localize_widget_tree(self, language)
+        QTimer.singleShot(0, self._load_media_preview)
 
     def closeEvent(self, event) -> None:
+        self._stop_async_load_watch()
         self._stop_preview_player()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
+        self._stop_async_load_watch()
         self._stop_preview_player()
         super().done(result)
 
     def values(self) -> tuple[Optional[int], Optional[int]]:
         return self._cue_start_ms, self._cue_end_ms
 
+    def _set_loading_state(self, loading: bool) -> None:
+        self._is_loading_media = bool(loading)
+        self.cue_indicator.set_loading(self._is_loading_media, "Loading audio waveform...")
+        ready = (not self._is_loading_media) and (self._load_error is None)
+        self.play_btn.setEnabled(ready)
+        self.stop_btn.setEnabled(ready)
+        self.preview_btn.setEnabled(ready)
+        self.jog_slider.setEnabled(ready)
+        self.start_set_btn.setEnabled(ready)
+        self.end_set_btn.setEnabled(ready)
+        self.start_reset_btn.setEnabled(ready)
+        self.end_reset_btn.setEnabled(ready)
+        self.clear_cue_btn.setEnabled(ready)
+        self.save_btn.setEnabled(ready)
+
+    def _load_media_preview(self) -> None:
+        self._load_error = None
+        self.error_label.setText("")
+        self.cue_indicator.set_waveform([])
+        self._set_loading_state(True)
+        self._load_wait_started = time.perf_counter()
+        preload_enabled, _active = get_audio_preload_runtime_status()
+        if not preload_enabled:
+            # Preload may be globally disabled; avoid waiting indefinitely.
+            self.cue_indicator.set_loading(True, "Loading audio waveform...")
+            QTimer.singleShot(0, self._finalize_media_load)
+            return
+        try:
+            request_audio_preload([self._file_path], prioritize=True)
+        except Exception:
+            pass
+        if is_audio_preloaded(self._file_path):
+            self._finalize_media_load()
+            return
+        self._load_poll_timer.start()
+
+    def _stop_async_load_watch(self) -> None:
+        if self._load_poll_timer.isActive():
+            self._load_poll_timer.stop()
+
+    def _poll_media_preload_state(self) -> None:
+        if not self._is_loading_media:
+            self._stop_async_load_watch()
+            return
+        elapsed = max(0.0, time.perf_counter() - self._load_wait_started)
+        dot_count = int(elapsed * 3.0) % 4
+        self.cue_indicator.set_loading(True, "Loading audio waveform" + ("." * dot_count))
+        if is_audio_preloaded(self._file_path):
+            self._stop_async_load_watch()
+            self._finalize_media_load()
+            return
+        if elapsed >= self._load_wait_timeout_sec:
+            self._stop_async_load_watch()
+            self.cue_indicator.set_loading(True, "Finalizing audio load...")
+            QTimer.singleShot(0, self._finalize_media_load)
+
+    def _finalize_media_load(self) -> None:
+        try:
+            self._player.setMedia(self._file_path)
+            self._duration_ms = max(0, int(self._player.duration()))
+            self.jog_slider.setRange(0, self._duration_ms)
+            self.cue_indicator.set_waveform(self._player.waveformPeaks(1800))
+            self._normalize_cues()
+            self._refresh_timecode_edits()
+            self._refresh_cue_indicator()
+            self._apply_jog_bounds()
+            self._refresh_transport_times(self._player.position())
+        except Exception as exc:
+            self._load_error = str(exc)
+            self.error_label.setText(f"Could not load audio preview: {exc}")
+        finally:
+            self._set_loading_state(False)
+            self._refresh_transport_buttons()
+
     def _play(self) -> None:
-        if self._load_error:
+        if self._load_error or self._is_loading_media:
             return
         if self._mode == "play" and self._player.state() == ExternalMediaPlayer.PlayingState:
             self._player.pause()
@@ -270,7 +418,7 @@ class CuePointDialog(QDialog):
         self._refresh_transport_buttons()
 
     def _stop(self) -> None:
-        if self._load_error:
+        if self._load_error or self._is_loading_media:
             return
         self._set_mode("idle")
         self._player.stop()
@@ -278,7 +426,7 @@ class CuePointDialog(QDialog):
         self._refresh_transport_buttons()
 
     def _preview(self) -> None:
-        if self._load_error:
+        if self._load_error or self._is_loading_media:
             return
         if self._mode == "preview" and self._player.state() == ExternalMediaPlayer.PlayingState:
             self._player.pause()
@@ -311,6 +459,8 @@ class CuePointDialog(QDialog):
         self._normalize_cues()
         self._refresh_timecode_edits()
         self._refresh_cue_indicator()
+        if self._duration_ms > 0:
+            self.cue_indicator.set_waveform(self._player.waveformPeaks(1800))
         self._apply_jog_bounds()
         self._refresh_transport_times(self._player.position())
 
@@ -486,6 +636,7 @@ class CuePointDialog(QDialog):
         self.total_label.setText(f"Total {format_timecode(total)}")
         self.elapsed_label.setText(f"Elapsed {format_timecode(elapsed)}")
         self.remaining_label.setText(f"Remaining {format_timecode(remaining)}")
+        self.cue_indicator.set_position(clamped)
         self._refresh_jog_meta(elapsed, total)
 
     def _refresh_cue_indicator(self) -> None:

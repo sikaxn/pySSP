@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -450,6 +450,40 @@ class StageDisplayWindow(QWidget):
         self._datetime_timer.timeout.connect(self._update_datetime)
         self._datetime_timer.start(1000)
         self._update_datetime()
+        self._install_fullscreen_toggle_filter(self)
+
+    def _install_fullscreen_toggle_filter(self, root: QWidget) -> None:
+        root.installEventFilter(self)
+        for child in root.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.MouseButtonDblClick:
+            if getattr(event, "button", lambda: None)() == Qt.LeftButton:
+                self._toggle_fullscreen()
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._toggle_fullscreen()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def configure_gadgets(self, gadgets: Dict[str, Dict[str, object]]) -> None:
         self._canvas.set_gadgets(gadgets)

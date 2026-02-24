@@ -251,6 +251,8 @@ class AppSettings:
     show_timecode_panel: bool = False
     timecode_timeline_mode: str = "cue_region"
     main_transport_timeline_mode: str = "cue_region"
+    main_progress_display_mode: str = "progress_bar"
+    main_progress_show_text: bool = True
     main_jog_outside_cue_action: str = "stop_immediately"
     color_empty: str = "#0B868A"
     color_unplayed: str = "#B0B0B0"
@@ -523,6 +525,8 @@ def save_settings(settings: AppSettings) -> None:
         "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
         "timecode_timeline_mode": settings.timecode_timeline_mode,
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
+        "main_progress_display_mode": settings.main_progress_display_mode,
+        "main_progress_show_text": "1" if settings.main_progress_show_text else "0",
         "main_jog_outside_cue_action": settings.main_jog_outside_cue_action,
         "color_empty": settings.color_empty,
         "color_unplayed": settings.color_unplayed,
@@ -797,6 +801,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     ).strip().lower()
     if timeline_mode_raw not in {"cue_region", "audio_file"}:
         timeline_mode_raw = "cue_region"
+    main_progress_display_mode = str(section.get("main_progress_display_mode", "progress_bar")).strip().lower()
+    if main_progress_display_mode not in {"progress_bar", "waveform"}:
+        main_progress_display_mode = "progress_bar"
+    main_progress_show_text = _get_bool(section, "main_progress_show_text", True)
     outside_action = str(section.get("main_jog_outside_cue_action", "stop_immediately")).strip().lower()
     if outside_action not in {
         "stop_immediately",
@@ -961,6 +969,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
         timecode_timeline_mode=timecode_timeline_mode_raw,
         main_transport_timeline_mode=timeline_mode_raw,
+        main_progress_display_mode=main_progress_display_mode,
+        main_progress_show_text=main_progress_show_text,
         main_jog_outside_cue_action=outside_action,
         color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),
         color_unplayed=_coerce_hex(str(section.get("color_unplayed", "#B0B0B0")), "#B0B0B0"),

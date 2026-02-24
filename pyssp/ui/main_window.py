@@ -271,6 +271,10 @@ class SoundButton(QPushButton):
                 return
         super().mouseMoveEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        self._host._show_slot_menu(self.slot_index, event.pos())
+        event.accept()
+
     def dragEnterEvent(self, event) -> None:
         if self._host._can_accept_sound_button_drop(event.mimeData()):
             event.acceptProposedAction()
@@ -3790,10 +3794,6 @@ class MainWindow(QMainWindow):
                 idx = row * GRID_COLS + col
                 button = SoundButton(idx, self)
                 button.clicked.connect(lambda _=False, slot=idx: self._on_sound_button_clicked(slot))
-                button.setContextMenuPolicy(Qt.CustomContextMenu)
-                button.customContextMenuRequested.connect(
-                    lambda pos, slot=idx: self._show_slot_menu(slot, pos)
-                )
                 self.sound_buttons.append(button)
                 grid_layout.addWidget(button, row, col)
         for row in range(GRID_ROWS):
@@ -4724,7 +4724,10 @@ class MainWindow(QMainWindow):
         slot = page[slot_index]
         page_created = self._is_page_created(self.current_group, self.current_page)
         if (self._view_group_key(), self.current_page, slot_index) in self._active_playing_keys:
-            self._open_playback_volume_dialog(slot)
+            # Keep direct right-click -> popup behavior, but defer by one event
+            # turn so the context-menu/mouse sequence can fully unwind.
+            button.setDown(False)
+            QTimer.singleShot(0, lambda s=slot: self._open_playback_volume_dialog(s))
             return
 
         menu = QMenu(self)
@@ -5635,15 +5638,53 @@ class MainWindow(QMainWindow):
             committed["value"] = True
             dialog.accept()
 
+        def _on_finished(_result: int) -> None:
+            if not committed["value"]:
+                slot.volume_override_pct = original_override
+                if is_current_slot:
+                    self._player_slot_volume_pct = original_slot_pct
+                    self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+            self._recover_from_stuck_mouse_state()
+            dialog.deleteLater()
+            if getattr(self, "_active_playback_volume_dialog", None) is dialog:
+                self._active_playback_volume_dialog = None
+
         remove_btn.clicked.connect(_remove)
         save_btn.clicked.connect(_save)
         cancel_btn.clicked.connect(dialog.reject)
-        dialog.exec_()
-        if not committed["value"]:
-            slot.volume_override_pct = original_override
-            if is_current_slot:
-                self._player_slot_volume_pct = original_slot_pct
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+        dialog.finished.connect(_on_finished)
+        existing = getattr(self, "_active_playback_volume_dialog", None)
+        if existing is not None and existing is not dialog:
+            try:
+                existing.close()
+            except Exception:
+                pass
+        self._active_playback_volume_dialog = dialog
+        dialog.open()
+
+    def _recover_from_stuck_mouse_state(self) -> None:
+        # Defensive UI recovery for platform-specific pointer grab issues after
+        # closing context-launched modal dialogs.
+        try:
+            grabber = QWidget.mouseGrabber()
+            if grabber is not None:
+                grabber.releaseMouse()
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                popup = app.activePopupWidget()
+                if popup is not None:
+                    popup.close()
+            except Exception:
+                pass
+        for btn in self.control_buttons.values():
+            btn.setDown(False)
+        for btn in self.group_buttons.values():
+            btn.setDown(False)
+        for btn in self.sound_buttons:
+            btn.setDown(False)
 
     def _play_slot(self, slot_index: int, allow_fade: bool = True) -> bool:
         click_t = time.perf_counter()
@@ -9953,4 +9994,3 @@ def elide_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
     return value[: max_chars - 3] + "..."
-

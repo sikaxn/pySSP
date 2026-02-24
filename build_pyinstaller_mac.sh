@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION_FILE="${ROOT_DIR}/version.json"
+APP_VERSION="0.0.0"
 export PIPENV_IGNORE_VIRTUALENVS=1
 export PIPENV_VENV_IN_PROJECT=1
 cd "${ROOT_DIR}"
@@ -44,15 +46,27 @@ if ! run_pipenv install --dev; then
   fi
 fi
 
+if [[ -f "${VERSION_FILE}" ]]; then
+  APP_VERSION="$(run_pipenv run python -c 'import json; print(json.load(open("version.json","r",encoding="utf-8")).get("version","0.0.0"))')"
+fi
+echo "[INFO] Build version: ${APP_VERSION}"
+
 echo "[INFO] Cleaning previous PyInstaller output..."
 rm -rf build
 find dist -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 mkdir -p dist
 
-echo "[INFO] Verifying documentation HTML..."
+echo "[INFO] Building documentation HTML..."
+if [[ ! -f "docs/source/conf.py" ]]; then
+  echo "[ERROR] docs/source/conf.py not found."
+  exit 1
+fi
+if ! run_pipenv run sphinx-build -b html docs/source docs/build/html; then
+  echo "[ERROR] Documentation build failed."
+  exit 1
+fi
 if [[ ! -f "docs/build/html/index.html" ]]; then
-  echo "[ERROR] Missing docs/build/html/index.html. Build docs before packaging."
-  echo "        Suggested command: sphinx-build -b html docs/source docs/build/html"
+  echo "[ERROR] Missing docs/build/html/index.html after documentation build."
   exit 1
 fi
 
@@ -87,6 +101,7 @@ if ! run_pipenv run pyinstaller \
   "${ICON_ARG[@]}" \
   --add-data "pyssp/assets:pyssp/assets" \
   --add-data "docs/build/html:docs/build/html" \
+  --add-data "version.json:." \
   main.py; then
   echo "[ERROR] PyInstaller GUI build failed."
   exit 1
@@ -129,9 +144,9 @@ if [[ -x "${APP_BIN}" ]]; then
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>${APP_VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${APP_VERSION}</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
 </dict>

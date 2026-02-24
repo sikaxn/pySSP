@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread, QUrl
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QProgressBar,
     QInputDialog,
+    QTabWidget,
     QSpinBox,
     QSlider,
     QShortcut,
@@ -104,6 +105,7 @@ from pyssp.ui.stage_display import (
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
+from pyssp.version import get_app_title_base, get_display_version
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -501,24 +503,49 @@ class ToolListWindow(QDialog):
         return match
 
 
-class TextFileViewerWindow(QDialog):
-    def __init__(self, title: str, body_label: str, parent=None) -> None:
+class AboutWindowDialog(QDialog):
+    def __init__(self, title: str, logo_path: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(900, 620)
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
+
+        self._cover_pixmap = QPixmap(logo_path)
+        self._target_cover_width = 360
+        if not self._cover_pixmap.isNull():
+            self._target_cover_width = max(320, min(420, self._cover_pixmap.width() // 4))
+
+        self.resize(self._target_cover_width + 24, 460)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        root.addWidget(QLabel(body_label))
+        self.cover_label = QLabel(self)
+        self.cover_label.setAlignment(Qt.AlignCenter)
+        self.cover_label.setMinimumHeight(90)
+        self.cover_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        root.addWidget(self.cover_label)
+        self._refresh_cover_pixmap()
 
-        self.viewer = QPlainTextEdit()
-        self.viewer.setReadOnly(True)
-        self.viewer.setLineWrapMode(QPlainTextEdit.NoWrap)
-        root.addWidget(self.viewer, 1)
+        self.notice_label = QLabel(
+            "pySSP is an independent project and is not affiliated with the original Sports Sounds Pro (SSP).",
+            self,
+        )
+        self.notice_label.setAlignment(Qt.AlignCenter)
+        self.notice_label.setWordWrap(True)
+        root.addWidget(self.notice_label)
+
+        self.tabs = QTabWidget(self)
+        root.addWidget(self.tabs, 1)
+
+        self.about_viewer = self._build_tab_textbox()
+        self.credits_viewer = self._build_tab_textbox()
+        self.license_viewer = self._build_tab_textbox(no_wrap=True)
+
+        self.tabs.addTab(self.about_viewer, "About")
+        self.tabs.addTab(self.credits_viewer, "Credits")
+        self.tabs.addTab(self.license_viewer, "License")
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -527,8 +554,32 @@ class TextFileViewerWindow(QDialog):
         button_row.addWidget(close_btn)
         root.addLayout(button_row)
 
-    def set_text(self, text: str) -> None:
-        self.viewer.setPlainText(text)
+    def _build_tab_textbox(self, no_wrap: bool = False) -> QPlainTextEdit:
+        textbox = QPlainTextEdit(self)
+        textbox.setReadOnly(True)
+        textbox.setLineWrapMode(QPlainTextEdit.NoWrap if no_wrap else QPlainTextEdit.WidgetWidth)
+        return textbox
+
+    def _refresh_cover_pixmap(self) -> None:
+        if self._cover_pixmap.isNull():
+            self.cover_label.setText("logo2.png not found")
+            return
+        scaled = self._cover_pixmap.scaled(
+            min(self.cover_label.width(), self._target_cover_width),
+            max(self.cover_label.height(), 180),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.cover_label.setPixmap(scaled)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_cover_pixmap()
+
+    def set_content(self, about_text: str, credits_text: str, license_text: str) -> None:
+        self.about_viewer.setPlainText(about_text)
+        self.credits_viewer.setPlainText(credits_text)
+        self.license_viewer.setPlainText(license_text)
 
 
 class TimecodePanel(QWidget):
@@ -1148,7 +1199,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._suspend_settings_save = True
-        self.setWindowTitle("Python SSP")
+        self.app_version_text = get_display_version()
+        self.app_title_base = get_app_title_base()
+        self.setWindowTitle(self.app_title_base)
         self.resize(1360, 900)
         self.settings: AppSettings = load_settings()
         self.ui_language = normalize_language(getattr(self.settings, "ui_language", "en"))
@@ -1589,7 +1642,7 @@ class MainWindow(QMainWindow):
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
-        self._about_window: Optional[TextFileViewerWindow] = None
+        self._about_window: Optional[AboutWindowDialog] = None
         self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
@@ -2274,6 +2327,20 @@ class MainWindow(QMainWindow):
     def _project_root_path(self) -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+    def _asset_file_path(self, *parts: str) -> str:
+        if getattr(sys, "frozen", False):
+            base_dir = os.path.dirname(sys.executable)
+            bundled = os.path.join(base_dir, "pyssp", "assets", *parts)
+            if os.path.exists(bundled):
+                return bundled
+            meipass_dir = getattr(sys, "_MEIPASS", "")
+            if meipass_dir:
+                candidate = os.path.join(meipass_dir, "pyssp", "assets", *parts)
+                if os.path.exists(candidate):
+                    return candidate
+            return bundled
+        return os.path.join(self._project_root_path(), "pyssp", "assets", *parts)
+
     def _help_index_path(self) -> str:
         if getattr(sys, "frozen", False):
             base_dir = os.path.dirname(sys.executable)
@@ -2876,10 +2943,10 @@ class MainWindow(QMainWindow):
                     continue
                 self._midi_action_handlers[token] = (lambda sk=slot_key: self._sound_button_midi_hotkey_trigger(sk))
 
-    def _load_project_text_file(self, filename: str) -> str:
-        file_path = os.path.join(self._project_root_path(), filename)
+    def _load_asset_text_file(self, *parts: str) -> str:
+        file_path = self._asset_file_path(*parts)
         if not os.path.exists(file_path):
-            return f"{filename} not found at:\n{file_path}"
+            return f"{os.path.join(*parts)} not found at:\n{file_path}"
         try:
             with open(file_path, "r", encoding="utf-8") as fh:
                 return fh.read()
@@ -2887,22 +2954,21 @@ class MainWindow(QMainWindow):
             with open(file_path, "r", encoding="latin1", errors="replace") as fh:
                 return fh.read()
         except Exception as exc:
-            return f"Could not read {filename}:\n{exc}"
+            return f"Could not read {os.path.join(*parts)}:\n{exc}"
 
     def _open_about_window(self) -> None:
         if self._about_window is None:
-            self._about_window = TextFileViewerWindow(
+            self._about_window = AboutWindowDialog(
                 title="About",
-                body_label="License",
+                logo_path=self._asset_file_path("logo2.png"),
                 parent=self,
             )
             self._about_window.destroyed.connect(lambda _=None: self._clear_about_window_ref())
-        license_text = self._load_project_text_file("LICENSE")
-        disclaimer = (
-            "Python SSP is an independent project and has no affiliation with, "
-            "endorsement by, or connection to the official Sports Sounds Pro.\n\n"
-        )
-        self._about_window.set_text(disclaimer + license_text)
+
+        about_text = self._load_asset_text_file("about", "about.md").replace("{{VERSION}}", self.app_version_text)
+        credits_text = self._load_asset_text_file("about", "credits.md")
+        license_text = self._load_asset_text_file("about", "license.md")
+        self._about_window.set_content(about_text=about_text, credits_text=credits_text, license_text=license_text)
         self._about_window.show()
         self._about_window.raise_()
         self._about_window.activateWindow()
@@ -4540,7 +4606,7 @@ class MainWindow(QMainWindow):
         self._refresh_window_title()
 
     def _refresh_window_title(self) -> None:
-        base = "Python SSP"
+        base = self.app_title_base
         title = f"{base}    {self.current_set_path}" if self.current_set_path else base
         if self._dirty:
             title = f"{title} *"

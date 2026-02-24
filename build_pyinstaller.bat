@@ -2,6 +2,10 @@
 setlocal
 
 set "ROOT_DIR=%~dp0"
+set "VERSION_FILE=%ROOT_DIR%version.json"
+set "APP_VERSION=0.0.0"
+set "APP_BASENAME=pySSP-%APP_VERSION%"
+set "APP_EXE_NAME=pySSP"
 set "PIPENV_IGNORE_VIRTUALENVS=1"
 set "PIPENV_VENV_IN_PROJECT=1"
 pushd "%ROOT_DIR%"
@@ -46,6 +50,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if exist "%VERSION_FILE%" (
+    for /f %%i in ('pipenv run python -c "import json; print(json.load(open('version.json','r',encoding='utf-8')).get('version','0.0.0'))"') do set "APP_VERSION=%%i"
+)
+set "APP_BASENAME=pySSP-%APP_VERSION%"
+echo [INFO] Build version: %APP_VERSION%
+
 echo [INFO] Cleaning previous PyInstaller output...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
@@ -73,10 +83,11 @@ pipenv run pyinstaller ^
   --noconfirm ^
   --clean ^
   --windowed ^
-  --name pySSP ^
+  --name %APP_EXE_NAME% ^
   --icon "pyssp\assets\app_icon.ico" ^
   --add-data "pyssp\assets;pyssp\assets" ^
   --add-data "docs\build\html;docs\build\html" ^
+  --add-data "version.json;." ^
   main.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller GUI build failed.
@@ -112,11 +123,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if exist "%ROOT_DIR%dist\%APP_BASENAME%" rmdir /s /q "%ROOT_DIR%dist\%APP_BASENAME%"
+move "%ROOT_DIR%dist\pySSP" "%ROOT_DIR%dist\%APP_BASENAME%" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to rename dist folder to versioned name.
+    popd
+    exit /b 1
+)
+
 echo.
 echo [SUCCESS] Build complete:
-echo   %ROOT_DIR%dist\pySSP\pySSP.exe
-echo   %ROOT_DIR%dist\pySSP\pySSP_cleanstart.bat
-echo   %ROOT_DIR%dist\pySSP\pySSP_debug.bat
+echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP.exe
+echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_cleanstart.bat
+echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_debug.bat
 
 popd
 exit /b 0

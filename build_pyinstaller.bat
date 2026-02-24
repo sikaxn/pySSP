@@ -50,6 +50,24 @@ echo [INFO] Cleaning previous PyInstaller output...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
+echo [INFO] Building documentation HTML...
+if not exist docs\source\conf.py (
+    echo [ERROR] docs\source\conf.py not found.
+    popd
+    exit /b 1
+)
+pipenv run sphinx-build -b html docs\source docs\build\html
+if errorlevel 1 (
+    echo [ERROR] Documentation build failed.
+    popd
+    exit /b 1
+)
+if not exist docs\build\html\index.html (
+    echo [ERROR] Missing docs\build\html\index.html after documentation build.
+    popd
+    exit /b 1
+)
+
 echo [INFO] Building app (no terminal) with PyInstaller...
 pipenv run pyinstaller ^
   --noconfirm ^
@@ -58,6 +76,7 @@ pipenv run pyinstaller ^
   --name pySSP ^
   --icon "pyssp\assets\app_icon.ico" ^
   --add-data "pyssp\assets;pyssp\assets" ^
+  --add-data "docs\build\html;docs\build\html" ^
   main.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller GUI build failed.

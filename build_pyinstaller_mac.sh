@@ -49,6 +49,13 @@ rm -rf build
 find dist -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 mkdir -p dist
 
+echo "[INFO] Verifying documentation HTML..."
+if [[ ! -f "docs/build/html/index.html" ]]; then
+  echo "[ERROR] Missing docs/build/html/index.html. Build docs before packaging."
+  echo "        Suggested command: sphinx-build -b html docs/source docs/build/html"
+  exit 1
+fi
+
 ICON_ARG=()
 if [[ -f "pyssp/assets/app_icon.png" ]] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
   TMP_ICONSET="$(mktemp -d)/pyssp.iconset"
@@ -79,6 +86,7 @@ if ! run_pipenv run pyinstaller \
   --name pySSP \
   "${ICON_ARG[@]}" \
   --add-data "pyssp/assets:pyssp/assets" \
+  --add-data "docs/build/html:docs/build/html" \
   main.py; then
   echo "[ERROR] PyInstaller GUI build failed."
   exit 1

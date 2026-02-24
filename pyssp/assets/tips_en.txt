@@ -1,0 +1,39 @@
+Use Search (Ctrl+F) to jump to any sound quickly by title or file path.
+
+Right-click a sound button to access Cue, Copy/Paste, Highlight, and Lock actions.
+
+Enable audio preload in Options for faster playback on frequently used pages.
+
+Use Stage Display to mirror key playback info for performers or presenters.
+
+Backup settings and hotkeys from the File menu before moving to another machine.
+
+Use Cue Start and Cue End to trim dead air and hit the exact point instantly.
+
+If a button turns purple, the audio file path is invalid or missing; use Verify Sound Buttons in Tools.
+
+Use page colors and clear page names so operators can navigate fast under pressure.
+
+Keep key stingers on the same page and same slot positions across all sets for muscle memory.
+
+Use Sound Button Hot Key on critical tracks so you can trigger without mouse focus.
+
+For consistent loudness, set per-button playback volume on songs that are too loud or too soft.
+
+Enable playback log file in Options when troubleshooting missed cues or timeline behavior.
+
+When using timecode, avoid Multi-Play unless you specifically tested the workflow end-to-end.
+
+Use Duplicate Check regularly to remove repeated files and keep pages clean.
+
+Backup pySSP settings before major updates, then restore quickly if needed.
+
+Use Next mode with clear candidate rules to avoid repeating recently played tracks.
+
+If Search double-click is set to Play and Highlight, you can audition faster during prep.
+
+Use the Cue page as a scratchpad for temporary sounds needed only for one event.
+
+Keep file paths on stable local drives to reduce missing-file issues during show time.
+
+After changing UI language, reopen existing dialogs/windows to fully refresh all text.

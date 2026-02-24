@@ -13,6 +13,9 @@ flask = "*"
 [dev-packages]
 pytest = ">=8.0"
 pyinstaller = ">=6.0"
+sphinx = ">=9.1"
+myst-parser = ">=5.0"
+sphinx-rtd-theme = ">=3.1"
 
 [requires]
 python_version = "3.12"

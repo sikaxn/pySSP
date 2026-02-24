@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import random
 import queue
@@ -15,12 +16,13 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont
+from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread, QUrl
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
+    QCheckBox,
     QColorDialog,
     QDialog,
     QDockWidget,
@@ -40,6 +42,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QProgressBar,
     QInputDialog,
+    QSpinBox,
     QSlider,
     QShortcut,
     QStyle,
@@ -93,7 +96,13 @@ from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
+from pyssp.ui.stage_display import (
+    StageDisplayWindow as GadgetStageDisplayWindow,
+    gadgets_to_legacy_layout_visibility,
+    normalize_stage_display_gadgets,
+)
 from pyssp.ui.search_window import SearchWindow
+from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 
 GROUPS = list("ABCDEFGHIJ")
@@ -1051,6 +1060,7 @@ class MainWindow(QMainWindow):
         self.set_file_encoding = self.settings.set_file_encoding or "utf8"
         if self.set_file_encoding not in {"utf8", "gbk"}:
             self.set_file_encoding = "utf8"
+        self.tips_open_on_startup = bool(getattr(self.settings, "tips_open_on_startup", True))
         self.audio_output_device = self.settings.audio_output_device
         _preload_total_mb, _preload_reserved_mb, _preload_cap_mb = get_preload_memory_limits_mb()
         self.preload_audio_enabled = bool(getattr(self.settings, "preload_audio_enabled", False))
@@ -1149,6 +1159,8 @@ class MainWindow(QMainWindow):
         )
         self.stage_display_visibility = self._normalize_stage_display_visibility(
             {
+                "current_time": bool(getattr(self.settings, "stage_display_show_current_time", True)),
+                "alert": bool(getattr(self.settings, "stage_display_show_alert", False)),
                 "total_time": bool(getattr(self.settings, "stage_display_show_total_time", True)),
                 "elapsed": bool(getattr(self.settings, "stage_display_show_elapsed", True)),
                 "remaining": bool(getattr(self.settings, "stage_display_show_remaining", True)),
@@ -1156,6 +1168,14 @@ class MainWindow(QMainWindow):
                 "song_name": bool(getattr(self.settings, "stage_display_show_song_name", True)),
                 "next_song": bool(getattr(self.settings, "stage_display_show_next_song", True)),
             }
+        )
+        self.stage_display_gadgets = normalize_stage_display_gadgets(
+            getattr(self.settings, "stage_display_gadgets", {}),
+            legacy_layout=self.stage_display_layout,
+            legacy_visibility=self.stage_display_visibility,
+        )
+        self.stage_display_layout, self.stage_display_visibility = gadgets_to_legacy_layout_visibility(
+            self.stage_display_gadgets
         )
         source = str(getattr(self.settings, "stage_display_text_source", "caption")).strip().lower()
         self.stage_display_text_source = source if source in {"caption", "filename", "note"} else "caption"
@@ -1425,7 +1445,7 @@ class MainWindow(QMainWindow):
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
         self._about_window: Optional[TextFileViewerWindow] = None
-        self._help_window: Optional[TextFileViewerWindow] = None
+        self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
         self._flash_slot_until = 0.0
@@ -1449,6 +1469,13 @@ class MainWindow(QMainWindow):
         self._save_notice_token = 0
         self._stage_display_window: Optional[StageDisplayWindow] = None
         self._hover_slot_index: Optional[int] = None
+        self._stage_alert_dialog: Optional[QDialog] = None
+        self._stage_alert_text_edit: Optional[QPlainTextEdit] = None
+        self._stage_alert_duration_spin: Optional[QSpinBox] = None
+        self._stage_alert_keep_checkbox: Optional[QCheckBox] = None
+        self._stage_alert_message: str = ""
+        self._stage_alert_until_monotonic: float = 0.0
+        self._stage_alert_sticky: bool = False
 
         self._build_ui()
         self._apply_language()
@@ -1532,6 +1559,8 @@ class MainWindow(QMainWindow):
         if startup_audio_warning:
             QMessageBox.warning(self, "Audio Device", startup_audio_warning)
         self._suspend_settings_save = False
+        if self.tips_open_on_startup:
+            QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
 
     def _build_ui(self) -> None:
         self._build_menu_bar()
@@ -1603,8 +1632,8 @@ class MainWindow(QMainWindow):
             localize_widget_tree(window, self.ui_language)
         if self._about_window is not None:
             localize_widget_tree(self._about_window, self.ui_language)
-        if self._help_window is not None:
-            localize_widget_tree(self._help_window, self.ui_language)
+        if self._tips_window is not None:
+            self._tips_window.set_language(self.ui_language)
         if self._stage_display_window is not None:
             self._stage_display_window.retranslate_ui()
 
@@ -2005,6 +2034,9 @@ class MainWindow(QMainWindow):
         stage_display_setting_action = QAction("Stage Display Setting", self)
         stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Display"))
         display_menu.addAction(stage_display_setting_action)
+        send_alert_action = QAction("Send Alert", self)
+        send_alert_action.triggered.connect(self._open_stage_alert_panel)
+        display_menu.addAction(send_alert_action)
 
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
@@ -2078,6 +2110,10 @@ class MainWindow(QMainWindow):
         help_action.triggered.connect(self._open_help_window)
         help_menu.addAction(help_action)
 
+        tips_action = QAction("Tips", self)
+        tips_action.triggered.connect(lambda _=False: self._open_tips_window(startup=False))
+        help_menu.addAction(tips_action)
+
         register_action = QAction("Register", self)
         register_action.triggered.connect(self._show_register_message)
         help_menu.addAction(register_action)
@@ -2092,6 +2128,20 @@ class MainWindow(QMainWindow):
 
     def _project_root_path(self) -> str:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _help_index_path(self) -> str:
+        if getattr(sys, "frozen", False):
+            base_dir = os.path.dirname(sys.executable)
+            bundled = os.path.join(base_dir, "docs", "build", "html", "index.html")
+            if os.path.exists(bundled):
+                return bundled
+            meipass_dir = getattr(sys, "_MEIPASS", "")
+            if meipass_dir:
+                candidate = os.path.join(meipass_dir, "docs", "build", "html", "index.html")
+                if os.path.exists(candidate):
+                    return candidate
+            return bundled
+        return os.path.join(self._project_root_path(), "docs", "build", "html", "index.html")
 
     def _default_backup_dir(self) -> str:
         return self.settings.last_save_dir or self.settings.last_open_dir or os.path.expanduser("~")
@@ -2118,7 +2168,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_stage_display_layout(values: List[str]) -> List[str]:
-        valid = ["total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        valid = ["current_time", "alert", "total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
         output: List[str] = []
         for raw in list(values or []):
             key = str(raw or "").strip().lower()
@@ -2131,7 +2181,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_stage_display_visibility(values: Dict[str, bool]) -> Dict[str, bool]:
-        valid = ["total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        valid = ["current_time", "alert", "total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
         output: Dict[str, bool] = {}
         for key in valid:
             output[key] = bool(values.get(key, True))
@@ -2713,23 +2763,86 @@ class MainWindow(QMainWindow):
         self._about_window.activateWindow()
 
     def _open_help_window(self) -> None:
-        if self._help_window is None:
-            self._help_window = TextFileViewerWindow(
-                title="Help",
-                body_label="README.md",
+        help_index = self._help_index_path()
+        if not os.path.exists(help_index):
+            QMessageBox.warning(
+                self,
+                "Help Not Found",
+                "Built help index not found.\n\n"
+                "Build docs first by running:\n"
+                "docs\\build.bat\n\n"
+                f"Expected path:\n{help_index}",
+            )
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(help_index)):
+            QMessageBox.warning(
+                self,
+                "Help Open Failed",
+                f"Could not open help index with the default browser.\n\nPath:\n{help_index}",
+            )
+
+    def _open_tips_window(self, startup: bool = False) -> None:
+        was_visible = self._tips_window is not None and self._tips_window.isVisible()
+        if self._tips_window is None:
+            self._tips_window = TipsWindow(
+                language=self.ui_language,
+                open_on_startup=self.tips_open_on_startup,
                 parent=self,
             )
-            self._help_window.destroyed.connect(lambda _=None: self._clear_help_window_ref())
-        self._help_window.set_text(self._load_project_text_file("README.md"))
-        self._help_window.show()
-        self._help_window.raise_()
-        self._help_window.activateWindow()
+            self._tips_window.openOnStartupChanged.connect(self._on_tips_open_on_startup_changed)
+            self._tips_window.destroyed.connect(lambda _=None: self._clear_tips_window_ref())
+        else:
+            self._tips_window.set_language(self.ui_language)
+            self._tips_window.set_open_on_startup(self.tips_open_on_startup)
+        if not was_visible:
+            self._tips_window.pick_random_tip()
+        self._tips_window.show()
+        if startup:
+            self._position_tips_window_for_startup()
+        self._tips_window.raise_()
+        self._tips_window.activateWindow()
+
+    def _on_tips_open_on_startup_changed(self, enabled: bool) -> None:
+        self.tips_open_on_startup = bool(enabled)
+        if not self._suspend_settings_save:
+            self._save_settings()
 
     def _clear_about_window_ref(self) -> None:
         self._about_window = None
 
-    def _clear_help_window_ref(self) -> None:
-        self._help_window = None
+    def _clear_tips_window_ref(self) -> None:
+        self._tips_window = None
+
+    def _position_tips_window_for_startup(self) -> None:
+        if self._tips_window is None:
+            return
+        tips = self._tips_window
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        main_rect = self.frameGeometry()
+        width = tips.width()
+        height = tips.height()
+        margin = 16
+
+        x = main_rect.right() + margin
+        y = main_rect.top() + margin
+        if (x + width) > (avail.x() + avail.width() - margin):
+            x = main_rect.left() - width - margin
+        if x < (avail.x() + margin):
+            x = avail.x() + avail.width() - width - margin
+
+        max_x = avail.x() + avail.width() - width - margin
+        max_y = avail.y() + avail.height() - height - margin
+        x = max(avail.x() + margin, min(x, max_x))
+        y = max(avail.y() + margin, min(y, max_y))
+
+        candidate = QRect(x, y, width, height)
+        if candidate.intersects(main_rect):
+            y2 = main_rect.bottom() + margin
+            y = max(avail.y() + margin, min(y2, max_y))
+        tips.move(x, y)
 
     def _sports_sounds_pro_folder(self) -> str:
         default_path = r"C:\SportsSoundsPro"
@@ -5828,14 +5941,104 @@ class MainWindow(QMainWindow):
 
     def _show_stage_display(self) -> None:
         if self._stage_display_window is None:
-            self._stage_display_window = StageDisplayWindow(self)
+            self._stage_display_window = GadgetStageDisplayWindow(self)
             self._stage_display_window.destroyed.connect(self._on_stage_display_destroyed)
         self._stage_display_window.retranslate_ui()
-        self._stage_display_window.configure_layout(self.stage_display_layout, self.stage_display_visibility)
+        self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
         self._refresh_stage_display()
         self._stage_display_window.show()
         self._stage_display_window.raise_()
         self._stage_display_window.activateWindow()
+
+    def _open_stage_alert_panel(self) -> None:
+        if self._stage_alert_dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Send Alert")
+            dialog.setModal(False)
+            dialog.resize(480, 320)
+            root = QVBoxLayout(dialog)
+            root.setContentsMargins(10, 10, 10, 10)
+            root.setSpacing(8)
+            root.addWidget(QLabel("Alert Message"))
+            self._stage_alert_text_edit = QPlainTextEdit(dialog)
+            self._stage_alert_text_edit.setPlaceholderText("Type alert text to show on Stage Display")
+            root.addWidget(self._stage_alert_text_edit, 1)
+            row = QHBoxLayout()
+            self._stage_alert_keep_checkbox = QCheckBox("Keep on screen until cleared", dialog)
+            self._stage_alert_keep_checkbox.setChecked(True)
+            self._stage_alert_duration_spin = QSpinBox(dialog)
+            self._stage_alert_duration_spin.setRange(1, 600)
+            self._stage_alert_duration_spin.setValue(10)
+            self._stage_alert_duration_spin.setEnabled(False)
+            self._stage_alert_keep_checkbox.toggled.connect(
+                lambda keep: self._stage_alert_duration_spin.setEnabled(not bool(keep))
+            )
+            row.addWidget(self._stage_alert_keep_checkbox)
+            row.addStretch(1)
+            row.addWidget(QLabel("Seconds"))
+            row.addWidget(self._stage_alert_duration_spin)
+            root.addLayout(row)
+            buttons = QHBoxLayout()
+            buttons.addStretch(1)
+            send_btn = QPushButton("Send", dialog)
+            clear_btn = QPushButton("Clear Alert", dialog)
+            close_btn = QPushButton("Close", dialog)
+            send_btn.clicked.connect(self._send_stage_alert_from_panel)
+            clear_btn.clicked.connect(self._clear_stage_alert)
+            close_btn.clicked.connect(dialog.close)
+            buttons.addWidget(send_btn)
+            buttons.addWidget(clear_btn)
+            buttons.addWidget(close_btn)
+            root.addLayout(buttons)
+            dialog.destroyed.connect(self._on_stage_alert_dialog_destroyed)
+            self._stage_alert_dialog = dialog
+        if self._stage_alert_text_edit is not None and not self._stage_alert_text_edit.toPlainText().strip():
+            self._stage_alert_text_edit.setPlainText(self._stage_alert_message)
+        self._stage_alert_dialog.show()
+        self._stage_alert_dialog.raise_()
+        self._stage_alert_dialog.activateWindow()
+
+    def _on_stage_alert_dialog_destroyed(self, _obj=None) -> None:
+        self._stage_alert_dialog = None
+        self._stage_alert_text_edit = None
+        self._stage_alert_duration_spin = None
+        self._stage_alert_keep_checkbox = None
+
+    def _send_stage_alert_from_panel(self) -> None:
+        if self._stage_alert_text_edit is None:
+            return
+        text = self._stage_alert_text_edit.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "Send Alert", "Please enter alert text.")
+            return
+        keep = bool(self._stage_alert_keep_checkbox.isChecked()) if self._stage_alert_keep_checkbox is not None else True
+        self._stage_alert_message = text
+        self._stage_alert_sticky = keep
+        if keep:
+            self._stage_alert_until_monotonic = 0.0
+        else:
+            seconds = int(self._stage_alert_duration_spin.value()) if self._stage_alert_duration_spin is not None else 10
+            self._stage_alert_until_monotonic = time.monotonic() + max(1, seconds)
+        self._refresh_stage_display()
+
+    def _clear_stage_alert(self) -> None:
+        self._stage_alert_message = ""
+        self._stage_alert_sticky = False
+        self._stage_alert_until_monotonic = 0.0
+        self._refresh_stage_display()
+
+    def _stage_alert_active(self) -> bool:
+        if not self._stage_alert_message:
+            return False
+        if self._stage_alert_sticky:
+            return True
+        if self._stage_alert_until_monotonic > 0.0 and time.monotonic() < self._stage_alert_until_monotonic:
+            return True
+        if self._stage_alert_until_monotonic > 0.0:
+            self._stage_alert_message = ""
+            self._stage_alert_until_monotonic = 0.0
+            self._stage_alert_sticky = False
+        return False
 
     def _on_stage_display_destroyed(self, _obj=None) -> None:
         self._stage_display_window = None
@@ -5871,6 +6074,7 @@ class MainWindow(QMainWindow):
             progress_text=self.progress_label.text().strip(),
             progress_style=self.progress_label.styleSheet(),
         )
+        self._stage_display_window.set_alert(self._stage_alert_message, self._stage_alert_active())
         self._stage_display_window.set_playback_status(self._stage_playback_status())
 
     def _stage_playback_status(self) -> str:
@@ -6547,6 +6751,7 @@ class MainWindow(QMainWindow):
             stage_display_layout=self.stage_display_layout,
             stage_display_visibility=self.stage_display_visibility,
             stage_display_text_source=self.stage_display_text_source,
+            stage_display_gadgets=self.stage_display_gadgets,
             ui_language=self.ui_language,
             initial_page=initial_page,
             parent=self,
@@ -6679,11 +6884,13 @@ class MainWindow(QMainWindow):
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(dialog.selected_midi_rotary_volume_step())))
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(dialog.selected_midi_rotary_jog_step_ms())))
-        self.stage_display_layout = self._normalize_stage_display_layout(dialog.selected_stage_display_layout())
-        self.stage_display_visibility = self._normalize_stage_display_visibility(dialog.selected_stage_display_visibility())
+        self.stage_display_gadgets = normalize_stage_display_gadgets(dialog.selected_stage_display_gadgets())
+        self.stage_display_layout, self.stage_display_visibility = gadgets_to_legacy_layout_visibility(
+            self.stage_display_gadgets
+        )
         self.stage_display_text_source = dialog.selected_stage_display_text_source()
         if self._stage_display_window is not None:
-            self._stage_display_window.configure_layout(self.stage_display_layout, self.stage_display_visibility)
+            self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
             self._refresh_stage_display()
         selected_ui_language = dialog.selected_ui_language()
         if selected_ui_language != self.ui_language:
@@ -8568,6 +8775,7 @@ class MainWindow(QMainWindow):
         self.settings.search_double_click_action = self.search_double_click_action
         self.settings.set_file_encoding = self.set_file_encoding
         self.settings.ui_language = self.ui_language
+        self.settings.tips_open_on_startup = bool(self.tips_open_on_startup)
         self.settings.audio_output_device = self.audio_output_device
         self.settings.preload_audio_enabled = bool(self.preload_audio_enabled)
         self.settings.preload_current_page_audio = bool(self.preload_current_page_audio)
@@ -8766,12 +8974,15 @@ class MainWindow(QMainWindow):
         self.settings.midi_rotary_volume_step = int(self.midi_rotary_volume_step)
         self.settings.midi_rotary_jog_step_ms = int(self.midi_rotary_jog_step_ms)
         self.settings.stage_display_layout = list(self.stage_display_layout)
+        self.settings.stage_display_show_current_time = bool(self.stage_display_visibility.get("current_time", True))
+        self.settings.stage_display_show_alert = bool(self.stage_display_visibility.get("alert", False))
         self.settings.stage_display_show_total_time = bool(self.stage_display_visibility.get("total_time", True))
         self.settings.stage_display_show_elapsed = bool(self.stage_display_visibility.get("elapsed", True))
         self.settings.stage_display_show_remaining = bool(self.stage_display_visibility.get("remaining", True))
         self.settings.stage_display_show_progress_bar = bool(self.stage_display_visibility.get("progress_bar", True))
         self.settings.stage_display_show_song_name = bool(self.stage_display_visibility.get("song_name", True))
         self.settings.stage_display_show_next_song = bool(self.stage_display_visibility.get("next_song", True))
+        self.settings.stage_display_gadgets = normalize_stage_display_gadgets(self.stage_display_gadgets)
         self.settings.stage_display_text_source = self.stage_display_text_source
         save_settings(self.settings)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,13 +40,152 @@ def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
 
 def default_stage_display_layout() -> list[str]:
     return [
+        "current_time",
         "total_time",
         "elapsed",
         "remaining",
         "progress_bar",
         "song_name",
         "next_song",
+        "alert",
     ]
+
+
+def default_stage_display_gadgets() -> dict[str, dict[str, int | bool | str]]:
+    return {
+        "current_time": {
+            "x": 1500,
+            "y": 200,
+            "w": 7000,
+            "h": 700,
+            "z": 0,
+            "visible": True,
+            "orientation": "horizontal",
+            "hide_text": True,
+            "hide_border": True,
+        },
+        "alert": {
+            "x": 0,
+            "y": 0,
+            "w": 10000,
+            "h": 10000,
+            "z": 99,
+            "visible": False,
+            "orientation": "vertical",
+            "hide_text": True,
+            "hide_border": False,
+        },
+        "total_time": {
+            "x": 400,
+            "y": 1100,
+            "w": 3000,
+            "h": 1300,
+            "z": 1,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "elapsed": {
+            "x": 3500,
+            "y": 1100,
+            "w": 3000,
+            "h": 1300,
+            "z": 2,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "remaining": {
+            "x": 6600,
+            "y": 1100,
+            "w": 3000,
+            "h": 1300,
+            "z": 3,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "progress_bar": {
+            "x": 600,
+            "y": 2800,
+            "w": 8800,
+            "h": 1100,
+            "z": 4,
+            "visible": True,
+            "orientation": "horizontal",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "song_name": {
+            "x": 500,
+            "y": 4300,
+            "w": 9000,
+            "h": 2100,
+            "z": 5,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "next_song": {
+            "x": 500,
+            "y": 6800,
+            "w": 9000,
+            "h": 2100,
+            "z": 6,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+    }
+
+
+def _normalize_stage_display_gadgets(
+    values: dict[str, dict[str, object]] | None,
+    fallback_layout: list[str] | None = None,
+    fallback_visibility: dict[str, bool] | None = None,
+) -> dict[str, dict[str, int | bool | str]]:
+    defaults = default_stage_display_gadgets()
+    raw = dict(values or {})
+    keys = list(defaults.keys())
+    for key in keys:
+        source = dict(raw.get(key, {})) if isinstance(raw.get(key), dict) else {}
+        base = defaults[key]
+        defaults[key] = {
+            "x": _clamp_int(_get_int(source, "x", int(base["x"])), 0, 9800),
+            "y": _clamp_int(_get_int(source, "y", int(base["y"])), 0, 9800),
+            "w": _clamp_int(_get_int(source, "w", int(base["w"])), 600, 10000),
+            "h": _clamp_int(_get_int(source, "h", int(base["h"])), 500, 10000),
+            "z": _clamp_int(_get_int(source, "z", int(base["z"])), 0, 100),
+            "visible": bool(source.get("visible", base["visible"])),
+            "orientation": (
+                str(source.get("orientation", base["orientation"])).strip().lower()
+                if str(source.get("orientation", base["orientation"])).strip().lower() in {"horizontal", "vertical"}
+                else str(base["orientation"])
+            ),
+            "hide_text": bool(source.get("hide_text", base["hide_text"])),
+            "hide_border": bool(source.get("hide_border", base["hide_border"])),
+        }
+    if fallback_layout:
+        ordered: list[str] = []
+        for token in fallback_layout:
+            key = str(token or "").strip().lower()
+            if key in keys and key not in ordered:
+                ordered.append(key)
+        for key in keys:
+            if key not in ordered:
+                ordered.append(key)
+        for index, key in enumerate(ordered):
+            defaults[key]["z"] = index
+    if fallback_visibility:
+        for key in keys:
+            if key in fallback_visibility:
+                defaults[key]["visible"] = bool(fallback_visibility.get(key, True))
+    return defaults
 
 
 @dataclass
@@ -84,6 +224,7 @@ class AppSettings:
     search_double_click_action: str = "find_highlight"
     set_file_encoding: str = "utf8"
     ui_language: str = "en"
+    tips_open_on_startup: bool = True
     audio_output_device: str = ""
     preload_audio_enabled: bool = False
     preload_current_page_audio: bool = True
@@ -283,12 +424,15 @@ class AppSettings:
     midi_rotary_volume_step: int = 2
     midi_rotary_jog_step_ms: int = 250
     stage_display_layout: list[str] = field(default_factory=default_stage_display_layout)
+    stage_display_show_current_time: bool = True
+    stage_display_show_alert: bool = False
     stage_display_show_total_time: bool = True
     stage_display_show_elapsed: bool = True
     stage_display_show_remaining: bool = True
     stage_display_show_progress_bar: bool = True
     stage_display_show_song_name: bool = True
     stage_display_show_next_song: bool = True
+    stage_display_gadgets: dict[str, dict[str, int | bool | str]] = field(default_factory=default_stage_display_gadgets)
     stage_display_text_source: str = "caption"
 
 
@@ -352,6 +496,7 @@ def save_settings(settings: AppSettings) -> None:
         "search_double_click_action": settings.search_double_click_action,
         "set_file_encoding": settings.set_file_encoding,
         "ui_language": settings.ui_language,
+        "tips_open_on_startup": "1" if settings.tips_open_on_startup else "0",
         "audio_output_device": settings.audio_output_device,
         "preload_audio_enabled": "1" if settings.preload_audio_enabled else "0",
         "preload_current_page_audio": "1" if settings.preload_current_page_audio else "0",
@@ -551,12 +696,18 @@ def save_settings(settings: AppSettings) -> None:
         "midi_rotary_volume_step": str(settings.midi_rotary_volume_step),
         "midi_rotary_jog_step_ms": str(settings.midi_rotary_jog_step_ms),
         "stage_display_layout": "\t".join(default_stage_display_layout() if not settings.stage_display_layout else settings.stage_display_layout),
+        "stage_display_show_current_time": "1" if settings.stage_display_show_current_time else "0",
+        "stage_display_show_alert": "1" if settings.stage_display_show_alert else "0",
         "stage_display_show_total_time": "1" if settings.stage_display_show_total_time else "0",
         "stage_display_show_elapsed": "1" if settings.stage_display_show_elapsed else "0",
         "stage_display_show_remaining": "1" if settings.stage_display_show_remaining else "0",
         "stage_display_show_progress_bar": "1" if settings.stage_display_show_progress_bar else "0",
         "stage_display_show_song_name": "1" if settings.stage_display_show_song_name else "0",
         "stage_display_show_next_song": "1" if settings.stage_display_show_next_song else "0",
+        "stage_display_gadgets": json.dumps(
+            _normalize_stage_display_gadgets(settings.stage_display_gadgets),
+            separators=(",", ":"),
+        ),
         "stage_display_text_source": settings.stage_display_text_source,
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
@@ -598,6 +749,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     ui_language = str(section.get("ui_language", "en")).strip().lower()
     if ui_language not in {"en", "zh", "zh_cn", "zh-cn"}:
         ui_language = "en"
+    tips_open_on_startup = _get_bool(section, "tips_open_on_startup", True)
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
@@ -698,6 +850,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     midi_rotary_volume_step = _clamp_int(_get_int(section, "midi_rotary_volume_step", 2), 1, 20)
     midi_rotary_jog_step_ms = _clamp_int(_get_int(section, "midi_rotary_jog_step_ms", 250), 10, 5000)
     valid_stage_layout_ids = {
+        "current_time",
+        "alert",
         "total_time",
         "elapsed",
         "remaining",
@@ -719,6 +873,32 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     stage_display_text_source = str(section.get("stage_display_text_source", "caption")).strip().lower()
     if stage_display_text_source not in {"caption", "filename", "note"}:
         stage_display_text_source = "caption"
+    raw_stage_display_gadgets = str(section.get("stage_display_gadgets", "")).strip()
+    parsed_stage_display_gadgets: dict[str, dict[str, object]] = {}
+    if raw_stage_display_gadgets:
+        try:
+            decoded = json.loads(raw_stage_display_gadgets)
+            if isinstance(decoded, dict):
+                parsed_stage_display_gadgets = {
+                    str(k): dict(v) for k, v in decoded.items() if isinstance(v, dict)
+                }
+        except Exception:
+            parsed_stage_display_gadgets = {}
+    stage_display_visibility = {
+        "current_time": _get_bool(section, "stage_display_show_current_time", True),
+        "alert": _get_bool(section, "stage_display_show_alert", False),
+        "total_time": _get_bool(section, "stage_display_show_total_time", True),
+        "elapsed": _get_bool(section, "stage_display_show_elapsed", True),
+        "remaining": _get_bool(section, "stage_display_show_remaining", True),
+        "progress_bar": _get_bool(section, "stage_display_show_progress_bar", True),
+        "song_name": _get_bool(section, "stage_display_show_song_name", True),
+        "next_song": _get_bool(section, "stage_display_show_next_song", True),
+    }
+    stage_display_gadgets = _normalize_stage_display_gadgets(
+        parsed_stage_display_gadgets,
+        fallback_layout=stage_display_layout,
+        fallback_visibility=stage_display_visibility,
+    )
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -754,6 +934,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         search_double_click_action=search_double_click_action,
         set_file_encoding=set_file_encoding,
         ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
+        tips_open_on_startup=tips_open_on_startup,
         audio_output_device=str(section.get("audio_output_device", "")),
         preload_audio_enabled=_get_bool(section, "preload_audio_enabled", False),
         preload_current_page_audio=_get_bool(section, "preload_current_page_audio", True),
@@ -953,12 +1134,15 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_rotary_volume_step=midi_rotary_volume_step,
         midi_rotary_jog_step_ms=midi_rotary_jog_step_ms,
         stage_display_layout=stage_display_layout,
-        stage_display_show_total_time=_get_bool(section, "stage_display_show_total_time", True),
-        stage_display_show_elapsed=_get_bool(section, "stage_display_show_elapsed", True),
-        stage_display_show_remaining=_get_bool(section, "stage_display_show_remaining", True),
-        stage_display_show_progress_bar=_get_bool(section, "stage_display_show_progress_bar", True),
-        stage_display_show_song_name=_get_bool(section, "stage_display_show_song_name", True),
-        stage_display_show_next_song=_get_bool(section, "stage_display_show_next_song", True),
+        stage_display_show_current_time=stage_display_visibility["current_time"],
+        stage_display_show_alert=stage_display_visibility["alert"],
+        stage_display_show_total_time=stage_display_visibility["total_time"],
+        stage_display_show_elapsed=stage_display_visibility["elapsed"],
+        stage_display_show_remaining=stage_display_visibility["remaining"],
+        stage_display_show_progress_bar=stage_display_visibility["progress_bar"],
+        stage_display_show_song_name=stage_display_visibility["song_name"],
+        stage_display_show_next_song=stage_display_visibility["next_song"],
+        stage_display_gadgets=stage_display_gadgets,
         stage_display_text_source=stage_display_text_source,
     )
 

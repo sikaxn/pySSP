@@ -16,6 +16,7 @@ import sounddevice as sd
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, normalize_config
+from pyssp.vst_host import VSTChainHost
 
 _DECODER_READY = False
 _NEXT_STREAM_ID = 0
@@ -490,6 +491,10 @@ class ExternalMediaPlayer(QObject):
         self._ended = False
         self._dsp_config = DSPConfig()
         self._dsp_processor = RealTimeDSPProcessor(self._sample_rate, self._channels)
+        self._vst_enabled = False
+        self._vst_chain: List[str] = []
+        self._vst_plugin_state: Dict[str, Dict[str, object]] = {}
+        self._vst_host = VSTChainHost(self._sample_rate, self._channels, block_size=1024)
 
         self._lock = threading.RLock()
         self._stream = self._create_stream()
@@ -529,6 +534,24 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             self._dsp_config = cfg
             self._dsp_processor.set_config(cfg)
+
+    def setVSTConfig(
+        self,
+        enabled: bool,
+        chain: List[str],
+        chain_enabled: List[bool],
+        plugin_state: Dict[str, Dict[str, object]],
+    ) -> None:
+        with self._lock:
+            self._vst_enabled = bool(enabled)
+            self._vst_chain = [str(v).strip() for v in list(chain) if str(v).strip()]
+            self._vst_plugin_state = VSTChainHost.normalize_plugin_state_map(plugin_state)
+            self._vst_host.configure(
+                self._vst_enabled,
+                self._vst_chain,
+                [bool(v) for v in list(chain_enabled)],
+                self._vst_plugin_state,
+            )
 
     def play(self) -> None:
         with self._lock:
@@ -691,6 +714,10 @@ class ExternalMediaPlayer(QObject):
                 block = self._apply_pitch_ratio_block(block, effective_pitch_ratio)
 
             block = self._dsp_processor.process_block(block)
+            try:
+                block = self._vst_host.process_block(block)
+            except Exception:
+                pass
             block *= (self._volume / 100.0)
 
             n = min(len(block), frames)

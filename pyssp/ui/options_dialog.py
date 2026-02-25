@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
+import threading
+
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -14,6 +16,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -65,6 +68,7 @@ from pyssp.ui.stage_display import (
     gadgets_to_legacy_layout_visibility,
     normalize_stage_display_gadgets,
 )
+from pyssp.vst import effective_vst_directories, is_vst_supported, plugin_display_name, scan_vst_plugins
 
 
 class HotkeyCaptureEdit(QLineEdit):
@@ -141,7 +145,9 @@ class MidiCaptureEdit(QLineEdit):
         self._binding = token
         self.setText(midi_binding_to_display(token) if token else "")
 
+
 class OptionsDialog(QDialog):
+    vstScanFinished = pyqtSignal(object)
     _HOTKEY_ROWS = [
         ("new_set", "New Set"),
         ("open_set", "Open Set"),
@@ -189,6 +195,12 @@ class OptionsDialog(QDialog):
         "main_progress_display_mode": "progress_bar",
         "main_progress_show_text": True,
         "ui_language": "en",
+        "vst_enabled": False,
+        "vst_directories": effective_vst_directories([]),
+        "vst_known_plugins": [],
+        "vst_enabled_plugins": [],
+        "vst_chain": [],
+        "vst_plugin_state": {},
         "preload_audio_enabled": False,
         "preload_current_page_audio": True,
         "preload_audio_memory_limit_mb": 512,
@@ -361,6 +373,12 @@ class OptionsDialog(QDialog):
         main_progress_display_mode: str,
         main_progress_show_text: bool,
         audio_output_device: str,
+        vst_enabled: bool,
+        vst_directories: List[str],
+        vst_known_plugins: List[str],
+        vst_enabled_plugins: List[str],
+        vst_chain: List[str],
+        vst_plugin_state: Dict[str, Dict[str, object]],
         available_audio_devices: List[str],
         available_midi_devices: List[tuple[str, str]],
         preload_audio_enabled: bool,
@@ -522,6 +540,19 @@ class OptionsDialog(QDialog):
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
         self._available_midi_devices = list(available_midi_devices)
+        self._vst_scan_in_progress = False
+        self.vstScanFinished.connect(self._on_vst_scan_finished)
+        self._vst_supported = is_vst_supported()
+        self._vst_enabled = bool(vst_enabled) and self._vst_supported
+        self._vst_directories = effective_vst_directories(vst_directories)
+        self._vst_known_plugins = [str(v).strip() for v in vst_known_plugins if str(v).strip()]
+        self._vst_enabled_plugins = {str(v).strip() for v in vst_enabled_plugins if str(v).strip()}
+        self._vst_chain = [str(v).strip() for v in vst_chain if str(v).strip()]
+        self._vst_plugin_state: Dict[str, Dict[str, object]] = {
+            str(k).strip(): dict(v)
+            for k, v in dict(vst_plugin_state or {}).items()
+            if str(k).strip() and isinstance(v, dict)
+        }
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -609,6 +640,11 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
+            "DSP / Plugin",
+            self._mono_icon("rack"),
+            self._build_vst_plugin_page(),
+        )
+        self._add_page(
             "Audio Device / Timecode",
             self._mono_icon("speaker"),
             self._build_audio_device_page(
@@ -676,6 +712,7 @@ class OptionsDialog(QDialog):
     def _add_page(self, title: str, icon, page: QWidget) -> None:
         self.stack.addWidget(page)
         item = QListWidgetItem(icon, title)
+        item.setData(Qt.UserRole, title.strip().lower())
         self.page_list.addItem(item)
 
     def select_page(self, title: Optional[str]) -> bool:
@@ -753,6 +790,14 @@ class OptionsDialog(QDialog):
             for x in [5, 8, 11, 14, 17]:
                 p.drawLine(x, 4, x, 6)
                 p.drawLine(x, 16, x, 18)
+        elif kind == "rack":
+            p.drawRoundedRect(QRectF(3, 4, 16, 14), 1.5, 1.5)
+            p.drawLine(6, 8, 16, 8)
+            p.drawLine(6, 12, 16, 12)
+            p.drawLine(6, 16, 16, 16)
+            p.drawEllipse(QRectF(4, 7, 1.5, 1.5))
+            p.drawEllipse(QRectF(4, 11, 1.5, 1.5))
+            p.drawEllipse(QRectF(4, 15, 1.5, 1.5))
         elif kind == "earth":
             p.drawEllipse(QRectF(3, 3, 16, 16))
             p.drawArc(QRectF(5, 3, 12, 16), 90 * 16, 180 * 16)
@@ -1121,6 +1166,153 @@ class OptionsDialog(QDialog):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
+
+    def _build_vst_plugin_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.vst_enabled_checkbox = QCheckBox("Enable VST Plugin")
+        self.vst_enabled_checkbox.setChecked(bool(self._vst_enabled))
+        layout.addWidget(self.vst_enabled_checkbox)
+
+        if not self._vst_supported:
+            not_supported = QLabel("VST plugin support is available on Windows only.")
+            not_supported.setWordWrap(True)
+            layout.addWidget(not_supported)
+
+        dir_group = QGroupBox("VST Directories")
+        dir_layout = QVBoxLayout(dir_group)
+        self.vst_dir_list = QListWidget()
+        self.vst_dir_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        dir_layout.addWidget(self.vst_dir_list, 1)
+        dir_btn_row = QHBoxLayout()
+        self.vst_dir_add_btn = QPushButton("Add Directory")
+        self.vst_dir_add_btn.clicked.connect(self._add_vst_directory)
+        self.vst_dir_remove_btn = QPushButton("Remove Selected")
+        self.vst_dir_remove_btn.clicked.connect(self._remove_vst_directory)
+        dir_btn_row.addWidget(self.vst_dir_add_btn)
+        dir_btn_row.addWidget(self.vst_dir_remove_btn)
+        dir_btn_row.addStretch(1)
+        dir_layout.addLayout(dir_btn_row)
+        layout.addWidget(dir_group, 1)
+
+        plugins_group = QGroupBox("Plugins")
+        plugins_layout = QVBoxLayout(plugins_group)
+        plugin_btn_row = QHBoxLayout()
+        self.vst_scan_btn = QPushButton("Scan")
+        self.vst_scan_btn.clicked.connect(self._scan_vst_plugins_clicked)
+        plugin_btn_row.addWidget(self.vst_scan_btn)
+        plugin_btn_row.addStretch(1)
+        plugins_layout.addLayout(plugin_btn_row)
+
+        self.vst_plugin_list = QListWidget()
+        self.vst_plugin_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        plugins_layout.addWidget(self.vst_plugin_list, 1)
+        self.vst_scan_status = QLabel("")
+        self.vst_scan_status.setWordWrap(True)
+        plugins_layout.addWidget(self.vst_scan_status)
+        layout.addWidget(plugins_group, 2)
+
+        self._refresh_vst_directory_list()
+        self._refresh_vst_plugin_list()
+        self._sync_vst_controls_enabled()
+        layout.addStretch(1)
+        return page
+
+    def _sync_vst_controls_enabled(self) -> None:
+        enabled = bool(self._vst_supported)
+        self.vst_enabled_checkbox.setEnabled(enabled)
+        self.vst_dir_add_btn.setEnabled(enabled)
+        self.vst_dir_remove_btn.setEnabled(enabled)
+        self.vst_scan_btn.setEnabled(enabled and (not self._vst_scan_in_progress))
+        self.vst_plugin_list.setEnabled(enabled)
+
+    def _refresh_vst_directory_list(self) -> None:
+        self.vst_dir_list.clear()
+        for directory in self._vst_directories:
+            self.vst_dir_list.addItem(directory)
+
+    def _refresh_vst_plugin_list(self) -> None:
+        try:
+            self.vst_plugin_list.itemChanged.disconnect(self._on_vst_plugin_toggled)
+        except Exception:
+            pass
+        self.vst_plugin_list.clear()
+        enabled_set = {str(v).strip() for v in self._vst_enabled_plugins}
+        for plugin_path in self._vst_known_plugins:
+            item = QListWidgetItem(plugin_display_name(plugin_path) or plugin_path)
+            item.setData(Qt.UserRole, plugin_path)
+            item.setToolTip(plugin_path)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if plugin_path in enabled_set else Qt.Unchecked)
+            self.vst_plugin_list.addItem(item)
+        self.vst_plugin_list.itemChanged.connect(self._on_vst_plugin_toggled)
+        self.vst_scan_status.setText(f"Detected plugins: {len(self._vst_known_plugins)}")
+
+    def _add_vst_directory(self) -> None:
+        selected = QFileDialog.getExistingDirectory(self, "Select VST Directory")
+        if not selected:
+            return
+        normalized = str(selected).strip()
+        if not normalized:
+            return
+        current = effective_vst_directories(self._vst_directories + [normalized])
+        self._vst_directories = current
+        self._refresh_vst_directory_list()
+
+    def _remove_vst_directory(self) -> None:
+        row = self.vst_dir_list.currentRow()
+        if row < 0:
+            return
+        if row < len(self._vst_directories):
+            self._vst_directories.pop(row)
+            self._refresh_vst_directory_list()
+
+    def _scan_vst_plugins_clicked(self) -> None:
+        if not self._vst_supported:
+            self.vst_scan_status.setText("VST scanning is available on Windows only.")
+            return
+        if self._vst_scan_in_progress:
+            return
+        self._vst_scan_in_progress = True
+        self.vst_scan_status.setText("Scanning plugins... pySSP remains responsive.")
+        self._sync_vst_controls_enabled()
+
+        directories = list(self._vst_directories)
+
+        def _worker() -> None:
+            try:
+                scanned = scan_vst_plugins(directories)
+            except Exception:
+                scanned = []
+            self.vstScanFinished.emit(scanned)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_vst_scan_finished(self, scanned: object) -> None:
+        self._vst_scan_in_progress = False
+        refs = [str(v).strip() for v in list(scanned or []) if str(v).strip()]
+        self._vst_known_plugins = refs
+        known = set(self._vst_known_plugins)
+        self._vst_enabled_plugins = {p for p in self._vst_enabled_plugins if p in known}
+        self._vst_chain = [p for p in self._vst_chain if p in known]
+        self._vst_plugin_state = {
+            p: dict(v) for p, v in self._vst_plugin_state.items() if p in known and isinstance(v, dict)
+        }
+        self._refresh_vst_plugin_list()
+        self._sync_vst_controls_enabled()
+
+    def _on_vst_plugin_toggled(self, _item: QListWidgetItem) -> None:
+        enabled: set[str] = set()
+        for index in range(self.vst_plugin_list.count()):
+            item = self.vst_plugin_list.item(index)
+            if item is None:
+                continue
+            plugin_path = str(item.data(Qt.UserRole) or "").strip()
+            if not plugin_path:
+                continue
+            if item.checkState() == Qt.Checked:
+                enabled.add(plugin_path)
+        self._vst_enabled_plugins = enabled
 
     def _build_midi_sound_button_hotkey_tab(self) -> QWidget:
         page = QWidget()
@@ -2074,6 +2266,63 @@ class OptionsDialog(QDialog):
     def selected_audio_output_device(self) -> str:
         return str(self.audio_device_combo.currentData() or "")
 
+    def selected_vst_enabled(self) -> bool:
+        return bool(self._vst_supported and self.vst_enabled_checkbox.isChecked())
+
+    def selected_vst_directories(self) -> List[str]:
+        dirs: List[str] = []
+        for index in range(self.vst_dir_list.count()):
+            item = self.vst_dir_list.item(index)
+            if item is None:
+                continue
+            token = str(item.text() or "").strip()
+            if token:
+                dirs.append(token)
+        return effective_vst_directories(dirs)
+
+    def selected_vst_known_plugins(self) -> List[str]:
+        plugins: List[str] = []
+        for index in range(self.vst_plugin_list.count()):
+            item = self.vst_plugin_list.item(index)
+            if item is None:
+                continue
+            token = str(item.data(Qt.UserRole) or "").strip()
+            if token:
+                plugins.append(token)
+        return plugins
+
+    def selected_vst_enabled_plugins(self) -> List[str]:
+        enabled: List[str] = []
+        for index in range(self.vst_plugin_list.count()):
+            item = self.vst_plugin_list.item(index)
+            if item is None:
+                continue
+            token = str(item.data(Qt.UserRole) or "").strip()
+            if token and item.checkState() == Qt.Checked:
+                enabled.append(token)
+        return enabled
+
+    def selected_vst_chain(self) -> List[str]:
+        known = set(self.selected_vst_known_plugins())
+        chain: List[str] = []
+        for plugin_path in self._vst_chain:
+            token = str(plugin_path or "").strip()
+            if token and token in known:
+                chain.append(token)
+        return chain
+
+    def selected_vst_plugin_state(self) -> Dict[str, Dict[str, object]]:
+        known = set(self.selected_vst_known_plugins())
+        output: Dict[str, Dict[str, object]] = {}
+        for plugin_path, state in self._vst_plugin_state.items():
+            token = str(plugin_path or "").strip()
+            if not token or token not in known:
+                continue
+            if not isinstance(state, dict):
+                continue
+            output[token] = dict(state)
+        return output
+
     def selected_timecode_audio_output_device(self) -> str:
         return str(self.timecode_output_combo.currentData() or "none")
 
@@ -2714,40 +2963,45 @@ class OptionsDialog(QDialog):
 
     def _restore_defaults_current_page(self) -> None:
         idx = self.page_list.currentRow()
-        if idx == 0:
+        item = self.page_list.item(idx) if idx >= 0 else None
+        page_name = str(item.data(Qt.UserRole) if item is not None else "").strip().lower()
+        if page_name == "general":
             self._restore_general_defaults()
             return
-        if idx == 1:
+        if page_name == "language":
             self._restore_language_defaults()
             return
-        if idx == 2:
+        if page_name == "hotkey":
             self._restore_hotkey_defaults()
             return
-        if idx == 3:
+        if page_name == "midi control":
             self._restore_midi_defaults()
             return
-        if idx == 4:
+        if page_name == "colour":
             self._restore_color_defaults()
             return
-        if idx == 5:
+        if page_name == "display":
             self._restore_display_defaults()
             return
-        if idx == 6:
+        if page_name == "fade":
             self._restore_delay_defaults()
             return
-        if idx == 7:
+        if page_name == "playback":
             self._restore_playback_defaults()
             return
-        if idx == 8:
+        if page_name == "dsp / plugin":
+            self._restore_vst_defaults()
+            return
+        if page_name == "audio device / timecode":
             self._restore_audio_device_defaults()
             return
-        if idx == 9:
+        if page_name == "audio preload":
             self._restore_preload_defaults()
             return
-        if idx == 10:
+        if page_name == "talk":
             self._restore_talk_defaults()
             return
-        if idx == 11:
+        if page_name == "web remote":
             self._restore_web_remote_defaults()
             return
 
@@ -3129,6 +3383,22 @@ class OptionsDialog(QDialog):
         else:
             self.jog_outside_stop_immediately_radio.setChecked(True)
         self._sync_jog_outside_group_enabled()
+
+    def _restore_vst_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.vst_enabled_checkbox.setChecked(bool(d.get("vst_enabled", False)) and self._vst_supported)
+        self._vst_directories = effective_vst_directories(list(d.get("vst_directories", [])))
+        self._vst_known_plugins = [str(v).strip() for v in list(d.get("vst_known_plugins", [])) if str(v).strip()]
+        self._vst_enabled_plugins = {str(v).strip() for v in list(d.get("vst_enabled_plugins", [])) if str(v).strip()}
+        self._vst_chain = [str(v).strip() for v in list(d.get("vst_chain", [])) if str(v).strip()]
+        self._vst_plugin_state = {
+            str(k).strip(): dict(v)
+            for k, v in dict(d.get("vst_plugin_state", {})).items()
+            if str(k).strip() and isinstance(v, dict)
+        }
+        self._refresh_vst_directory_list()
+        self._refresh_vst_plugin_list()
+        self._sync_vst_controls_enabled()
 
     def _restore_audio_device_defaults(self) -> None:
         d = self._DEFAULTS

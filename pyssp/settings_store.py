@@ -38,6 +38,29 @@ def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
     return output[:48]
 
 
+def _normalize_string_list(values: list[str], max_items: int = 512) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in values[:max_items]:
+        token = str(raw or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        output.append(token)
+    return output
+
+
+def default_vst_directories() -> list[str]:
+    candidates = [
+        r"C:\Program Files\VstPlugins",
+        r"C:\Program Files\Common Files\VST2",
+        r"C:\Program Files\Common Files\VST3",
+        r"C:\Program Files\Steinberg\VstPlugins",
+        r"C:\Program Files\Native Instruments\VSTPlugins 64 bit",
+    ]
+    return _normalize_string_list(candidates, max_items=32)
+
+
 def default_stage_display_layout() -> list[str]:
     return [
         "current_time",
@@ -226,6 +249,15 @@ class AppSettings:
     ui_language: str = "en"
     tips_open_on_startup: bool = True
     audio_output_device: str = ""
+    vst_enabled: bool = False
+    vst_processing_enabled: bool = True
+    vst_rack_last_path: str = ""
+    vst_directories: list[str] = field(default_factory=default_vst_directories)
+    vst_known_plugins: list[str] = field(default_factory=list)
+    vst_enabled_plugins: list[str] = field(default_factory=list)
+    vst_chain: list[str] = field(default_factory=list)
+    vst_chain_enabled: list[bool] = field(default_factory=list)
+    vst_plugin_state: dict[str, dict[str, object]] = field(default_factory=dict)
     preload_audio_enabled: bool = False
     preload_current_page_audio: bool = True
     preload_audio_memory_limit_mb: int = 512
@@ -500,6 +532,15 @@ def save_settings(settings: AppSettings) -> None:
         "ui_language": settings.ui_language,
         "tips_open_on_startup": "1" if settings.tips_open_on_startup else "0",
         "audio_output_device": settings.audio_output_device,
+        "vst_enabled": "1" if settings.vst_enabled else "0",
+        "vst_processing_enabled": "1" if settings.vst_processing_enabled else "0",
+        "vst_rack_last_path": settings.vst_rack_last_path,
+        "vst_directories": json.dumps(_normalize_string_list(settings.vst_directories, max_items=64), separators=(",", ":")),
+        "vst_known_plugins": json.dumps(_normalize_string_list(settings.vst_known_plugins), separators=(",", ":")),
+        "vst_enabled_plugins": json.dumps(_normalize_string_list(settings.vst_enabled_plugins), separators=(",", ":")),
+        "vst_chain": json.dumps(_normalize_string_list(settings.vst_chain), separators=(",", ":")),
+        "vst_chain_enabled": json.dumps([bool(v) for v in settings.vst_chain_enabled], separators=(",", ":")),
+        "vst_plugin_state": json.dumps(settings.vst_plugin_state if isinstance(settings.vst_plugin_state, dict) else {}, separators=(",", ":")),
         "preload_audio_enabled": "1" if settings.preload_audio_enabled else "0",
         "preload_current_page_audio": "1" if settings.preload_current_page_audio else "0",
         "preload_audio_memory_limit_mb": str(settings.preload_audio_memory_limit_mb),
@@ -754,6 +795,57 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if ui_language not in {"en", "zh", "zh_cn", "zh-cn"}:
         ui_language = "en"
     tips_open_on_startup = _get_bool(section, "tips_open_on_startup", True)
+    vst_enabled = _get_bool(section, "vst_enabled", False)
+    vst_processing_enabled = _get_bool(section, "vst_processing_enabled", True)
+    vst_rack_last_path = str(section.get("vst_rack_last_path", "")).strip()
+    vst_directories_raw = str(section.get("vst_directories", "")).strip()
+    vst_known_plugins_raw = str(section.get("vst_known_plugins", "")).strip()
+    vst_enabled_plugins_raw = str(section.get("vst_enabled_plugins", "")).strip()
+    vst_chain_raw = str(section.get("vst_chain", "")).strip()
+    vst_chain_enabled_raw = str(section.get("vst_chain_enabled", "")).strip()
+    vst_plugin_state_raw = str(section.get("vst_plugin_state", "")).strip()
+
+    def _decode_string_list(raw: str, fallback: list[str] | None = None, max_items: int = 512) -> list[str]:
+        if not raw:
+            return _normalize_string_list(list(fallback or []), max_items=max_items)
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                return _normalize_string_list([str(v) for v in loaded], max_items=max_items)
+        except Exception:
+            pass
+        return _normalize_string_list(str(raw).split("\t"), max_items=max_items)
+
+    vst_directories = _decode_string_list(vst_directories_raw, default_vst_directories(), max_items=64)
+    if not vst_directories:
+        vst_directories = default_vst_directories()
+    vst_known_plugins = _decode_string_list(vst_known_plugins_raw)
+    vst_enabled_plugins = _decode_string_list(vst_enabled_plugins_raw)
+    vst_chain = _decode_string_list(vst_chain_raw)
+    vst_chain_enabled: list[bool] = []
+    if vst_chain_enabled_raw:
+        try:
+            decoded = json.loads(vst_chain_enabled_raw)
+            if isinstance(decoded, list):
+                vst_chain_enabled = [bool(v) for v in decoded]
+        except Exception:
+            vst_chain_enabled = []
+    if len(vst_chain_enabled) < len(vst_chain):
+        vst_chain_enabled.extend([True for _ in range(len(vst_chain) - len(vst_chain_enabled))])
+    elif len(vst_chain_enabled) > len(vst_chain):
+        vst_chain_enabled = vst_chain_enabled[: len(vst_chain)]
+    vst_plugin_state: dict[str, dict[str, object]] = {}
+    if vst_plugin_state_raw:
+        try:
+            decoded = json.loads(vst_plugin_state_raw)
+            if isinstance(decoded, dict):
+                for key, value in decoded.items():
+                    plugin_path = str(key or "").strip()
+                    if not plugin_path or not isinstance(value, dict):
+                        continue
+                    vst_plugin_state[plugin_path] = dict(value)
+        except Exception:
+            vst_plugin_state = {}
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
@@ -944,6 +1036,15 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
         tips_open_on_startup=tips_open_on_startup,
         audio_output_device=str(section.get("audio_output_device", "")),
+        vst_enabled=vst_enabled,
+        vst_processing_enabled=vst_processing_enabled,
+        vst_rack_last_path=vst_rack_last_path,
+        vst_directories=vst_directories,
+        vst_known_plugins=vst_known_plugins,
+        vst_enabled_plugins=vst_enabled_plugins,
+        vst_chain=vst_chain,
+        vst_chain_enabled=vst_chain_enabled,
+        vst_plugin_state=vst_plugin_state,
         preload_audio_enabled=_get_bool(section, "preload_audio_enabled", False),
         preload_current_page_audio=_get_bool(section, "preload_current_page_audio", True),
         preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,

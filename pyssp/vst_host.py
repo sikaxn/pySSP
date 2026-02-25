@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -123,6 +124,7 @@ def show_plugin_editor(plugin_ref: str, state: Dict[str, object] | None = None) 
 
 class VSTChainHost:
     def __init__(self, sample_rate: int, channels: int, block_size: int = 1024) -> None:
+        self._lock = threading.RLock()
         self._sample_rate = max(1, int(sample_rate))
         self._channels = max(1, int(channels))
         self._block_size = max(1, int(block_size))
@@ -138,43 +140,52 @@ class VSTChainHost:
         chain_enabled: List[bool],
         plugin_state: Dict[str, Dict[str, object]],
     ) -> None:
-        self._enabled = bool(enabled)
-        if not is_host_available():
-            self._chain = []
-            self._chain_enabled = []
-            self._plugin_cache.clear()
-            return
-        state_map = dict(plugin_state or {})
-        normalized_chain = [str(v).strip() for v in chain if str(v).strip()]
-        normalized_enabled = [bool(v) for v in list(chain_enabled)]
-        if len(normalized_enabled) < len(normalized_chain):
-            normalized_enabled.extend([True for _ in range(len(normalized_chain) - len(normalized_enabled))])
-        elif len(normalized_enabled) > len(normalized_chain):
-            normalized_enabled = normalized_enabled[: len(normalized_chain)]
+        with self._lock:
+            self._enabled = bool(enabled)
+            if not is_host_available():
+                self._chain = []
+                self._chain_enabled = []
+                self._plugin_cache.clear()
+                return
+            state_map = dict(plugin_state or {})
+            normalized_chain = [str(v).strip() for v in chain if str(v).strip()]
+            normalized_enabled = [bool(v) for v in list(chain_enabled)]
+            if len(normalized_enabled) < len(normalized_chain):
+                normalized_enabled.extend([True for _ in range(len(normalized_chain) - len(normalized_enabled))])
+            elif len(normalized_enabled) > len(normalized_chain):
+                normalized_enabled = normalized_enabled[: len(normalized_chain)]
 
-        next_cache: Dict[str, object] = {}
-        for path in normalized_chain:
-            plugin = self._plugin_cache.get(path, None)
-            if plugin is None:
-                plugin = load_plugin_instance(path, state=state_map.get(path, {}))
-            else:
-                for key, value in _coerce_state_values(state_map.get(path, {})).items():
-                    try:
-                        setattr(plugin, key, value)
-                    except Exception:
-                        continue
-            if bool(getattr(plugin, "is_instrument", False)):
-                continue
-            next_cache[path] = plugin
-        self._plugin_cache = next_cache
-        self._chain = [p for p in normalized_chain if p in self._plugin_cache]
-        self._chain_enabled = []
-        for idx, path in enumerate(normalized_chain):
-            if path in self._plugin_cache:
-                self._chain_enabled.append(normalized_enabled[idx] if idx < len(normalized_enabled) else True)
+            next_cache: Dict[str, object] = {}
+            for path in normalized_chain:
+                plugin = self._plugin_cache.get(path, None)
+                if plugin is None:
+                    plugin = load_plugin_instance(path, state=state_map.get(path, {}))
+                else:
+                    for key, value in _coerce_state_values(state_map.get(path, {})).items():
+                        try:
+                            setattr(plugin, key, value)
+                        except Exception:
+                            continue
+                if bool(getattr(plugin, "is_instrument", False)):
+                    continue
+                next_cache[path] = plugin
+            self._plugin_cache = next_cache
+            self._chain = [p for p in normalized_chain if p in self._plugin_cache]
+            self._chain_enabled = []
+            for idx, path in enumerate(normalized_chain):
+                if path in self._plugin_cache:
+                    self._chain_enabled.append(normalized_enabled[idx] if idx < len(normalized_enabled) else True)
 
     def process_block(self, block: np.ndarray) -> np.ndarray:
-        if not self._enabled or not self._chain:
+        with self._lock:
+            enabled = bool(self._enabled)
+            chain = list(self._chain)
+            chain_enabled = list(self._chain_enabled)
+            plugin_cache = dict(self._plugin_cache)
+            sample_rate = float(self._sample_rate)
+            channels = int(self._channels)
+            block_size = int(self._block_size)
+        if not enabled or not chain:
             return block
         if block.ndim != 2:
             return block
@@ -182,24 +193,44 @@ class VSTChainHost:
         if frame_count <= 0:
             return block
         audio = np.asarray(block.T, dtype=np.float32, order="C")
-        for index, plugin_path in enumerate(self._chain):
-            if not (self._chain_enabled[index] if index < len(self._chain_enabled) else True):
+        expected_frames = frame_count
+        for index, plugin_path in enumerate(chain):
+            if not (chain_enabled[index] if index < len(chain_enabled) else True):
                 continue
-            plugin = self._plugin_cache.get(plugin_path, None)
+            plugin = plugin_cache.get(plugin_path, None)
             if plugin is None:
                 continue
-            audio = plugin.process(audio, float(self._sample_rate), buffer_size=self._block_size, reset=False)
-            audio = np.asarray(audio, dtype=np.float32)
-            if audio.ndim == 1:
-                audio = audio.reshape(1, -1)
-        if audio.shape[0] < self._channels:
-            pad = np.zeros((self._channels - audio.shape[0], audio.shape[1]), dtype=np.float32)
+            prev_audio = np.asarray(audio, dtype=np.float32, copy=True)
+            try:
+                processed = plugin.process(audio, sample_rate, buffer_size=block_size, reset=False)
+            except Exception:
+                audio = prev_audio
+                continue
+            processed_audio = np.asarray(processed, dtype=np.float32)
+            if processed_audio.ndim == 1:
+                processed_audio = processed_audio.reshape(1, -1)
+            elif processed_audio.ndim != 2:
+                audio = prev_audio
+                continue
+            # Some plugins may return samples-first. Normalize back to
+            # channels-first to avoid accidental silence/misaligned output.
+            if processed_audio.shape[0] == expected_frames and processed_audio.shape[1] != expected_frames:
+                processed_audio = processed_audio.T
+            if processed_audio.ndim != 2 or processed_audio.shape[1] <= 0:
+                audio = prev_audio
+                continue
+            if not np.all(np.isfinite(processed_audio)):
+                audio = prev_audio
+                continue
+            audio = processed_audio
+        if audio.shape[0] < channels:
+            pad = np.zeros((channels - audio.shape[0], audio.shape[1]), dtype=np.float32)
             audio = np.vstack((audio, pad))
-        if audio.shape[0] > self._channels:
-            audio = audio[: self._channels, :]
+        if audio.shape[0] > channels:
+            audio = audio[: channels, :]
         out = np.asarray(audio.T, dtype=np.float32)
         if out.shape[0] < frame_count:
-            pad = np.zeros((frame_count - out.shape[0], self._channels), dtype=np.float32)
+            pad = np.zeros((frame_count - out.shape[0], channels), dtype=np.float32)
             out = np.vstack((out, pad))
         elif out.shape[0] > frame_count:
             out = out[:frame_count, :]
@@ -207,6 +238,20 @@ class VSTChainHost:
             out = np.nan_to_num(out, copy=False)
         out = np.clip(out, -4.0, 4.0)
         return out
+
+    def open_plugin_editor(self, plugin_path: str) -> Dict[str, object]:
+        path = str(plugin_path or "").strip()
+        if not path:
+            raise RuntimeError("No plugin selected.")
+        with self._lock:
+            plugin = self._plugin_cache.get(path, None)
+        if plugin is None:
+            raise RuntimeError("Plugin is not loaded in the current chain.")
+        show = getattr(plugin, "show_editor", None)
+        if not callable(show):
+            raise RuntimeError("Plugin does not expose a native editor UI.")
+        show()
+        return extract_plugin_state(plugin)
 
     @staticmethod
     def normalize_plugin_state_map(state_map: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:

@@ -37,18 +37,21 @@ def discover_plugin_names(file_path: str) -> List[str]:
     except Exception:
         return []
     probe_name = "__pyssp_probe_nonexistent_plugin__"
-    try:
-        pb.load_plugin(normalized, plugin_name=probe_name, initialization_timeout=2.5)
-    except Exception as exc:
-        names = _parse_plugin_names_from_error(str(exc))
-        if names:
-            return names
-    try:
-        plugin = pb.load_plugin(normalized, initialization_timeout=2.5)
-        name = str(getattr(plugin, "name", "") or "").strip()
-        return [name] if name else []
-    except Exception:
-        return []
+    for timeout in (2.5, 8.0):
+        try:
+            pb.load_plugin(normalized, plugin_name=probe_name, initialization_timeout=timeout)
+        except Exception as exc:
+            names = _parse_plugin_names_from_error(str(exc))
+            if names:
+                return names
+        try:
+            plugin = pb.load_plugin(normalized, initialization_timeout=timeout)
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if name:
+                return [name]
+        except Exception:
+            continue
+    return []
 
 
 def main() -> int:

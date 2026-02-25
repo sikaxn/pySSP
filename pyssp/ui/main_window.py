@@ -8299,6 +8299,7 @@ class MainWindow(QMainWindow):
             self._vst_window.chainEnabledChanged.connect(self._on_vst_chain_enabled_changed)
             self._vst_window.processingEnabledChanged.connect(self._on_vst_processing_enabled_changed)
             self._vst_window.pluginStateChanged.connect(self._on_vst_plugin_state_changed)
+            self._vst_window.pluginPanelRequested.connect(self._on_vst_plugin_panel_requested)
             self._vst_window.newRequested.connect(self._vst_rack_new)
             self._vst_window.saveRequested.connect(self._vst_rack_save)
             self._vst_window.saveAsRequested.connect(self._vst_rack_save_as)
@@ -8351,6 +8352,37 @@ class MainWindow(QMainWindow):
         self._apply_vst_to_players()
         self._autosave_vst_rack()
         self._save_settings()
+
+    def _on_vst_plugin_panel_requested(self, plugin_path: str) -> None:
+        path = str(plugin_path or "").strip()
+        if not path:
+            QMessageBox.information(self, "Plugin Panel", "Select a plugin from the chain.")
+            return
+        candidates = [self.player, self.player_b] + list(self._multi_players)
+        editor_player = None
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                if int(candidate.state()) == int(candidate.PlayingState):
+                    editor_player = candidate
+                    break
+            except Exception:
+                continue
+        if editor_player is None:
+            editor_player = self.player
+        if editor_player is None:
+            QMessageBox.warning(self, "Plugin Panel", "Audio engine is unavailable.")
+            return
+        try:
+            updated_state = editor_player.openVSTPluginEditor(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Plugin Panel", f"Could not open plugin panel:\n{exc}")
+            return
+        cleaned = {str(k): v for k, v in dict(updated_state or {}).items() if str(k).strip()}
+        self._on_vst_plugin_state_changed(path, cleaned)
+        if self._vst_window is not None:
+            self._vst_window.set_plugin_state_map(self.vst_plugin_state)
 
     def _on_dsp_config_changed(self, config: object) -> None:
         if isinstance(config, DSPConfig):

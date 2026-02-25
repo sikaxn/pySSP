@@ -46,3 +46,20 @@ def test_unchecked_chain_item_reports_bypass_state(qapp):
     window.set_chain_enabled([False])
 
     assert window.chain_enabled() == [False]
+
+
+def test_programmatic_chain_sync_does_not_emit_change_signals(qapp):
+    _ = qapp
+    window = VSTWindow()
+    emitted_chain = []
+    emitted_enabled = []
+    window.chainChanged.connect(lambda v: emitted_chain.append(list(v)))
+    window.chainEnabledChanged.connect(lambda v: emitted_enabled.append(list(v)))
+
+    plugin_path = "/Library/Audio/Plug-Ins/VST3/Test.vst3"
+    window.set_chain([plugin_path])
+    window.set_chain_enabled([False])
+
+    assert emitted_chain == []
+    assert emitted_enabled == []
+    assert window.chain_enabled() == [False]

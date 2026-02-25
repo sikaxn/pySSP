@@ -131,7 +131,6 @@ class VSTWindow(QDialog):
         for plugin_path in [str(p).strip() for p in chain if str(p).strip()]:
             self.chain_list.addItem(self._make_chain_item(plugin_path, enabled=True))
         self.chain_list.itemChanged.connect(self._on_chain_item_changed)
-        self._emit_chain_changed()
 
     def set_plugin_state_map(self, plugin_state: Dict[str, Dict[str, object]]) -> None:
         self._plugin_state = {
@@ -153,7 +152,6 @@ class VSTWindow(QDialog):
             checked = flags[index] if index < len(flags) else True
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
         self.chain_list.itemChanged.connect(self._on_chain_item_changed)
-        self.chainEnabledChanged.emit(self.chain_enabled())
 
     def chain_enabled(self) -> List[bool]:
         values: List[bool] = []

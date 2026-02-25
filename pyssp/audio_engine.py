@@ -559,6 +559,45 @@ class ExternalMediaPlayer(QObject):
             raise RuntimeError("No plugin selected.")
         return self._vst_host.open_plugin_editor(path)
 
+    def shutdown(self) -> None:
+        stream_ref = None
+        with self._lock:
+            self._set_state_locked(self.StoppedState)
+            self._source_frames = None
+            self._source_pos = 0.0
+            self._source_pos_anchor = 0.0
+            self._position_ms = 0
+            self._ended = False
+            self._vst_host.shutdown()
+            stream_ref = self._stream
+            self._stream = _NullOutputStream()
+        try:
+            self._poll_timer.stop()
+        except Exception:
+            pass
+
+        def _close_stream() -> None:
+            if stream_ref is None:
+                return
+            try:
+                abort_fn = getattr(stream_ref, "abort", None)
+                if callable(abort_fn):
+                    abort_fn()
+            except Exception:
+                pass
+            try:
+                stream_ref.stop()
+            except Exception:
+                pass
+            try:
+                stream_ref.close()
+            except Exception:
+                pass
+
+        closer = threading.Thread(target=_close_stream, daemon=True)
+        closer.start()
+        closer.join(timeout=0.75)
+
     def play(self) -> None:
         with self._lock:
             if self._source_frames is None:
@@ -821,8 +860,6 @@ class ExternalMediaPlayer(QObject):
 
     def __del__(self) -> None:
         try:
-            if hasattr(self, "_stream") and self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
+            self.shutdown()
         except Exception:
             pass

@@ -99,8 +99,6 @@ if ! run_pipenv run pyinstaller \
   --windowed \
   --name pySSP \
   "${ICON_ARG[@]}" \
-  --collect-all pedalboard \
-  --hidden-import pedalboard_native \
   --add-data "pyssp/assets:pyssp/assets" \
   --add-data "docs/build/html:docs/build/html" \
   --add-data "version.json:." \

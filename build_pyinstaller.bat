@@ -85,8 +85,6 @@ pipenv run pyinstaller ^
   --windowed ^
   --name %APP_EXE_NAME% ^
   --icon "pyssp\assets\app_icon.ico" ^
-  --collect-all pedalboard ^
-  --hidden-import pedalboard_native ^
   --add-data "pyssp\assets;pyssp\assets" ^
   --add-data "docs\build\html;docs\build\html" ^
   --add-data "version.json;." ^

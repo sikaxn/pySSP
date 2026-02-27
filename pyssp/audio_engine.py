@@ -553,12 +553,6 @@ class ExternalMediaPlayer(QObject):
                 self._vst_plugin_state,
             )
 
-    def openVSTPluginEditor(self, plugin_path: str) -> Dict[str, object]:
-        path = str(plugin_path or "").strip()
-        if not path:
-            raise RuntimeError("No plugin selected.")
-        return self._vst_host.open_plugin_editor(path)
-
     def play(self) -> None:
         with self._lock:
             if self._source_frames is None:

@@ -5,7 +5,6 @@ Python (PSFL)
 Qt5 / PyQt5 (GPL3)
 pygame-ce (LGPL)
 sounddevice (MIT)
-pedalboard
 numpy (BSD)
 Requests (Apache 2.0)
 websockets (BSD)

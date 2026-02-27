@@ -3,7 +3,6 @@ from __future__ import annotations
 import configparser
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,25 +51,13 @@ def _normalize_string_list(values: list[str], max_items: int = 512) -> list[str]
 
 
 def default_vst_directories() -> list[str]:
-    if os.name == "nt":
-        candidates = [
-            r"C:\Program Files\VstPlugins",
-            r"C:\Program Files\Common Files\VST2",
-            r"C:\Program Files\Common Files\VST3",
-            r"C:\Program Files\Steinberg\VstPlugins",
-            r"C:\Program Files\Native Instruments\VSTPlugins 64 bit",
-        ]
-    elif sys.platform == "darwin":
-        candidates = [
-            "/Library/Audio/Plug-Ins/VST3",
-            "/Library/Audio/Plug-Ins/VST",
-            "/Library/Audio/Plug-Ins/Components",
-            os.path.expanduser("~/Library/Audio/Plug-Ins/VST3"),
-            os.path.expanduser("~/Library/Audio/Plug-Ins/VST"),
-            os.path.expanduser("~/Library/Audio/Plug-Ins/Components"),
-        ]
-    else:
-        candidates = []
+    candidates = [
+        r"C:\Program Files\VstPlugins",
+        r"C:\Program Files\Common Files\VST2",
+        r"C:\Program Files\Common Files\VST3",
+        r"C:\Program Files\Steinberg\VstPlugins",
+        r"C:\Program Files\Native Instruments\VSTPlugins 64 bit",
+    ]
     return _normalize_string_list(candidates, max_items=32)
 
 

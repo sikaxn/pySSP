@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
+import sys
+import tempfile
 from typing import Dict, List
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QProcess, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -25,7 +29,6 @@ class VSTWindow(QDialog):
     chainEnabledChanged = pyqtSignal(list)
     processingEnabledChanged = pyqtSignal(bool)
     pluginStateChanged = pyqtSignal(str, dict)
-    pluginPanelRequested = pyqtSignal(str)
     newRequested = pyqtSignal()
     saveRequested = pyqtSignal()
     saveAsRequested = pyqtSignal()
@@ -38,6 +41,7 @@ class VSTWindow(QDialog):
         self.setWindowModality(Qt.NonModal)
         self._available_plugins: List[str] = []
         self._plugin_state: Dict[str, Dict[str, object]] = {}
+        self._editor_sessions: Dict[int, Dict[str, object]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -129,7 +133,12 @@ class VSTWindow(QDialog):
             pass
         self.chain_list.clear()
         for plugin_path in [str(p).strip() for p in chain if str(p).strip()]:
-            self.chain_list.addItem(self._make_chain_item(plugin_path, enabled=True))
+            item = QListWidgetItem(plugin_display_name(plugin_path))
+            item.setToolTip(plugin_path)
+            item.setData(Qt.UserRole, plugin_path)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.chain_list.addItem(item)
         self.chain_list.itemChanged.connect(self._on_chain_item_changed)
         self._emit_chain_changed()
 
@@ -190,18 +199,12 @@ class VSTWindow(QDialog):
         plugin_path = str(current.data(Qt.UserRole) or "").strip()
         if not plugin_path:
             return
-        item = self._make_chain_item(plugin_path, enabled=True)
-        self.chain_list.addItem(item)
-        self.chain_list.setCurrentItem(item)
-        self._emit_chain_changed()
-
-    def _make_chain_item(self, plugin_path: str, enabled: bool = True) -> QListWidgetItem:
         item = QListWidgetItem(plugin_display_name(plugin_path))
         item.setToolTip(plugin_path)
         item.setData(Qt.UserRole, plugin_path)
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked if bool(enabled) else Qt.Unchecked)
-        return item
+        self.chain_list.addItem(item)
+        self.chain_list.setCurrentItem(item)
+        self._emit_chain_changed()
 
     def _remove_selected_chain_item(self) -> None:
         row = self.chain_list.currentRow()
@@ -256,4 +259,95 @@ class VSTWindow(QDialog):
         if not plugin_path:
             QMessageBox.information(self, "Plugin Panel", "Select a plugin from the chain or enabled plugins list.")
             return
-        self.pluginPanelRequested.emit(plugin_path)
+        fd_state, state_path = tempfile.mkstemp(prefix="pyssp_vst_state_", suffix=".json")
+        os.close(fd_state)
+        fd_result, result_path = tempfile.mkstemp(prefix="pyssp_vst_result_", suffix=".json")
+        os.close(fd_result)
+        try:
+            with open(state_path, "w", encoding="utf-8") as fh:
+                json.dump(dict(self._plugin_state.get(plugin_path, {})), fh, ensure_ascii=False, separators=(",", ":"))
+        except Exception as exc:
+            QMessageBox.warning(self, "Plugin Panel", f"Could not write plugin state:\n{exc}")
+            self._cleanup_editor_temp_files(state_path, result_path)
+            return
+        process = QProcess(self)
+        process.finished.connect(self._on_editor_process_finished)
+        args = [
+            "-m",
+            "pyssp.vst_editor_host",
+            "--plugin",
+            plugin_path,
+            "--state-file",
+            state_path,
+            "--result-file",
+            result_path,
+        ]
+        process.start(sys.executable, args)
+        if not process.waitForStarted(3000):
+            QMessageBox.warning(self, "Plugin Panel", "Failed to open plugin editor process.")
+            self._cleanup_editor_temp_files(state_path, result_path)
+            process.deleteLater()
+            return
+        self._editor_sessions[id(process)] = {
+            "process": process,
+            "plugin_path": plugin_path,
+            "state_path": state_path,
+            "result_path": result_path,
+        }
+
+    def _cleanup_editor_temp_files(self, state_path: str, result_path: str) -> None:
+        for path in [state_path, result_path]:
+            token = str(path or "").strip()
+            if not token:
+                continue
+            try:
+                os.remove(token)
+            except Exception:
+                pass
+
+    def _on_editor_process_finished(self, _exit_code: int, _exit_status) -> None:
+        process = self.sender()
+        if not isinstance(process, QProcess):
+            return
+        session = self._editor_sessions.pop(id(process), {})
+        plugin_path = str(session.get("plugin_path", "") or "")
+        state_path = str(session.get("state_path", "") or "")
+        result_path = str(session.get("result_path", "") or "")
+        process.deleteLater()
+        try:
+            with open(result_path, "r", encoding="utf-8") as fh:
+                result = json.load(fh)
+        except Exception:
+            result = {}
+        if isinstance(result, dict):
+            error = str(result.get("error", "") or "").strip()
+            state = result.get("state", {})
+            if error:
+                QMessageBox.warning(self, "Plugin Panel", f"Plugin editor closed with error:\n{error}")
+            elif isinstance(state, dict) and plugin_path:
+                cleaned = {str(k): v for k, v in state.items() if str(k).strip()}
+                self._plugin_state[plugin_path] = cleaned
+                self.pluginStateChanged.emit(plugin_path, cleaned)
+        self._cleanup_editor_temp_files(state_path, result_path)
+
+    def closeEvent(self, event) -> None:
+        sessions = list(self._editor_sessions.values())
+        self._editor_sessions.clear()
+        for session in sessions:
+            process = session.get("process", None)
+            if not isinstance(process, QProcess):
+                continue
+            try:
+                process.terminate()
+                process.waitForFinished(1200)
+            except Exception:
+                pass
+            if process.state() != QProcess.NotRunning:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            state_path = str(session.get("state_path", "") or "")
+            result_path = str(session.get("result_path", "") or "")
+            self._cleanup_editor_temp_files(state_path, result_path)
+        super().closeEvent(event)

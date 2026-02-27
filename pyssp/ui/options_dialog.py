@@ -1170,16 +1170,16 @@ class OptionsDialog(QDialog):
     def _build_vst_plugin_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.vst_enabled_checkbox = QCheckBox("Enable Plugin Host (VST/AU)")
+        self.vst_enabled_checkbox = QCheckBox("Enable VST Plugin")
         self.vst_enabled_checkbox.setChecked(bool(self._vst_enabled))
         layout.addWidget(self.vst_enabled_checkbox)
 
         if not self._vst_supported:
-            not_supported = QLabel("Plugin support is currently available on Windows and macOS.")
+            not_supported = QLabel("VST plugin support is available on Windows only.")
             not_supported.setWordWrap(True)
             layout.addWidget(not_supported)
 
-        dir_group = QGroupBox("Plugin Directories (VST/AU)")
+        dir_group = QGroupBox("VST Directories")
         dir_layout = QVBoxLayout(dir_group)
         self.vst_dir_list = QListWidget()
         self.vst_dir_list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -1249,7 +1249,7 @@ class OptionsDialog(QDialog):
         self.vst_scan_status.setText(f"Detected plugins: {len(self._vst_known_plugins)}")
 
     def _add_vst_directory(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "Select Plugin Directory")
+        selected = QFileDialog.getExistingDirectory(self, "Select VST Directory")
         if not selected:
             return
         normalized = str(selected).strip()
@@ -1269,7 +1269,7 @@ class OptionsDialog(QDialog):
 
     def _scan_vst_plugins_clicked(self) -> None:
         if not self._vst_supported:
-            self.vst_scan_status.setText("Plugin scanning is unavailable on this platform.")
+            self.vst_scan_status.setText("VST scanning is available on Windows only.")
             return
         if self._vst_scan_in_progress:
             return

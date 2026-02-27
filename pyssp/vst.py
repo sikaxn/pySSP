@@ -14,24 +14,10 @@ from pyssp.settings_store import default_vst_directories
 
 
 def is_vst_supported() -> bool:
-    return sys.platform.startswith("win") or sys.platform == "darwin"
+    return sys.platform.startswith("win")
 
 
 PLUGIN_REF_SEPARATOR = "\t"
-
-
-def _plugin_extensions() -> tuple[str, ...]:
-    if os.name == "nt":
-        return (".dll", ".vst3")
-    return (".vst3", ".vst", ".component")
-
-
-def _is_plugin_candidate_path(path: Path, plugin_extensions: tuple[str, ...]) -> bool:
-    if str(path.suffix or "").lower() not in plugin_extensions:
-        return False
-    if not path.exists():
-        return False
-    return path.is_file() or path.is_dir()
 
 
 def normalize_vst_directories(values: Iterable[str]) -> List[str]:
@@ -118,7 +104,7 @@ def discover_plugins_in_file(file_path: str) -> List[str]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=45.0,
+            timeout=15.0,
             creationflags=creationflags,
         )
         payload_text = ""
@@ -149,33 +135,13 @@ def _discover_single_file(file_path: str) -> List[str]:
 def scan_vst_plugins(directories: Iterable[str]) -> List[str]:
     if not is_vst_supported():
         return []
-    plugin_extensions = _plugin_extensions()
-    patterns = tuple(f"*{ext}" for ext in plugin_extensions)
     candidates: List[str] = []
-    existing_scan_roots: List[Path] = []
-    seen_scan_roots: set[str] = set()
-    # Always include configured roots plus platform defaults so users don't miss
-    # newly installed plugins in standard locations.
-    combined_roots = normalize_vst_directories(
-        list(effective_vst_directories(directories)) + list(default_vst_directories())
-    )
-    for root in combined_roots:
+    for root in effective_vst_directories(directories):
         base = Path(root)
-        if not base.exists():
-            continue
-        fold = os.path.normcase(str(base))
-        if fold in seen_scan_roots:
-            continue
-        seen_scan_roots.add(fold)
-        existing_scan_roots.append(base)
-    for base in existing_scan_roots:
-        if _is_plugin_candidate_path(base, plugin_extensions):
-            candidates.append(os.path.normpath(str(base)))
-            continue
-        if not base.is_dir():
+        if not base.exists() or not base.is_dir():
             continue
         try:
-            for pattern in patterns:
+            for pattern in ("*.dll", "*.vst3"):
                 for plugin_path in base.rglob(pattern):
                     try:
                         normalized = os.path.normpath(str(plugin_path))

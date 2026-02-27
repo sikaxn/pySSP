@@ -8117,25 +8117,10 @@ class MainWindow(QMainWindow):
         return str(settings_dir / "vst_rack.json")
 
     def _vst_rack_payload(self) -> Dict[str, object]:
-        plugins: List[Dict[str, object]] = []
-        for idx, plugin_path in enumerate(self.vst_chain):
-            token = str(plugin_path or "").strip()
-            if not token:
-                continue
-            enabled = self.vst_chain_enabled[idx] if idx < len(self.vst_chain_enabled) else True
-            state = self.vst_plugin_state.get(token, {})
-            plugins.append(
-                {
-                    "path": token,
-                    "enabled": bool(enabled),
-                    "state": dict(state) if isinstance(state, dict) else {},
-                }
-            )
         return {
             "version": 1,
             "vst_enabled": bool(self.vst_enabled),
             "processing_enabled": bool(self.vst_processing_enabled),
-            "plugins": plugins,
             "chain": list(self.vst_chain),
             "chain_enabled": [bool(v) for v in self.vst_chain_enabled],
             "plugin_state": dict(self.vst_plugin_state),
@@ -8169,35 +8154,18 @@ class MainWindow(QMainWindow):
         return None
 
     def _load_vst_rack_payload(self, payload: Dict[str, object]) -> None:
-        chain: List[str] = []
-        chain_enabled: List[bool] = []
-        state_map: Dict[str, Dict[str, object]] = {}
-        plugins_raw = payload.get("plugins", [])
-        if isinstance(plugins_raw, list):
-            for entry in plugins_raw:
-                if not isinstance(entry, dict):
-                    continue
-                token = str(entry.get("path", "") or "").strip()
-                if not token:
-                    continue
-                chain.append(token)
-                chain_enabled.append(bool(entry.get("enabled", True)))
-                state = entry.get("state", {})
-                if isinstance(state, dict):
-                    state_map[token] = dict(state)
-        if not chain:
-            chain = [str(v).strip() for v in list(payload.get("chain", [])) if str(v).strip()]
-            chain_enabled = [bool(v) for v in list(payload.get("chain_enabled", []))]
-            if len(chain_enabled) < len(chain):
-                chain_enabled.extend([True for _ in range(len(chain) - len(chain_enabled))])
-            elif len(chain_enabled) > len(chain):
-                chain_enabled = chain_enabled[: len(chain)]
-            state_raw = payload.get("plugin_state", {})
-            state_map = {
-                str(k).strip(): dict(v)
-                for k, v in dict(state_raw if isinstance(state_raw, dict) else {}).items()
-                if str(k).strip() and isinstance(v, dict)
-            }
+        chain = [str(v).strip() for v in list(payload.get("chain", [])) if str(v).strip()]
+        chain_enabled = [bool(v) for v in list(payload.get("chain_enabled", []))]
+        if len(chain_enabled) < len(chain):
+            chain_enabled.extend([True for _ in range(len(chain) - len(chain_enabled))])
+        elif len(chain_enabled) > len(chain):
+            chain_enabled = chain_enabled[: len(chain)]
+        state_raw = payload.get("plugin_state", {})
+        state_map = {
+            str(k).strip(): dict(v)
+            for k, v in dict(state_raw if isinstance(state_raw, dict) else {}).items()
+            if str(k).strip() and isinstance(v, dict)
+        }
         self.vst_enabled = bool(payload.get("vst_enabled", self.vst_enabled)) and self._vst_supported
         self.vst_processing_enabled = bool(payload.get("processing_enabled", self.vst_processing_enabled))
         self.vst_chain = chain
@@ -8306,15 +8274,7 @@ class MainWindow(QMainWindow):
         btn.setText("Plugin" if self.vst_enabled else "DSP")
 
     def _open_dsp_or_plugin_window(self) -> None:
-        if self._vst_supported:
-            if not self.vst_enabled:
-                # Main toolbar "DSP/Plugin" button should promote to plugin mode
-                # and persist that mode for next launch.
-                self.vst_enabled = True
-                self._sync_dsp_plugin_button()
-                self._apply_vst_to_players()
-                self._autosave_vst_rack()
-                self._save_settings()
+        if self.vst_enabled and self._vst_supported:
             self._open_vst_window()
             return
         self._open_dsp_window()
@@ -10293,7 +10253,6 @@ class MainWindow(QMainWindow):
                 if self._dirty:
                     event.ignore()
                     return
-        all_players = [self.player, self.player_b, *list(self._multi_players)]
         self._hard_stop_all()
         try:
             self._ltc_sender.shutdown()
@@ -10321,11 +10280,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._stop_web_remote_service()
-        for player in all_players:
-            try:
-                player.shutdown()
-            except Exception:
-                continue
         if not self._skip_save_on_close:
             self._save_settings()
         super().closeEvent(event)

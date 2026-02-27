@@ -253,13 +253,6 @@ class VSTChainHost:
         show()
         return extract_plugin_state(plugin)
 
-    def shutdown(self) -> None:
-        with self._lock:
-            self._enabled = False
-            self._chain = []
-            self._chain_enabled = []
-            self._plugin_cache.clear()
-
     @staticmethod
     def normalize_plugin_state_map(state_map: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:
         result: Dict[str, Dict[str, object]] = {}

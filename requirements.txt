@@ -3,7 +3,6 @@ pygame-ce>=2.5
 numpy>=1.26
 sounddevice>=0.4.7
 Flask>=3.0
-pedalboard>=0.9.22
 pytest>=8.0
 sphinx>=9.1
 myst-parser>=5.0

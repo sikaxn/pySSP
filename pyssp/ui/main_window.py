@@ -94,7 +94,6 @@ from pyssp.timecode import (
     nominal_fps,
 )
 from pyssp.ui.dsp_window import DSPWindow
-from pyssp.ui.vst_window import VSTWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
@@ -107,8 +106,6 @@ from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 from pyssp.version import get_app_title_base, get_display_version
-from pyssp.vst import effective_vst_directories, is_vst_supported
-from pyssp.vst_host import VSTChainHost
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -1001,15 +998,6 @@ class NoAudioPlayer(QObject):
     def setDSPConfig(self, dsp_config: DSPConfig) -> None:
         _ = dsp_config
 
-    def setVSTConfig(
-        self,
-        enabled: bool,
-        chain: List[str],
-        chain_enabled: List[bool],
-        plugin_state: Dict[str, Dict[str, object]],
-    ) -> None:
-        _ = (enabled, chain, chain_enabled, plugin_state)
-
     def play(self) -> None:
         self._state = self.PlayingState
         self.stateChanged.emit(self._state)
@@ -1272,35 +1260,6 @@ class MainWindow(QMainWindow):
             self.set_file_encoding = "utf8"
         self.tips_open_on_startup = bool(getattr(self.settings, "tips_open_on_startup", True))
         self.audio_output_device = self.settings.audio_output_device
-        self._vst_supported = is_vst_supported()
-        self.vst_enabled = bool(getattr(self.settings, "vst_enabled", False)) and self._vst_supported
-        self.vst_processing_enabled = bool(getattr(self.settings, "vst_processing_enabled", True))
-        self.vst_directories = effective_vst_directories(getattr(self.settings, "vst_directories", []))
-        self.vst_known_plugins = [str(v).strip() for v in list(getattr(self.settings, "vst_known_plugins", [])) if str(v).strip()]
-        _known_vst_set = set(self.vst_known_plugins)
-        self.vst_enabled_plugins = [
-            str(v).strip()
-            for v in list(getattr(self.settings, "vst_enabled_plugins", []))
-            if str(v).strip() and str(v).strip() in _known_vst_set
-        ]
-        self.vst_chain = [
-            str(v).strip()
-            for v in list(getattr(self.settings, "vst_chain", []))
-            if str(v).strip() and str(v).strip() in _known_vst_set
-        ]
-        raw_chain_enabled = [bool(v) for v in list(getattr(self.settings, "vst_chain_enabled", []))]
-        if len(raw_chain_enabled) < len(self.vst_chain):
-            raw_chain_enabled.extend([True for _ in range(len(self.vst_chain) - len(raw_chain_enabled))])
-        elif len(raw_chain_enabled) > len(self.vst_chain):
-            raw_chain_enabled = raw_chain_enabled[: len(self.vst_chain)]
-        self.vst_chain_enabled = raw_chain_enabled
-        self.vst_plugin_state = {
-            str(k).strip(): dict(v)
-            for k, v in dict(getattr(self.settings, "vst_plugin_state", {})).items()
-            if str(k).strip() and isinstance(v, dict)
-        }
-        self.vst_rack_path = str(getattr(self.settings, "vst_rack_last_path", "") or "").strip()
-        self._load_vst_rack_startup()
         _preload_total_mb, _preload_reserved_mb, _preload_cap_mb = get_preload_memory_limits_mb()
         self.preload_audio_enabled = bool(getattr(self.settings, "preload_audio_enabled", False))
         self.preload_current_page_audio = bool(getattr(self.settings, "preload_current_page_audio", True))
@@ -1672,7 +1631,6 @@ class MainWindow(QMainWindow):
         self._copied_slot_buffer: Optional[SoundButtonData] = None
         self._search_window: Optional[SearchWindow] = None
         self._dsp_window: Optional[DSPWindow] = None
-        self._vst_window: Optional[VSTWindow] = None
         self._tool_windows: Dict[str, ToolListWindow] = {}
         self._tool_window_matches: Dict[str, List[dict]] = {}
         self._menu_actions: Dict[str, QAction] = {}
@@ -1722,7 +1680,6 @@ class MainWindow(QMainWindow):
         self._stage_alert_sticky: bool = False
 
         self._build_ui()
-        self._sync_dsp_plugin_button()
         self._apply_language()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
@@ -1742,7 +1699,6 @@ class MainWindow(QMainWindow):
         self.volume_slider.setValue(self.settings.volume)
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
         self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
-        self._apply_vst_to_players()
         self._refresh_group_buttons()
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -1874,8 +1830,6 @@ class MainWindow(QMainWindow):
             localize_widget_tree(self._search_window, self.ui_language)
         if self._dsp_window is not None:
             localize_widget_tree(self._dsp_window, self.ui_language)
-        if self._vst_window is not None:
-            localize_widget_tree(self._vst_window, self.ui_language)
         for window in self._tool_windows.values():
             localize_widget_tree(window, self.ui_language)
         if self._about_window is not None:
@@ -1884,7 +1838,6 @@ class MainWindow(QMainWindow):
             self._tips_window.set_language(self.ui_language)
         if self._stage_display_window is not None:
             self._stage_display_window.retranslate_ui()
-        self._sync_dsp_plugin_button()
 
     def _build_timecode_dock(self) -> None:
         self.timecode_dock = QDockWidget("Timecode", self)
@@ -3863,9 +3816,8 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
 
-        dsp_button_label = "Plugin" if self.vst_enabled else "DSP"
         controls = [
-            "Cue", "Multi-Play", dsp_button_label,
+            "Cue", "Multi-Play", "DSP",
             "Go To Playing",
             "Loop", "Next", "Button Drag", "Pause",
             "Rapid Fire", "Shuffle", "Reset Page", "STOP",
@@ -3875,7 +3827,7 @@ class MainWindow(QMainWindow):
             "Cue": (0, 0, 1, 1),
             "Multi-Play": (0, 1, 1, 1),
             "Go To Playing": (0, 2, 1, 1),
-            dsp_button_label: (0, 3, 1, 1),
+            "DSP": (0, 3, 1, 1),
             "Loop": (1, 0, 1, 1),
             "Next": (1, 1, 1, 1),
             "Button Drag": (1, 2, 1, 1),
@@ -3935,9 +3887,8 @@ class MainWindow(QMainWindow):
                 btn.setEnabled(False)
             elif text == "Search":
                 btn.clicked.connect(self._open_find_dialog)
-            elif text in {"DSP", "Plugin"}:
-                btn.clicked.connect(self._open_dsp_or_plugin_window)
-                self.control_buttons["DSP_PLUGIN"] = btn
+            elif text == "DSP":
+                btn.clicked.connect(self._open_dsp_window)
             elif text == "Go To Playing":
                 btn.clicked.connect(self._go_to_current_playing_page)
             if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag"}:
@@ -5929,12 +5880,6 @@ class MainWindow(QMainWindow):
         extra_player = ExternalMediaPlayer(self)
         extra_player.setNotifyInterval(90)
         extra_player.setDSPConfig(self._dsp_config)
-        extra_player.setVSTConfig(
-            bool(self.vst_enabled and self.vst_processing_enabled and self._vst_supported and self.vst_chain),
-            list(self.vst_chain),
-            list(self.vst_chain_enabled),
-            dict(self.vst_plugin_state),
-        )
         slot_pct = self._slot_volume_pct(slot)
         try:
             if not self._try_load_media(extra_player, slot):
@@ -7030,12 +6975,6 @@ class MainWindow(QMainWindow):
             main_progress_display_mode=self.main_progress_display_mode,
             main_progress_show_text=self.main_progress_show_text,
             audio_output_device=self.audio_output_device,
-            vst_enabled=self.vst_enabled,
-            vst_directories=self.vst_directories,
-            vst_known_plugins=self.vst_known_plugins,
-            vst_enabled_plugins=self.vst_enabled_plugins,
-            vst_chain=self.vst_chain,
-            vst_plugin_state=self.vst_plugin_state,
             available_audio_devices=available_devices,
             available_midi_devices=available_midi_output_devices,
             preload_audio_enabled=self.preload_audio_enabled,
@@ -7276,32 +7215,6 @@ class MainWindow(QMainWindow):
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
-        self.vst_enabled = bool(dialog.selected_vst_enabled()) and self._vst_supported
-        self.vst_directories = effective_vst_directories(dialog.selected_vst_directories())
-        self.vst_known_plugins = dialog.selected_vst_known_plugins()
-        self.vst_enabled_plugins = dialog.selected_vst_enabled_plugins()
-        known_set = set(self.vst_known_plugins)
-        self.vst_chain = [p for p in dialog.selected_vst_chain() if p in known_set]
-        if len(self.vst_chain_enabled) < len(self.vst_chain):
-            self.vst_chain_enabled.extend([True for _ in range(len(self.vst_chain) - len(self.vst_chain_enabled))])
-        elif len(self.vst_chain_enabled) > len(self.vst_chain):
-            self.vst_chain_enabled = self.vst_chain_enabled[: len(self.vst_chain)]
-        self.vst_plugin_state = {
-            p: dict(v)
-            for p, v in dialog.selected_vst_plugin_state().items()
-            if p in known_set and isinstance(v, dict)
-        }
-        self._apply_vst_to_players()
-        self._autosave_vst_rack()
-        if self._vst_window is not None:
-            self._vst_window.set_available_plugins(self.vst_enabled_plugins)
-            self._vst_window.set_chain(self.vst_chain)
-            self._vst_window.set_chain_enabled(self.vst_chain_enabled)
-            self._vst_window.set_processing_enabled(self.vst_processing_enabled)
-            self._vst_window.set_plugin_state_map(self.vst_plugin_state)
-            if not self.vst_enabled:
-                self._vst_window.hide()
-        self._sync_dsp_plugin_button()
         self.preload_audio_enabled = dialog.selected_preload_audio_enabled()
         self.preload_current_page_audio = dialog.selected_preload_current_page_audio()
         self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()
@@ -8112,173 +8025,6 @@ class MainWindow(QMainWindow):
     def _clear_search_window_ref(self) -> None:
         self._search_window = None
 
-    def _vst_default_rack_path(self) -> str:
-        settings_dir = get_settings_path().parent
-        return str(settings_dir / "vst_rack.json")
-
-    def _vst_rack_payload(self) -> Dict[str, object]:
-        return {
-            "version": 1,
-            "vst_enabled": bool(self.vst_enabled),
-            "processing_enabled": bool(self.vst_processing_enabled),
-            "chain": list(self.vst_chain),
-            "chain_enabled": [bool(v) for v in self.vst_chain_enabled],
-            "plugin_state": dict(self.vst_plugin_state),
-        }
-
-    def _write_vst_rack_file(self, path: str) -> bool:
-        target = str(path or "").strip()
-        if not target:
-            return False
-        try:
-            directory = os.path.dirname(target)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            with open(target, "w", encoding="utf-8") as fh:
-                json.dump(self._vst_rack_payload(), fh, ensure_ascii=False, indent=2)
-            return True
-        except Exception:
-            return False
-
-    def _read_vst_rack_file(self, path: str) -> Optional[Dict[str, object]]:
-        target = str(path or "").strip()
-        if not target or not os.path.exists(target):
-            return None
-        try:
-            with open(target, "r", encoding="utf-8") as fh:
-                decoded = json.load(fh)
-            if isinstance(decoded, dict):
-                return decoded
-        except Exception:
-            return None
-        return None
-
-    def _load_vst_rack_payload(self, payload: Dict[str, object]) -> None:
-        chain = [str(v).strip() for v in list(payload.get("chain", [])) if str(v).strip()]
-        chain_enabled = [bool(v) for v in list(payload.get("chain_enabled", []))]
-        if len(chain_enabled) < len(chain):
-            chain_enabled.extend([True for _ in range(len(chain) - len(chain_enabled))])
-        elif len(chain_enabled) > len(chain):
-            chain_enabled = chain_enabled[: len(chain)]
-        state_raw = payload.get("plugin_state", {})
-        state_map = {
-            str(k).strip(): dict(v)
-            for k, v in dict(state_raw if isinstance(state_raw, dict) else {}).items()
-            if str(k).strip() and isinstance(v, dict)
-        }
-        self.vst_enabled = bool(payload.get("vst_enabled", self.vst_enabled)) and self._vst_supported
-        self.vst_processing_enabled = bool(payload.get("processing_enabled", self.vst_processing_enabled))
-        self.vst_chain = chain
-        self.vst_chain_enabled = chain_enabled
-        self.vst_plugin_state = state_map
-
-    def _load_vst_rack_startup(self) -> None:
-        candidate = self.vst_rack_path or self._vst_default_rack_path()
-        payload = self._read_vst_rack_file(candidate)
-        if payload is not None:
-            self._load_vst_rack_payload(payload)
-            self.vst_rack_path = candidate
-            return
-        self.vst_rack_path = candidate
-        self._write_vst_rack_file(self.vst_rack_path)
-
-    def _autosave_vst_rack(self) -> None:
-        target = self.vst_rack_path or self._vst_default_rack_path()
-        self.vst_rack_path = target
-        self._write_vst_rack_file(target)
-        default_target = self._vst_default_rack_path()
-        if os.path.normcase(default_target) != os.path.normcase(target):
-            self._write_vst_rack_file(default_target)
-        if self._vst_window is not None:
-            self._vst_window.set_rack_path(self.vst_rack_path)
-
-    def _vst_rack_new(self) -> None:
-        self.vst_enabled = bool(self._vst_supported)
-        self.vst_processing_enabled = True
-        self.vst_chain = []
-        self.vst_chain_enabled = []
-        self.vst_plugin_state = {}
-        self._apply_vst_to_players()
-        if self._vst_window is not None:
-            self._vst_window.set_chain(self.vst_chain)
-            self._vst_window.set_chain_enabled(self.vst_chain_enabled)
-            self._vst_window.set_processing_enabled(self.vst_processing_enabled)
-            self._vst_window.set_plugin_state_map(self.vst_plugin_state)
-        self._autosave_vst_rack()
-        self._save_settings()
-
-    def _vst_rack_save(self) -> None:
-        if not self.vst_rack_path:
-            self._vst_rack_save_as()
-            return
-        if not self._write_vst_rack_file(self.vst_rack_path):
-            QMessageBox.warning(self, "VST Rack", "Could not save VST rack file.")
-            return
-        self._save_settings()
-
-    def _vst_rack_save_as(self) -> None:
-        start_dir = os.path.dirname(self.vst_rack_path) if self.vst_rack_path else str(get_settings_path().parent)
-        selected, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save VST Rack As",
-            os.path.join(start_dir, "rack.vstrack.json"),
-            "VST Rack (*.vstrack.json);;JSON (*.json)",
-        )
-        target = str(selected or "").strip()
-        if not target:
-            return
-        self.vst_rack_path = target
-        if not self._write_vst_rack_file(self.vst_rack_path):
-            QMessageBox.warning(self, "VST Rack", "Could not save VST rack file.")
-            return
-        if self._vst_window is not None:
-            self._vst_window.set_rack_path(self.vst_rack_path)
-        self._save_settings()
-
-    def _apply_vst_to_players(self) -> None:
-        chain = [str(v).strip() for v in self.vst_chain if str(v).strip()]
-        chain_enabled = [bool(v) for v in list(self.vst_chain_enabled)]
-        if len(chain_enabled) < len(chain):
-            chain_enabled.extend([True for _ in range(len(chain) - len(chain_enabled))])
-        elif len(chain_enabled) > len(chain):
-            chain_enabled = chain_enabled[: len(chain)]
-        known = set(self.vst_known_plugins)
-        chain = [p for p in chain if p in known]
-        filtered_chain: List[str] = []
-        filtered_enabled: List[bool] = []
-        for idx, plugin_path in enumerate(chain):
-            enabled = chain_enabled[idx] if idx < len(chain_enabled) else True
-            filtered_chain.append(plugin_path)
-            filtered_enabled.append(bool(enabled))
-        state = {
-            p: dict(v)
-            for p, v in VSTChainHost.normalize_plugin_state_map(self.vst_plugin_state).items()
-            if p in known
-        }
-        enabled = bool(self.vst_enabled and self.vst_processing_enabled and self._vst_supported and filtered_chain)
-        self.vst_chain = filtered_chain
-        self.vst_chain_enabled = filtered_enabled
-        self.vst_plugin_state = state
-        for player in [self.player, self.player_b] + list(self._multi_players):
-            if player is None:
-                continue
-            try:
-                player.setVSTConfig(enabled, filtered_chain, filtered_enabled, state)
-            except Exception:
-                continue
-
-    def _sync_dsp_plugin_button(self) -> None:
-        btn = self.control_buttons.get("DSP_PLUGIN")
-        if btn is None:
-            return
-        btn.setText("Plugin" if self.vst_enabled else "DSP")
-
-    def _open_dsp_or_plugin_window(self) -> None:
-        if self.vst_enabled and self._vst_supported:
-            self._open_vst_window()
-            return
-        self._open_dsp_window()
-
     def _open_dsp_window(self) -> None:
         if self._dsp_window is None:
             self._dsp_window = DSPWindow(self, language=self.ui_language)
@@ -8291,66 +8037,6 @@ class MainWindow(QMainWindow):
 
     def _clear_dsp_window_ref(self) -> None:
         self._dsp_window = None
-
-    def _open_vst_window(self) -> None:
-        if self._vst_window is None:
-            self._vst_window = VSTWindow(self, language=self.ui_language)
-            self._vst_window.chainChanged.connect(self._on_vst_chain_changed)
-            self._vst_window.chainEnabledChanged.connect(self._on_vst_chain_enabled_changed)
-            self._vst_window.processingEnabledChanged.connect(self._on_vst_processing_enabled_changed)
-            self._vst_window.pluginStateChanged.connect(self._on_vst_plugin_state_changed)
-            self._vst_window.newRequested.connect(self._vst_rack_new)
-            self._vst_window.saveRequested.connect(self._vst_rack_save)
-            self._vst_window.saveAsRequested.connect(self._vst_rack_save_as)
-            self._vst_window.destroyed.connect(lambda _=None: self._clear_vst_window_ref())
-        self._vst_window.set_available_plugins(self.vst_enabled_plugins)
-        self._vst_window.set_chain(self.vst_chain)
-        self._vst_window.set_chain_enabled(self.vst_chain_enabled)
-        self._vst_window.set_processing_enabled(self.vst_processing_enabled)
-        self._vst_window.set_plugin_state_map(self.vst_plugin_state)
-        self._vst_window.set_rack_path(self.vst_rack_path)
-        self._vst_window.show()
-        self._vst_window.raise_()
-        self._vst_window.activateWindow()
-
-    def _clear_vst_window_ref(self) -> None:
-        self._vst_window = None
-
-    def _on_vst_chain_changed(self, chain: List[str]) -> None:
-        self.vst_chain = [str(v).strip() for v in chain if str(v).strip()]
-        if len(self.vst_chain_enabled) < len(self.vst_chain):
-            self.vst_chain_enabled.extend([True for _ in range(len(self.vst_chain) - len(self.vst_chain_enabled))])
-        elif len(self.vst_chain_enabled) > len(self.vst_chain):
-            self.vst_chain_enabled = self.vst_chain_enabled[: len(self.vst_chain)]
-        self._apply_vst_to_players()
-        self._autosave_vst_rack()
-        self._save_settings()
-
-    def _on_vst_chain_enabled_changed(self, enabled_flags: List[bool]) -> None:
-        flags = [bool(v) for v in list(enabled_flags)]
-        if len(flags) < len(self.vst_chain):
-            flags.extend([True for _ in range(len(self.vst_chain) - len(flags))])
-        elif len(flags) > len(self.vst_chain):
-            flags = flags[: len(self.vst_chain)]
-        self.vst_chain_enabled = flags
-        self._apply_vst_to_players()
-        self._autosave_vst_rack()
-        self._save_settings()
-
-    def _on_vst_processing_enabled_changed(self, enabled: bool) -> None:
-        self.vst_processing_enabled = bool(enabled)
-        self._apply_vst_to_players()
-        self._autosave_vst_rack()
-        self._save_settings()
-
-    def _on_vst_plugin_state_changed(self, plugin_path: str, state: Dict[str, object]) -> None:
-        path = str(plugin_path or "").strip()
-        if not path:
-            return
-        self.vst_plugin_state[path] = dict(state or {})
-        self._apply_vst_to_players()
-        self._autosave_vst_rack()
-        self._save_settings()
 
     def _on_dsp_config_changed(self, config: object) -> None:
         if isinstance(config, DSPConfig):
@@ -9435,15 +9121,6 @@ class MainWindow(QMainWindow):
         self.settings.ui_language = self.ui_language
         self.settings.tips_open_on_startup = bool(self.tips_open_on_startup)
         self.settings.audio_output_device = self.audio_output_device
-        self.settings.vst_enabled = bool(self.vst_enabled and self._vst_supported)
-        self.settings.vst_processing_enabled = bool(self.vst_processing_enabled)
-        self.settings.vst_rack_last_path = self.vst_rack_path
-        self.settings.vst_directories = list(self.vst_directories)
-        self.settings.vst_known_plugins = list(self.vst_known_plugins)
-        self.settings.vst_enabled_plugins = list(self.vst_enabled_plugins)
-        self.settings.vst_chain = list(self.vst_chain)
-        self.settings.vst_chain_enabled = [bool(v) for v in self.vst_chain_enabled]
-        self.settings.vst_plugin_state = dict(self.vst_plugin_state)
         self.settings.preload_audio_enabled = bool(self.preload_audio_enabled)
         self.settings.preload_current_page_audio = bool(self.preload_current_page_audio)
         self.settings.preload_audio_memory_limit_mb = int(self.preload_audio_memory_limit_mb)

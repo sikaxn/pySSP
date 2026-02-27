@@ -220,7 +220,7 @@ def test_display_page_layout_and_visibility_round_trip(qapp):
             "total_time": True,
             "next_song": False,
         },
-        initial_page="Display",
+        initial_page="Stage Display",
     )
     assert dialog.selected_stage_display_layout()[0] == "song_name"
     visibility = dialog.selected_stage_display_visibility()
@@ -229,7 +229,7 @@ def test_display_page_layout_and_visibility_round_trip(qapp):
 
 
 def test_display_page_text_source_selection(qapp):
-    dialog = _build_dialog(stage_display_text_source="note", initial_page="Display")
+    dialog = _build_dialog(stage_display_text_source="note", initial_page="Stage Display")
     assert dialog.selected_stage_display_text_source() == "note"
     dialog.display_text_source_combo.setCurrentIndex(dialog.display_text_source_combo.findData("filename"))
     assert dialog.selected_stage_display_text_source() == "filename"

@@ -76,6 +76,7 @@ from pyssp.midi_control import (
     MidiInputRouter,
     list_midi_input_devices,
     midi_input_name_selector,
+    midi_input_selector_name,
     normalize_midi_binding,
     split_midi_binding,
 )
@@ -1599,6 +1600,7 @@ class MainWindow(QMainWindow):
         self.drag_mode_banner = QLabel("")
         self.timecode_multiplay_banner = QLabel("")
         self.web_remote_warning_banner = QLabel("")
+        self.midi_connection_warning_banner = QLabel("")
         self.playback_warning_banner = QLabel("")
         self.save_notice_banner = QLabel("")
         self.status_totals_label = QLabel("")
@@ -1651,6 +1653,10 @@ class MainWindow(QMainWindow):
         self._midi_last_trigger_t: Dict[str, float] = {}
         self._midi_context_handler = None
         self._midi_context_block_actions = False
+        self._midi_last_status_scan_t = 0.0
+        self._midi_last_force_rescan_t = 0.0
+        self._midi_last_periodic_force_rebind_t = 0.0
+        self._midi_missing_selectors: set[str] = set()
         self._skip_save_on_close = False
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
@@ -1678,6 +1684,7 @@ class MainWindow(QMainWindow):
         self._preload_icon_blink_on = False
         self._playback_warning_token = 0
         self._save_notice_token = 0
+        self._midi_connection_warning_token = 0
         self._stage_display_window: Optional[GadgetStageDisplayWindow] = None
         self._hover_slot_index: Optional[int] = None
         self._stage_alert_dialog: Optional[QDialog] = None
@@ -1803,6 +1810,13 @@ class MainWindow(QMainWindow):
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.web_remote_warning_banner)
+        self.midi_connection_warning_banner.setVisible(False)
+        self.midi_connection_warning_banner.setWordWrap(True)
+        self.midi_connection_warning_banner.setStyleSheet(
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.midi_connection_warning_banner)
         self.playback_warning_banner.setVisible(False)
         self.playback_warning_banner.setWordWrap(True)
         self.playback_warning_banner.setStyleSheet(
@@ -2243,7 +2257,7 @@ class MainWindow(QMainWindow):
         show_display_action.triggered.connect(self._show_stage_display)
         display_menu.addAction(show_display_action)
         stage_display_setting_action = QAction("Stage Display Setting", self)
-        stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Display"))
+        stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage Display"))
         display_menu.addAction(stage_display_setting_action)
         send_alert_action = QAction("Send Alert", self)
         send_alert_action.triggered.connect(self._open_stage_alert_panel)
@@ -2320,6 +2334,10 @@ class MainWindow(QMainWindow):
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
         help_menu.addAction(help_action)
+
+        latest_version_action = QAction("Get the Latest Version", self)
+        latest_version_action.triggered.connect(self._open_latest_version_page)
+        help_menu.addAction(latest_version_action)
 
         tips_action = QAction("Tips", self)
         tips_action.triggered.connect(lambda _=False: self._open_tips_window(startup=False))
@@ -2922,6 +2940,7 @@ class MainWindow(QMainWindow):
         self._midi_action_handlers = {}
         self._midi_last_trigger_t = {}
         self._midi_router.set_devices(self.midi_input_device_ids)
+        self._refresh_midi_connection_warning(force_refresh=False)
         runtime_handlers = self._runtime_action_handlers()
         ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
         sound_bindings = self._collect_sound_button_midi_bindings() if self.midi_sound_button_hotkey_enabled else {}
@@ -3003,6 +3022,15 @@ class MainWindow(QMainWindow):
                 self,
                 "Help Open Failed",
                 f"Could not open help index with the default browser.\n\nPath:\n{help_index}",
+            )
+
+    def _open_latest_version_page(self) -> None:
+        releases_url = QUrl("https://github.com/sikaxn/pySSP/releases")
+        if not QDesktopServices.openUrl(releases_url):
+            QMessageBox.warning(
+                self,
+                "Help Open Failed",
+                f"Could not open URL with the default browser.\n\nURL:\n{releases_url.toString()}",
             )
 
     def _open_tips_window(self, startup: bool = False) -> None:
@@ -6396,20 +6424,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Send Alert", "Please enter alert text.")
             return
         keep = bool(self._stage_alert_keep_checkbox.isChecked()) if self._stage_alert_keep_checkbox is not None else True
-        self._stage_alert_message = text
-        self._stage_alert_sticky = keep
-        if keep:
+        seconds = int(self._stage_alert_duration_spin.value()) if self._stage_alert_duration_spin is not None else 10
+        self._set_stage_alert(text, keep=keep, seconds=seconds)
+
+    def _set_stage_alert(self, text: str, keep: bool = True, seconds: int = 10) -> None:
+        self._stage_alert_message = str(text or "").strip()
+        self._stage_alert_sticky = bool(keep)
+        if self._stage_alert_sticky:
             self._stage_alert_until_monotonic = 0.0
         else:
-            seconds = int(self._stage_alert_duration_spin.value()) if self._stage_alert_duration_spin is not None else 10
-            self._stage_alert_until_monotonic = time.monotonic() + max(1, seconds)
+            self._stage_alert_until_monotonic = time.monotonic() + max(1, int(seconds))
         self._refresh_stage_display()
 
     def _clear_stage_alert(self) -> None:
-        self._stage_alert_message = ""
-        self._stage_alert_sticky = False
-        self._stage_alert_until_monotonic = 0.0
-        self._refresh_stage_display()
+        self._set_stage_alert("", keep=True, seconds=1)
 
     def _stage_alert_active(self) -> bool:
         if not self._stage_alert_message:
@@ -7338,6 +7366,17 @@ class MainWindow(QMainWindow):
             return "toggle"
         return None
 
+    @staticmethod
+    def _parse_api_bool(raw: object) -> Optional[bool]:
+        if isinstance(raw, bool):
+            return raw
+        value = str(raw or "").strip().lower()
+        if value in {"1", "true", "on", "yes"}:
+            return True
+        if value in {"0", "false", "off", "no"}:
+            return False
+        return None
+
     def _parse_button_id(self, raw: str, require_slot: bool) -> Tuple[Optional[str], Optional[int], Optional[int], Optional[dict]]:
         parts = [segment for segment in str(raw or "").strip().split("-") if segment]
         if not parts:
@@ -7761,6 +7800,58 @@ class MainWindow(QMainWindow):
         self.web_remote_warning_banner.setText(message)
         self.web_remote_warning_banner.setVisible(bool(message))
 
+    def _show_midi_connection_warning_banner(self, text: str, timeout_ms: int = 0) -> None:
+        message = str(text or "").strip()
+        self._midi_connection_warning_token += 1
+        token = self._midi_connection_warning_token
+        self.midi_connection_warning_banner.setText(message)
+        self.midi_connection_warning_banner.setVisible(bool(message))
+        if message and timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda t=token: self._hide_midi_connection_warning_banner(t))
+
+    def _debug_midi_connection(self, text: str) -> None:
+        print(f"[MIDI-CONNECTION] {str(text or '').strip()}", flush=True)
+
+    def _hide_midi_connection_warning_banner(self, token: Optional[int] = None) -> None:
+        if token is not None and token != self._midi_connection_warning_token:
+            return
+        self.midi_connection_warning_banner.setVisible(False)
+        self.midi_connection_warning_banner.setText("")
+
+    def _refresh_midi_connection_warning(self, force_refresh: bool = False) -> None:
+        previous_missing = set(self._midi_missing_selectors)
+        selected = [str(v).strip() for v in self.midi_input_device_ids if str(v).strip()]
+        if not selected:
+            self._midi_missing_selectors = set()
+            self._hide_midi_connection_warning_banner()
+            return
+        missing_selectors = set(self._midi_router.missing_selected_selectors())
+        self._midi_missing_selectors = missing_selectors
+        if not missing_selectors:
+            if previous_missing:
+                recovered_labels = [midi_input_selector_name(v) or str(v) for v in sorted(previous_missing) if str(v).strip()]
+                display = ", ".join(recovered_labels[:3])
+                if len(recovered_labels) > 3:
+                    display += f" (+{len(recovered_labels) - 3} more)"
+                self._debug_midi_connection(f"reconnected={display or '<none>'}")
+                self._show_midi_connection_warning_banner(
+                    f"{tr('MIDI input reconnected:')} {display}. {tr('MIDI control restored.')}",
+                    timeout_ms=4500,
+                )
+            else:
+                self._hide_midi_connection_warning_banner()
+            return
+        current_labels = [midi_input_selector_name(v) or str(v) for v in sorted(missing_selectors)]
+        display = ", ".join(current_labels[:3])
+        if len(current_labels) > 3:
+            display += f" (+{len(current_labels) - 3} more)"
+        if missing_selectors != previous_missing:
+            self._debug_midi_connection(f"disconnected={display or '<none>'}")
+        self._show_midi_connection_warning_banner(
+            f"{tr('MIDI input disconnected:')} {display}. {tr('MIDI control will resume automatically when reconnected.')}",
+            timeout_ms=0,
+        )
+
     def _web_remote_port_conflict_text(self) -> str:
         return (
             f"{tr('WEB REMOTE PORT CONFLICT:')} {tr('Port')} {self.web_remote_port} {tr('is already in use.')}\n"
@@ -7980,6 +8071,118 @@ class MainWindow(QMainWindow):
                 self._refresh_sound_grid()
                 return self._api_success({"state": self._api_state()})
             return self._api_error("invalid_scope", "Scope must be current or all.")
+
+        if cmd == "volume_set":
+            try:
+                level = int(params.get("level", 0))
+            except (TypeError, ValueError):
+                return self._api_error("invalid_volume", "Volume level must be an integer.")
+            if level < 0 or level > 100:
+                return self._api_error("invalid_volume", "Volume level must be in range 0..100.")
+            self.volume_slider.setValue(level)
+            return self._api_success({"volume": int(self.volume_slider.value()), "state": self._api_state()})
+
+        if cmd == "mute":
+            self._toggle_mute_hotkey()
+            return self._api_success({"volume": int(self.volume_slider.value()), "state": self._api_state()})
+
+        if cmd == "navigate":
+            target = str(params.get("target", "")).strip().lower()
+            direction = str(params.get("direction", "")).strip().lower()
+            if direction not in {"next", "prev"}:
+                return self._api_error("invalid_direction", "Direction must be next or prev.")
+            delta = 1 if direction == "next" else -1
+            if target == "group":
+                self._hotkey_select_group_delta(delta)
+                return self._api_success({"state": self._api_state()})
+            if target == "page":
+                self._hotkey_select_page_delta(delta)
+                return self._api_success({"state": self._api_state()})
+            if target == "sound_button":
+                self._hotkey_select_sound_button_delta(delta)
+                return self._api_success({"state": self._api_state()})
+            return self._api_error("invalid_target", "Navigation target must be group, page, or sound_button.")
+
+        if cmd in {"playselected", "playselectedpause"}:
+            slot_index: Optional[int] = None
+            key = self._hotkey_selected_slot_key
+            if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
+                slot_index = key[2]
+            else:
+                for i, btn in enumerate(self.sound_buttons):
+                    if btn.hasFocus():
+                        slot_index = i
+                        break
+            if slot_index is None:
+                return self._api_error("no_selected_button", "No selected sound button on current page.", status=409)
+            if cmd == "playselected":
+                self._hotkey_play_selected()
+            else:
+                self._hotkey_play_selected_pause()
+            return self._api_success({"selected_button": slot_index + 1, "state": self._api_state()})
+
+        if cmd == "seek":
+            total_ms = self._transport_total_ms()
+            if total_ms <= 0:
+                return self._api_error("not_seekable", "No active seek range is available.", status=409)
+            percent_raw = params.get("percent")
+            time_raw = params.get("time")
+            target_display: Optional[int] = None
+            if percent_raw is not None and str(percent_raw).strip() != "":
+                try:
+                    percent = float(str(percent_raw).strip())
+                except (TypeError, ValueError):
+                    return self._api_error("invalid_percent", "percent must be a number in range 0..100.")
+                if percent < 0.0 or percent > 100.0:
+                    return self._api_error("invalid_percent", "percent must be in range 0..100.")
+                target_display = int(round((percent / 100.0) * total_ms))
+            elif time_raw is not None and str(time_raw).strip() != "":
+                parsed_ms = self._parse_cue_time_string_to_ms(str(time_raw).strip())
+                if parsed_ms is None:
+                    return self._api_error("invalid_time", "time must be mm:ss, mm:ss:ff, or hh:mm:ss.")
+                target_display = parsed_ms
+            else:
+                return self._api_error("invalid_seek", "Provide either percent or time.")
+            display_ms, absolute_ms = self._seek_transport_display_ms(target_display)
+            return self._api_success(
+                {
+                    "display_ms": display_ms,
+                    "display_time": format_clock_time(display_ms),
+                    "absolute_ms": absolute_ms,
+                    "absolute_time": format_clock_time(absolute_ms),
+                    "state": self._api_state(),
+                }
+            )
+
+        if cmd == "alert":
+            clear_mode = self._parse_api_mode(params.get("mode", ""))
+            clear_flag = self._parse_api_bool(params.get("clear"))
+            if clear_mode == "disable" or clear_flag is True:
+                self._clear_stage_alert()
+                return self._api_success({"alert_active": False, "alert_message": "", "state": self._api_state()})
+
+            text = str(params.get("text", "")).strip()
+            if not text:
+                return self._api_error("invalid_alert", "Alert text is required.")
+
+            keep = self._parse_api_bool(params.get("keep"))
+            keep_value = True if keep is None else bool(keep)
+            try:
+                seconds = int(params.get("seconds", 10))
+            except (TypeError, ValueError):
+                return self._api_error("invalid_seconds", "seconds must be an integer.")
+            if seconds < 1 or seconds > 600:
+                return self._api_error("invalid_seconds", "seconds must be in range 1..600.")
+
+            self._set_stage_alert(text, keep=keep_value, seconds=seconds)
+            return self._api_success(
+                {
+                    "alert_active": self._stage_alert_active(),
+                    "alert_message": self._stage_alert_message,
+                    "alert_keep": self._stage_alert_sticky,
+                    "state": self._api_state(),
+                }
+            )
 
         return self._api_error("unknown_command", f"Unknown command '{command}'.", status=404)
 
@@ -8733,11 +8936,18 @@ class MainWindow(QMainWindow):
         self._is_scrubbing = True
 
     def _on_seek_released(self) -> None:
-        absolute = self._transport_absolute_ms_for_display(self.seek_slider.value())
+        self._seek_transport_display_ms(self.seek_slider.value())
+        self._is_scrubbing = False
+
+    def _seek_transport_display_ms(self, display_ms: int) -> tuple[int, int]:
+        total_ms = self._transport_total_ms()
+        clamped_display = max(0, min(total_ms, int(display_ms)))
+        absolute = max(0, int(self._transport_absolute_ms_for_display(clamped_display)))
         self.player.setPosition(absolute)
+        self.seek_slider.setValue(clamped_display)
         self._apply_main_jog_outside_cue_behavior(absolute)
         self._mtc_sender.request_resync()
-        self._is_scrubbing = False
+        return clamped_display, absolute
 
     def _on_seek_value_changed(self, value: int) -> None:
         if self._is_scrubbing:
@@ -9445,6 +9655,11 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _handle_space_bar_action(self) -> None:
+        if self._search_window is not None and self._search_window.isVisible():
+            active = QApplication.activeWindow()
+            if active is self._search_window:
+                if self._search_window.activate_selected_by_setting():
+                    return
         self._stop_playback()
         return
 
@@ -9494,6 +9709,9 @@ class MainWindow(QMainWindow):
         self._select_page(next_page)
 
     def _hotkey_select_sound_button_delta(self, delta: int) -> None:
+        if self._search_window is not None and self._search_window.isVisible():
+            if self._search_window.select_result_delta(delta):
+                return
         page = self._current_page_slots()
         candidates = [i for i, slot in enumerate(page) if slot.assigned and not slot.marker]
         if not candidates:
@@ -9517,6 +9735,9 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
 
     def _hotkey_play_selected(self) -> None:
+        if self._search_window is not None and self._search_window.isVisible():
+            if self._search_window.activate_selected_by_setting():
+                return
         slot_index: Optional[int] = None
         key = self._hotkey_selected_slot_key
         if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
@@ -9532,6 +9753,9 @@ class MainWindow(QMainWindow):
         self._play_slot(slot_index)
 
     def _hotkey_play_selected_pause(self) -> None:
+        if self._search_window is not None and self._search_window.isVisible():
+            if self._search_window.activate_selected_by_setting():
+                return
         slot_index: Optional[int] = None
         key = self._hotkey_selected_slot_key
         if key is not None and key[0] == self._view_group_key() and key[1] == self.current_page:
@@ -9715,6 +9939,40 @@ class MainWindow(QMainWindow):
             self._midi_router.poll()
         except Exception:
             pass
+        now = time.perf_counter()
+        if (now - self._midi_last_status_scan_t) < 0.9:
+            return
+        self._midi_last_status_scan_t = now
+        try:
+            self._midi_router.set_devices(self.midi_input_device_ids)
+        except Exception:
+            pass
+        try:
+            self._refresh_midi_connection_warning(force_refresh=False)
+        except Exception:
+            pass
+        if self.midi_input_device_ids and (now - self._midi_last_periodic_force_rebind_t) >= 5.0:
+            self._midi_last_periodic_force_rebind_t = now
+            try:
+                self._midi_router.set_devices(self.midi_input_device_ids, force_refresh=True)
+            except Exception:
+                pass
+            try:
+                self._refresh_midi_connection_warning(force_refresh=True)
+            except Exception:
+                pass
+        if self._midi_missing_selectors and (now - self._midi_last_force_rescan_t) >= 2.5:
+            self._midi_last_force_rescan_t = now
+            # When some selected devices are missing, force backend re-enumeration
+            # so reconnect works even if other MIDI devices remain active.
+            try:
+                self._midi_router.set_devices(self.midi_input_device_ids, force_refresh=True)
+            except Exception:
+                pass
+            try:
+                self._refresh_midi_connection_warning(force_refresh=True)
+            except Exception:
+                pass
 
     def _cc_binding_matches(self, configured: str, source_selector: str, cc_token: str) -> bool:
         selector, token = split_midi_binding(configured)

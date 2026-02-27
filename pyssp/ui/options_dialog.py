@@ -573,7 +573,7 @@ class OptionsDialog(QDialog):
             self._build_color_page(),
         )
         self._add_page(
-            "Display",
+            "Stage Display",
             self._mono_icon("projector"),
             self._build_display_page(),
         )
@@ -680,6 +680,8 @@ class OptionsDialog(QDialog):
 
     def select_page(self, title: Optional[str]) -> bool:
         needle = str(title or "").strip().lower()
+        if needle == "display":
+            needle = "stage display"
         if not needle:
             return False
         for index in range(self.page_list.count()):
@@ -931,6 +933,11 @@ class OptionsDialog(QDialog):
         hint = QLabel("Select one or more MIDI input devices. pySSP will listen on all selected devices.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self.midi_input_status_label = QLabel("")
+        self.midi_input_status_label.setWordWrap(True)
+        self.midi_input_status_label.setStyleSheet("color:#B00020; font-weight:bold;")
+        self.midi_input_status_label.setVisible(False)
+        layout.addWidget(self.midi_input_status_label)
         self.midi_input_list = QListWidget()
         self.midi_input_list.setSelectionMode(QListWidget.NoSelection)
         layout.addWidget(self.midi_input_list, 1)
@@ -1657,6 +1664,9 @@ class OptionsDialog(QDialog):
         self.timecode_midi_output_combo.addItem("None (disabled)", MIDI_OUTPUT_DEVICE_NONE)
         for device_id, device_name in available_midi_devices:
             self.timecode_midi_output_combo.addItem(device_name, device_id)
+        self.timecode_midi_output_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_midi_input_devices(force_refresh=False)
+        )
         mtc_form.addRow("MIDI Output Device:", self.timecode_midi_output_combo)
 
         self.timecode_mtc_fps_combo = QComboBox()
@@ -2347,6 +2357,18 @@ class OptionsDialog(QDialog):
             name = midi_input_selector_name(selector)
             if name:
                 current_names.add(name)
+        mtc_device_id = str(
+            self.timecode_midi_output_combo.currentData() if hasattr(self, "timecode_midi_output_combo") else MIDI_OUTPUT_DEVICE_NONE
+        ).strip()
+        mtc_device_name = (
+            str(self.timecode_midi_output_combo.currentText() if hasattr(self, "timecode_midi_output_combo") else "").strip()
+            if mtc_device_id != MIDI_OUTPUT_DEVICE_NONE
+            else ""
+        )
+        selected_before = set(current_ids)
+        disconnected_labels: List[str] = []
+        mtc_blocked_labels: List[str] = []
+        listed_selectors: set[str] = set()
         try:
             self.midi_input_list.itemChanged.disconnect(self._on_midi_input_selection_changed)
         except Exception:
@@ -2354,14 +2376,52 @@ class OptionsDialog(QDialog):
         self.midi_input_list.clear()
         for device_id, device_name in list_midi_input_devices(force_refresh=force_refresh):
             selector = midi_input_name_selector(device_name)
+            listed_selectors.add(selector)
             item = QListWidgetItem(device_name)
             item.setData(Qt.UserRole, selector)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             checked = (selector in current_ids) or (str(device_name).strip() in current_names) or (str(device_id) in current_ids)
+            blocked_for_mtc = bool(mtc_device_name) and str(device_name).strip().lower() == mtc_device_name.lower()
+            if blocked_for_mtc:
+                checked = False
+                item.setFlags(Qt.NoItemFlags)
+                font = item.font()
+                font.setStrikeOut(True)
+                item.setFont(font)
+                item.setText(f"{device_name} (used by MTC)")
+                item.setForeground(QColor("#7A7A7A"))
+                mtc_blocked_labels.append(str(device_name).strip() or str(selector))
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
             self.midi_input_list.addItem(item)
+        for selector in list(selected_before):
+            token = str(selector or "").strip()
+            if (not token) or (token in listed_selectors):
+                continue
+            disconnected_name = midi_input_selector_name(token) or token
+            item = QListWidgetItem(f"{disconnected_name} (Disconnected)")
+            item.setData(Qt.UserRole, token)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            item.setForeground(QColor("#7A7A7A"))
+            self.midi_input_list.addItem(item)
+            disconnected_labels.append(disconnected_name)
         self.midi_input_list.itemChanged.connect(self._on_midi_input_selection_changed)
         self._on_midi_input_selection_changed()
+        notices: List[str] = []
+        if disconnected_labels:
+            display = ", ".join(disconnected_labels[:3])
+            if len(disconnected_labels) > 3:
+                display += f" (+{len(disconnected_labels) - 3} more)"
+            notices.append(f"{tr('Disconnected MIDI device selected:')} {display}")
+        if mtc_blocked_labels:
+            display = ", ".join(mtc_blocked_labels[:3])
+            if len(mtc_blocked_labels) > 3:
+                display += f" (+{len(mtc_blocked_labels) - 3} more)"
+            mtc_notice = tr("Device used for MTC can't be used for MIDI control:")
+            notices.append(f"{mtc_notice} {display}")
+        if hasattr(self, "midi_input_status_label") and self.midi_input_status_label is not None:
+            self.midi_input_status_label.setText(" ".join(notices))
+            self.midi_input_status_label.setVisible(bool(notices))
 
     def _checked_midi_input_device_ids(self) -> List[str]:
         selected: List[str] = []
@@ -2371,6 +2431,8 @@ class OptionsDialog(QDialog):
         for i in range(self.midi_input_list.count()):
             item = self.midi_input_list.item(i)
             if item is None:
+                continue
+            if not (item.flags() & Qt.ItemIsEnabled):
                 continue
             if item.checkState() == Qt.Checked:
                 device_id = str(item.data(Qt.UserRole) or "").strip()
@@ -2674,6 +2736,7 @@ class OptionsDialog(QDialog):
             selected_timecode_midi,
             MIDI_OUTPUT_DEVICE_NONE,
         )
+        self._refresh_midi_input_devices(force_refresh=False)
         localize_widget_tree(self, self._ui_language)
 
     def _refresh_color_button(self, button: QPushButton, color_hex: str) -> None:
@@ -3163,6 +3226,7 @@ class OptionsDialog(QDialog):
             str(d["timecode_midi_output_device"]),
             MIDI_OUTPUT_DEVICE_NONE,
         )
+        self._refresh_midi_input_devices(force_refresh=False)
         self._set_combo_data_or_default(
             self.timecode_sample_rate_combo,
             int(d["timecode_sample_rate"]),

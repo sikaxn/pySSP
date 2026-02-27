@@ -12,6 +12,11 @@ class TestI18n(unittest.TestCase):
 
     def test_translate_known_text(self):
         self.assertEqual(translate_text("Options", LANG_ZH_CN), "选项")
+        self.assertEqual(translate_text("Main Transport Display", LANG_ZH_CN), "主时间线显示")
+        self.assertEqual(translate_text("Stage Display", LANG_ZH_CN), "舞台显示")
+        self.assertEqual(translate_text("Stage Display Setting", LANG_ZH_CN), "舞台显示设置")
+        self.assertEqual(translate_text("Send Alert", LANG_ZH_CN), "发送通知")
+        self.assertEqual(translate_text("Gadgets", LANG_ZH_CN), "组件")
 
     def test_localize_label_text(self):
         label = QLabel("Options")

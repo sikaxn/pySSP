@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Any, Callable, Dict
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 from werkzeug.serving import WSGIRequestHandler, make_server
 
 
@@ -119,6 +119,10 @@ class WebRemoteServer:
     .tracks{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
     .track{padding:4px 0;border-bottom:1px dotted #d9e5eb}
     .track:last-child{border-bottom:0}
+    .section{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+    textarea,input[type="number"]{width:100%;border:1px solid var(--line);border-radius:6px;padding:6px;font:inherit}
+    textarea{min-height:68px;resize:vertical}
+    .alert-box{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
   </style>
 </head>
 <body>
@@ -151,6 +155,43 @@ class WebRemoteServer:
     <div class="row">
       <button onclick="callApi('/api/resetpage/current')">Reset Page</button>
       <button class="warn" onclick="callApi('/api/resetpage/all')">Reset All</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/mute')">Mute</button>
+      <label>Volume
+        <input type="number" id="volumeLevel" min="0" max="100" value="90" style="width:72px;">
+      </label>
+      <button onclick="setVolumeFromInput()">Set Volume</button>
+    </div>
+
+    <div class="section">
+      <div class="row"><strong>Hotkey-style Controls</strong></div>
+      <div class="row">
+        <button onclick="callApi('/api/group/prev')">Prev Group</button>
+        <button onclick="callApi('/api/group/next')">Next Group</button>
+        <button onclick="callApi('/api/page/prev')">Prev Page</button>
+        <button onclick="callApi('/api/page/next')">Next Page</button>
+      </div>
+      <div class="row">
+        <button onclick="callApi('/api/soundbutton/prev')">Prev Button</button>
+        <button onclick="callApi('/api/soundbutton/next')">Next Button</button>
+        <button onclick="callApi('/api/playselected')">Play Selected</button>
+        <button onclick="callApi('/api/playselectedpause')">Play Sel/Pause</button>
+      </div>
+    </div>
+    <div class="alert-box">
+      <div class="row"><strong>Send Alert</strong></div>
+      <div class="row">
+        <textarea id="alertText" placeholder="Type alert text..."></textarea>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="alertKeep" checked> Keep on screen</label>
+        <label>Seconds <input type="number" id="alertSeconds" min="1" max="600" value="10" style="width:86px;"></label>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="sendAlert()">Send Alert</button>
+        <button class="warn" onclick="clearAlert()">Clear Alert</button>
+      </div>
     </div>
     <div id="stateView" class="status mono"></div>
     <div class="tracks">
@@ -186,6 +227,40 @@ class WebRemoteServer:
       await refreshAll(false);
       return data;
     }catch(err){ setStatus('Error: ' + err); }
+  }
+
+  async function sendAlert(){
+    const textEl = document.getElementById('alertText');
+    const keepEl = document.getElementById('alertKeep');
+    const secondsEl = document.getElementById('alertSeconds');
+    const text = (textEl?.value || '').trim();
+    if(!text){ setStatus('Error: alert text required'); return; }
+    const keep = !!(keepEl && keepEl.checked);
+    const seconds = Math.max(1, Math.min(600, parseInt(secondsEl?.value || '10', 10) || 10));
+    try{
+      const res = await fetch('/api/alert', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text, keep, seconds})
+      });
+      const data = await res.json();
+      if(!data.ok){ setStatus('Error: ' + (data.error?.message || 'request failed')); }
+      else { setStatus('OK'); }
+      await refreshAll(false);
+      return data;
+    }catch(err){ setStatus('Error: ' + err); }
+  }
+
+  async function clearAlert(){
+    await callApi('/api/alert/clear');
+  }
+
+  async function setVolumeFromInput(){
+    const input = document.getElementById('volumeLevel');
+    const raw = parseInt(input?.value || '0', 10);
+    const level = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 0));
+    if(input){ input.value = String(level); }
+    await callApi('/api/volume/' + level);
   }
 
   function escapeHtml(value){
@@ -414,6 +489,87 @@ class WebRemoteServer:
         @app.route("/api/crossfade/<string:mode>", methods=["GET", "POST"])
         def api_crossfade(mode: str):
             return send("fade", kind="crossfade", mode=mode)
+
+        @app.route("/api/volume/<int:level>", methods=["GET", "POST"])
+        def api_volume_set(level: int):
+            return send("volume_set", level=level)
+
+        @app.route("/api/mute", methods=["GET", "POST"])
+        def api_mute():
+            return send("mute")
+
+        @app.route("/api/group/next", methods=["GET", "POST"])
+        def api_group_next():
+            return send("navigate", target="group", direction="next")
+
+        @app.route("/api/group/prev", methods=["GET", "POST"])
+        def api_group_prev():
+            return send("navigate", target="group", direction="prev")
+
+        @app.route("/api/page/next", methods=["GET", "POST"])
+        def api_page_next():
+            return send("navigate", target="page", direction="next")
+
+        @app.route("/api/page/prev", methods=["GET", "POST"])
+        def api_page_prev():
+            return send("navigate", target="page", direction="prev")
+
+        @app.route("/api/soundbutton/next", methods=["GET", "POST"])
+        def api_soundbutton_next():
+            return send("navigate", target="sound_button", direction="next")
+
+        @app.route("/api/soundbutton/prev", methods=["GET", "POST"])
+        def api_soundbutton_prev():
+            return send("navigate", target="sound_button", direction="prev")
+
+        @app.route("/api/playselected", methods=["GET", "POST"])
+        def api_playselected():
+            return send("playselected")
+
+        @app.route("/api/playselectedpause", methods=["GET", "POST"])
+        def api_playselectedpause():
+            return send("playselectedpause")
+
+        @app.route("/api/seek/percent/<string:percent>", methods=["GET", "POST"])
+        def api_seek_percent(percent: str):
+            return send("seek", percent=percent)
+
+        @app.route("/api/seek/time/<path:timecode>", methods=["GET", "POST"])
+        def api_seek_time(timecode: str):
+            return send("seek", time=timecode)
+
+        @app.route("/api/seek", methods=["GET", "POST"])
+        def api_seek():
+            params: Dict[str, Any] = {}
+            if request.method == "POST":
+                payload = request.get_json(silent=True)
+                if isinstance(payload, dict):
+                    params.update(payload)
+                params.update(request.form.to_dict())
+            params.update(request.args.to_dict())
+            return send("seek", percent=params.get("percent"), time=params.get("time"))
+
+        @app.route("/api/alert", methods=["GET", "POST"])
+        def api_alert():
+            params: Dict[str, Any] = {}
+            if request.method == "POST":
+                payload = request.get_json(silent=True)
+                if isinstance(payload, dict):
+                    params.update(payload)
+                params.update(request.form.to_dict())
+            params.update(request.args.to_dict())
+            return send(
+                "alert",
+                text=params.get("text", ""),
+                keep=params.get("keep"),
+                seconds=params.get("seconds"),
+                clear=params.get("clear"),
+                mode=params.get("mode"),
+            )
+
+        @app.route("/api/alert/clear", methods=["GET", "POST"])
+        def api_alert_clear():
+            return send("alert", clear=True)
 
         @app.get("/api/query")
         def api_query_all():

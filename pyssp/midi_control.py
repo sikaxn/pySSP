@@ -71,10 +71,12 @@ def midi_input_selector_name(selector: str) -> str:
 
 
 def list_midi_input_devices(force_refresh: bool = False) -> List[Tuple[str, str]]:
-    # Avoid backend quit/re-init while devices may be actively polled; this can crash pygame.midi
-    # on some systems. Keep refresh semantics as a lightweight re-enumeration.
-    _ = bool(force_refresh)
-    ready = _ensure_midi_init()
+    if force_refresh:
+        ready = _refresh_midi_backend()
+        if not ready:
+            ready = _ensure_midi_init()
+    else:
+        ready = _ensure_midi_init()
     if not ready:
         return []
     devices: List[Tuple[str, str]] = []
@@ -190,7 +192,11 @@ class MidiInputRouter:
         self._selected_device_ids: List[str] = []
         self._selector_name_hints: Dict[str, str] = {}
         self._last_resync_t = 0.0
+        self._last_hard_resync_t = 0.0
+        self._last_device_scan_t = 0.0
         self._resolved_names_by_id: Dict[str, str] = {}
+        self._resolved_ids_by_selector: Dict[str, List[str]] = {}
+        self._missing_selectors: set[str] = set()
 
     def set_callback(self, callback: Optional[Callable[[str, str, int, int, int], None]]) -> None:
         self._callback = callback
@@ -204,6 +210,10 @@ class MidiInputRouter:
                 continue
             seen_wanted.add(token)
             wanted.append(token)
+        if force_refresh:
+            # Ensure backend refresh happens with no open handles to avoid stale device state.
+            for device_id in list(self._inputs.keys()):
+                self._close_input(device_id)
         wanted_concrete = self._resolve_device_ids(wanted, force_refresh=force_refresh)
         wanted_set = set(wanted_concrete)
         for device_id in list(self._inputs.keys()):
@@ -215,20 +225,32 @@ class MidiInputRouter:
                 continue
             self._open_input(device_id)
         self._selected_device_ids = wanted
+        self._recompute_missing_selectors()
 
     def selected_device_ids(self) -> List[str]:
         return list(self._selected_device_ids)
+
+    def missing_selected_selectors(self) -> List[str]:
+        return sorted(self._missing_selectors)
 
     def poll(self, max_events_per_device: int = 64) -> None:
         callback = self._callback
         if callback is None:
             return
+        now = time.perf_counter()
+        # Periodically verify that opened handles still map to currently enumerated devices.
+        if (now - self._last_device_scan_t) >= 0.9:
+            self._last_device_scan_t = now
+            self._verify_open_inputs_against_enumeration()
         # If selection exists but no active devices, periodically resync from current hardware.
         if self._selected_device_ids and not self._inputs:
-            now = time.perf_counter()
             if (now - self._last_resync_t) >= 0.75:
                 self._last_resync_t = now
                 self._resync_selected_devices(force_refresh=False)
+            # Escalate to backend re-init occasionally only when no handles are open.
+            if (now - self._last_hard_resync_t) >= 3.0:
+                self._last_hard_resync_t = now
+                self._resync_selected_devices(force_refresh=True)
         for device_id, inp in list(self._inputs.items()):
             try:
                 # Using read() directly avoids pygame.midi poll() crashes observed on
@@ -252,16 +274,14 @@ class MidiInputRouter:
                 token = midi_event_to_binding(status, data1, data2)
                 device_name = str(self._resolved_names_by_id.get(device_id, "")).strip()
                 selector = midi_input_name_selector(device_name) if device_name else ""
-                print(
-                    f"[MIDI] device={device_name or device_id} selector={selector or '<none>'} raw={status:02X}:{data1:02X}:{data2:02X} binding={token or '<none>'}",
-                    flush=True,
-                )
                 callback(token, selector, status, data1, data2)
 
     def close(self) -> None:
         for device_id in list(self._inputs.keys()):
             self._close_input(device_id)
         self._selected_device_ids = []
+        self._resolved_ids_by_selector = {}
+        self._missing_selectors = set()
 
     def clear_pending(self, max_reads_per_device: int = 8, max_events_per_read: int = 128) -> None:
         for _device_id, inp in list(self._inputs.items()):
@@ -285,6 +305,7 @@ class MidiInputRouter:
             by_id[did] = dname
             by_name.setdefault(dname, []).append(did)
         self._resolved_names_by_id = dict(by_id)
+        resolved_by_selector: Dict[str, List[str]] = {}
 
         resolved: List[str] = []
         seen: set[str] = set()
@@ -304,6 +325,7 @@ class MidiInputRouter:
                 hinted_name = str(self._selector_name_hints.get(token, "")).strip()
                 if hinted_name:
                     concrete = list(by_name.get(hinted_name, []))
+            resolved_by_selector[token] = list(concrete)
             for device_id in concrete:
                 if device_id in seen:
                     continue
@@ -312,6 +334,7 @@ class MidiInputRouter:
                 name = str(by_id.get(device_id, "")).strip()
                 if name and token.isdigit():
                     self._selector_name_hints[token] = name
+        self._resolved_ids_by_selector = resolved_by_selector
         return resolved
 
     def _resync_selected_devices(self, force_refresh: bool = False) -> None:
@@ -337,3 +360,33 @@ class MidiInputRouter:
             inp.close()
         except Exception:
             pass
+
+    def _verify_open_inputs_against_enumeration(self) -> None:
+        if not self._inputs:
+            return
+        listed_ids = {str(device_id).strip() for device_id, _name in list_midi_input_devices(force_refresh=False)}
+        stale_ids: List[str] = []
+        for device_id in list(self._inputs.keys()):
+            if str(device_id).strip() not in listed_ids:
+                stale_ids.append(device_id)
+        if not stale_ids:
+            return
+        for device_id in stale_ids:
+            self._close_input(device_id)
+        # Re-resolve selectors after dropping stale handles.
+        self._resync_selected_devices(force_refresh=False)
+
+    def _recompute_missing_selectors(self) -> None:
+        missing: set[str] = set()
+        open_ids = set(self._inputs.keys())
+        for selector in self._selected_device_ids:
+            token = str(selector).strip()
+            if not token:
+                continue
+            resolved_ids = list(self._resolved_ids_by_selector.get(token, []))
+            if not resolved_ids:
+                missing.add(token)
+                continue
+            if not any(device_id in open_ids for device_id in resolved_ids):
+                missing.add(token)
+        self._missing_selectors = missing

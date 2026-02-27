@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -39,8 +40,6 @@ class SearchWindow(QDialog):
         self.query_edit = QLineEdit()
         self.query_edit.setPlaceholderText("Type words from title or file path")
         input_row.addWidget(self.query_edit, 1)
-        self.search_btn = QPushButton("Search")
-        input_row.addWidget(self.search_btn)
         root.addLayout(input_row)
 
         self.results_list = QListWidget()
@@ -59,9 +58,9 @@ class SearchWindow(QDialog):
         button_row.addWidget(self.close_btn)
         root.addLayout(button_row)
 
-        self.search_btn.clicked.connect(self.run_search)
-        self.query_edit.returnPressed.connect(self.run_search)
         self.query_edit.textChanged.connect(lambda _text: self.run_search())
+        self.query_edit.installEventFilter(self)
+        self.results_list.installEventFilter(self)
         self.goto_btn.clicked.connect(self.go_to_selected)
         self.play_btn.clicked.connect(self.play_selected)
         self.results_list.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -104,29 +103,49 @@ class SearchWindow(QDialog):
             item = QListWidgetItem(display)
             item.setData(Qt.UserRole, match)
             self.results_list.addItem(item)
+        if matches:
+            self.results_list.setCurrentRow(0)
         self.status_label.setText(f"{len(matches)} match(es).")
 
-    def go_to_selected(self) -> None:
+    def go_to_selected(self) -> bool:
         if self._goto_handler is None:
-            return
+            return False
         match = self._selected_match()
         if match is None:
-            return
+            return False
         self._goto_handler(match)
+        self._return_to_main_window()
+        return True
 
-    def play_selected(self) -> None:
+    def play_selected(self) -> bool:
         if self._play_handler is None:
-            return
+            return False
         match = self._selected_match()
         if match is None:
-            return
+            return False
         self._play_handler(match)
+        self._return_to_main_window()
+        return True
+
+    def activate_selected_by_setting(self) -> bool:
+        if self._double_click_action == "play_highlight":
+            return self.play_selected()
+        return self.go_to_selected()
+
+    def select_result_delta(self, delta: int) -> bool:
+        count = int(self.results_list.count())
+        if count <= 0:
+            return False
+        current = int(self.results_list.currentRow())
+        if current < 0:
+            next_row = 0 if int(delta) >= 0 else (count - 1)
+        else:
+            next_row = (current + int(delta)) % count
+        self.results_list.setCurrentRow(next_row)
+        return True
 
     def _on_item_double_clicked(self, _item) -> None:
-        if self._double_click_action == "play_highlight":
-            self.play_selected()
-            return
-        self.go_to_selected()
+        self.activate_selected_by_setting()
 
     def _selected_match(self) -> Optional[dict]:
         item = self.results_list.currentItem()
@@ -136,3 +155,27 @@ class SearchWindow(QDialog):
         if not isinstance(match, dict):
             return None
         return match
+
+    def _return_to_main_window(self) -> None:
+        self.hide()
+        parent = self.parentWidget()
+        if parent is not None:
+            parent.raise_()
+            parent.activateWindow()
+            parent.setFocus()
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() != QEvent.KeyPress:
+            return super().eventFilter(obj, event)
+        key = int(event.key())
+        mods = event.modifiers()
+        if QKeySequence(int(mods) | key).matches(QKeySequence.Find):
+            self.focus_query()
+            return True
+        if key in {Qt.Key_Return, Qt.Key_Enter} and mods == Qt.NoModifier:
+            self.activate_selected_by_setting()
+            return True
+        if obj is self.query_edit and key in {Qt.Key_Up, Qt.Key_Down}:
+            self.select_result_delta(-1 if key == Qt.Key_Up else 1)
+            return True
+        return super().eventFilter(obj, event)

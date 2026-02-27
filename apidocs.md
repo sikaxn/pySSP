@@ -72,6 +72,44 @@ Mode values: `enable`, `disable`, `toggle`
     - `<group>-<page>-<button>` (example: `a-1-1`)
 - `GET/POST /api/resetpage/current`
 - `GET/POST /api/resetpage/all`
+- `GET/POST /api/group/next`
+- `GET/POST /api/group/prev`
+- `GET/POST /api/page/next`
+- `GET/POST /api/page/prev`
+- `GET/POST /api/soundbutton/next`
+- `GET/POST /api/soundbutton/prev`
+
+## Playback Selection / Volume
+
+- `GET/POST /api/playselected`
+  - Mimics the `Play Selected` hotkey behavior.
+- `GET/POST /api/playselectedpause`
+  - Mimics the `Play Selected / Pause` hotkey behavior.
+- `GET/POST /api/volume/<level>`
+  - Set master volume, where `level` is `0..100`.
+- `GET/POST /api/mute`
+  - Mimics the `Mute` hotkey toggle behavior.
+- `GET/POST /api/seek/percent/<value>`
+  - Seek transport by percentage (`0..100`, supports decimal values).
+- `GET/POST /api/seek/time/<value>`
+  - Seek transport by time string (`mm:ss`, `mm:ss:ff`, or `hh:mm:ss`).
+- `GET/POST /api/seek`
+  - Same as above using params:
+    - `percent=<0..100>`
+    - or `time=<mm:ss | mm:ss:ff | hh:mm:ss>`
+
+## Stage Alert
+
+- `GET/POST /api/alert`
+  - Send alert text to Stage Display.
+  - Supported params (query, form, or JSON):
+    - `text` (required): alert text
+    - `keep` (optional): `true/false` (default `true`)
+    - `seconds` (optional): `1..600`, used only when `keep=false`
+    - `mode` (optional): `disable` to clear alert
+    - `clear` (optional): `true` to clear alert
+- `GET/POST /api/alert/clear`
+  - Shortcut to clear current alert.
 
 ## Query Endpoints
 

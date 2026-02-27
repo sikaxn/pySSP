@@ -12,7 +12,7 @@ It includes:
 
 Python SSP is an independent project and has no affiliation with, endorsement by, or connection to the official Sports Sounds Pro.
 
-![pySSP main window](images/main%20window.png)
+![pySSP main window](docs/source/images/main_ui.png)
 
 ## Project status
 

@@ -41,6 +41,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QProgressBar,
+    QProgressDialog,
     QInputDialog,
     QTabWidget,
     QSpinBox,
@@ -3157,10 +3158,14 @@ class MainWindow(QMainWindow):
         return window
 
     def _tool_match_to_line(self, match: dict) -> str:
-        return (
+        line = (
             f"{match['location']} - Button {int(match['slot']) + 1}: "
             f"{match['title']} | {match['file_path']}"
         )
+        cause = str(match.get("cause", "")).strip()
+        if cause:
+            return f"{line} | Cause: {cause}"
+        return line
 
     def _tool_hotkey_match_to_line(self, match: dict) -> str:
         return (
@@ -3190,6 +3195,8 @@ class MainWindow(QMainWindow):
         if not file_path.lower().endswith(ext):
             file_path = f"{file_path}{ext}"
         header = "Page,Button Number,Sound Button Name,File Path"
+        if key == "verify_sound_buttons":
+            header = "Page,Button Number,Sound Button Name,File Path,Cause"
         try:
             self._write_csv_rows(file_path, header, matches)
         except Exception as exc:
@@ -3226,18 +3233,18 @@ class MainWindow(QMainWindow):
             cell = cell.replace('"', '""')
             return f'"{cell}"'
 
+        include_cause = "Cause" in header
         lines = [header]
         for match in matches:
-            lines.append(
-                ",".join(
-                    [
-                        _csv_cell(str(match["location"])),
-                        _csv_cell(str(int(match["slot"]) + 1)),
-                        _csv_cell(str(match["title"])),
-                        _csv_cell(str(match["file_path"])),
-                    ]
-                )
-            )
+            row = [
+                _csv_cell(str(match["location"])),
+                _csv_cell(str(int(match["slot"]) + 1)),
+                _csv_cell(str(match["title"])),
+                _csv_cell(str(match["file_path"])),
+            ]
+            if include_cause:
+                row.append(_csv_cell(str(match.get("cause", ""))))
+            lines.append(",".join(row))
         with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
             fh.write("\r\n".join(lines))
 
@@ -3373,40 +3380,64 @@ class MainWindow(QMainWindow):
 
     def _run_verify_sound_buttons(self) -> None:
         matches: List[dict] = []
+        diagnostics_cache: Dict[str, Optional[str]] = {}
+        entries: List[Tuple[str, int, int, SoundButtonData, str]] = []
+
+        def slot_cause(slot: SoundButtonData) -> Optional[str]:
+            path = str(slot.file_path or "").strip()
+            if not path:
+                return "No file path assigned."
+            cached = diagnostics_cache.get(path)
+            if cached is not None or path in diagnostics_cache:
+                return cached
+            cause = self._diagnose_sound_button_issue(path)
+            diagnostics_cache[path] = cause
+            return cause
+
         for group in GROUPS:
             for page_index in range(PAGE_COUNT):
+                location = self._page_display_name(group, page_index)
                 for slot_index, slot in enumerate(self.data[group][page_index]):
                     if not slot.assigned or slot.marker:
                         continue
-                    if os.path.exists(slot.file_path):
-                        continue
-                    title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
-                    matches.append(
-                        {
-                            "group": group,
-                            "page": page_index,
-                            "slot": slot_index,
-                            "title": title,
-                            "file_path": slot.file_path,
-                            "location": self._page_display_name(group, page_index),
-                        }
-                    )
+                    entries.append((group, page_index, slot_index, slot, location))
         for slot_index, slot in enumerate(self.cue_page):
             if not slot.assigned or slot.marker:
                 continue
-            if os.path.exists(slot.file_path):
-                continue
-            title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
-            matches.append(
-                {
-                    "group": "Q",
-                    "page": 0,
-                    "slot": slot_index,
-                    "title": title,
-                    "file_path": slot.file_path,
-                    "location": "Cue Page",
-                }
-            )
+            entries.append(("Q", 0, slot_index, slot, "Cue Page"))
+
+        cancelled = False
+        total = len(entries)
+        progress = QProgressDialog("Verifying sound buttons...", "Cancel", 0, max(1, total), self)
+        progress.setWindowTitle("Verify Sound Buttons")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        processed = 0
+        for group, page_index, slot_index, slot, location in entries:
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(f"Checking {location} - Button {slot_index + 1}...")
+            cause = slot_cause(slot)
+            if cause:
+                title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
+                matches.append(
+                    {
+                        "group": group,
+                        "page": page_index,
+                        "slot": slot_index,
+                        "title": title,
+                        "file_path": slot.file_path,
+                        "location": location,
+                        "cause": cause,
+                    }
+                )
+            processed += 1
+            progress.setValue(processed)
+            QApplication.processEvents()
+        progress.close()
 
         self._refresh_sound_grid()
         window = self._open_tool_window(
@@ -3422,14 +3453,50 @@ class MainWindow(QMainWindow):
             print_handler=lambda: self._print_tool_window("verify_sound_buttons", "Verify Sound Buttons"),
         )
         lines = [self._tool_match_to_line(match) for match in matches]
-        status = f"{len(matches)} invalid button(s) found."
-        if not lines:
+        if cancelled:
+            status = f"Cancelled after {processed}/{total} button(s). {len(matches)} invalid button(s) found."
+        else:
+            status = f"{len(matches)} invalid button(s) found."
+        if not lines and not cancelled:
             status = "No invalid sound button paths found."
         self._tool_window_matches["verify_sound_buttons"] = matches
         window.set_items(lines, matches=matches, status=status)
         window.show()
         window.raise_()
         window.activateWindow()
+
+    def _diagnose_sound_button_issue(self, file_path: str) -> Optional[str]:
+        path = str(file_path or "").strip()
+        if not path:
+            return "No file path assigned."
+        if not os.path.exists(path):
+            base_name = os.path.basename(path)
+            if ("?" in base_name) or ("\uFFFD" in base_name):
+                return "Missing file. Filename appears encoding-corrupted ('?' or replacement character)."
+            return "Missing file path."
+        try:
+            get_media_ssp_units(path)
+            return None
+        except Exception as exc:
+            return self._classify_audio_decode_issue(path, exc)
+
+    def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
+        ext = os.path.splitext(file_path)[1].lower()
+        reason = str(exc).strip() or exc.__class__.__name__
+        try:
+            with open(file_path, "rb") as fh:
+                head = fh.read(64)
+        except OSError:
+            return f"Audio decode failed: {reason}"
+
+        asf_header = bytes.fromhex("30 26 B2 75 8E 66 CF 11 A6 D9 00 AA 00 62 CE 6C")
+        if len(head) >= 16 and head[:16] == asf_header:
+            return "Audio decode failed: file is ASF/WMA content mislabeled as .mp3."
+        if ext == ".mp3" and len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+            return "Audio decode failed: MPEG bitstream appears malformed or unsupported by decoder."
+        if ext == ".mp3":
+            return "Audio decode failed: data does not appear to be valid MP3."
+        return f"Audio decode failed: {reason}"
 
     def _disable_playlist_on_all_pages(self) -> None:
         changed = False

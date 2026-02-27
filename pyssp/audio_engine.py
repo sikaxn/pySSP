@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import atexit
+import io
 import os
 import sys
 import threading
@@ -176,7 +177,7 @@ def _dedupe(values: List[str]) -> List[str]:
 
 def get_media_ssp_units(file_path: str) -> Tuple[int, int]:
     _ensure_decoder()
-    sound = pygame.mixer.Sound(file_path)
+    sound = _load_sound_with_fallback(file_path)
     raw_units = len(sound.get_raw())
     duration_ms = int(max(0.0, float(sound.get_length())) * 1000.0)
     return duration_ms, max(0, int(raw_units))
@@ -428,7 +429,7 @@ def _bytes_to_frames(raw: bytes, sample_size: int, channels: int) -> Optional[np
 
 def _decode_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
     _ensure_decoder()
-    sound = pygame.mixer.Sound(file_path)
+    sound = _load_sound_with_fallback(file_path)
     raw = sound.get_raw()
     mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
     sample_rate = int(mixer_info[0])
@@ -439,6 +440,49 @@ def _decode_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
         raise ValueError("Unsupported mixer sample format for streaming DSP")
     duration_ms = int((len(frames) / float(sample_rate)) * 1000.0)
     return frames, duration_ms
+
+
+def _load_sound_with_fallback(file_path: str):
+    try:
+        return pygame.mixer.Sound(file_path)
+    except Exception as direct_exc:
+        if not str(file_path or "").lower().endswith(".mp3"):
+            raise
+        try:
+            raw = open(file_path, "rb").read()
+        except Exception:
+            raise direct_exc
+        offset = _find_mp3_frame_sync_offset(raw)
+        if offset <= 0:
+            raise direct_exc
+        try:
+            return pygame.mixer.Sound(file=io.BytesIO(raw[offset:]))
+        except Exception as fallback_exc:
+            message = f"{direct_exc}; mp3 fallback from byte offset {offset} failed: {fallback_exc}"
+            raise type(direct_exc)(message) from fallback_exc
+
+
+def _find_mp3_frame_sync_offset(raw: bytes) -> int:
+    if not raw or len(raw) < 2:
+        return -1
+
+    start = 0
+    if len(raw) >= 10 and raw[:3] == b"ID3":
+        flags = raw[5]
+        size = ((raw[6] & 0x7F) << 21) | ((raw[7] & 0x7F) << 14) | ((raw[8] & 0x7F) << 7) | (raw[9] & 0x7F)
+        start = 10 + int(size)
+        if flags & 0x10:
+            start += 10
+        start = min(start, max(0, len(raw) - 2))
+
+    for i in range(max(0, start), len(raw) - 1):
+        if raw[i] != 0xFF:
+            continue
+        b1 = raw[i + 1]
+        if (b1 & 0xE0) != 0xE0:
+            continue
+        return i
+    return -1
 
 
 def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:

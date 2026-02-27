@@ -86,7 +86,7 @@ class WebRemoteServer:
     :root{
       --bg:#eef3f6; --panel:#ffffff; --ink:#1d2b34; --muted:#4f6472;
       --accent:#0b868a; --danger:#c13f29; --ok:#2e7d32; --line:#d5e1e7;
-      --empty:#0B868A; --assigned:#B0B0B0; --playing:#66FF33; --played:#FF3B30; --missing:#7B3FB3; --locked:#F2D74A; --marker:#111111;
+      --empty:#0B868A; --assigned:#B0B0B0; --playing:#66FF33; --played:#FF3B30; --missing:#7B3FB3; --locked:#F2D74A; --marker:#D0D0D0;
     }
     *{box-sizing:border-box}
     body{margin:0;padding:14px;background:linear-gradient(180deg,#edf3f7,#dde8ef);font-family:Segoe UI,Arial,sans-serif;color:var(--ink)}
@@ -115,7 +115,7 @@ class WebRemoteServer:
     .btn-grid button.played{background:var(--played);color:#fff}
     .btn-grid button.missing{background:var(--missing);color:#fff}
     .btn-grid button.locked{background:var(--locked)}
-    .btn-grid button.marker{background:var(--marker);color:#fff}
+    .btn-grid button.marker{background:var(--marker);color:#111}
     .tracks{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
     .track{padding:4px 0;border-bottom:1px dotted #d9e5eb}
     .track:last-child{border-bottom:0}

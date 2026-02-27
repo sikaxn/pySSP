@@ -121,7 +121,7 @@ COLORS = {
     "played": "#FF3B30",
     "missing": "#7B3FB3",
     "locked": "#F2D74A",
-    "marker": "#111111",
+    "marker": "#D0D0D0",
     "copied": "#2E65FF",
     "cue_indicator": "#61D6FF",
     "volume_indicator": "#FFD45A",
@@ -1395,6 +1395,14 @@ class MainWindow(QMainWindow):
             "volume_indicator": self.settings.color_volume_indicator,
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
         }
+        # Migrate legacy default marker color so marker text remains readable.
+        if str(self.settings.color_place_marker).strip().upper() == "#111111":
+            self.settings.color_place_marker = COLORS["marker"]
+            self.state_colors["marker"] = COLORS["marker"]
+            try:
+                save_settings(self.settings)
+            except OSError:
+                pass
         self.sound_button_text_color = self.settings.sound_button_text_color
         self.hotkeys: Dict[str, tuple[str, str]] = {
             "new_set": (self.settings.hotkey_new_set_1, self.settings.hotkey_new_set_2),
@@ -4740,6 +4748,8 @@ class MainWindow(QMainWindow):
             edit_action.setEnabled(page_created)
             marker_action = menu.addAction("Insert Place Marker")
             marker_action.setEnabled(page_created)
+            paste_action = menu.addAction(tr("Paste Sound Button"))
+            paste_action.setEnabled(self._copied_slot_buffer is not None and page_created and not slot.locked)
             selected = menu.exec_(button.mapToGlobal(pos))
             if selected == add_action:
                 self._pick_sound(slot_index)
@@ -4747,6 +4757,10 @@ class MainWindow(QMainWindow):
                 self._edit_sound_button(slot_index)
             elif selected == marker_action:
                 self._insert_place_marker(slot_index)
+            elif selected == paste_action:
+                if self._copied_slot_buffer is not None:
+                    page[slot_index] = self._clone_slot(self._copied_slot_buffer)
+                    self._set_dirty(True)
             self._refresh_page_list()
             self._refresh_sound_grid()
             return
@@ -4755,6 +4769,8 @@ class MainWindow(QMainWindow):
             edit_marker_action = menu.addAction("Edit Place Marker")
             copy_action = menu.addAction("Copy Sound Button")
             copy_action.setEnabled(True)
+            paste_action = menu.addAction(tr("Paste Sound Button"))
+            paste_action.setEnabled(self._copied_slot_buffer is not None and page_created and not slot.locked)
             change_color_action = menu.addAction("Change Colour")
             remove_color_action = menu.addAction("Remove Colour")
             remove_color_action.setEnabled(bool(slot.custom_color))
@@ -4764,6 +4780,10 @@ class MainWindow(QMainWindow):
                 self._edit_place_marker(slot_index)
             elif selected == copy_action:
                 self._copied_slot_buffer = self._clone_slot(slot)
+            elif selected == paste_action:
+                if self._copied_slot_buffer is not None:
+                    page[slot_index] = self._clone_slot(self._copied_slot_buffer)
+                    self._set_dirty(True)
             elif selected == change_color_action:
                 current = slot.custom_color or "#C0C0C0"
                 color = QColorDialog.getColor(QColor(current), self, "Button Colour")
@@ -4789,7 +4809,7 @@ class MainWindow(QMainWindow):
         cue_points_action.setEnabled(slot.assigned)
         copy_action = menu.addAction("Copy Sound Button")
         copy_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
-        paste_action = menu.addAction("Paste")
+        paste_action = menu.addAction(tr("Paste Sound Button"))
         paste_action.setEnabled(self._copied_slot_buffer is not None and page_created and not slot.locked)
         menu.addSeparator()
         highlight_action = menu.addAction("Highlight Off" if slot.highlighted else "Highlight On")

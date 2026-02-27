@@ -235,7 +235,7 @@ class OptionsDialog(QDialog):
             "highlight": "#A6D8FF",
             "lock": "#F2D74A",
             "error": "#7B3FB3",
-            "place_marker": "#111111",
+            "place_marker": "#D0D0D0",
             "empty": "#0B868A",
             "copied_to_cue": "#2E65FF",
             "cue_indicator": "#61D6FF",

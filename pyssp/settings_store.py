@@ -261,7 +261,7 @@ class AppSettings:
     color_played: str = "#FF3B30"
     color_error: str = "#7B3FB3"
     color_lock: str = "#F2D74A"
-    color_place_marker: str = "#111111"
+    color_place_marker: str = "#D0D0D0"
     color_copied_to_cue: str = "#2E65FF"
     color_cue_indicator: str = "#61D6FF"
     color_volume_indicator: str = "#FFD45A"
@@ -979,7 +979,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         color_played=_coerce_hex(str(section.get("color_played", "#FF3B30")), "#FF3B30"),
         color_error=_coerce_hex(str(section.get("color_error", "#7B3FB3")), "#7B3FB3"),
         color_lock=_coerce_hex(str(section.get("color_lock", "#F2D74A")), "#F2D74A"),
-        color_place_marker=_coerce_hex(str(section.get("color_place_marker", "#111111")), "#111111"),
+        color_place_marker=_coerce_hex(str(section.get("color_place_marker", "#D0D0D0")), "#D0D0D0"),
         color_copied_to_cue=_coerce_hex(str(section.get("color_copied_to_cue", "#2E65FF")), "#2E65FF"),
         color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
         color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),

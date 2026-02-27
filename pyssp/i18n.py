@@ -212,6 +212,7 @@ _TRANSLATIONS = {
         "Set Cue Points...": "设置 Cue 点...",
         "Copy Sound Button": "复制声音按钮",
         "Paste": "粘贴",
+        "Paste Sound Button": "粘贴声音按钮",
         "Highlight On": "高亮开",
         "Highlight Off": "高亮关",
         "Lock On": "锁定开",

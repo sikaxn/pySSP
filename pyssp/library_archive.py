@@ -277,7 +277,7 @@ class PackReportDialog(QDialog):
 
 def default_unpack_directory(package_path: str) -> str:
     appdata = os.getenv("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / ".config"
+    base = (Path(appdata) / "pyssp") if appdata else (Path.home() / ".config" / "pyssp")
     stem = Path(package_path).stem or "package"
     return str((base / "unpack" / stem).resolve())
 

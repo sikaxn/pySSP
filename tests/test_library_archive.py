@@ -5,6 +5,7 @@ from pyssp.library_archive import (
     build_archive_audio_entries,
     build_manifest,
     build_unpack_target_path,
+    default_unpack_directory,
     rewrite_packed_set_paths,
     unpack_pyssppak,
     write_manifest,
@@ -96,3 +97,12 @@ def test_unpack_target_path_flattens_when_requested(tmp_path):
 
     assert target_a.endswith(r"audio\crowd.wav")
     assert target_b.endswith(r"audio\crowd_2.wav")
+
+
+def test_default_unpack_directory_uses_pyssp_config_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    path = default_unpack_directory("/tmp/pyssp_audio_library_20260228_214421.pyssppak")
+
+    assert Path(path) == (tmp_path / ".config" / "pyssp" / "unpack" / "pyssp_audio_library_20260228_214421").resolve()

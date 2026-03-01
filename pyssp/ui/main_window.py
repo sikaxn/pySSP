@@ -2068,6 +2068,11 @@ class MainWindow(QMainWindow):
         )
         self.preload_status_icon.setToolTip("RAM preload idle")
         self.statusBar().addPermanentWidget(self.preload_status_icon)
+        if sys.platform == "darwin":
+            self.lock_screen_button = self._create_lock_screen_button(self.statusBar(), auto_raise=False)
+            self.lock_screen_button.setMinimumSize(28, 20)
+            self.statusBar().addPermanentWidget(self.lock_screen_button)
+            self._sync_lock_ui_state()
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
         self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
@@ -2713,14 +2718,26 @@ class MainWindow(QMainWindow):
         register_action = QAction("Register", self)
         register_action.triggered.connect(self._show_register_message)
         help_menu.addAction(register_action)
-        self.lock_screen_button = QToolButton(self.menuBar())
-        self.lock_screen_button.setCheckable(True)
-        self.lock_screen_button.setAutoRaise(True)
-        self.lock_screen_button.setIcon(QIcon(build_lock_icon()))
-        self.lock_screen_button.setIconSize(QSize(18, 18))
-        self.lock_screen_button.clicked.connect(self._toggle_lock_screen)
-        self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
+        if sys.platform != "darwin":
+            self.lock_screen_button = self._create_lock_screen_button(self.menuBar(), auto_raise=True)
+            self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
         self._apply_hotkeys()
+
+    def _create_lock_screen_button(self, parent: QWidget, *, auto_raise: bool) -> QToolButton:
+        button = QToolButton(parent)
+        button.setCheckable(True)
+        button.setAutoRaise(bool(auto_raise))
+        button.setIcon(QIcon(build_lock_icon()))
+        button.setIconSize(QSize(18, 18))
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        button.clicked.connect(self._on_lock_screen_button_clicked)
+        return button
+
+    def _on_lock_screen_button_clicked(self) -> None:
+        if sys.platform == "darwin":
+            QTimer.singleShot(0, self._toggle_lock_screen)
+            return
+        self._toggle_lock_screen()
 
     def _show_register_message(self) -> None:
         QMessageBox.information(

@@ -3,13 +3,25 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+import json
+from pathlib import Path
+
+
+def _load_release() -> str:
+    version_file = Path(__file__).resolve().parents[2] / "version.json"
+    try:
+        payload = json.loads(version_file.read_text(encoding="utf-8"))
+    except Exception:
+        return "0.0.0"
+    return str(payload.get("version", "0.0.0")).strip() or "0.0.0"
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'pySSP'
 copyright = '2026, pySSP Developers'
 author = 'Sikaxn'
-release = '0.1.0'
+release = _load_release()
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

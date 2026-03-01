@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/bitfocus/companion-module-base/main/assets/manifest.schema.json",
   "id": "pyssp",
-  "name": "pySSP",
+  "name": "Python SSP",
   "shortname": "pySSP",
   "description": "Control pySSP via its HTTP Web Remote API",
   "version": "1.1.0",
@@ -21,6 +21,6 @@
     "entrypoint": "../src/index.js"
   },
   "manufacturer": "pySSP",
-  "products": ["pySSP"],
+  "products": ["Python SSP"],
   "keywords": ["audio", "playback", "sound", "pyssp", "Sports", "Sounds", "Pro"]
 }

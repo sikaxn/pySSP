@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread, QUrl
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap, QPen, QIcon
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
     QFrame,
@@ -49,6 +50,7 @@ from PyQt5.QtWidgets import (
     QShortcut,
     QStyle,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -162,6 +164,7 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "mute": ("", ""),
     "volume_up": ("", ""),
     "volume_down": ("", ""),
+    "lock_toggle": ("Ctrl+L", ""),
 }
 
 MIDI_HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {key: ("", "") for key in HOTKEY_DEFAULTS.keys()}
@@ -198,7 +201,31 @@ SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "mute",
     "volume_up",
     "volume_down",
+    "lock_toggle",
 ]
+
+
+def build_lock_icon(size: int = 18, color: str = "#202020") -> QPixmap:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidth(2)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    body_w = max(8, int(size * 0.56))
+    body_h = max(6, int(size * 0.42))
+    body_x = int((size - body_w) / 2)
+    body_y = int(size * 0.46)
+    painter.drawRoundedRect(body_x, body_y, body_w, body_h, 2, 2)
+    shackle_w = max(6, int(size * 0.38))
+    shackle_h = max(5, int(size * 0.34))
+    shackle_x = int((size - shackle_w) / 2)
+    shackle_y = int(size * 0.16)
+    painter.drawArc(shackle_x, shackle_y, shackle_w, shackle_h, 0, 180 * 16)
+    painter.end()
+    return pixmap
 
 
 @dataclass
@@ -1201,6 +1228,294 @@ class MainThreadExecutor(QObject):
         raise value
 
 
+class LockScreenOverlay(QWidget):
+    unlocked = pyqtSignal()
+
+    def __init__(self, host: "MainWindow") -> None:
+        super().__init__(host)
+        self._host = host
+        self._mode = "click_3_random_points"
+        self._radius = 40
+        self._targets: List[Tuple[int, int]] = []
+        self._completed: set[int] = set()
+        self._fixed_button_rect = QRect()
+        self._slide_track_rect = QRect()
+        self._slide_handle_x = 0
+        self._slide_dragging = False
+        self._slide_drag_offset = 0
+        self.hide()
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+    def activate_lock(self) -> None:
+        self._mode = str(getattr(self._host, "lock_unlock_method", "click_3_random_points")).strip().lower()
+        self._completed.clear()
+        self.sync_geometry(rebuild_targets=True)
+        self.show()
+        self.raise_()
+        self.setFocus(Qt.ActiveWindowFocusReason)
+        self.update()
+
+    def deactivate_lock(self) -> None:
+        self.hide()
+        self._completed.clear()
+        self._slide_dragging = False
+
+    def reset_unlock_progress(self) -> None:
+        self._completed.clear()
+        self._slide_dragging = False
+        if self._mode == "slide_to_unlock" and (not self._slide_track_rect.isNull()):
+            self._slide_handle_x = self._slide_track_rect.left() + 4
+        self.update()
+
+    def sync_geometry(self, rebuild_targets: bool = False) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.setGeometry(parent.rect())
+        if rebuild_targets:
+            self._rebuild_unlock_geometry()
+
+    def _rebuild_unlock_geometry(self) -> None:
+        if self._mode == "click_one_button":
+            self._rebuild_fixed_button()
+        elif self._mode == "slide_to_unlock":
+            self._rebuild_slide_unlock()
+        else:
+            self._rebuild_targets()
+
+    def _rebuild_targets(self) -> None:
+        width = max(360, self.width())
+        height = max(260, self.height())
+        self._radius = max(28, min(56, int(min(width, height) * 0.06)))
+        margin = self._radius + 28
+        min_x = margin
+        max_x = max(min_x, width - margin)
+        min_y = max(margin + 34, int(height * 0.22))
+        max_y = max(min_y, height - margin)
+        min_dist_sq = max(1, int((self._radius * 3.1) ** 2))
+        targets: List[Tuple[int, int]] = []
+        attempts = 0
+        while len(targets) < 3 and attempts < 300:
+            attempts += 1
+            x = random.randint(min_x, max_x)
+            y = random.randint(min_y, max_y)
+            if all(((x - px) ** 2) + ((y - py) ** 2) >= min_dist_sq for px, py in targets):
+                targets.append((x, y))
+        fallback = [
+            (int(width * 0.24), int(height * 0.42)),
+            (int(width * 0.52), int(height * 0.70)),
+            (int(width * 0.78), int(height * 0.48)),
+        ]
+        for point in fallback:
+            if len(targets) >= 3:
+                break
+            targets.append(point)
+        self._targets = targets[:3]
+        self._completed.clear()
+        self.update()
+
+    def _rebuild_fixed_button(self) -> None:
+        width = max(360, self.width())
+        height = max(260, self.height())
+        button_w = min(280, max(180, int(width * 0.24)))
+        button_h = 60
+        self._fixed_button_rect = QRect(
+            int((width - button_w) / 2),
+            int(height * 0.66),
+            button_w,
+            button_h,
+        )
+        self.update()
+
+    def _rebuild_slide_unlock(self) -> None:
+        width = max(360, self.width())
+        height = max(260, self.height())
+        track_w = min(420, max(220, int(width * 0.4)))
+        track_h = 56
+        self._slide_track_rect = QRect(
+            int((width - track_w) / 2),
+            int(height * 0.66),
+            track_w,
+            track_h,
+        )
+        self._slide_handle_x = self._slide_track_rect.left() + 4
+        self._slide_dragging = False
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.LeftButton:
+            event.accept()
+            return
+        pos = event.pos()
+        if self._mode == "click_one_button":
+            if self._fixed_button_rect.contains(pos):
+                self.unlocked.emit()
+            event.accept()
+            return
+        if self._mode == "slide_to_unlock":
+            handle = self._slide_handle_rect()
+            if handle.contains(pos):
+                self._slide_dragging = True
+                self._slide_drag_offset = pos.x() - handle.left()
+            event.accept()
+            return
+        for index, (center_x, center_y) in enumerate(self._targets):
+            if index in self._completed:
+                continue
+            if ((pos.x() - center_x) ** 2) + ((pos.y() - center_y) ** 2) <= (self._radius ** 2):
+                self._completed.add(index)
+                if len(self._completed) >= len(self._targets):
+                    self.unlocked.emit()
+                self.update()
+                event.accept()
+                return
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._mode != "slide_to_unlock" or (not self._slide_dragging):
+            event.accept()
+            return
+        handle = self._slide_handle_rect()
+        min_x = self._slide_track_rect.left() + 4
+        max_x = self._slide_track_rect.right() - handle.width() - 3
+        next_x = max(min_x, min(max_x, event.pos().x() - self._slide_drag_offset))
+        self._slide_handle_x = next_x
+        self.update()
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._mode != "slide_to_unlock":
+            event.accept()
+            return
+        if self._slide_dragging:
+            handle = self._slide_handle_rect()
+            threshold = self._slide_track_rect.right() - handle.width() - 12
+            if self._slide_handle_x >= threshold:
+                self._slide_dragging = False
+                self.unlocked.emit()
+                event.accept()
+                return
+            self._slide_dragging = False
+            self._slide_handle_x = self._slide_track_rect.left() + 4
+            self.update()
+        event.accept()
+
+    def keyPressEvent(self, event) -> None:
+        self._host._handle_lock_overlay_key_press(event)
+        event.accept()
+
+    def keyReleaseEvent(self, event) -> None:
+        self._host._handle_lock_overlay_key_release(event)
+        event.accept()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 118))
+
+        automation_locked = bool(getattr(self._host, "_automation_locked", False))
+        panel_width = min(max(320, self.width() - 80), 620)
+        panel_height = 120 if automation_locked else 84
+        panel_x = int((self.width() - panel_width) / 2)
+        panel_y = 28
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(14, 18, 24, 190))
+        painter.drawRoundedRect(panel_x, panel_y, panel_width, panel_height, 12, 12)
+
+        painter.setPen(QColor("#F4F7FB"))
+        title_font = QFont(self.font())
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(panel_x, panel_y + 16, panel_width, 28, Qt.AlignHCenter | Qt.AlignVCenter, tr("Screen Locked"))
+
+        body_font = QFont(self.font())
+        body_font.setPointSize(10)
+        painter.setFont(body_font)
+        painter.setPen(QColor("#D6DBE3"))
+        helper_text = tr("Click all 3 targets to unlock.")
+        if self._mode == "click_one_button":
+            helper_text = tr("Click the unlock button to continue.")
+        elif self._mode == "slide_to_unlock":
+            helper_text = tr("Slide all the way to unlock.")
+        painter.drawText(
+            panel_x + 18,
+            panel_y + 42,
+            panel_width - 36,
+            34,
+            Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap,
+            helper_text,
+        )
+        if automation_locked:
+            warning_rect = QRect(panel_x + 18, panel_y + 76, panel_width - 36, 32)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#C13F29"))
+            painter.drawRoundedRect(warning_rect, 8, 8)
+            painter.setPen(QColor("#FFF5F3"))
+            painter.drawText(
+                warning_rect.adjusted(10, 0, -10, 0),
+                Qt.AlignCenter | Qt.TextWordWrap,
+                tr("Automation lock is active. pySSP is expected to be controlled remotely. Unlock only for troubleshooting when you are sure."),
+            )
+
+        label_font = QFont(self.font())
+        label_font.setPointSize(11)
+        label_font.setBold(True)
+        if self._mode == "click_one_button":
+            painter.setPen(QPen(QColor("#F4F7FB"), 2))
+            painter.setBrush(QColor(255, 255, 255, 54))
+            painter.drawRoundedRect(self._fixed_button_rect, 10, 10)
+            painter.setFont(label_font)
+            painter.setPen(QColor("#F4F7FB"))
+            painter.drawText(self._fixed_button_rect, Qt.AlignCenter, tr("Unlock"))
+        elif self._mode == "slide_to_unlock":
+            painter.setPen(QPen(QColor("#F4F7FB"), 2))
+            painter.setBrush(QColor(255, 255, 255, 34))
+            painter.drawRoundedRect(self._slide_track_rect, 18, 18)
+            painter.setFont(label_font)
+            painter.setPen(QColor("#D6DBE3"))
+            painter.drawText(self._slide_track_rect, Qt.AlignCenter, tr("Slide to Unlock"))
+            handle = self._slide_handle_rect()
+            painter.setPen(QPen(QColor("#52D080"), 2))
+            painter.setBrush(QColor("#52D080"))
+            painter.drawRoundedRect(handle, 18, 18)
+            painter.setPen(QColor("#0F1115"))
+            painter.drawText(handle, Qt.AlignCenter, ">")
+        else:
+            for index, (center_x, center_y) in enumerate(self._targets):
+                hit = index in self._completed
+                fill = QColor(82, 208, 128, 165) if hit else QColor(255, 255, 255, 54)
+                border = QColor("#52D080") if hit else QColor("#F4F7FB")
+                painter.setPen(QPen(border, 2))
+                painter.setBrush(fill)
+                painter.drawEllipse(center_x - self._radius, center_y - self._radius, self._radius * 2, self._radius * 2)
+                painter.setFont(label_font)
+                painter.setPen(QColor("#0F1115") if hit else QColor("#F4F7FB"))
+                painter.drawText(
+                    center_x - self._radius,
+                    center_y - self._radius,
+                    self._radius * 2,
+                    self._radius * 2,
+                    Qt.AlignCenter,
+                    str(index + 1),
+                )
+        painter.end()
+        super().paintEvent(event)
+
+    def _slide_handle_rect(self) -> QRect:
+        if self._slide_track_rect.isNull():
+            return QRect()
+        handle_w = 72
+        inset = 4
+        return QRect(
+            self._slide_handle_x,
+            self._slide_track_rect.top() + inset,
+            handle_w,
+            self._slide_track_rect.height() - (inset * 2),
+        )
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1235,6 +1550,21 @@ class MainWindow(QMainWindow):
         self.inactive_group_color = self.settings.inactive_group_color
         self.title_char_limit = self.settings.title_char_limit
         self.show_file_notifications = self.settings.show_file_notifications
+        self.lock_allow_quit = bool(getattr(self.settings, "lock_allow_quit", False))
+        self.lock_allow_system_hotkeys = bool(getattr(self.settings, "lock_allow_system_hotkeys", False))
+        self.lock_allow_quick_action_hotkeys = bool(getattr(self.settings, "lock_allow_quick_action_hotkeys", False))
+        self.lock_allow_sound_button_hotkeys = bool(getattr(self.settings, "lock_allow_sound_button_hotkeys", False))
+        self.lock_allow_midi_control = bool(getattr(self.settings, "lock_allow_midi_control", False))
+        self.lock_auto_allow_quit = bool(getattr(self.settings, "lock_auto_allow_quit", True))
+        self.lock_auto_allow_midi_control = bool(getattr(self.settings, "lock_auto_allow_midi_control", True))
+        self.lock_unlock_method = str(getattr(self.settings, "lock_unlock_method", "click_3_random_points")).strip().lower()
+        if self.lock_unlock_method not in {"click_3_random_points", "click_one_button", "slide_to_unlock"}:
+            self.lock_unlock_method = "click_3_random_points"
+        self.lock_require_password = bool(getattr(self.settings, "lock_require_password", False))
+        self.lock_password = str(getattr(self.settings, "lock_password", ""))
+        self.lock_restart_state = str(getattr(self.settings, "lock_restart_state", "unlock_on_restart")).strip().lower()
+        if self.lock_restart_state not in {"unlock_on_restart", "lock_on_restart"}:
+            self.lock_restart_state = "unlock_on_restart"
         self.fade_in_sec = self.settings.fade_in_sec
         self.cross_fade_sec = self.settings.cross_fade_sec
         self.fade_out_sec = self.settings.fade_out_sec
@@ -1441,6 +1771,7 @@ class MainWindow(QMainWindow):
             "mute": (self.settings.hotkey_mute_1, self.settings.hotkey_mute_2),
             "volume_up": (self.settings.hotkey_volume_up_1, self.settings.hotkey_volume_up_2),
             "volume_down": (self.settings.hotkey_volume_down_1, self.settings.hotkey_volume_down_2),
+            "lock_toggle": (self.settings.hotkey_lock_toggle_1, self.settings.hotkey_lock_toggle_2),
         }
         self.quick_action_enabled = bool(self.settings.quick_action_enabled)
         self.quick_action_keys = list(self.settings.quick_action_keys[:48])
@@ -1490,6 +1821,7 @@ class MainWindow(QMainWindow):
             "mute": (self.settings.midi_hotkey_mute_1, self.settings.midi_hotkey_mute_2),
             "volume_up": (self.settings.midi_hotkey_volume_up_1, self.settings.midi_hotkey_volume_up_2),
             "volume_down": (self.settings.midi_hotkey_volume_down_1, self.settings.midi_hotkey_volume_down_2),
+            "lock_toggle": (self.settings.midi_hotkey_lock_toggle_1, self.settings.midi_hotkey_lock_toggle_2),
         }
         self.midi_quick_action_enabled = bool(self.settings.midi_quick_action_enabled)
         self.midi_quick_action_bindings = [normalize_midi_binding(v) for v in self.settings.midi_quick_action_bindings[:48]]
@@ -1648,6 +1980,10 @@ class MainWindow(QMainWindow):
         self._runtime_hotkey_shortcuts: List[QShortcut] = []
         self._modifier_hotkey_handlers: Dict[int, List[Callable[[], None]]] = {}
         self._modifier_hotkey_down: set[int] = set()
+        self._ui_locked = False
+        self._automation_locked = False
+        self._lock_screen_overlay: Optional[LockScreenOverlay] = None
+        self.lock_screen_button: Optional[QToolButton] = None
         self._midi_router = MidiInputRouter(self._on_midi_binding_triggered)
         self._midi_action_handlers: Dict[str, Callable[[], None]] = {}
         self._midi_last_trigger_t: Dict[str, float] = {}
@@ -1696,9 +2032,14 @@ class MainWindow(QMainWindow):
         self._stage_alert_sticky: bool = False
 
         self._build_ui()
+        self._lock_screen_overlay = LockScreenOverlay(self)
+        self._lock_screen_overlay.unlocked.connect(self._attempt_unlock_from_overlay)
         self._apply_language()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
+        self._sync_lock_ui_state()
+        if self.lock_restart_state == "lock_on_restart" and bool(getattr(self.settings, "lock_was_locked_on_exit", False)):
+            self._engage_lock_screen()
         self.statusBar().addWidget(self.status_hover_label)
         self.statusBar().addWidget(self.status_now_playing_label, 1)
         self.statusBar().addPermanentWidget(self.timecode_status_label)
@@ -2346,6 +2687,13 @@ class MainWindow(QMainWindow):
         register_action = QAction("Register", self)
         register_action.triggered.connect(self._show_register_message)
         help_menu.addAction(register_action)
+        self.lock_screen_button = QToolButton(self.menuBar())
+        self.lock_screen_button.setCheckable(True)
+        self.lock_screen_button.setAutoRaise(True)
+        self.lock_screen_button.setIcon(QIcon(build_lock_icon()))
+        self.lock_screen_button.setIconSize(QSize(18, 18))
+        self.lock_screen_button.clicked.connect(self._toggle_lock_screen)
+        self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
         self._apply_hotkeys()
 
     def _show_register_message(self) -> None:
@@ -2833,6 +3181,8 @@ class MainWindow(QMainWindow):
 
         for key in ordered_system_keys:
             handler = runtime_handlers[key]
+            source_name = "lock_toggle" if key == "lock_toggle" else "system"
+            wrapped_handler = (lambda fn=handler, source=source_name: self._run_locked_input(source, fn))
             h1, h2 = self._normalized_hotkey_pair(key)
             for seq_text in [h1, h2]:
                 key_token = self._normalize_hotkey_text(seq_text)
@@ -2842,8 +3192,8 @@ class MainWindow(QMainWindow):
                 modifier_key = self._modifier_key_from_hotkey_text(seq_text)
                 if modifier_key is not None:
                     handlers = self._modifier_hotkey_handlers.setdefault(modifier_key, [])
-                    if handler not in handlers:
-                        handlers.append(handler)
+                    if wrapped_handler not in handlers:
+                        handlers.append(wrapped_handler)
                         key_name = self._normalize_hotkey_text(seq_text)
                         if key_name:
                             registered_keys.add(key_name)
@@ -2853,7 +3203,7 @@ class MainWindow(QMainWindow):
                     continue
                 shortcut = QShortcut(seq, self)
                 shortcut.setContext(Qt.ApplicationShortcut)
-                shortcut.activated.connect(handler)
+                shortcut.activated.connect(wrapped_handler)
                 self._runtime_hotkey_shortcuts.append(shortcut)
                 if key_token:
                     registered_keys.add(key_token)
@@ -2869,7 +3219,9 @@ class MainWindow(QMainWindow):
                     continue
                 shortcut = QShortcut(seq, self)
                 shortcut.setContext(Qt.ApplicationShortcut)
-                shortcut.activated.connect(lambda slot=idx: self._quick_action_trigger(slot))
+                shortcut.activated.connect(
+                    lambda slot=idx: self._run_locked_input("quick_action", lambda: self._quick_action_trigger(slot))
+                )
                 self._runtime_hotkey_shortcuts.append(shortcut)
                 if key_token:
                     registered_keys.add(key_token)
@@ -2883,9 +3235,12 @@ class MainWindow(QMainWindow):
                     continue
                 shortcut = QShortcut(seq, self)
                 shortcut.setContext(Qt.ApplicationShortcut)
-                shortcut.activated.connect(lambda sk=slot_key: self._sound_button_hotkey_trigger(sk))
+                shortcut.activated.connect(
+                    lambda sk=slot_key: self._run_locked_input("sound_button", lambda: self._sound_button_hotkey_trigger(sk))
+                )
                 self._runtime_hotkey_shortcuts.append(shortcut)
         self._apply_midi_bindings()
+        self._sync_lock_ui_state()
 
     def _runtime_action_handlers(self) -> Dict[str, Callable[[], None]]:
         return {
@@ -2914,6 +3269,7 @@ class MainWindow(QMainWindow):
             "mute": self._toggle_mute_hotkey,
             "volume_up": self._volume_up_hotkey,
             "volume_down": self._volume_down_hotkey,
+            "lock_toggle": self._hotkey_lock_toggle,
         }
 
     def _normalized_midi_pair(self, action_key: str) -> tuple[str, str]:
@@ -2948,6 +3304,7 @@ class MainWindow(QMainWindow):
 
         for key in ordered_system_keys:
             handler = runtime_handlers[key]
+            source_name = "lock_toggle" if key == "lock_toggle" else "midi"
             m1, m2 = self._normalized_midi_pair(key)
             for token in [m1, m2]:
                 if not token:
@@ -2955,7 +3312,7 @@ class MainWindow(QMainWindow):
                 if self.midi_sound_button_hotkey_enabled and self.midi_sound_button_hotkey_priority == "sound_button_first":
                     if token in sound_bindings:
                         continue
-                self._midi_action_handlers[token] = handler
+                self._midi_action_handlers[token] = (lambda fn=handler, source=source_name: self._run_locked_input(source, fn))
                 registered_tokens.add(token)
 
         if self.midi_quick_action_enabled:
@@ -7068,6 +7425,13 @@ class MainWindow(QMainWindow):
             inactive_group_color=self.inactive_group_color,
             title_char_limit=self.title_char_limit,
             show_file_notifications=self.show_file_notifications,
+            lock_allow_quit=self.lock_allow_quit,
+            lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
+            lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
+            lock_allow_sound_button_hotkeys=self.lock_allow_sound_button_hotkeys,
+            lock_allow_midi_control=self.lock_allow_midi_control,
+            lock_auto_allow_quit=self.lock_auto_allow_quit,
+            lock_auto_allow_midi_control=self.lock_auto_allow_midi_control,
             fade_in_sec=self.fade_in_sec,
             cross_fade_sec=self.cross_fade_sec,
             fade_out_sec=self.fade_out_sec,
@@ -7173,6 +7537,10 @@ class MainWindow(QMainWindow):
             stage_display_layout=self.stage_display_layout,
             stage_display_visibility=self.stage_display_visibility,
             stage_display_text_source=self.stage_display_text_source,
+            lock_unlock_method=self.lock_unlock_method,
+            lock_require_password=self.lock_require_password,
+            lock_password=self.lock_password,
+            lock_restart_state=self.lock_restart_state,
             stage_display_gadgets=self.stage_display_gadgets,
             ui_language=self.ui_language,
             initial_page=initial_page,
@@ -7189,6 +7557,17 @@ class MainWindow(QMainWindow):
         self.active_group_color = dialog.active_group_color
         self.inactive_group_color = dialog.inactive_group_color
         self.title_char_limit = dialog.title_limit_spin.value()
+        self.lock_allow_quit = dialog.selected_lock_allow_quit()
+        self.lock_allow_system_hotkeys = dialog.selected_lock_allow_system_hotkeys()
+        self.lock_allow_quick_action_hotkeys = dialog.selected_lock_allow_quick_action_hotkeys()
+        self.lock_allow_sound_button_hotkeys = dialog.selected_lock_allow_sound_button_hotkeys()
+        self.lock_allow_midi_control = dialog.selected_lock_allow_midi_control()
+        self.lock_auto_allow_quit = dialog.selected_lock_auto_allow_quit()
+        self.lock_auto_allow_midi_control = dialog.selected_lock_auto_allow_midi_control()
+        self.lock_unlock_method = dialog.selected_lock_unlock_method()
+        self.lock_require_password = dialog.selected_lock_require_password()
+        self.lock_password = dialog.selected_lock_password()
+        self.lock_restart_state = dialog.selected_lock_restart_state()
         self.fade_in_sec = dialog.fade_in_spin.value()
         self.cross_fade_sec = dialog.cross_fade_spin.value()
         self.fade_out_sec = dialog.fade_out_spin.value()
@@ -7348,6 +7727,7 @@ class MainWindow(QMainWindow):
         self._refresh_group_buttons()
         self._refresh_sound_grid()
         self._apply_web_remote_state()
+        self._sync_lock_ui_state()
         self._save_settings()
 
     def _api_success(self, result: Optional[dict] = None, status: int = 200) -> dict:
@@ -7577,6 +7957,8 @@ class MainWindow(QMainWindow):
             "playlist_enabled": False if self.cue_mode else self.page_playlist_enabled[self.current_group][self.current_page],
             "shuffle_enabled": False if self.cue_mode else self.page_shuffle_enabled[self.current_group][self.current_page],
             "is_playing": bool(self._all_active_players()),
+            "screen_locked": bool(self._ui_locked),
+            "automation_locked": bool(self._automation_locked),
             "playing_buttons": [self._format_button_key(k).lower() for k in sorted(self._active_playing_keys)],
             "current_playing": self._format_button_key(self.current_playing).lower() if self.current_playing else None,
             "playing_tracks": playing_tracks,
@@ -7895,6 +8277,15 @@ class MainWindow(QMainWindow):
             page = self._api_page_state(group, page_index)
             page["buttons"] = self._api_page_buttons(group, page_index)
             return self._api_success(page)
+        if cmd == "lock":
+            self._engage_lock_screen()
+            return self._api_success({"screen_locked": True, "automation_locked": False, "state": self._api_state()})
+        if cmd == "automation_lock":
+            self._engage_lock_screen(automation=True)
+            return self._api_success({"screen_locked": True, "automation_locked": True, "state": self._api_state()})
+        if cmd == "unlock":
+            self._release_lock_screen(force=True)
+            return self._api_success({"screen_locked": False, "automation_locked": False, "state": self._api_state()})
 
         if cmd == "goto":
             group, page_index, slot_index, error = self._parse_button_id(params.get("target", ""), require_slot=False)
@@ -9392,6 +9783,18 @@ class MainWindow(QMainWindow):
         self.settings.inactive_group_color = self.inactive_group_color
         self.settings.title_char_limit = self.title_char_limit
         self.settings.show_file_notifications = self.show_file_notifications
+        self.settings.lock_allow_quit = bool(self.lock_allow_quit)
+        self.settings.lock_allow_system_hotkeys = bool(self.lock_allow_system_hotkeys)
+        self.settings.lock_allow_quick_action_hotkeys = bool(self.lock_allow_quick_action_hotkeys)
+        self.settings.lock_allow_sound_button_hotkeys = bool(self.lock_allow_sound_button_hotkeys)
+        self.settings.lock_allow_midi_control = bool(self.lock_allow_midi_control)
+        self.settings.lock_auto_allow_quit = bool(self.lock_auto_allow_quit)
+        self.settings.lock_auto_allow_midi_control = bool(self.lock_auto_allow_midi_control)
+        self.settings.lock_unlock_method = self.lock_unlock_method
+        self.settings.lock_require_password = bool(self.lock_require_password)
+        self.settings.lock_password = self.lock_password
+        self.settings.lock_restart_state = self.lock_restart_state
+        self.settings.lock_was_locked_on_exit = bool(self._ui_locked)
         self.settings.volume = self.volume_slider.value() if self.volume_slider is not None else self.player.volume()
         self.settings.last_set_path = self.current_set_path
         self.settings.last_group = self.current_group
@@ -9521,6 +9924,8 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_volume_up_2 = self.hotkeys.get("volume_up", ("", ""))[1]
         self.settings.hotkey_volume_down_1 = self.hotkeys.get("volume_down", ("", ""))[0]
         self.settings.hotkey_volume_down_2 = self.hotkeys.get("volume_down", ("", ""))[1]
+        self.settings.hotkey_lock_toggle_1 = self.hotkeys.get("lock_toggle", ("", ""))[0]
+        self.settings.hotkey_lock_toggle_2 = self.hotkeys.get("lock_toggle", ("", ""))[1]
         self.settings.quick_action_enabled = bool(self.quick_action_enabled)
         self.settings.quick_action_keys = list(self.quick_action_keys[:48])
         self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
@@ -9589,6 +9994,8 @@ class MainWindow(QMainWindow):
         self.settings.midi_hotkey_volume_up_2 = self.midi_hotkeys.get("volume_up", ("", ""))[1]
         self.settings.midi_hotkey_volume_down_1 = self.midi_hotkeys.get("volume_down", ("", ""))[0]
         self.settings.midi_hotkey_volume_down_2 = self.midi_hotkeys.get("volume_down", ("", ""))[1]
+        self.settings.midi_hotkey_lock_toggle_1 = self.midi_hotkeys.get("lock_toggle", ("", ""))[0]
+        self.settings.midi_hotkey_lock_toggle_2 = self.midi_hotkeys.get("lock_toggle", ("", ""))[1]
         self.settings.midi_quick_action_enabled = bool(self.midi_quick_action_enabled)
         self.settings.midi_quick_action_bindings = list(self.midi_quick_action_bindings[:48])
         self.settings.midi_sound_button_hotkey_enabled = bool(self.midi_sound_button_hotkey_enabled)
@@ -9632,6 +10039,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_page_list_item_heights()
+        if self._lock_screen_overlay is not None:
+            self._lock_screen_overlay.sync_geometry(rebuild_targets=self._ui_locked)
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.page_list.viewport():
@@ -9664,6 +10073,9 @@ class MainWindow(QMainWindow):
         return
 
     def keyPressEvent(self, event) -> None:
+        if self._ui_locked and not self._is_locked_input_allowed("system"):
+            event.accept()
+            return
         if event.isAutoRepeat():
             super().keyPressEvent(event)
             return
@@ -10167,7 +10579,7 @@ class MainWindow(QMainWindow):
                 pass
         if self._midi_context_block_actions:
             return
-        if self._apply_midi_rotary(source_selector, status, data1, data2):
+        if self._is_locked_input_allowed("midi") and self._apply_midi_rotary(source_selector, status, data1, data2):
             return
         _selector, normalized_token = split_midi_binding(token)
         if not normalized_token:
@@ -10216,6 +10628,11 @@ class MainWindow(QMainWindow):
         super().keyReleaseEvent(event)
 
     def closeEvent(self, event) -> None:
+        lock_allows_quit = self.lock_auto_allow_quit if self._automation_locked else self.lock_allow_quit
+        if self._ui_locked and not lock_allows_quit:
+            self.statusBar().showMessage(tr("Unlock the screen before closing pySSP."), 3000)
+            event.ignore()
+            return
         if self._is_playback_in_progress():
             answer = QMessageBox.warning(
                 self,
@@ -10289,6 +10706,240 @@ class MainWindow(QMainWindow):
             if extra.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
                 return True
         return False
+
+    def _is_locked_input_allowed(self, source: str) -> bool:
+        if not self._ui_locked:
+            return True
+        token = str(source or "").strip().lower()
+        if token == "lock_toggle":
+            return True
+        if self._automation_locked:
+            if token == "midi":
+                return bool(self.lock_auto_allow_midi_control)
+            return False
+        if token == "system":
+            return bool(self.lock_allow_system_hotkeys)
+        if token == "quick_action":
+            return bool(self.lock_allow_quick_action_hotkeys and self.quick_action_enabled)
+        if token == "sound_button":
+            return bool(self.lock_allow_sound_button_hotkeys and self.sound_button_hotkey_enabled)
+        if token == "midi":
+            return bool(self.lock_allow_midi_control)
+        return False
+
+    def _run_locked_input(self, source: str, handler: Callable[[], None]) -> None:
+        if not self._is_locked_input_allowed(source):
+            return
+        handler()
+
+    def _handle_lock_overlay_key_press(self, event) -> None:
+        if event.isAutoRepeat():
+            return
+        if not self._is_locked_input_allowed("system"):
+            return
+        key = int(event.key())
+        handlers = self._modifier_hotkey_handlers.get(key)
+        if handlers and key not in self._modifier_hotkey_down:
+            self._modifier_hotkey_down.add(key)
+            for handler in handlers:
+                handler()
+
+    def _handle_lock_overlay_key_release(self, event) -> None:
+        key = int(event.key())
+        if key in self._modifier_hotkey_down:
+            self._modifier_hotkey_down.discard(key)
+
+    def _hotkey_lock_toggle(self) -> None:
+        if self._ui_locked:
+            self._attempt_unlock_from_hotkey()
+            return
+        self._engage_lock_screen()
+
+    def _toggle_lock_screen(self) -> None:
+        if self._ui_locked:
+            return
+        self._engage_lock_screen()
+
+    def _engage_lock_screen(self, automation: bool = False) -> None:
+        if self._ui_locked and self._automation_locked == bool(automation):
+            return
+        self._ui_locked = True
+        self._automation_locked = bool(automation)
+        self._modifier_hotkey_down.clear()
+        if self._lock_screen_overlay is not None:
+            self._lock_screen_overlay.activate_lock()
+        self._sync_lock_ui_state()
+        status = tr("Automation lock is active.") if self._automation_locked else tr("Lock screen is active.")
+        self.statusBar().showMessage(status, 2500)
+
+    def _attempt_unlock_from_overlay(self) -> None:
+        if self._automation_locked:
+            if not self._prompt_unlock_phrase(
+                phrase="sure to unlock",
+                message=tr("Type sure to unlock and press Enter to unlock remote automation control."),
+                error_text=tr("Type sure to unlock to continue."),
+                require_password=bool(self.lock_require_password and self.lock_password),
+            ):
+                if self._lock_screen_overlay is not None:
+                    self._lock_screen_overlay.reset_unlock_progress()
+                return
+            self._release_lock_screen()
+            return
+        if self.lock_require_password:
+            if not self._prompt_unlock_credentials(require_keyword=False):
+                if self._lock_screen_overlay is not None:
+                    self._lock_screen_overlay.reset_unlock_progress()
+                return
+        self._release_lock_screen()
+
+    def _attempt_unlock_from_hotkey(self) -> None:
+        if self._automation_locked:
+            if not self._prompt_unlock_phrase(
+                phrase="sure to unlock",
+                message=tr("Type sure to unlock and press Enter to unlock remote automation control."),
+                error_text=tr("Type sure to unlock to continue."),
+                require_password=bool(self.lock_require_password and self.lock_password),
+            ):
+                return
+            self._release_lock_screen()
+            return
+        require_keyword = not bool(self.lock_require_password and self.lock_password)
+        if not self._prompt_unlock_credentials(require_keyword=require_keyword):
+            return
+        self._release_lock_screen()
+
+    def _prompt_unlock_credentials(self, require_keyword: bool) -> bool:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Unlock pySSP"))
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        if require_keyword:
+            message = tr("Type unlock and press Enter to unlock.")
+        elif self.lock_require_password:
+            message = tr("Enter password and press Enter to unlock.")
+        else:
+            message = tr("Press Enter to unlock.")
+        if self.lock_require_password and require_keyword:
+            message += "\n" + tr("Password is also required.")
+        note = QLabel(message, dialog)
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        keyword_edit: Optional[QLineEdit] = None
+        if require_keyword:
+            keyword_edit = QLineEdit(dialog)
+            keyword_edit.setPlaceholderText("unlock")
+            layout.addWidget(keyword_edit)
+        password_edit: Optional[QLineEdit] = None
+        if self.lock_require_password:
+            password_edit = QLineEdit(dialog)
+            password_edit.setEchoMode(QLineEdit.Password)
+            password_edit.setPlaceholderText(tr("Password"))
+            layout.addWidget(password_edit)
+        warning = QLabel("", dialog)
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color:#B00020; font-weight:bold;")
+        warning.setVisible(False)
+        layout.addWidget(warning)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        layout.addWidget(buttons)
+
+        def submit() -> None:
+            if require_keyword and keyword_edit is not None and keyword_edit.text().strip().lower() != "unlock":
+                warning.setText(tr("Type unlock to continue."))
+                warning.setVisible(True)
+                return
+            if self.lock_require_password and password_edit is not None and password_edit.text() != self.lock_password:
+                warning.setText(tr("Password is incorrect."))
+                warning.setVisible(True)
+                return
+            dialog.accept()
+
+        buttons.accepted.connect(submit)
+        buttons.rejected.connect(dialog.reject)
+        if keyword_edit is not None:
+            keyword_edit.returnPressed.connect(submit)
+            keyword_edit.setFocus()
+        elif password_edit is not None:
+            password_edit.returnPressed.connect(submit)
+            password_edit.setFocus()
+        if password_edit is not None and keyword_edit is not None:
+            password_edit.returnPressed.connect(submit)
+        return dialog.exec_() == QDialog.Accepted
+
+    def _prompt_unlock_phrase(self, phrase: str, message: str, error_text: str, require_password: bool = False) -> bool:
+        target = str(phrase or "").strip().lower()
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Unlock pySSP"))
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        prompt_message = str(message or "")
+        if require_password:
+            prompt_message += "\n" + tr("Password is also required.")
+        note = QLabel(prompt_message, dialog)
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        text_edit = QLineEdit(dialog)
+        text_edit.setPlaceholderText(target)
+        layout.addWidget(text_edit)
+        password_edit: Optional[QLineEdit] = None
+        if require_password:
+            password_edit = QLineEdit(dialog)
+            password_edit.setEchoMode(QLineEdit.Password)
+            password_edit.setPlaceholderText(tr("Password"))
+            layout.addWidget(password_edit)
+        warning = QLabel("", dialog)
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color:#B00020; font-weight:bold;")
+        warning.setVisible(False)
+        layout.addWidget(warning)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        layout.addWidget(buttons)
+
+        def submit() -> None:
+            if text_edit.text().strip().lower() != target:
+                warning.setText(error_text)
+                warning.setVisible(True)
+                return
+            if require_password and password_edit is not None and password_edit.text() != self.lock_password:
+                warning.setText(tr("Password is incorrect."))
+                warning.setVisible(True)
+                return
+            dialog.accept()
+
+        buttons.accepted.connect(submit)
+        buttons.rejected.connect(dialog.reject)
+        text_edit.returnPressed.connect(submit)
+        if password_edit is not None:
+            password_edit.returnPressed.connect(submit)
+        text_edit.setFocus()
+        return dialog.exec_() == QDialog.Accepted
+
+    def _release_lock_screen(self, force: bool = False) -> None:
+        if not self._ui_locked:
+            return
+        was_automation_locked = self._automation_locked
+        self._ui_locked = False
+        self._automation_locked = False
+        self._modifier_hotkey_down.clear()
+        if self._lock_screen_overlay is not None:
+            self._lock_screen_overlay.deactivate_lock()
+        self._sync_lock_ui_state()
+        status = tr("Automation lock released.") if was_automation_locked else tr("Lock screen released.")
+        if force and was_automation_locked:
+            status = tr("Automation lock released by Web Remote.")
+        self.statusBar().showMessage(status, 2500)
+
+    def _sync_lock_ui_state(self) -> None:
+        if self.lock_screen_button is not None:
+            self.lock_screen_button.setChecked(self._ui_locked)
+            self.lock_screen_button.setToolTip(
+                tr("Lock Screen") if not self._ui_locked else tr("Click the 3 targets to unlock.")
+            )
+        system_actions_enabled = (not self._ui_locked) or bool(self.lock_allow_system_hotkeys)
+        for key in ["new_set", "open_set", "save_set", "save_set_as", "search", "options"]:
+            action = self._menu_actions.get(key)
+            if action is not None:
+                action.setEnabled(system_actions_enabled)
 
 
 def format_time(ms: int) -> str:

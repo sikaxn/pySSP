@@ -17,6 +17,15 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(translate_text("Stage Display Setting", LANG_ZH_CN), "舞台显示设置")
         self.assertEqual(translate_text("Send Alert", LANG_ZH_CN), "发送通知")
         self.assertEqual(translate_text("Gadgets", LANG_ZH_CN), "组件")
+        self.assertEqual(translate_text("Lock Screen", LANG_ZH_CN), "锁屏")
+        self.assertEqual(translate_text("Lock / Unlock", LANG_ZH_CN), "锁定 / 解锁")
+        self.assertEqual(translate_text("Require password for unlock", LANG_ZH_CN), "解锁时需要密码")
+        self.assertEqual(translate_text("Automation lock is active.", LANG_ZH_CN), "自动化锁定已启用。")
+        self.assertEqual(translate_text("Allow While Auto Locked", LANG_ZH_CN), "自动化锁定时允许")
+        self.assertEqual(
+            translate_text("Type sure to unlock to continue.", LANG_ZH_CN),
+            "请输入 sure to unlock 以继续。",
+        )
 
     def test_localize_label_text(self):
         label = QLabel("Options")

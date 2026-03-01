@@ -123,6 +123,7 @@ class WebRemoteServer:
     textarea,input[type="number"]{width:100%;border:1px solid var(--line);border-radius:6px;padding:6px;font:inherit}
     textarea{min-height:68px;resize:vertical}
     .alert-box{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+    .warn-box{margin-top:8px;padding:8px 10px;border-radius:8px;background:#ffe3df;border:1px solid #e09b8f;color:#7f2415;font-size:12px;font-weight:600}
   </style>
 </head>
 <body>
@@ -163,6 +164,12 @@ class WebRemoteServer:
       </label>
       <button onclick="setVolumeFromInput()">Set Volume</button>
     </div>
+    <div class="row">
+      <button onclick="callApi('/api/lock')">Lock</button>
+      <button class="warn" onclick="callApi('/api/automation-lock')">Automation Lock</button>
+      <button class="good" onclick="unlockFromRemote()">Unlock</button>
+    </div>
+    <div id="automationWarning" class="warn-box" style="display:none;"></div>
 
     <div class="section">
       <div class="row"><strong>Hotkey-style Controls</strong></div>
@@ -215,6 +222,7 @@ class WebRemoteServer:
   let selectedGroup = 'A';
   let selectedPage = 1;
   let pageMeta = [];
+  let lastState = null;
 
   function setStatus(text){ document.getElementById('lastStatus').textContent = text; }
 
@@ -340,6 +348,16 @@ class WebRemoteServer:
     await callApi('/api/play/' + buttonId);
   }
 
+  async function unlockFromRemote(){
+    if(lastState?.automation_locked){
+      const ok = window.confirm(
+        'Automation lock is active. Unlock only for troubleshooting when you are sure pySSP should stop being remotely controlled.'
+      );
+      if(!ok){ return; }
+    }
+    await callApi('/api/unlock');
+  }
+
   function renderTracks(tracks){
     const root = document.getElementById('tracksView');
     if(!tracks || tracks.length===0){ root.innerHTML = '<div class="track">None</div>'; return; }
@@ -354,6 +372,7 @@ class WebRemoteServer:
     const payload = await res.json();
     if(!payload.ok){ setStatus('Error: ' + (payload.error?.message || 'query failed')); return null; }
     const s = payload.result || {};
+    lastState = s;
     if(updateSelection){
       if(s.current_group && groups.includes(s.current_group)){ selectedGroup = s.current_group; }
       if(s.current_page){ selectedPage = Math.max(1, Math.min(18, s.current_page)); }
@@ -362,12 +381,25 @@ class WebRemoteServer:
       current_group: s.current_group,
       current_page: s.current_page,
       is_playing: s.is_playing,
+      screen_locked: s.screen_locked,
+      automation_locked: s.automation_locked,
       talk_active: s.talk_active,
       playlist_enabled: s.playlist_enabled,
       shuffle_enabled: s.shuffle_enabled,
       multi_play_enabled: s.multi_play_enabled,
       web_remote_url: s.web_remote_url
     }, null, 2);
+    const automationWarning = document.getElementById('automationWarning');
+    if(automationWarning){
+      if(s.automation_locked){
+        automationWarning.textContent =
+          'Automation lock is active. pySSP is expected to be controlled remotely. Unlock only for troubleshooting when you are sure.';
+        automationWarning.style.display = 'block';
+      }else{
+        automationWarning.textContent = '';
+        automationWarning.style.display = 'none';
+      }
+    }
     renderTracks(s.playing_tracks || []);
     renderGroups();
     renderPages();
@@ -497,6 +529,19 @@ class WebRemoteServer:
         @app.route("/api/mute", methods=["GET", "POST"])
         def api_mute():
             return send("mute")
+
+        @app.route("/api/lock", methods=["GET", "POST"])
+        def api_lock():
+            return send("lock")
+
+        @app.route("/api/automation-lock", methods=["GET", "POST"])
+        @app.route("/api/automation_lock", methods=["GET", "POST"])
+        def api_automation_lock():
+            return send("automation_lock")
+
+        @app.route("/api/unlock", methods=["GET", "POST"])
+        def api_unlock():
+            return send("unlock")
 
         @app.route("/api/group/next", methods=["GET", "POST"])
         def api_group_next():

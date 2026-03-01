@@ -174,6 +174,7 @@ class OptionsDialog(QDialog):
         ("mute", "Mute"),
         ("volume_up", "Volume Up"),
         ("volume_down", "Volume Down"),
+        ("lock_toggle", "Lock / Unlock"),
     ]
 
     _DEFAULTS = {
@@ -189,6 +190,17 @@ class OptionsDialog(QDialog):
         "main_progress_display_mode": "progress_bar",
         "main_progress_show_text": True,
         "ui_language": "en",
+        "lock_allow_quit": True,
+        "lock_allow_system_hotkeys": False,
+        "lock_allow_quick_action_hotkeys": False,
+        "lock_allow_sound_button_hotkeys": False,
+        "lock_allow_midi_control": True,
+        "lock_auto_allow_quit": True,
+        "lock_auto_allow_midi_control": True,
+        "lock_unlock_method": "click_3_random_points",
+        "lock_require_password": False,
+        "lock_password": "",
+        "lock_restart_state": "unlock_on_restart",
         "preload_audio_enabled": False,
         "preload_current_page_audio": True,
         "preload_audio_memory_limit_mb": 512,
@@ -275,6 +287,7 @@ class OptionsDialog(QDialog):
             "mute": ("", ""),
             "volume_up": ("", ""),
             "volume_down": ("", ""),
+            "lock_toggle": ("Ctrl+L", ""),
         },
         "sound_button_hotkey_enabled": False,
         "sound_button_hotkey_priority": "system_first",
@@ -432,6 +445,17 @@ class OptionsDialog(QDialog):
         stage_display_visibility: Dict[str, bool],
         stage_display_text_source: str,
         ui_language: str,
+        lock_allow_quit: bool,
+        lock_allow_system_hotkeys: bool,
+        lock_allow_quick_action_hotkeys: bool,
+        lock_allow_sound_button_hotkeys: bool,
+        lock_allow_midi_control: bool,
+        lock_auto_allow_quit: bool,
+        lock_auto_allow_midi_control: bool,
+        lock_unlock_method: str,
+        lock_require_password: bool,
+        lock_password: str,
+        lock_restart_state: str,
         stage_display_gadgets: Optional[Dict[str, Dict[str, object]]] = None,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -504,6 +528,7 @@ class OptionsDialog(QDialog):
         self._midi_has_conflict = False
         self._learning_midi_target: Optional[MidiCaptureEdit] = None
         self._ui_language = normalize_language(ui_language)
+        self._lock_existing_password = str(lock_password or "")
         self._stage_display_layout = self._normalize_stage_display_layout(stage_display_layout)
         self._stage_display_visibility = self._normalize_stage_display_visibility(stage_display_visibility)
         self._stage_display_gadgets = normalize_stage_display_gadgets(
@@ -518,6 +543,7 @@ class OptionsDialog(QDialog):
         )
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
+        self.ok_button: Optional[QPushButton] = None
         self.state_colors = dict(state_colors)
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
@@ -556,6 +582,23 @@ class OptionsDialog(QDialog):
             "Language",
             self._mono_icon("earth"),
             self._build_language_page(self._ui_language),
+        )
+        self._add_page(
+            "Lock Screen",
+            self._mono_icon("lock"),
+            self._build_lock_screen_page(
+                lock_allow_quit=lock_allow_quit,
+                lock_allow_system_hotkeys=lock_allow_system_hotkeys,
+                lock_allow_quick_action_hotkeys=lock_allow_quick_action_hotkeys,
+                lock_allow_sound_button_hotkeys=lock_allow_sound_button_hotkeys,
+                lock_allow_midi_control=lock_allow_midi_control,
+                lock_auto_allow_quit=lock_auto_allow_quit,
+                lock_auto_allow_midi_control=lock_auto_allow_midi_control,
+                lock_unlock_method=lock_unlock_method,
+                lock_require_password=lock_require_password,
+                lock_password=lock_password,
+                lock_restart_state=lock_restart_state,
+            ),
         )
         self._add_page(
             "Hotkey",
@@ -671,6 +714,7 @@ class OptionsDialog(QDialog):
         root_layout.addWidget(buttons)
         self._validate_hotkey_conflicts()
         self._validate_midi_conflicts()
+        self._validate_lock_page()
         localize_widget_tree(self, self._ui_language)
 
     def _add_page(self, title: str, icon, page: QWidget) -> None:
@@ -771,6 +815,9 @@ class OptionsDialog(QDialog):
             p.drawRect(QRectF(5, 4, 2, 7))
             p.drawRect(QRectF(9, 4, 2, 7))
             p.drawRect(QRectF(13, 4, 2, 7))
+        elif kind == "lock":
+            p.drawRoundedRect(QRectF(6, 10, 10, 8), 1.5, 1.5)
+            p.drawArc(QRectF(7, 4, 8, 9), 0, 180 * 16)
 
         p.end()
         return QIcon(pix)
@@ -889,6 +936,126 @@ class OptionsDialog(QDialog):
         note = QLabel("App language (requires reopen dialogs/windows to fully refresh).")
         note.setWordWrap(True)
         layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _build_lock_screen_page(
+        self,
+        lock_allow_quit: bool,
+        lock_allow_system_hotkeys: bool,
+        lock_allow_quick_action_hotkeys: bool,
+        lock_allow_sound_button_hotkeys: bool,
+        lock_allow_midi_control: bool,
+        lock_auto_allow_quit: bool,
+        lock_auto_allow_midi_control: bool,
+        lock_unlock_method: str,
+        lock_require_password: bool,
+        lock_password: str,
+        lock_restart_state: str,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        method_group = QGroupBox("Method of Unlock")
+        method_layout = QVBoxLayout(method_group)
+        self.lock_method_random_points_radio = QRadioButton("Click 3 random points")
+        self.lock_method_fixed_button_radio = QRadioButton("Click one button in a fixed position")
+        self.lock_method_slide_radio = QRadioButton("Slide to unlock")
+        method_token = str(lock_unlock_method or "").strip().lower()
+        if method_token == "click_one_button":
+            self.lock_method_fixed_button_radio.setChecked(True)
+        elif method_token == "slide_to_unlock":
+            self.lock_method_slide_radio.setChecked(True)
+        else:
+            self.lock_method_random_points_radio.setChecked(True)
+        method_layout.addWidget(self.lock_method_random_points_radio)
+        method_layout.addWidget(self.lock_method_fixed_button_radio)
+        method_layout.addWidget(self.lock_method_slide_radio)
+        method_note = QLabel("Web Remote always keeps working while the lock screen is active.")
+        method_note.setWordWrap(True)
+        method_layout.addWidget(method_note)
+        layout.addWidget(method_group)
+
+        access_group = QGroupBox("Allow While Locked")
+        access_layout = QVBoxLayout(access_group)
+        self.lock_allow_quit_checkbox = QCheckBox("Allow closing pySSP while locked")
+        self.lock_allow_quit_checkbox.setChecked(lock_allow_quit)
+        access_layout.addWidget(self.lock_allow_quit_checkbox)
+        self.lock_allow_system_hotkeys_checkbox = QCheckBox("Allow standard hotkeys while locked")
+        self.lock_allow_system_hotkeys_checkbox.setChecked(lock_allow_system_hotkeys)
+        access_layout.addWidget(self.lock_allow_system_hotkeys_checkbox)
+        self.lock_allow_quick_action_hotkeys_checkbox = QCheckBox("Allow Quick Action keys while locked")
+        self.lock_allow_quick_action_hotkeys_checkbox.setChecked(lock_allow_quick_action_hotkeys)
+        access_layout.addWidget(self.lock_allow_quick_action_hotkeys_checkbox)
+        self.lock_allow_sound_button_hotkeys_checkbox = QCheckBox("Allow Sound Button hotkeys while locked")
+        self.lock_allow_sound_button_hotkeys_checkbox.setChecked(lock_allow_sound_button_hotkeys)
+        access_layout.addWidget(self.lock_allow_sound_button_hotkeys_checkbox)
+        self.lock_allow_midi_control_checkbox = QCheckBox("Allow MIDI control while locked")
+        self.lock_allow_midi_control_checkbox.setChecked(lock_allow_midi_control)
+        access_layout.addWidget(self.lock_allow_midi_control_checkbox)
+        locked_note = QLabel("These settings apply to the regular lock screen.")
+        locked_note.setWordWrap(True)
+        access_layout.addWidget(locked_note)
+        layout.addWidget(access_group)
+
+        auto_access_group = QGroupBox("Allow While Auto Locked")
+        auto_access_layout = QVBoxLayout(auto_access_group)
+        self.lock_auto_allow_quit_checkbox = QCheckBox("Allow closing pySSP while auto locked")
+        self.lock_auto_allow_quit_checkbox.setChecked(lock_auto_allow_quit)
+        auto_access_layout.addWidget(self.lock_auto_allow_quit_checkbox)
+        self.lock_auto_allow_midi_control_checkbox = QCheckBox("Allow MIDI control while auto locked")
+        self.lock_auto_allow_midi_control_checkbox.setChecked(lock_auto_allow_midi_control)
+        auto_access_layout.addWidget(self.lock_auto_allow_midi_control_checkbox)
+        auto_note = QLabel("Keyboard shortcuts except Unlock are all disabled while automation lock is active.")
+        auto_note.setWordWrap(True)
+        auto_access_layout.addWidget(auto_note)
+        layout.addWidget(auto_access_group)
+
+        password_group = QGroupBox("Password")
+        password_layout = QFormLayout(password_group)
+        self.lock_require_password_checkbox = QCheckBox("Require password for unlock")
+        self.lock_require_password_checkbox.setChecked(lock_require_password)
+        password_layout.addRow(self.lock_require_password_checkbox)
+        self.lock_password_info_label = QLabel("")
+        self.lock_password_info_label.setWordWrap(True)
+        password_layout.addRow(self.lock_password_info_label)
+        self.lock_password_edit = QLineEdit()
+        self.lock_password_edit.setEchoMode(QLineEdit.Password)
+        self.lock_password_edit.setPlaceholderText("Password has been set. Start typing to change it.")
+        password_layout.addRow("Password:", self.lock_password_edit)
+        self.lock_password_verify_edit = QLineEdit()
+        self.lock_password_verify_edit.setEchoMode(QLineEdit.Password)
+        self.lock_password_verify_edit.setPlaceholderText("Re-enter new password to change it.")
+        password_layout.addRow("Verify Password:", self.lock_password_verify_edit)
+        self.lock_password_warning_label = QLabel(
+            "Warning: this password is stored as plain text in the settings file."
+        )
+        self.lock_password_warning_label.setWordWrap(True)
+        self.lock_password_warning_label.setStyleSheet("color:#B00020; font-weight:bold;")
+        password_layout.addRow(self.lock_password_warning_label)
+        self.lock_password_status_label = QLabel("")
+        self.lock_password_status_label.setWordWrap(True)
+        self.lock_password_status_label.setStyleSheet("color:#B00020; font-weight:bold;")
+        self.lock_password_status_label.setVisible(False)
+        password_layout.addRow(self.lock_password_status_label)
+        layout.addWidget(password_group)
+
+        restart_group = QGroupBox("After Restart")
+        restart_layout = QVBoxLayout(restart_group)
+        self.lock_restart_unlock_radio = QRadioButton("Start unlocked")
+        self.lock_restart_lock_radio = QRadioButton("Start locked again if pySSP closed while locked")
+        if str(lock_restart_state or "").strip().lower() == "lock_on_restart":
+            self.lock_restart_lock_radio.setChecked(True)
+        else:
+            self.lock_restart_unlock_radio.setChecked(True)
+        restart_layout.addWidget(self.lock_restart_unlock_radio)
+        restart_layout.addWidget(self.lock_restart_lock_radio)
+        layout.addWidget(restart_group)
+
+        self.lock_require_password_checkbox.toggled.connect(self._validate_lock_page)
+        self.lock_password_edit.textChanged.connect(self._validate_lock_page)
+        self.lock_password_verify_edit.textChanged.connect(self._validate_lock_page)
+        self._validate_lock_page()
         layout.addStretch(1)
         return page
 
@@ -2229,6 +2396,49 @@ class OptionsDialog(QDialog):
             return "lower_only"
         return "percent_of_master"
 
+    def selected_lock_allow_quit(self) -> bool:
+        return bool(self.lock_allow_quit_checkbox.isChecked())
+
+    def selected_lock_allow_system_hotkeys(self) -> bool:
+        return bool(self.lock_allow_system_hotkeys_checkbox.isChecked())
+
+    def selected_lock_allow_quick_action_hotkeys(self) -> bool:
+        return bool(self.lock_allow_quick_action_hotkeys_checkbox.isChecked())
+
+    def selected_lock_allow_sound_button_hotkeys(self) -> bool:
+        return bool(self.lock_allow_sound_button_hotkeys_checkbox.isChecked())
+
+    def selected_lock_allow_midi_control(self) -> bool:
+        return bool(self.lock_allow_midi_control_checkbox.isChecked())
+
+    def selected_lock_auto_allow_quit(self) -> bool:
+        return bool(self.lock_auto_allow_quit_checkbox.isChecked())
+
+    def selected_lock_auto_allow_midi_control(self) -> bool:
+        return bool(self.lock_auto_allow_midi_control_checkbox.isChecked())
+
+    def selected_lock_unlock_method(self) -> str:
+        if self.lock_method_fixed_button_radio.isChecked():
+            return "click_one_button"
+        if self.lock_method_slide_radio.isChecked():
+            return "slide_to_unlock"
+        return "click_3_random_points"
+
+    def selected_lock_require_password(self) -> bool:
+        return bool(self.lock_require_password_checkbox.isChecked())
+
+    def selected_lock_password(self) -> str:
+        password = str(self.lock_password_edit.text())
+        verify = str(self.lock_password_verify_edit.text())
+        if password or verify:
+            return password
+        return self._lock_existing_password
+
+    def selected_lock_restart_state(self) -> str:
+        if self.lock_restart_lock_radio.isChecked():
+            return "lock_on_restart"
+        return "unlock_on_restart"
+
     def selected_hotkeys(self) -> Dict[str, tuple[str, str]]:
         result: Dict[str, tuple[str, str]] = {}
         for key, (edit1, edit2) in self._hotkey_edits.items():
@@ -2784,33 +2994,36 @@ class OptionsDialog(QDialog):
             self._restore_language_defaults()
             return
         if idx == 2:
-            self._restore_hotkey_defaults()
+            self._restore_lock_defaults()
             return
         if idx == 3:
-            self._restore_midi_defaults()
+            self._restore_hotkey_defaults()
             return
         if idx == 4:
-            self._restore_color_defaults()
+            self._restore_midi_defaults()
             return
         if idx == 5:
-            self._restore_display_defaults()
+            self._restore_color_defaults()
             return
         if idx == 6:
-            self._restore_delay_defaults()
+            self._restore_display_defaults()
             return
         if idx == 7:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 8:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 9:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 10:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 11:
+            self._restore_talk_defaults()
+            return
+        if idx == 12:
             self._restore_web_remote_defaults()
             return
 
@@ -2843,6 +3056,34 @@ class OptionsDialog(QDialog):
         else:
             self.main_progress_display_progress_bar_radio.setChecked(True)
         self.main_progress_show_text_checkbox.setChecked(bool(d.get("main_progress_show_text", True)))
+
+    def _restore_lock_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.lock_allow_quit_checkbox.setChecked(bool(d.get("lock_allow_quit", False)))
+        self.lock_allow_system_hotkeys_checkbox.setChecked(bool(d.get("lock_allow_system_hotkeys", False)))
+        self.lock_allow_quick_action_hotkeys_checkbox.setChecked(bool(d.get("lock_allow_quick_action_hotkeys", False)))
+        self.lock_allow_sound_button_hotkeys_checkbox.setChecked(bool(d.get("lock_allow_sound_button_hotkeys", False)))
+        self.lock_allow_midi_control_checkbox.setChecked(bool(d.get("lock_allow_midi_control", False)))
+        self.lock_auto_allow_quit_checkbox.setChecked(bool(d.get("lock_auto_allow_quit", False)))
+        self.lock_auto_allow_midi_control_checkbox.setChecked(bool(d.get("lock_auto_allow_midi_control", False)))
+        method = str(d.get("lock_unlock_method", "click_3_random_points")).strip().lower()
+        if method == "click_one_button":
+            self.lock_method_fixed_button_radio.setChecked(True)
+        elif method == "slide_to_unlock":
+            self.lock_method_slide_radio.setChecked(True)
+        else:
+            self.lock_method_random_points_radio.setChecked(True)
+        self.lock_require_password_checkbox.setChecked(bool(d.get("lock_require_password", False)))
+        password = str(d.get("lock_password", ""))
+        self._lock_existing_password = password
+        self.lock_password_edit.clear()
+        self.lock_password_verify_edit.clear()
+        restart_state = str(d.get("lock_restart_state", "unlock_on_restart")).strip().lower()
+        if restart_state == "lock_on_restart":
+            self.lock_restart_lock_radio.setChecked(True)
+        else:
+            self.lock_restart_unlock_radio.setChecked(True)
+        self._validate_lock_page()
 
     def _restore_color_defaults(self) -> None:
         d = self._DEFAULTS
@@ -2983,6 +3224,46 @@ class OptionsDialog(QDialog):
         canonical = QKeySequence(text).toString().strip()
         return canonical or text
 
+    def _validate_lock_page(self) -> None:
+        require_password = bool(self.lock_require_password_checkbox.isChecked())
+        password = str(self.lock_password_edit.text())
+        verify = str(self.lock_password_verify_edit.text())
+        has_saved_password = bool(self._lock_existing_password)
+        changing_password = bool(password or verify)
+        message = ""
+        if require_password and changing_password:
+            if not password:
+                message = "Password is required when changing the password."
+            elif password != verify:
+                message = "Password and Verify Password must match."
+        if message:
+            self.lock_password_status_label.setText(message)
+            self.lock_password_status_label.setVisible(True)
+        else:
+            self.lock_password_status_label.setVisible(False)
+            self.lock_password_status_label.setText("")
+        if require_password:
+            if has_saved_password:
+                self.lock_password_info_label.setText("Password has been set. Start typing in Password to change it.")
+            elif changing_password:
+                self.lock_password_info_label.setText("Type a new password and verify it to save the change.")
+            else:
+                self.lock_password_info_label.setText("Password fields are ignored until you start typing.")
+        else:
+            self.lock_password_info_label.setText("Password unlock is disabled.")
+        self._sync_ok_button_state()
+
+    def _sync_ok_button_state(self) -> None:
+        if self.ok_button is None:
+            return
+        keyboard_conflict = bool(self.hotkey_warning_label is not None and self.hotkey_warning_label.text().strip())
+        midi_conflict = bool(self._midi_has_conflict)
+        lock_invalid = bool(
+            hasattr(self, "lock_password_status_label")
+            and self.lock_password_status_label.text().strip()
+        )
+        self.ok_button.setEnabled((not keyboard_conflict) and (not midi_conflict) and (not lock_invalid))
+
     def _validate_hotkey_conflicts(self) -> None:
         seen: Dict[str, tuple[str, int]] = {}
         conflicts: List[str] = []
@@ -3036,20 +3317,20 @@ class OptionsDialog(QDialog):
                     edit.setStyleSheet("")
 
         has_conflict = bool(conflicts)
-        if self.ok_button is not None:
-            midi_conflict = bool(self._midi_has_conflict)
-            self.ok_button.setEnabled((not has_conflict) and (not midi_conflict))
         if self.hotkey_warning_label is None:
+            self._sync_ok_button_state()
             return
         if not has_conflict:
             self.hotkey_warning_label.setVisible(False)
             self.hotkey_warning_label.setText("")
+            self._sync_ok_button_state()
             return
         display = "; ".join(conflicts[:4])
         if len(conflicts) > 4:
             display += f"; +{len(conflicts) - 4} {tr('more')}"
         self.hotkey_warning_label.setText(f"{tr('Hotkey conflict detected. Fix duplicates before saving.')} {display}")
         self.hotkey_warning_label.setVisible(True)
+        self._sync_ok_button_state()
 
     def _validate_midi_conflicts(self) -> None:
         seen: Dict[str, List[tuple[str, int, str]]] = {}
@@ -3128,9 +3409,7 @@ class OptionsDialog(QDialog):
                 if self._learning_midi_rotary_target is None:
                     self._midi_warning_label.setVisible(False)
                     self._midi_warning_label.setText("")
-        if self.ok_button is not None and self.hotkey_warning_label is not None:
-            keyboard_conflict = self.hotkey_warning_label.isVisible()
-            self.ok_button.setEnabled((not keyboard_conflict) and (not has_conflict))
+        self._sync_ok_button_state()
 
     def _describe_conflict_target(self, key: str, slot_index: int) -> str:
         if key in {"quick_action", "midi_quick_action"}:

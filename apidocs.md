@@ -98,6 +98,23 @@ Mode values: `enable`, `disable`, `toggle`
     - `percent=<0..100>`
     - or `time=<mm:ss | mm:ss:ff | hh:mm:ss>`
 
+## Lock Control
+
+- `GET/POST /api/lock`
+  - Enables the normal lock screen.
+  - Uses the configured unlock method for local UI unlock.
+- `GET/POST /api/automation-lock`
+- `GET/POST /api/automation_lock`
+  - Enables automation lock.
+  - Automation lock is intended for remote/API control scenarios.
+  - On the local pySSP UI, automation lock shows an extra red warning box.
+  - Local unlock from the pySSP UI requires typing `sure to unlock`.
+  - If password unlock is enabled, local automation unlock also requires the password.
+  - While automation lock is active, Web Remote and API control still work.
+- `GET/POST /api/unlock`
+  - Releases either normal lock or automation lock.
+  - Web API unlock bypasses the local unlock method and bypasses password prompts.
+
 ## Stage Alert
 
 - `GET/POST /api/alert`
@@ -115,6 +132,9 @@ Mode values: `enable`, `disable`, `toggle`
 
 - `GET /api/query`
   - Returns current high-level app state.
+  - Includes:
+    - `screen_locked`: `true` when pySSP is currently locked
+    - `automation_locked`: `true` when the current lock is automation lock
   - Includes `playing_tracks` array with active song title(s), button id(s), and remaining time (`remaining`, `remaining_ms`).
 - `GET /api/query/button/<button_id>`
   - Example: `/api/query/button/a-1-1`
@@ -143,5 +163,8 @@ curl http://192.168.1.10:5050/api/resume
 curl http://192.168.1.10:5050/api/playlist/enable
 curl http://192.168.1.10:5050/api/playlist/shuffle/enable
 curl http://192.168.1.10:5050/api/playnext
+curl http://192.168.1.10:5050/api/lock
+curl http://192.168.1.10:5050/api/automation-lock
+curl http://192.168.1.10:5050/api/unlock
 curl http://192.168.1.10:5050/api/query
 ```

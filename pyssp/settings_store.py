@@ -38,6 +38,21 @@ def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
     return output[:48]
 
 
+def _encode_ascii_setting(value: str) -> str:
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def _decode_ascii_setting(value: str) -> str:
+    raw = str(value)
+    if not raw:
+        return ""
+    try:
+        decoded = json.loads(raw)
+    except Exception:
+        return raw
+    return decoded if isinstance(decoded, str) else raw
+
+
 def default_stage_display_layout() -> list[str]:
     return [
         "current_time",
@@ -198,6 +213,18 @@ class AppSettings:
     inactive_group_color: str = "#ECECEC"
     title_char_limit: int = 26
     show_file_notifications: bool = True
+    lock_allow_quit: bool = True
+    lock_allow_system_hotkeys: bool = False
+    lock_allow_quick_action_hotkeys: bool = False
+    lock_allow_sound_button_hotkeys: bool = False
+    lock_allow_midi_control: bool = True
+    lock_auto_allow_quit: bool = True
+    lock_auto_allow_midi_control: bool = True
+    lock_unlock_method: str = "click_3_random_points"
+    lock_require_password: bool = False
+    lock_password: str = ""
+    lock_restart_state: str = "unlock_on_restart"
+    lock_was_locked_on_exit: bool = False
     volume: int = 90
     last_group: str = "A"
     last_page: int = 0
@@ -329,6 +356,8 @@ class AppSettings:
     hotkey_volume_up_2: str = ""
     hotkey_volume_down_1: str = ""
     hotkey_volume_down_2: str = ""
+    hotkey_lock_toggle_1: str = "Ctrl+L"
+    hotkey_lock_toggle_2: str = ""
     quick_action_enabled: bool = False
     quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
     sound_button_hotkey_enabled: bool = False
@@ -398,6 +427,8 @@ class AppSettings:
     midi_hotkey_volume_up_2: str = ""
     midi_hotkey_volume_down_1: str = ""
     midi_hotkey_volume_down_2: str = ""
+    midi_hotkey_lock_toggle_1: str = ""
+    midi_hotkey_lock_toggle_2: str = ""
     midi_quick_action_enabled: bool = False
     midi_quick_action_bindings: list[str] = field(default_factory=default_midi_quick_action_bindings)
     midi_sound_button_hotkey_enabled: bool = False
@@ -472,6 +503,18 @@ def save_settings(settings: AppSettings) -> None:
         "inactive_group_color": settings.inactive_group_color,
         "title_char_limit": str(settings.title_char_limit),
         "show_file_notifications": "1" if settings.show_file_notifications else "0",
+        "lock_allow_quit": "1" if settings.lock_allow_quit else "0",
+        "lock_allow_system_hotkeys": "1" if settings.lock_allow_system_hotkeys else "0",
+        "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
+        "lock_allow_sound_button_hotkeys": "1" if settings.lock_allow_sound_button_hotkeys else "0",
+        "lock_allow_midi_control": "1" if settings.lock_allow_midi_control else "0",
+        "lock_auto_allow_quit": "1" if settings.lock_auto_allow_quit else "0",
+        "lock_auto_allow_midi_control": "1" if settings.lock_auto_allow_midi_control else "0",
+        "lock_unlock_method": settings.lock_unlock_method,
+        "lock_require_password": "1" if settings.lock_require_password else "0",
+        "lock_password": _encode_ascii_setting(settings.lock_password),
+        "lock_restart_state": settings.lock_restart_state,
+        "lock_was_locked_on_exit": "1" if settings.lock_was_locked_on_exit else "0",
         "volume": str(settings.volume),
         "last_group": settings.last_group,
         "last_page": str(settings.last_page),
@@ -603,6 +646,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_volume_up_2": settings.hotkey_volume_up_2,
         "hotkey_volume_down_1": settings.hotkey_volume_down_1,
         "hotkey_volume_down_2": settings.hotkey_volume_down_2,
+        "hotkey_lock_toggle_1": settings.hotkey_lock_toggle_1,
+        "hotkey_lock_toggle_2": settings.hotkey_lock_toggle_2,
         "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
         "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
         "sound_button_hotkey_enabled": "1" if settings.sound_button_hotkey_enabled else "0",
@@ -672,6 +717,8 @@ def save_settings(settings: AppSettings) -> None:
         "midi_hotkey_volume_up_2": settings.midi_hotkey_volume_up_2,
         "midi_hotkey_volume_down_1": settings.midi_hotkey_volume_down_1,
         "midi_hotkey_volume_down_2": settings.midi_hotkey_volume_down_2,
+        "midi_hotkey_lock_toggle_1": settings.midi_hotkey_lock_toggle_1,
+        "midi_hotkey_lock_toggle_2": settings.midi_hotkey_lock_toggle_2,
         "midi_quick_action_enabled": "1" if settings.midi_quick_action_enabled else "0",
         "midi_quick_action_bindings": "\t".join(_normalize_midi_quick_action_bindings(settings.midi_quick_action_bindings)),
         "midi_sound_button_hotkey_enabled": "1" if settings.midi_sound_button_hotkey_enabled else "0",
@@ -813,6 +860,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         "stop_cue_or_end",
     }:
         outside_action = "stop_immediately"
+    lock_unlock_method = str(section.get("lock_unlock_method", "click_3_random_points")).strip().lower()
+    if lock_unlock_method not in {"click_3_random_points", "click_one_button", "slide_to_unlock"}:
+        lock_unlock_method = "click_3_random_points"
+    lock_password = _decode_ascii_setting(str(section.get("lock_password", "")))
+    lock_require_password = _get_bool(section, "lock_require_password", False)
+    lock_restart_state = str(section.get("lock_restart_state", "unlock_on_restart")).strip().lower()
+    if lock_restart_state not in {"unlock_on_restart", "lock_on_restart"}:
+        lock_restart_state = "unlock_on_restart"
     sound_button_hotkey_priority = str(section.get("sound_button_hotkey_priority", "system_first")).strip().lower()
     if sound_button_hotkey_priority not in {"system_first", "sound_button_first"}:
         sound_button_hotkey_priority = "system_first"
@@ -916,6 +971,18 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         inactive_group_color=_coerce_hex(str(section.get("inactive_group_color", "#ECECEC")), "#ECECEC"),
         title_char_limit=title_limit,
         show_file_notifications=_get_bool(section, "show_file_notifications", True),
+        lock_allow_quit=_get_bool(section, "lock_allow_quit", True),
+        lock_allow_system_hotkeys=_get_bool(section, "lock_allow_system_hotkeys", False),
+        lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),
+        lock_allow_sound_button_hotkeys=_get_bool(section, "lock_allow_sound_button_hotkeys", False),
+        lock_allow_midi_control=_get_bool(section, "lock_allow_midi_control", True),
+        lock_auto_allow_quit=_get_bool(section, "lock_auto_allow_quit", True),
+        lock_auto_allow_midi_control=_get_bool(section, "lock_auto_allow_midi_control", True),
+        lock_unlock_method=lock_unlock_method,
+        lock_require_password=lock_require_password,
+        lock_password=lock_password,
+        lock_restart_state=lock_restart_state,
+        lock_was_locked_on_exit=_get_bool(section, "lock_was_locked_on_exit", False),
         volume=volume,
         last_group=group,
         last_page=page,
@@ -1047,6 +1114,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_volume_up_2=str(section.get("hotkey_volume_up_2", "")).strip(),
         hotkey_volume_down_1=str(section.get("hotkey_volume_down_1", "")).strip(),
         hotkey_volume_down_2=str(section.get("hotkey_volume_down_2", "")).strip(),
+        hotkey_lock_toggle_1=str(section.get("hotkey_lock_toggle_1", "Ctrl+L")).strip(),
+        hotkey_lock_toggle_2=str(section.get("hotkey_lock_toggle_2", "")).strip(),
         quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
         quick_action_keys=quick_action_keys,
         sound_button_hotkey_enabled=_get_bool(section, "sound_button_hotkey_enabled", False),
@@ -1116,6 +1185,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_hotkey_volume_up_2=str(section.get("midi_hotkey_volume_up_2", "")).strip(),
         midi_hotkey_volume_down_1=str(section.get("midi_hotkey_volume_down_1", "")).strip(),
         midi_hotkey_volume_down_2=str(section.get("midi_hotkey_volume_down_2", "")).strip(),
+        midi_hotkey_lock_toggle_1=str(section.get("midi_hotkey_lock_toggle_1", "")).strip(),
+        midi_hotkey_lock_toggle_2=str(section.get("midi_hotkey_lock_toggle_2", "")).strip(),
         midi_quick_action_enabled=_get_bool(section, "midi_quick_action_enabled", False),
         midi_quick_action_bindings=midi_quick_action_bindings,
         midi_sound_button_hotkey_enabled=_get_bool(section, "midi_sound_button_hotkey_enabled", False),

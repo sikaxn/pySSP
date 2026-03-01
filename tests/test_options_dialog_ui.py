@@ -124,6 +124,25 @@ def _build_dialog(**overrides):
         stage_display_visibility=overrides.get("stage_display_visibility", defaults["stage_display_visibility"]),
         stage_display_text_source=str(overrides.get("stage_display_text_source", defaults["stage_display_text_source"])),
         ui_language=defaults["ui_language"],
+        lock_allow_quit=bool(overrides.get("lock_allow_quit", defaults["lock_allow_quit"])),
+        lock_allow_system_hotkeys=bool(
+            overrides.get("lock_allow_system_hotkeys", defaults["lock_allow_system_hotkeys"])
+        ),
+        lock_allow_quick_action_hotkeys=bool(
+            overrides.get("lock_allow_quick_action_hotkeys", defaults["lock_allow_quick_action_hotkeys"])
+        ),
+        lock_allow_sound_button_hotkeys=bool(
+            overrides.get("lock_allow_sound_button_hotkeys", defaults["lock_allow_sound_button_hotkeys"])
+        ),
+        lock_allow_midi_control=bool(overrides.get("lock_allow_midi_control", defaults["lock_allow_midi_control"])),
+        lock_auto_allow_quit=bool(overrides.get("lock_auto_allow_quit", defaults["lock_auto_allow_quit"])),
+        lock_auto_allow_midi_control=bool(
+            overrides.get("lock_auto_allow_midi_control", defaults["lock_auto_allow_midi_control"])
+        ),
+        lock_unlock_method=str(overrides.get("lock_unlock_method", defaults["lock_unlock_method"])),
+        lock_require_password=bool(overrides.get("lock_require_password", defaults["lock_require_password"])),
+        lock_password=str(overrides.get("lock_password", defaults["lock_password"])),
+        lock_restart_state=str(overrides.get("lock_restart_state", defaults["lock_restart_state"])),
         initial_page=overrides.get("initial_page"),
         parent=None,
     )
@@ -207,6 +226,84 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_timecode_timeline_mode() == "audio_file"
     assert dialog.selected_main_progress_display_mode() == "waveform"
     assert dialog.selected_main_progress_show_text() is False
+
+
+def test_lock_screen_settings_round_trip_and_restore_defaults(qapp):
+    dialog = _build_dialog(
+        lock_allow_quit=True,
+        lock_allow_system_hotkeys=True,
+        lock_allow_quick_action_hotkeys=True,
+        lock_allow_sound_button_hotkeys=True,
+        lock_allow_midi_control=True,
+        lock_auto_allow_quit=False,
+        lock_auto_allow_midi_control=False,
+        lock_unlock_method="slide_to_unlock",
+        lock_require_password=True,
+        lock_password="secret",
+        lock_restart_state="lock_on_restart",
+    )
+    assert dialog.selected_lock_allow_quit() is True
+    assert dialog.selected_lock_allow_system_hotkeys() is True
+    assert dialog.selected_lock_allow_quick_action_hotkeys() is True
+    assert dialog.selected_lock_allow_sound_button_hotkeys() is True
+    assert dialog.selected_lock_allow_midi_control() is True
+    assert dialog.selected_lock_auto_allow_quit() is False
+    assert dialog.selected_lock_auto_allow_midi_control() is False
+    assert dialog.selected_lock_unlock_method() == "slide_to_unlock"
+    assert dialog.selected_lock_require_password() is True
+    assert dialog.selected_lock_password() == "secret"
+    assert dialog.selected_lock_restart_state() == "lock_on_restart"
+
+    dialog.select_page("Lock Screen")
+    dialog._restore_defaults_current_page()
+
+    assert dialog.selected_lock_allow_quit() is True
+    assert dialog.selected_lock_allow_system_hotkeys() is False
+    assert dialog.selected_lock_allow_quick_action_hotkeys() is False
+    assert dialog.selected_lock_allow_sound_button_hotkeys() is False
+    assert dialog.selected_lock_allow_midi_control() is True
+    assert dialog.selected_lock_auto_allow_quit() is True
+    assert dialog.selected_lock_auto_allow_midi_control() is True
+    assert dialog.selected_lock_unlock_method() == "click_3_random_points"
+    assert dialog.selected_lock_require_password() is False
+    assert dialog.selected_lock_password() == ""
+    assert dialog.selected_lock_restart_state() == "unlock_on_restart"
+
+
+def test_hotkey_defaults_include_ctrl_l_for_lock_toggle(qapp):
+    dialog = _build_dialog()
+    hotkeys = dialog.selected_hotkeys()
+    assert hotkeys["lock_toggle"] == ("Ctrl+L", "")
+
+    dialog._hotkey_edits["lock_toggle"][0].setHotkey("")
+    dialog._restore_hotkey_defaults()
+
+    hotkeys = dialog.selected_hotkeys()
+    assert hotkeys["lock_toggle"] == ("Ctrl+L", "")
+
+
+def test_lock_screen_existing_password_does_not_block_save(qapp):
+    dialog = _build_dialog(
+        lock_require_password=True,
+        lock_password="secret",
+        initial_page="Lock Screen",
+    )
+    assert dialog.lock_password_edit.text() == ""
+    assert dialog.lock_password_verify_edit.text() == ""
+    assert dialog.lock_password_status_label.isVisible() is False
+    assert dialog.selected_lock_password() == "secret"
+    assert dialog.ok_button.isEnabled() is True
+
+
+def test_lock_screen_blank_password_fields_are_ignored_until_typing(qapp):
+    dialog = _build_dialog(
+        lock_require_password=True,
+        lock_password="",
+        initial_page="Lock Screen",
+    )
+    assert dialog.lock_password_status_label.isVisible() is False
+    assert dialog.ok_button.isEnabled() is True
+    assert dialog.selected_lock_password() == ""
 
 
 def test_display_page_layout_and_visibility_round_trip(qapp):

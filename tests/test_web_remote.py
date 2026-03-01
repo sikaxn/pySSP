@@ -48,6 +48,31 @@ def test_volume_set_route_dispatches_level():
     assert calls[-1][1]["level"] == 73
 
 
+def test_lock_routes_dispatch():
+    calls = []
+    client = _make_client(calls)
+
+    response = client.post("/api/lock")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "lock"
+
+    response = client.post("/api/automation-lock")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "automation_lock"
+
+    response = client.post("/api/automation_lock")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "automation_lock"
+
+    response = client.post("/api/unlock")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "unlock"
+
+
 def test_navigation_and_selected_play_routes_dispatch():
     calls = []
     client = _make_client(calls)

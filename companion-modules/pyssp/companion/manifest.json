@@ -10,7 +10,7 @@
   "bugs": "https://github.com/sikaxn/pySSP/issues",
   "maintainers": [
     {
-      "name": "Nathan"
+      "name": "sikaxn"
     }
   ],
   "legacyIds": [],
@@ -22,5 +22,5 @@
   },
   "manufacturer": "pySSP",
   "products": ["pySSP"],
-  "keywords": ["audio", "playback", "sound", "pyssp"]
+  "keywords": ["audio", "playback", "sound", "pyssp", "Sports", "Sounds", "Pro"]
 }

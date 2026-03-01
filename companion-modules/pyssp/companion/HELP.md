@@ -2,6 +2,8 @@
 
 This module controls pySSP over the pySSP Web Remote HTTP API.
 
+pySSP is an open source alternative to Sports Sounds Pro for show playback and arena production on Windows and macOS Apple silicon. Note this module does not support the origional Sports Sounds Pro. You can download pySSP at https://pyssp.studenttechsupport.com/
+
 Configuration:
 
 - Host/IP (`host`)

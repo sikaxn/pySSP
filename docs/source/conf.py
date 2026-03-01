@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'pySSP'
-copyright = '2026, Nathan'
-author = 'Nathan'
+copyright = '2026, pySSP Developers'
+author = 'Sikaxn'
 release = '0.1.0'
 
 # -- General configuration ---------------------------------------------------

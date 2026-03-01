@@ -2,7 +2,7 @@
   "name": "companion-module-pyssp",
   "version": "1.1.0",
   "private": true,
-  "description": "Bitfocus Companion module for controlling pySSP over HTTP",
+  "description": "Bitfocus Companion module for controlling Python SSP (pySSP) over HTTP. pySSP is an open source alternative to Sports Sounds Pro for show playback and arena production on Windows and macOS Apple silicon. Note this module does not support the origional Sports Sounds Pro. You can download pySSP at https://pyssp.studenttechsupport.com/",
   "main": "src/index.js",
   "type": "module",
   "license": "MIT",

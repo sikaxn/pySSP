@@ -4,7 +4,7 @@
   "name": "pySSP",
   "shortname": "pySSP",
   "description": "Control pySSP via its HTTP Web Remote API",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "repository": "https://github.com/sikaxn/pySSP",
   "bugs": "https://github.com/sikaxn/pySSP/issues",

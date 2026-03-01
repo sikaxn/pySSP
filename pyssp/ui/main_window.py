@@ -12,6 +12,8 @@ import re
 import json
 import shutil
 import configparser
+import tempfile
+import zipfile
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
@@ -74,6 +76,20 @@ from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.settings_store import AppSettings, get_settings_path, load_settings, save_settings
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
+from pyssp.library_archive import (
+    ArchiveOperationCancelled,
+    PackAudioLibraryDialog,
+    PackReportDialog,
+    PackReportRow,
+    PageSelectionItem,
+    UnpackLibraryDialog,
+    build_archive_audio_entries,
+    build_manifest,
+    default_unpack_directory,
+    rewrite_packed_set_paths,
+    unpack_pyssppak,
+    write_manifest,
+)
 from pyssp.midi_control import (
     MidiInputRouter,
     list_midi_input_devices,
@@ -2553,6 +2569,16 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        pack_audio_library_action = QAction(tr("Pack Audio Library"), self)
+        pack_audio_library_action.triggered.connect(self._pack_audio_library)
+        file_menu.addAction(pack_audio_library_action)
+
+        unpack_audio_library_action = QAction(tr("Unpack Library"), self)
+        unpack_audio_library_action.triggered.connect(self._unpack_audio_library)
+        file_menu.addAction(unpack_audio_library_action)
+
+        file_menu.addSeparator()
+
         backup_settings_action = QAction("Backup pySSP Settings", self)
         backup_settings_action.triggered.connect(self._backup_pyssp_settings)
         file_menu.addAction(backup_settings_action)
@@ -2840,6 +2866,313 @@ class MainWindow(QMainWindow):
             "Restore pySSP Settings",
             "Settings restored to disk. Restart pySSP before making more changes.",
         )
+
+    def _pack_audio_library(self) -> None:
+        dialog = PackAudioLibraryDialog(self._build_pack_page_selection_items(), parent=self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        selected_pages: set[Tuple[str, int]] = set()
+        for key in dialog.selected_keys():
+            decoded = self._decode_pack_page_key(key)
+            if decoded is not None:
+                selected_pages.add(decoded)
+        if not selected_pages:
+            QMessageBox.information(self, tr("Pack Audio Library"), tr("Select at least one page to pack."))
+            return
+
+        start_dir = self.settings.last_save_dir or self.settings.last_open_dir or os.path.expanduser("~")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        initial_path = os.path.join(start_dir, f"pyssp_audio_library_{stamp}.pyssppak")
+        package_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Pack Audio Library"),
+            initial_path,
+            tr("pySSP Audio Library (*.pyssppak);;All Files (*.*)"),
+        )
+        if not package_path:
+            return
+        if not package_path.lower().endswith(".pyssppak"):
+            package_path = f"{package_path}.pyssppak"
+
+        include_settings = bool(dialog.include_settings_checkbox.isChecked())
+        maintain_structure = bool(dialog.maintain_structure_checkbox.isChecked())
+        settings_source = None
+        if include_settings:
+            self._save_settings()
+            settings_path = get_settings_path()
+            if settings_path.exists():
+                settings_source = str(settings_path)
+
+        path_usage = self._collect_pack_path_usage(selected_pages)
+        ordered_paths = [item["source_path"] for item in path_usage.values()]
+        planned_audio_entries = build_archive_audio_entries(ordered_paths, maintain_structure)
+        entry_by_path = {
+            os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_audio_entries
+        }
+        total_steps = len(planned_audio_entries) + 2 + (1 if settings_source else 0)
+        progress = QProgressDialog(tr("Packing audio library..."), tr("Cancel"), 0, max(1, total_steps), self)
+        progress.setWindowTitle(tr("Pack Audio Library"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        set_member_name = f"{os.path.splitext(os.path.basename(package_path))[0]}.set"
+        packed_audio_entries: List[object] = []
+        slot_path_overrides: Dict[Tuple[str, int, int], str] = {}
+        skipped_slots: set[Tuple[str, int, int]] = set()
+        report_rows: List[PackReportRow] = []
+        try:
+            with tempfile.TemporaryDirectory(prefix="pyssp_pack_") as temp_dir:
+                with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    step = 0
+                    for normalized_path, path_info in path_usage.items():
+                        if progress.wasCanceled():
+                            raise ArchiveOperationCancelled()
+                        source_path = str(path_info["source_path"])
+                        progress.setLabelText(f"{tr('Verifying and packing')} {os.path.basename(source_path)}...")
+                        cause = self._diagnose_sound_button_issue(source_path)
+                        if cause:
+                            for slot_info in path_info["slots"]:
+                                skipped_slots.add((slot_info["group"], slot_info["page"], slot_info["slot"]))
+                                report_rows.append(
+                                    PackReportRow(
+                                        location=str(slot_info["location"]),
+                                        slot=int(slot_info["slot"]) + 1,
+                                        title=str(slot_info["title"]),
+                                        file_path=source_path,
+                                        status=tr("Skipped"),
+                                        cause=cause,
+                                    )
+                                )
+                        else:
+                            entry = entry_by_path.get(normalized_path)
+                            if entry is None:
+                                raise RuntimeError(f"Missing archive entry for {source_path}")
+                            archive.write(source_path, arcname=entry.archive_member)
+                            packed_audio_entries.append(entry)
+                            for slot_info in path_info["slots"]:
+                                slot_key = (slot_info["group"], slot_info["page"], slot_info["slot"])
+                                slot_path_overrides[slot_key] = entry.set_path
+                                report_rows.append(
+                                    PackReportRow(
+                                        location=str(slot_info["location"]),
+                                        slot=int(slot_info["slot"]) + 1,
+                                        title=str(slot_info["title"]),
+                                        file_path=source_path,
+                                        status=tr("Packed"),
+                                        cause="",
+                                    )
+                                )
+                            step += 1
+                            self._update_archive_progress(
+                                progress,
+                                step,
+                                total_steps,
+                                f"{tr('Processed')} {os.path.basename(source_path)}",
+                            )
+
+                    temp_set_path = os.path.join(temp_dir, set_member_name)
+                    pack_lines = self._build_set_file_lines(
+                        selected_pages=selected_pages,
+                        slot_path_overrides=slot_path_overrides,
+                        skipped_slots=skipped_slots,
+                    )
+                    self._write_set_payload(temp_set_path, pack_lines)
+                    archive.write(temp_set_path, arcname=set_member_name)
+                    step += 1
+                    self._update_archive_progress(progress, step, total_steps, f"{tr('Packing')} {set_member_name}...")
+
+                    if settings_source:
+                        if progress.wasCanceled():
+                            raise ArchiveOperationCancelled()
+                        archive.write(settings_source, arcname="settings.ini")
+                        step += 1
+                        self._update_archive_progress(progress, step, total_steps, tr("Packing settings.ini..."))
+
+                    manifest = build_manifest(set_member_name, packed_audio_entries, bool(settings_source))
+                    write_manifest(archive, manifest)
+                    step += 1
+                    self._update_archive_progress(progress, step, total_steps, tr("Writing package manifest..."))
+        except ArchiveOperationCancelled:
+            progress.close()
+            if os.path.exists(package_path):
+                try:
+                    os.remove(package_path)
+                except OSError:
+                    pass
+            QMessageBox.information(self, tr("Pack Audio Library"), tr("Pack operation cancelled."))
+            return
+        except Exception as exc:
+            progress.close()
+            QMessageBox.critical(self, tr("Pack Audio Library"), f"{tr('Could not pack audio library:')}\n{exc}")
+            return
+
+        progress.close()
+        self.settings.last_save_dir = os.path.dirname(package_path)
+        self._save_settings()
+        report_dialog = PackReportDialog(report_rows, os.path.dirname(package_path), parent=self)
+        report_dialog.exec_()
+
+    def _unpack_audio_library(self) -> None:
+        dialog = UnpackLibraryDialog("", "", parent=self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        values = dialog.values()
+        package_path = values.package_path
+        destination_dir = values.destination_dir or default_unpack_directory(package_path)
+        if not package_path or not os.path.exists(package_path):
+            QMessageBox.warning(self, tr("Unpack Library"), tr("Select a valid pyssppak file."))
+            return
+        if not destination_dir:
+            QMessageBox.warning(self, tr("Unpack Library"), tr("Select an unpack directory."))
+            return
+
+        progress = QProgressDialog(tr("Unpacking audio library..."), tr("Cancel"), 0, 1, self)
+        progress.setWindowTitle(tr("Unpack Library"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        try:
+            result = unpack_pyssppak(
+                package_path=package_path,
+                destination_dir=destination_dir,
+                maintain_directory_structure=values.maintain_directory_structure,
+                progress_callback=lambda current, total, label: self._update_archive_progress(
+                    progress, current, total, label
+                ),
+                is_cancelled=progress.wasCanceled,
+            )
+            if result.audio_path_map:
+                rewrite_packed_set_paths(result.extracted_set_path, result.audio_path_map)
+        except ArchiveOperationCancelled:
+            progress.close()
+            QMessageBox.information(self, tr("Unpack Library"), tr("Unpack operation cancelled."))
+            return
+        except Exception as exc:
+            progress.close()
+            QMessageBox.critical(self, tr("Unpack Library"), f"{tr('Could not unpack library:')}\n{exc}")
+            return
+
+        progress.close()
+        self.settings.last_open_dir = os.path.dirname(package_path)
+        self.settings.last_save_dir = destination_dir
+        self._save_settings()
+
+        if values.open_set_after_unpack:
+            self._load_set(result.extracted_set_path, show_message=True, restore_last_position=False)
+
+        if values.restore_settings and result.extracted_settings_path:
+            self._restore_packed_pyssp_settings(
+                result.extracted_settings_path,
+                open_set_path=result.extracted_set_path if values.open_set_after_unpack else "",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            tr("Unpack Library"),
+            f"{tr('Library unpacked.')}\n\n{tr('Set file:')}\n{result.extracted_set_path}\n\n{tr('Audio folder:')}\n{destination_dir}",
+        )
+
+    def _restore_packed_pyssp_settings(self, source_path: str, open_set_path: str = "") -> None:
+        target = get_settings_path()
+        try:
+            shutil.copy2(source_path, str(target))
+            restored_settings = load_settings()
+            if open_set_path:
+                restored_settings.last_set_path = open_set_path
+                restored_settings.last_open_dir = os.path.dirname(open_set_path)
+                restored_settings.last_save_dir = os.path.dirname(open_set_path)
+                restored_settings.last_group = "A"
+                restored_settings.last_page = 0
+                save_settings(restored_settings)
+        except Exception as exc:
+            QMessageBox.critical(self, tr("Restore pySSP Settings"), f"{tr('Could not restore settings:')}\n{exc}")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            tr("Restore pySSP Settings"),
+            tr("Settings restored.\npySSP needs restart to apply them correctly.\n\nRestart now?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._skip_save_on_close = True
+            self.close()
+            return
+        QMessageBox.information(
+            self,
+            tr("Restore pySSP Settings"),
+            tr("Settings restored to disk. Restart pySSP before making more changes."),
+        )
+
+    def _build_pack_page_selection_items(self) -> List[PageSelectionItem]:
+        items: List[PageSelectionItem] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                label = self._page_display_name(group, page_index)
+                page_created = self._is_page_created(group, page_index)
+                items.append(
+                    PageSelectionItem(
+                        key=self._encode_pack_page_key(group, page_index),
+                        label=label,
+                        checked=page_created,
+                        enabled=page_created,
+                    )
+                )
+        return items
+
+    def _collect_pack_path_usage(self, selected_pages: set[Tuple[str, int]]) -> Dict[str, dict]:
+        usage: Dict[str, dict] = {}
+        for group, page_index in sorted(selected_pages):
+            location = self._page_display_name(group, page_index)
+            for slot_index, slot in enumerate(self.data[group][page_index]):
+                if not slot.assigned or slot.marker:
+                    continue
+                path = str(slot.file_path or "").strip()
+                normalized = os.path.normcase(os.path.abspath(path))
+                if normalized not in usage:
+                    usage[normalized] = {"source_path": path, "slots": []}
+                usage[normalized]["slots"].append(
+                    {
+                        "group": group,
+                        "page": page_index,
+                        "slot": slot_index,
+                        "location": location,
+                        "title": slot.title.strip() or os.path.splitext(os.path.basename(path))[0],
+                    }
+                )
+        return usage
+
+    def _update_archive_progress(self, progress: QProgressDialog, current: int, total: int, label: str) -> None:
+        progress.setMaximum(max(1, total))
+        progress.setValue(max(0, min(current, max(1, total))))
+        progress.setLabelText(label)
+        QApplication.processEvents()
+
+    @staticmethod
+    def _encode_pack_page_key(group: str, page_index: int) -> str:
+        return f"{group}:{page_index}"
+
+    @staticmethod
+    def _decode_pack_page_key(value: str) -> Optional[Tuple[str, int]]:
+        raw = str(value or "").strip()
+        if ":" not in raw:
+            return None
+        group, page_value = raw.split(":", 1)
+        group = group.strip().upper()
+        if group not in GROUPS:
+            return None
+        try:
+            page_index = int(page_value)
+        except ValueError:
+            return None
+        if page_index < 0 or page_index >= PAGE_COUNT:
+            return None
+        return group, page_index
 
     def _backup_keyboard_hotkey_bindings(self) -> None:
         payload = {
@@ -9595,26 +9928,59 @@ class MainWindow(QMainWindow):
     def _write_set_file(self, file_path: str) -> None:
         has_custom_cues = self._has_any_custom_cues()
         try:
-            lines: List[str] = [
-                "[Main]",
-                "CreatedBy=SportsSounds",
-                f"Personalization=pySSP {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                "",
-            ]
+            lines = self._build_set_file_lines()
+            self._write_set_payload(file_path, lines)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Set Failed", f"Could not save set file:\n{exc}")
+            return
 
-            for group in GROUPS:
-                for page_index in range(PAGE_COUNT):
-                    section_name = f"Page{page_index + 1}" if group == "A" else f"Page{group}{page_index + 1}"
-                    lines.append(f"[{section_name}]")
-                    page_name = clean_set_value(self.page_names[group][page_index]) or " "
-                    lines.append(f"PageName={page_name}")
-                    lines.append(f"PagePlay={'T' if self.page_playlist_enabled[group][page_index] else 'F'}")
-                    lines.append("RapidFire=F")
-                    lines.append(f"PageShuffle={'T' if self.page_shuffle_enabled[group][page_index] else 'F'}")
-                    lines.append(f"PageColor={to_set_color_value(self.page_colors[group][page_index])}")
+        self.current_set_path = file_path
+        self._set_dirty(False)
+        self.settings.last_set_path = file_path
+        self.settings.last_save_dir = os.path.dirname(file_path)
+        self.settings.last_open_dir = os.path.dirname(file_path)
+        self._save_settings()
+        self._show_save_notice_banner(f"Set Saved: {file_path}")
+        if has_custom_cues:
+            self._show_save_notice_banner(
+                "Reminder: Custom cue points saved by pySSP are not supported by original Sports Sounds Pro.",
+                timeout_ms=9000,
+            )
 
-                    page = self.data[group][page_index]
-                    for slot_index, slot in enumerate(page, start=1):
+    def _build_set_file_lines(
+        self,
+        selected_pages: Optional[set[Tuple[str, int]]] = None,
+        slot_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
+        skipped_slots: Optional[set[Tuple[str, int, int]]] = None,
+    ) -> List[str]:
+        overrides = slot_path_overrides or {}
+        skipped = skipped_slots or set()
+        lines: List[str] = [
+            "[Main]",
+            "CreatedBy=SportsSounds",
+            f"Personalization=pySSP {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+        ]
+
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                include_page = selected_pages is None or (group, page_index) in selected_pages
+                section_name = f"Page{page_index + 1}" if group == "A" else f"Page{group}{page_index + 1}"
+                lines.append(f"[{section_name}]")
+                page_name = clean_set_value(self.page_names[group][page_index]) if include_page else ""
+                lines.append(f"PageName={page_name or ' '}")
+                lines.append(f"PagePlay={'T' if include_page and self.page_playlist_enabled[group][page_index] else 'F'}")
+                lines.append("RapidFire=F")
+                lines.append(f"PageShuffle={'T' if include_page and self.page_shuffle_enabled[group][page_index] else 'F'}")
+                lines.append(
+                    f"PageColor={to_set_color_value(self.page_colors[group][page_index]) if include_page else 'clBtnFace'}"
+                )
+
+                if include_page:
+                    for slot_index, slot in enumerate(self.data[group][page_index], start=1):
+                        slot_key = (group, page_index, slot_index - 1)
+                        if slot_key in skipped:
+                            continue
                         if not slot.assigned and not slot.title:
                             continue
                         if slot.marker:
@@ -9624,10 +9990,11 @@ class MainWindow(QMainWindow):
                             lines.append(f"activity{slot_index}=7")
                             lines.append(f"co{slot_index}=clBtnFace")
                             continue
+                        effective_file_path = overrides.get(slot_key, slot.file_path)
                         title = clean_set_value(slot.title or os.path.splitext(os.path.basename(slot.file_path))[0])
                         notes = clean_set_value(slot.notes or title)
                         lines.append(f"c{slot_index}={notes}")
-                        lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
+                        lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
                         lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
                         lines.append(f"n{slot_index}={title}")
                         if slot.volume_override_pct is not None:
@@ -9647,40 +10014,26 @@ class MainWindow(QMainWindow):
                             lines.append(f"pysspcuestart{slot_index}={cue_start}")
                         if cue_end is not None:
                             lines.append(f"pysspcueend{slot_index}={cue_end}")
-                    lines.append("")
+                lines.append("")
 
-            lines.extend(
-                [
-                    "[PageQ19]",
-                    "PageName=Cue",
-                    "PagePlay=F",
-                    "RapidFire=F",
-                    "PageShuffle=F",
-                    "PageColor=clBlack",
-                    "",
-                ]
-            )
+        lines.extend(
+            [
+                "[PageQ19]",
+                "PageName=Cue",
+                "PagePlay=F",
+                "RapidFire=F",
+                "PageShuffle=F",
+                "PageColor=clBlack",
+                "",
+            ]
+        )
+        return lines
 
-            payload = "\r\n".join(lines)
-            encoding = "utf-8-sig" if self.set_file_encoding == "utf8" else "gbk"
-            with open(file_path, "w", encoding=encoding, newline="") as fh:
-                fh.write(payload)
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Set Failed", f"Could not save set file:\n{exc}")
-            return
-
-        self.current_set_path = file_path
-        self._set_dirty(False)
-        self.settings.last_set_path = file_path
-        self.settings.last_save_dir = os.path.dirname(file_path)
-        self.settings.last_open_dir = os.path.dirname(file_path)
-        self._save_settings()
-        self._show_save_notice_banner(f"Set Saved: {file_path}")
-        if has_custom_cues:
-            self._show_save_notice_banner(
-                "Reminder: Custom cue points saved by pySSP are not supported by original Sports Sounds Pro.",
-                timeout_ms=9000,
-            )
+    def _write_set_payload(self, file_path: str, lines: List[str]) -> None:
+        payload = "\r\n".join(lines)
+        encoding = "utf-8-sig" if self.set_file_encoding == "utf8" else "gbk"
+        with open(file_path, "w", encoding=encoding, newline="") as fh:
+            fh.write(payload)
 
     def _load_set(self, file_path: str, show_message: bool = True, restore_last_position: bool = False) -> None:
         try:

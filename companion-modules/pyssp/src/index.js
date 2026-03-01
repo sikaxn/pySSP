@@ -6,10 +6,98 @@ import {
 } from '@companion-module/base'
 import * as config from './config.js'
 
-const GROUP_CHOICES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map((group) => ({
+const GROUP_CHOICES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'Q'].map((group) => ({
 	id: group,
 	label: group,
 }))
+
+const PLAYER_COMMAND_CHOICES = [
+	{ id: 'pause', label: 'Pause' },
+	{ id: 'resume', label: 'Resume' },
+	{ id: 'stop', label: 'Stop' },
+	{ id: 'forcestop', label: 'Force Stop' },
+	{ id: 'playnext', label: 'Play Next' },
+	{ id: 'rapidfire', label: 'Rapid Fire' },
+	{ id: 'playselected', label: 'Play Selected' },
+	{ id: 'playselectedpause', label: 'Play Selected / Pause' },
+	{ id: 'mute', label: 'Mute Toggle' },
+	{ id: 'talk/enable', label: 'Talk Enable' },
+	{ id: 'talk/disable', label: 'Talk Disable' },
+	{ id: 'talk/toggle', label: 'Talk Toggle' },
+	{ id: 'playlist/enable', label: 'Playlist Enable' },
+	{ id: 'playlist/disable', label: 'Playlist Disable' },
+	{ id: 'playlist/toggle', label: 'Playlist Toggle' },
+	{ id: 'playlist/shuffle/enable', label: 'Shuffle Enable' },
+	{ id: 'playlist/shuffle/disable', label: 'Shuffle Disable' },
+	{ id: 'playlist/shuffle/toggle', label: 'Shuffle Toggle' },
+	{ id: 'multiplay/enable', label: 'Multi-play Enable' },
+	{ id: 'multiplay/disable', label: 'Multi-play Disable' },
+	{ id: 'multiplay/toggle', label: 'Multi-play Toggle' },
+	{ id: 'fadein/enable', label: 'Fade In Enable' },
+	{ id: 'fadein/disable', label: 'Fade In Disable' },
+	{ id: 'fadein/toggle', label: 'Fade In Toggle' },
+	{ id: 'fadeout/enable', label: 'Fade Out Enable' },
+	{ id: 'fadeout/disable', label: 'Fade Out Disable' },
+	{ id: 'fadeout/toggle', label: 'Fade Out Toggle' },
+	{ id: 'crossfade/enable', label: 'Crossfade Enable' },
+	{ id: 'crossfade/disable', label: 'Crossfade Disable' },
+	{ id: 'crossfade/toggle', label: 'Crossfade Toggle' },
+	{ id: 'resetpage/current', label: 'Reset Current Page' },
+	{ id: 'resetpage/all', label: 'Reset All Pages' },
+	{ id: 'group/prev', label: 'Previous Group' },
+	{ id: 'group/next', label: 'Next Group' },
+	{ id: 'page/prev', label: 'Previous Page' },
+	{ id: 'page/next', label: 'Next Page' },
+	{ id: 'soundbutton/prev', label: 'Previous Sound Button' },
+	{ id: 'soundbutton/next', label: 'Next Sound Button' },
+	{ id: 'lock', label: 'Lock' },
+	{ id: 'automation-lock', label: 'Automation Lock' },
+	{ id: 'unlock', label: 'Unlock' },
+]
+
+const PLAYER_PRESETS = [
+	{ id: 'pause', name: 'Pause', command: 'pause', color: 'bg' },
+	{ id: 'resume', name: 'Resume', command: 'resume', color: 'green' },
+	{ id: 'stop', name: 'Stop', command: 'stop', color: 'red' },
+	{ id: 'forcestop', name: 'Force Stop', command: 'forcestop', color: 'red' },
+	{ id: 'playnext', name: 'Play Next', command: 'playnext', color: 'bg' },
+	{ id: 'rapidfire', name: 'Rapid Fire', command: 'rapidfire', color: 'bg' },
+	{ id: 'playselected', name: 'Play Selected', command: 'playselected', color: 'bg' },
+	{ id: 'playselectedpause', name: 'Play Sel/Pause', command: 'playselectedpause', color: 'bg' },
+	{ id: 'mute', name: 'Mute Toggle', command: 'mute', color: 'bg' },
+	{ id: 'talk_enable', name: 'Talk Enable', command: 'talk/enable', color: 'bg' },
+	{ id: 'talk_disable', name: 'Talk Disable', command: 'talk/disable', color: 'bg' },
+	{ id: 'talk_toggle', name: 'Talk Toggle', command: 'talk/toggle', color: 'bg' },
+	{ id: 'playlist_enable', name: 'Playlist Enable', command: 'playlist/enable', color: 'bg' },
+	{ id: 'playlist_disable', name: 'Playlist Disable', command: 'playlist/disable', color: 'bg' },
+	{ id: 'playlist_toggle', name: 'Playlist Toggle', command: 'playlist/toggle', color: 'bg' },
+	{ id: 'shuffle_enable', name: 'Shuffle Enable', command: 'playlist/shuffle/enable', color: 'bg' },
+	{ id: 'shuffle_disable', name: 'Shuffle Disable', command: 'playlist/shuffle/disable', color: 'bg' },
+	{ id: 'shuffle_toggle', name: 'Shuffle Toggle', command: 'playlist/shuffle/toggle', color: 'bg' },
+	{ id: 'multiplay_enable', name: 'Multi-play Enable', command: 'multiplay/enable', color: 'bg' },
+	{ id: 'multiplay_disable', name: 'Multi-play Disable', command: 'multiplay/disable', color: 'bg' },
+	{ id: 'multiplay_toggle', name: 'Multi-play Toggle', command: 'multiplay/toggle', color: 'bg' },
+	{ id: 'fadein_enable', name: 'Fade In Enable', command: 'fadein/enable', color: 'bg' },
+	{ id: 'fadein_disable', name: 'Fade In Disable', command: 'fadein/disable', color: 'bg' },
+	{ id: 'fadein_toggle', name: 'Fade In Toggle', command: 'fadein/toggle', color: 'bg' },
+	{ id: 'fadeout_enable', name: 'Fade Out Enable', command: 'fadeout/enable', color: 'bg' },
+	{ id: 'fadeout_disable', name: 'Fade Out Disable', command: 'fadeout/disable', color: 'bg' },
+	{ id: 'fadeout_toggle', name: 'Fade Out Toggle', command: 'fadeout/toggle', color: 'bg' },
+	{ id: 'crossfade_enable', name: 'Crossfade Enable', command: 'crossfade/enable', color: 'bg' },
+	{ id: 'crossfade_disable', name: 'Crossfade Disable', command: 'crossfade/disable', color: 'bg' },
+	{ id: 'crossfade_toggle', name: 'Crossfade Toggle', command: 'crossfade/toggle', color: 'bg' },
+	{ id: 'reset_current', name: 'Reset Current Page', command: 'resetpage/current', color: 'bg' },
+	{ id: 'reset_all', name: 'Reset All Pages', command: 'resetpage/all', color: 'bg' },
+	{ id: 'group_prev', name: 'Prev Group', command: 'group/prev', color: 'bg' },
+	{ id: 'group_next', name: 'Next Group', command: 'group/next', color: 'bg' },
+	{ id: 'page_prev', name: 'Prev Page', command: 'page/prev', color: 'bg' },
+	{ id: 'page_next', name: 'Next Page', command: 'page/next', color: 'bg' },
+	{ id: 'soundbutton_prev', name: 'Prev Button', command: 'soundbutton/prev', color: 'bg' },
+	{ id: 'soundbutton_next', name: 'Next Button', command: 'soundbutton/next', color: 'bg' },
+	{ id: 'lock', name: 'Lock', command: 'lock', color: 'red' },
+	{ id: 'automation_lock', name: 'Automation Lock', command: 'automation-lock', color: 'red' },
+	{ id: 'unlock', name: 'Unlock', command: 'unlock', color: 'green' },
+]
 
 class PySSPInstance extends InstanceBase {
 	constructor(internal) {
@@ -35,14 +123,23 @@ class PySSPInstance extends InstanceBase {
 		this.setVariableDefinitions([
 			{ variableId: 'current_group', name: 'Current group' },
 			{ variableId: 'current_page', name: 'Current page' },
+			{ variableId: 'cue_mode', name: 'Cue mode' },
 			{ variableId: 'is_playing', name: 'Is playing' },
 			{ variableId: 'talk_active', name: 'Talk active' },
 			{ variableId: 'playlist_enabled', name: 'Playlist enabled' },
 			{ variableId: 'shuffle_enabled', name: 'Shuffle enabled' },
 			{ variableId: 'multi_play_enabled', name: 'Multi-play enabled' },
+			{ variableId: 'fade_in_enabled', name: 'Fade in enabled' },
+			{ variableId: 'fade_out_enabled', name: 'Fade out enabled' },
+			{ variableId: 'crossfade_enabled', name: 'Crossfade enabled' },
+			{ variableId: 'screen_locked', name: 'Screen locked' },
+			{ variableId: 'automation_locked', name: 'Automation locked' },
 			{ variableId: 'playing_count', name: 'Playing track count' },
+			{ variableId: 'playing_buttons', name: 'Playing button list' },
 			{ variableId: 'playing_button_ids', name: 'Playing button IDs' },
+			{ variableId: 'current_playing', name: 'Current playing button' },
 			{ variableId: 'playing_titles', name: 'Playing titles' },
+			{ variableId: 'web_remote_url', name: 'Web remote URL' },
 			{ variableId: 'base_url', name: 'Configured base URL' },
 			{ variableId: 'last_error', name: 'Last error' },
 		])
@@ -105,37 +202,7 @@ class PySSPInstance extends InstanceBase {
 						type: 'dropdown',
 						label: 'Command',
 						default: 'pause',
-						choices: [
-							{ id: 'pause', label: 'Pause' },
-							{ id: 'resume', label: 'Resume' },
-							{ id: 'stop', label: 'Stop' },
-							{ id: 'forcestop', label: 'Force Stop' },
-							{ id: 'playnext', label: 'Play Next' },
-							{ id: 'rapidfire', label: 'Rapid Fire' },
-							{ id: 'talk/enable', label: 'Talk Enable' },
-							{ id: 'talk/disable', label: 'Talk Disable' },
-							{ id: 'talk/toggle', label: 'Talk Toggle' },
-							{ id: 'playlist/enable', label: 'Playlist Enable' },
-							{ id: 'playlist/disable', label: 'Playlist Disable' },
-							{ id: 'playlist/toggle', label: 'Playlist Toggle' },
-							{ id: 'playlist/shuffle/enable', label: 'Shuffle Enable' },
-							{ id: 'playlist/shuffle/disable', label: 'Shuffle Disable' },
-							{ id: 'playlist/shuffle/toggle', label: 'Shuffle Toggle' },
-							{ id: 'multiplay/enable', label: 'Multi-play Enable' },
-							{ id: 'multiplay/disable', label: 'Multi-play Disable' },
-							{ id: 'multiplay/toggle', label: 'Multi-play Toggle' },
-							{ id: 'fadein/enable', label: 'Fade In Enable' },
-							{ id: 'fadein/disable', label: 'Fade In Disable' },
-							{ id: 'fadein/toggle', label: 'Fade In Toggle' },
-							{ id: 'fadeout/enable', label: 'Fade Out Enable' },
-							{ id: 'fadeout/disable', label: 'Fade Out Disable' },
-							{ id: 'fadeout/toggle', label: 'Fade Out Toggle' },
-							{ id: 'crossfade/enable', label: 'Crossfade Enable' },
-							{ id: 'crossfade/disable', label: 'Crossfade Disable' },
-							{ id: 'crossfade/toggle', label: 'Crossfade Toggle' },
-							{ id: 'resetpage/current', label: 'Reset Current Page' },
-							{ id: 'resetpage/all', label: 'Reset All Pages' },
-						],
+						choices: PLAYER_COMMAND_CHOICES,
 					},
 				],
 				callback: async (action) => {
@@ -182,6 +249,127 @@ class PySSPInstance extends InstanceBase {
 
 					if (!buttonId) throw new Error('Audio selection is required')
 					await this.callCommand(`/api/play/${encodeURIComponent(buttonId)}`)
+				},
+			},
+			volume_set: {
+				name: 'Volume - Set Master Level',
+				options: [
+					{
+						id: 'level',
+						type: 'number',
+						label: 'Volume',
+						default: 100,
+						min: 0,
+						max: 100,
+						range: true,
+					},
+				],
+				callback: async (action) => {
+					const level = Number(action.options.level)
+					if (!Number.isInteger(level) || level < 0 || level > 100) {
+						throw new Error('Volume must be an integer from 0 to 100')
+					}
+					await this.callCommand(`/api/volume/${level}`)
+				},
+			},
+			seek_transport: {
+				name: 'Seek Transport',
+				options: [
+					{
+						id: 'seek_mode',
+						type: 'dropdown',
+						label: 'Seek by',
+						default: 'percent',
+						choices: [
+							{ id: 'percent', label: 'Percent' },
+							{ id: 'time', label: 'Time String' },
+						],
+					},
+					{
+						id: 'percent',
+						type: 'textinput',
+						label: 'Percent',
+						default: '50',
+						isVisible: new Function('options', "return String(options.seek_mode ?? 'percent') === 'percent'"),
+					},
+					{
+						id: 'time',
+						type: 'textinput',
+						label: 'Time',
+						default: '01:00',
+						isVisible: new Function('options', "return String(options.seek_mode ?? 'percent') === 'time'"),
+					},
+				],
+				callback: async (action) => {
+					const seekMode = String(action.options.seek_mode ?? 'percent').trim().toLowerCase()
+					if (seekMode === 'percent') {
+						const value = String(action.options.percent ?? '').trim()
+						if (!value) throw new Error('Percent is required')
+						await this.callCommand(`/api/seek/percent/${encodeURIComponent(value)}`)
+						return
+					}
+
+					if (seekMode === 'time') {
+						const value = String(action.options.time ?? '').trim()
+						if (!value) throw new Error('Time is required')
+						await this.callCommand(`/api/seek/time/${encodeURIComponent(value)}`)
+						return
+					}
+
+					throw new Error('Seek mode must be percent or time')
+				},
+			},
+			stage_alert: {
+				name: 'Stage Alert - Send',
+				options: [
+					{
+						id: 'text',
+						type: 'textinput',
+						label: 'Text',
+						default: '',
+					},
+					{
+						id: 'keep',
+						type: 'checkbox',
+						label: 'Keep alert visible',
+						default: true,
+					},
+					{
+						id: 'seconds',
+						type: 'number',
+						label: 'Seconds when not kept',
+						default: 10,
+						min: 1,
+						max: 600,
+						isVisible: new Function('options', 'return !options.keep'),
+					},
+				],
+				callback: async (action) => {
+					const text = String(action.options.text ?? '').trim()
+					if (!text) throw new Error('Alert text is required')
+
+					const keep = !!action.options.keep
+					const query = new URLSearchParams({
+						text,
+						keep: String(keep),
+					})
+
+					if (!keep) {
+						const seconds = Number(action.options.seconds)
+						if (!Number.isInteger(seconds) || seconds < 1 || seconds > 600) {
+							throw new Error('Seconds must be an integer from 1 to 600')
+						}
+						query.set('seconds', String(seconds))
+					}
+
+					await this.callCommand(`/api/alert?${query.toString()}`)
+				},
+			},
+			clear_alert: {
+				name: 'Stage Alert - Clear',
+				options: [],
+				callback: async () => {
+					await this.callCommand('/api/alert/clear')
 				},
 			},
 		}
@@ -303,59 +491,14 @@ class PySSPInstance extends InstanceBase {
 		const red = combineRgb(160, 0, 0)
 		const green = combineRgb(0, 120, 0)
 		const presets = {}
-		const playerPresets = [
-			{ id: 'pause', name: 'Pause', command: 'pause', color: bg },
-			{ id: 'resume', name: 'Resume', command: 'resume', color: green },
-			{ id: 'stop', name: 'Stop', command: 'stop', color: red },
-			{ id: 'forcestop', name: 'Force Stop', command: 'forcestop', color: red },
-			{ id: 'playnext', name: 'Play Next', command: 'playnext', color: bg },
-			{ id: 'rapidfire', name: 'Rapid Fire', command: 'rapidfire', color: bg },
-			{ id: 'talk_enable', name: 'Talk Enable', command: 'talk/enable', color: bg },
-			{ id: 'talk_disable', name: 'Talk Disable', command: 'talk/disable', color: bg },
-			{ id: 'talk_toggle', name: 'Talk Toggle', command: 'talk/toggle', color: bg },
-			{ id: 'playlist_enable', name: 'Playlist Enable', command: 'playlist/enable', color: bg },
-			{ id: 'playlist_disable', name: 'Playlist Disable', command: 'playlist/disable', color: bg },
-			{ id: 'playlist_toggle', name: 'Playlist Toggle', command: 'playlist/toggle', color: bg },
-			{
-				id: 'shuffle_enable',
-				name: 'Shuffle Enable',
-				command: 'playlist/shuffle/enable',
-				color: bg,
-			},
-			{
-				id: 'shuffle_disable',
-				name: 'Shuffle Disable',
-				command: 'playlist/shuffle/disable',
-				color: bg,
-			},
-			{
-				id: 'shuffle_toggle',
-				name: 'Shuffle Toggle',
-				command: 'playlist/shuffle/toggle',
-				color: bg,
-			},
-			{ id: 'multiplay_enable', name: 'Multi-play Enable', command: 'multiplay/enable', color: bg },
-			{ id: 'multiplay_disable', name: 'Multi-play Disable', command: 'multiplay/disable', color: bg },
-			{ id: 'multiplay_toggle', name: 'Multi-play Toggle', command: 'multiplay/toggle', color: bg },
-			{ id: 'fadein_enable', name: 'Fade In Enable', command: 'fadein/enable', color: bg },
-			{ id: 'fadein_disable', name: 'Fade In Disable', command: 'fadein/disable', color: bg },
-			{ id: 'fadein_toggle', name: 'Fade In Toggle', command: 'fadein/toggle', color: bg },
-			{ id: 'fadeout_enable', name: 'Fade Out Enable', command: 'fadeout/enable', color: bg },
-			{ id: 'fadeout_disable', name: 'Fade Out Disable', command: 'fadeout/disable', color: bg },
-			{ id: 'fadeout_toggle', name: 'Fade Out Toggle', command: 'fadeout/toggle', color: bg },
-			{ id: 'crossfade_enable', name: 'Crossfade Enable', command: 'crossfade/enable', color: bg },
-			{ id: 'crossfade_disable', name: 'Crossfade Disable', command: 'crossfade/disable', color: bg },
-			{ id: 'crossfade_toggle', name: 'Crossfade Toggle', command: 'crossfade/toggle', color: bg },
-			{ id: 'reset_current', name: 'Reset Current Page', command: 'resetpage/current', color: bg },
-			{ id: 'reset_all', name: 'Reset All Pages', command: 'resetpage/all', color: bg },
-		]
+		const colors = { fg, bg, red, green }
 
-		for (const item of playerPresets) {
+		for (const item of PLAYER_PRESETS) {
 			presets[`player_${item.id}`] = {
 				type: 'button',
 				category: 'Player Control',
 				name: item.name,
-				style: { text: item.name, size: '14', color: fg, bgcolor: item.color },
+				style: { text: item.name, size: '14', color: fg, bgcolor: colors[item.color] ?? bg },
 				steps: [
 					{
 						down: [{ actionId: 'player_control', options: { command: item.command } }],
@@ -374,6 +517,34 @@ class PySSPInstance extends InstanceBase {
 			steps: [
 				{
 					down: [{ actionId: 'internal_refresh_library', options: {} }],
+					up: [],
+				},
+			],
+			feedbacks: [],
+		}
+
+		presets.volume_100 = {
+			type: 'button',
+			category: 'Volume',
+			name: 'Volume 100',
+			style: { text: 'Vol\\n100', size: '14', color: fg, bgcolor: bg },
+			steps: [
+				{
+					down: [{ actionId: 'volume_set', options: { level: 100 } }],
+					up: [],
+				},
+			],
+			feedbacks: [],
+		}
+
+		presets.clear_alert = {
+			type: 'button',
+			category: 'Stage Alert',
+			name: 'Clear Alert',
+			style: { text: 'Clear\\nAlert', size: '14', color: fg, bgcolor: red },
+			steps: [
+				{
+					down: [{ actionId: 'clear_alert', options: {} }],
 					up: [],
 				},
 			],
@@ -570,14 +741,23 @@ class PySSPInstance extends InstanceBase {
 			this.setVariableValues({
 				current_group: String(result.current_group ?? ''),
 				current_page: result.current_page ?? '',
+				cue_mode: !!result.cue_mode,
 				is_playing: !!result.is_playing,
 				talk_active: !!result.talk_active,
 				playlist_enabled: !!result.playlist_enabled,
 				shuffle_enabled: !!result.shuffle_enabled,
 				multi_play_enabled: !!result.multi_play_enabled,
+				fade_in_enabled: !!result.fade_in_enabled,
+				fade_out_enabled: !!result.fade_out_enabled,
+				crossfade_enabled: !!result.crossfade_enabled,
+				screen_locked: !!result.screen_locked,
+				automation_locked: !!result.automation_locked,
 				playing_count: playingTracks.length,
+				playing_buttons: Array.isArray(result.playing_buttons) ? result.playing_buttons.join(', ') : '',
 				playing_button_ids: ids.join(', '),
+				current_playing: String(result.current_playing ?? ''),
 				playing_titles: titles.join(', '),
+				web_remote_url: String(result.web_remote_url ?? ''),
 				last_error: '',
 			})
 

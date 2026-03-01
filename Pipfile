@@ -9,6 +9,7 @@ pygame-ce = ">=2.5"
 numpy = ">=1.26"
 sounddevice = ">=0.4.7"
 flask = "*"
+werkzeug = ">=3.0"
 
 [dev-packages]
 pytest = ">=8.0"

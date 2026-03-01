@@ -567,6 +567,7 @@ _TRANSLATIONS = {
         "Restore pySSP Settings": "恢复 pySSP 设置",
         "Pack Audio Library": "打包音频库",
         "Unpack Library": "解包音频库",
+        "Unpack Audio Library": "解包音频库",
         "Pack Audio Library Report": "打包音频库报告",
         "Select pages to include in the packed audio library.": "选择要包含在打包音频库中的页面。",
         "Empty page": "空页面",

@@ -2600,7 +2600,7 @@ class MainWindow(QMainWindow):
         pack_audio_library_action.triggered.connect(self._pack_audio_library)
         file_menu.addAction(pack_audio_library_action)
 
-        unpack_audio_library_action = QAction(tr("Unpack Library"), self)
+        unpack_audio_library_action = QAction(tr("Unpack Audio Library"), self)
         unpack_audio_library_action.triggered.connect(self._unpack_audio_library)
         file_menu.addAction(unpack_audio_library_action)
 
@@ -3061,14 +3061,14 @@ class MainWindow(QMainWindow):
         package_path = values.package_path
         destination_dir = values.destination_dir or default_unpack_directory(package_path)
         if not package_path or not os.path.exists(package_path):
-            QMessageBox.warning(self, tr("Unpack Library"), tr("Select a valid pyssppak file."))
+            QMessageBox.warning(self, tr("Unpack Audio Library"), tr("Select a valid pyssppak file."))
             return
         if not destination_dir:
-            QMessageBox.warning(self, tr("Unpack Library"), tr("Select an unpack directory."))
+            QMessageBox.warning(self, tr("Unpack Audio Library"), tr("Select an unpack directory."))
             return
 
         progress = QProgressDialog(tr("Unpacking audio library..."), tr("Cancel"), 0, 1, self)
-        progress.setWindowTitle(tr("Unpack Library"))
+        progress.setWindowTitle(tr("Unpack Audio Library"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -3087,11 +3087,11 @@ class MainWindow(QMainWindow):
                 rewrite_packed_set_paths(result.extracted_set_path, result.audio_path_map)
         except ArchiveOperationCancelled:
             progress.close()
-            QMessageBox.information(self, tr("Unpack Library"), tr("Unpack operation cancelled."))
+            QMessageBox.information(self, tr("Unpack Audio Library"), tr("Unpack operation cancelled."))
             return
         except Exception as exc:
             progress.close()
-            QMessageBox.critical(self, tr("Unpack Library"), f"{tr('Could not unpack library:')}\n{exc}")
+            QMessageBox.critical(self, tr("Unpack Audio Library"), f"{tr('Could not unpack library:')}\n{exc}")
             return
 
         progress.close()
@@ -3111,7 +3111,7 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            tr("Unpack Library"),
+            tr("Unpack Audio Library"),
             f"{tr('Library unpacked.')}\n\n{tr('Set file:')}\n{result.extracted_set_path}\n\n{tr('Audio folder:')}\n{destination_dir}",
         )
 
@@ -4264,12 +4264,12 @@ class MainWindow(QMainWindow):
                 self.page_playlist_enabled[group][page_index] = False
                 self.page_shuffle_enabled[group][page_index] = False
         if not changed:
-            QMessageBox.information(self, "Disable Play List on All Pages", "Play List is already disabled on all pages.")
+            self._show_info_notice_banner("Play List is already disabled on all pages.")
             return
         self.current_playlist_start = None
         self._set_dirty(True)
         self._sync_playlist_shuffle_buttons()
-        QMessageBox.information(self, "Disable Play List on All Pages", "Play List has been disabled on all pages.")
+        self._show_save_notice_banner("Play List has been disabled on all pages.")
 
     def _show_page_library_folder_path(self) -> None:
         path = self._page_library_folder_path()

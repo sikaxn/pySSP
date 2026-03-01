@@ -153,7 +153,7 @@ class PackAudioLibraryDialog(QDialog):
 class UnpackLibraryDialog(QDialog):
     def __init__(self, initial_package_path: str, initial_destination_dir: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Unpack Library"))
+        self.setWindowTitle(tr("Unpack Audio Library"))
         self.resize(640, 220)
 
         layout = QVBoxLayout(self)

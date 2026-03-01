@@ -1,0 +1,1 @@
+Moved to https://github.com/sikaxn/companion-module-python-ssp

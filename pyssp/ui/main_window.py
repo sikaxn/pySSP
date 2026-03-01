@@ -1951,6 +1951,7 @@ class MainWindow(QMainWindow):
         self.midi_connection_warning_banner = QLabel("")
         self.playback_warning_banner = QLabel("")
         self.save_notice_banner = QLabel("")
+        self.info_notice_banner = QLabel("")
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
         self.status_now_playing_label = QLabel("Now Playing: -")
@@ -2036,6 +2037,7 @@ class MainWindow(QMainWindow):
         self._preload_icon_blink_on = False
         self._playback_warning_token = 0
         self._save_notice_token = 0
+        self._info_notice_token = 0
         self._midi_connection_warning_token = 0
         self._stage_display_window: Optional[GadgetStageDisplayWindow] = None
         self._hover_slot_index: Optional[int] = None
@@ -2193,6 +2195,13 @@ class MainWindow(QMainWindow):
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.save_notice_banner)
+        self.info_notice_banner.setVisible(False)
+        self.info_notice_banner.setWordWrap(True)
+        self.info_notice_banner.setStyleSheet(
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.info_notice_banner)
 
         body_layout = QHBoxLayout()
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -2312,6 +2321,19 @@ class MainWindow(QMainWindow):
         if token is not None and token != self._save_notice_token:
             return
         self.save_notice_banner.setVisible(False)
+
+    def _show_info_notice_banner(self, text: str, timeout_ms: int = 5000) -> None:
+        self._info_notice_token += 1
+        token = self._info_notice_token
+        self.info_notice_banner.setText(str(text or "").strip())
+        self.info_notice_banner.setVisible(True)
+        if timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda t=token: self._hide_info_notice_banner(t))
+
+    def _hide_info_notice_banner(self, token: Optional[int] = None) -> None:
+        if token is not None and token != self._info_notice_token:
+            return
+        self.info_notice_banner.setVisible(False)
 
     def _timecode_current_follow_ms(self) -> int:
         if self.player is None:
@@ -5000,7 +5022,7 @@ class MainWindow(QMainWindow):
             return
         page_name = name.strip()
         if not page_name:
-            QMessageBox.information(self, "Page Name", "Page name is required.")
+            self._show_info_notice_banner("Page name is required.")
             return
         self.page_names[self.current_group][page_index] = page_name
         self.current_page = page_index
@@ -5726,7 +5748,7 @@ class MainWindow(QMainWindow):
             return
         source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
         if source_key in self._active_playing_keys:
-            QMessageBox.information(self, "Button Drag", "Cannot drag a currently playing button.")
+            self._show_info_notice_banner("Cannot drag a currently playing button.")
             return
         if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
             return
@@ -5767,10 +5789,10 @@ class MainWindow(QMainWindow):
         if dest_key == source_key:
             return False
         if not self._is_page_created(dest_key[0], dest_key[1]):
-            QMessageBox.information(self, "Button Drag", "Cannot drag into a blank page.")
+            self._show_info_notice_banner("Cannot drag into a blank page.")
             return False
         if source_key in self._active_playing_keys or dest_key in self._active_playing_keys:
-            QMessageBox.information(self, "Button Drag", "Cannot drag currently playing buttons.")
+            self._show_info_notice_banner("Cannot drag currently playing buttons.")
             return False
 
         source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
@@ -5778,7 +5800,7 @@ class MainWindow(QMainWindow):
         if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
             return False
         if dest_slot.locked:
-            QMessageBox.information(self, "Button Drag", "Destination button is locked.")
+            self._show_info_notice_banner("Destination button is locked.")
             return False
 
         source_clone = self._clone_slot(source_slot)
@@ -5819,7 +5841,7 @@ class MainWindow(QMainWindow):
             return
         note = note_text.strip()
         if not note:
-            QMessageBox.information(self, "Insert Place Marker", "Page note text is required.")
+            self._show_info_notice_banner("Page note text is required.")
             return
         page[slot_index] = SoundButtonData(
             title=note,
@@ -5836,7 +5858,7 @@ class MainWindow(QMainWindow):
             return
         note = note_text.strip()
         if not note:
-            QMessageBox.information(self, "Edit Place Marker", "Page note text is required.")
+            self._show_info_notice_banner("Page note text is required.")
             return
         slot.title = note
         slot.activity_code = "7"
@@ -5878,7 +5900,7 @@ class MainWindow(QMainWindow):
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
-            QMessageBox.information(self, "Locked", "This sound button is locked.")
+            self._show_info_notice_banner("This sound button is locked.")
             return
         start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
         dialog = EditSoundButtonDialog(
@@ -5903,7 +5925,7 @@ class MainWindow(QMainWindow):
             return
         file_path, caption, notes, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
         if not file_path:
-            QMessageBox.information(self, "Edit Sound Button", "File is required.")
+            self._show_info_notice_banner("File is required.")
             return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
         if conflict is not None:
@@ -6007,7 +6029,7 @@ class MainWindow(QMainWindow):
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
-            QMessageBox.information(self, "Locked", "This sound button is locked.")
+            self._show_info_notice_banner("This sound button is locked.")
             return
         if not slot.assigned or slot.marker:
             return
@@ -6041,12 +6063,12 @@ class MainWindow(QMainWindow):
 
     def _pick_sound(self, slot_index: int) -> None:
         if not self.cue_mode and not self._is_page_created(self.current_group, self.current_page):
-            QMessageBox.information(self, "Create Page", "Create the page first before adding sound buttons.")
+            self._show_info_notice_banner("Create the page first before adding sound buttons.")
             return
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
-            QMessageBox.information(self, "Locked", "This sound button is locked.")
+            self._show_info_notice_banner("This sound button is locked.")
             return
 
         start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
@@ -6094,7 +6116,7 @@ class MainWindow(QMainWindow):
         if slot.missing:
             QMessageBox.warning(self, "Missing File", f"File not found:\n{slot.file_path}")
         else:
-            QMessageBox.information(self, "File Check", "Sound file exists.")
+            self._show_info_notice_banner("Sound file exists.")
 
     def _slot_volume_pct(self, slot: SoundButtonData) -> int:
         if slot.volume_override_pct is None:
@@ -7568,11 +7590,7 @@ class MainWindow(QMainWindow):
         if len(active_players) < max_allowed:
             return True
         if self.multi_play_limit_action == "disallow_more_play":
-            QMessageBox.information(
-                self,
-                "Multi-Play Limit",
-                f"Maximum Multi-Play songs reached ({max_allowed}).",
-            )
+            self._show_info_notice_banner(f"Maximum Multi-Play songs reached ({max_allowed}).")
             return False
         oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
         self._stop_single_player(oldest)
@@ -9083,7 +9101,7 @@ class MainWindow(QMainWindow):
 
     def _go_to_current_playing_page(self) -> None:
         if self.current_playing is None:
-            QMessageBox.information(self, "Go To Playing", "No sound is currently playing.")
+            self._show_info_notice_banner("No sound is currently playing.")
             return
         group_key, page_index, _slot_index = self.current_playing
         if group_key == "Q":

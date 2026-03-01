@@ -185,3 +185,4 @@ cython_debug/
 node_modules/
 Pipfile.lock
 .DS_Store
+/companion-modules/pyssp

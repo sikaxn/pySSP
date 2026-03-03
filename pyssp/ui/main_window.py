@@ -14,6 +14,7 @@ import shutil
 import configparser
 import tempfile
 import zipfile
+import math
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
@@ -43,7 +44,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QProgressBar,
     QProgressDialog,
     QInputDialog,
     QTabWidget,
@@ -666,6 +666,113 @@ class TimecodePanel(QWidget):
         current_layout.addWidget(self.device_label)
         root.addWidget(current_group)
         root.addStretch(1)
+
+
+class DbfsMeterScale(QWidget):
+    TICKS = (-60, -24, -12, -6, 0)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(18)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("Meter scale in dBFS")
+
+    @staticmethod
+    def _db_to_ratio(db_value: int) -> float:
+        clamped = max(-60.0, min(0.0, float(db_value)))
+        return (clamped + 60.0) / 60.0
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        rect = self.rect().adjusted(1, 0, -1, -1)
+        if rect.width() <= 0 or rect.height() <= 0:
+            painter.end()
+            return
+
+        painter.setPen(QColor("#7F8C97"))
+        for db_value in self.TICKS:
+            x = rect.left() + int(round(rect.width() * self._db_to_ratio(db_value)))
+            painter.drawLine(x, rect.bottom() - 6, x, rect.bottom())
+            label_left = max(rect.left(), min(x - 16, rect.right() - 31))
+            label_rect = QRect(label_left, rect.top(), 32, rect.height() - 6)
+            painter.drawText(label_rect, Qt.AlignHCenter | Qt.AlignVCenter, str(db_value))
+
+        painter.end()
+
+
+class DbfsMeter(QWidget):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._level = 0.0
+        self.setMinimumHeight(16)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("Peak meter with dBFS scale")
+
+    @staticmethod
+    def _db_to_ratio(db_value: float) -> float:
+        clamped = max(-60.0, min(0.0, db_value))
+        return (clamped + 60.0) / 60.0
+
+    @staticmethod
+    def _level_to_ratio(level: float) -> float:
+        if level <= 0.000001:
+            return 0.0
+        db_value = 20.0 * math.log10(max(0.000001, min(1.0, float(level))))
+        return DbfsMeter._db_to_ratio(db_value)
+
+    def setLevel(self, level: float) -> None:
+        next_level = max(0.0, min(1.0, float(level)))
+        if abs(next_level - self._level) < 0.001:
+            return
+        self._level = next_level
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        rect = self.rect().adjusted(0, 1, -1, -1)
+        if rect.width() <= 1 or rect.height() <= 1:
+            painter.end()
+            return
+
+        painter.fillRect(rect, QColor("#11161B"))
+        zone_specs = [
+            (-60.0, -12.0, QColor("#17341D")),
+            (-12.0, -6.0, QColor("#574A16")),
+            (-6.0, 0.0, QColor("#5A1E1B")),
+        ]
+        for start_db, end_db, color in zone_specs:
+            start_x = rect.left() + int(round(rect.width() * self._db_to_ratio(start_db)))
+            end_x = rect.left() + int(round(rect.width() * self._db_to_ratio(end_db)))
+            if end_x > start_x:
+                painter.fillRect(QRect(start_x, rect.top(), end_x - start_x, rect.height()), color)
+
+        fill_width = int(round(rect.width() * self._level_to_ratio(self._level)))
+        fill_specs = [
+            (-60.0, -12.0, QColor("#2ECF5A")),
+            (-12.0, -6.0, QColor("#F3C746")),
+            (-6.0, 0.0, QColor("#E05243")),
+        ]
+        for start_db, end_db, color in fill_specs:
+            start_x = rect.left() + int(round(rect.width() * self._db_to_ratio(start_db)))
+            end_x = rect.left() + int(round(rect.width() * self._db_to_ratio(end_db)))
+            clipped_end_x = min(rect.left() + fill_width, end_x)
+            if clipped_end_x > start_x:
+                painter.fillRect(QRect(start_x, rect.top(), clipped_end_x - start_x, rect.height()), color)
+
+        painter.setPen(QColor("#6B7783"))
+        for db_value in DbfsMeterScale.TICKS:
+            x = rect.left() + int(round(rect.width() * self._db_to_ratio(float(db_value))))
+            painter.drawLine(x, rect.top(), x, rect.bottom())
+
+        painter.setPen(QColor("#8C939D"))
+        painter.drawRect(rect)
+        painter.end()
 
 
 class StageDisplayWindow(QWidget):
@@ -1965,8 +2072,9 @@ class MainWindow(QMainWindow):
         self.jog_in_label = QLabel("In 00:00:00")
         self.jog_percent_label = QLabel("0%")
         self.jog_out_label = QLabel("Out 00:00:00")
-        self.left_meter = QProgressBar()
-        self.right_meter = QProgressBar()
+        self.left_meter = DbfsMeter()
+        self.right_meter = DbfsMeter()
+        self.meter_scale = DbfsMeterScale()
         self.seek_slider = QSlider(Qt.Horizontal)
         self.volume_slider = QSlider(Qt.Horizontal)
         self.control_buttons: Dict[str, QPushButton] = {}
@@ -4758,15 +4866,14 @@ class MainWindow(QMainWindow):
 
         meter_row = QHBoxLayout()
         meter_labels = QVBoxLayout()
+        meter_labels.addWidget(QLabel("dBFS"))
         meter_labels.addWidget(QLabel("Left"))
         meter_labels.addWidget(QLabel("Right"))
         meter_row.addLayout(meter_labels)
 
         meters = QVBoxLayout()
-        self.left_meter.setRange(0, 100)
-        self.right_meter.setRange(0, 100)
-        self.left_meter.setTextVisible(False)
-        self.right_meter.setTextVisible(False)
+        meters.setSpacing(3)
+        meters.addWidget(self.meter_scale)
         meters.addWidget(self.left_meter)
         meters.addWidget(self.right_meter)
         meter_row.addLayout(meters, 1)
@@ -7032,8 +7139,6 @@ class MainWindow(QMainWindow):
             sum_right += right_x
         target_left = min(1.0, max(0.0, sum_left))
         target_right = min(1.0, max(0.0, sum_right))
-        target_left *= 100.0
-        target_right *= 100.0
         attack = 0.92
         release = 0.68 if any_playing else 0.45
         if target_left >= self._vu_levels[0]:
@@ -7046,8 +7151,8 @@ class MainWindow(QMainWindow):
             self._vu_levels[1] += (target_right - self._vu_levels[1]) * release
         self._sync_preload_pause_state(any_playing)
         self._refresh_timecode_panel()
-        self.left_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[0]))))
-        self.right_meter.setValue(int(max(0.0, min(100.0, self._vu_levels[1]))))
+        self.left_meter.setLevel(self._vu_levels[0])
+        self.right_meter.setLevel(self._vu_levels[1])
         self._refresh_stage_display()
 
     def _update_group_status(self) -> None:

@@ -179,8 +179,14 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
 
 def test_web_remote_url_label_tracks_port_changes(qapp):
     dialog = _build_dialog(web_remote_url="http://10.0.0.55:5050/")
+    assert "Python SSP module" in dialog.web_remote_companion_setup_value.text()
+    assert dialog.web_remote_companion_ip_value.text() == "IP address: 10.0.0.55"
+    assert dialog.web_remote_companion_port_value.text() == "Port: 5050"
+    assert "same computer" in dialog.web_remote_companion_default_value.text()
     dialog.web_remote_port_spin.setValue(6060)
     assert "http://10.0.0.55:6060/" in dialog.web_remote_url_value.text()
+    assert dialog.web_remote_companion_port_value.text() == "Port: 6060"
+    assert dialog.web_remote_companion_default_value.text() == ""
     dialog.web_remote_enabled_checkbox.setChecked(True)
     assert dialog.web_remote_enabled_checkbox.isChecked() is True
 

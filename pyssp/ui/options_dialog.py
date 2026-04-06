@@ -197,11 +197,33 @@ class _AvailableButtonsList(QListWidget):
         self.setGridSize(QSize(110, 44))
         self.setIconSize(QSize(1, 1))
         self.setSpacing(6)
+        self.setStyleSheet(
+            "QListWidget{background:#15191E;border:1px solid #303A45;padding:6px;}"
+            "QListWidget::item{border:none;background:transparent;}"
+            "QListWidget::item:selected{background:transparent;}"
+        )
+
+    class _Tile(QFrame):
+        def __init__(self, label: str, parent: Optional[QWidget] = None) -> None:
+            super().__init__(parent)
+            self.setStyleSheet(
+                "QFrame{background:#2E415A;border:1px solid #7CA2D1;border-radius:4px;}"
+                "QLabel{color:#FFFFFF;font-weight:bold;}"
+            )
+            text = QLabel(str(label), self)
+            text.setAlignment(Qt.AlignCenter)
+            text.setWordWrap(True)
+            root = QVBoxLayout(self)
+            root.setContentsMargins(6, 4, 6, 4)
+            root.addWidget(text, 1)
 
     def set_buttons(self, buttons: List[str]) -> None:
         self.clear()
         for token in buttons:
-            self.addItem(str(token))
+            item = QListWidgetItem(str(token))
+            item.setSizeHint(QSize(104, 36))
+            self.addItem(item)
+            self.setItemWidget(item, self._Tile(str(token), self))
 
     def buttons(self) -> List[str]:
         return [self.item(i).text() for i in range(self.count()) if self.item(i) is not None]

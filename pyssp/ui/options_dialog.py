@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
+from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -29,6 +31,7 @@ from PyQt5.QtWidgets import (
     QSlider,
     QSpacerItem,
     QSpinBox,
+    QMessageBox,
     QStackedWidget,
     QStyle,
     QTabWidget,
@@ -36,7 +39,17 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from pyssp.settings_store import default_quick_action_keys
+from pyssp.settings_store import (
+    WINDOW_LAYOUT_FADE_GRID_COLS,
+    WINDOW_LAYOUT_FADE_GRID_ROWS,
+    WINDOW_LAYOUT_FADE_ORDER,
+    WINDOW_LAYOUT_MAIN_GRID_COLS,
+    WINDOW_LAYOUT_MAIN_GRID_ROWS,
+    WINDOW_LAYOUT_MAIN_ORDER,
+    default_quick_action_keys,
+    default_window_layout,
+    normalize_window_layout,
+)
 from pyssp.i18n import localize_widget_tree, normalize_language, tr
 from pyssp.midi_control import (
     list_midi_input_devices,
@@ -65,6 +78,489 @@ from pyssp.ui.stage_display import (
     gadgets_to_legacy_layout_visibility,
     normalize_stage_display_gadgets,
 )
+
+
+WINDOW_LAYOUT_DRAG_MIME = "application/x-pyssp-window-layout-item"
+
+
+class _GridLayoutButton(QFrame):
+    delete_requested = pyqtSignal(str)
+
+    def __init__(self, uid: str, key: str, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.uid = uid
+        self.key = key
+        self._label = QLabel(key, self)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet("color:#FFFFFF;")
+        self._drag_mode = ""
+        self._drag_start_local = QPoint()
+        self._start_pos = QPoint()
+        self._start_rect = QRect()
+        self.setCursor(Qt.OpenHandCursor)
+        self.setStyleSheet(
+            "QFrame{background:#2E415A;border:1px solid #7CA2D1;border-radius:4px;}"
+            "QLabel{font-weight:bold;}"
+        )
+        self._resize_handle = QFrame(self)
+        self._resize_handle.setFixedSize(10, 10)
+        self._resize_handle.setStyleSheet("QFrame{background:#A8C4E8;border:1px solid #D6E4F8;border-radius:2px;}")
+        self._delete_btn = QPushButton("x", self)
+        self._delete_btn.setFixedSize(16, 16)
+        self._delete_btn.setStyleSheet(
+            "QPushButton{background:#A33A3A;color:#FFFFFF;border:1px solid #C66A6A;border-radius:8px;font-weight:bold;padding:0px;}"
+            "QPushButton:hover{background:#B74747;}"
+        )
+        self._delete_btn.clicked.connect(lambda _=False: self.delete_requested.emit(self.uid))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._label.setGeometry(self.rect().adjusted(6, 4, -6, -4))
+        self._resize_handle.move(max(0, self.width() - 12), max(0, self.height() - 12))
+        self._delete_btn.move(max(0, self.width() - 18), 2)
+        font = QFont(self._label.font())
+        font.setPointSize(max(8, min(11, int(min(self.width(), self.height()) / 14))))
+        self._label.setFont(font)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self.raise_()
+        self._drag_start_local = event.pos()
+        self._start_pos = event.globalPos()
+        self._start_rect = self.geometry()
+        edge = 14
+        if event.pos().x() >= self.width() - edge and event.pos().y() >= self.height() - edge:
+            self._drag_mode = "resize"
+            self.setCursor(Qt.SizeFDiagCursor)
+        else:
+            self._drag_mode = "move"
+            self.setCursor(Qt.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if not (event.buttons() & Qt.LeftButton) or not self._drag_mode:
+            super().mouseMoveEvent(event)
+            return
+        parent = self.parentWidget()
+        if not isinstance(parent, _GridLayoutCanvas):
+            return
+        if self._drag_mode == "resize":
+            delta = event.globalPos() - self._start_pos
+            parent.update_item_from_pixel_rect(
+                self.uid,
+                QRect(
+                    self._start_rect.x(),
+                    self._start_rect.y(),
+                    max(36, self._start_rect.width() + delta.x()),
+                    max(26, self._start_rect.height() + delta.y()),
+                ),
+            )
+            event.accept()
+            return
+        if (event.pos() - self._drag_start_local).manhattanLength() < 6:
+            return
+        payload = parent.payload_for_uid(self.uid)
+        if payload is None:
+            return
+        mime = QMimeData()
+        mime.setData(WINDOW_LAYOUT_DRAG_MIME, json.dumps(payload).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.setHotSpot(self.rect().center())
+        drag.exec_(Qt.MoveAction | Qt.CopyAction, Qt.MoveAction)
+        self.setCursor(Qt.OpenHandCursor)
+        self._drag_mode = ""
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_mode = ""
+        self.setCursor(Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+
+class _AvailableButtonsList(QListWidget):
+    dropped = pyqtSignal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setViewMode(QListWidget.IconMode)
+        self.setFlow(QListWidget.LeftToRight)
+        self.setWrapping(True)
+        self.setResizeMode(QListWidget.Adjust)
+        self.setGridSize(QSize(110, 44))
+        self.setIconSize(QSize(1, 1))
+        self.setSpacing(6)
+
+    def set_buttons(self, buttons: List[str]) -> None:
+        self.clear()
+        for token in buttons:
+            self.addItem(str(token))
+
+    def buttons(self) -> List[str]:
+        return [self.item(i).text() for i in range(self.count()) if self.item(i) is not None]
+
+    def startDrag(self, supportedActions) -> None:
+        item = self.currentItem()
+        if item is None:
+            return
+        payload = {"source": "available", "source_zone": "available", "uid": "", "button": item.text(), "w": 1, "h": 1}
+        mime = QMimeData()
+        mime.setData(WINDOW_LAYOUT_DRAG_MIME, json.dumps(payload).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec_(Qt.CopyAction, Qt.CopyAction)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        raw = bytes(event.mimeData().data(WINDOW_LAYOUT_DRAG_MIME)).decode("utf-8", errors="ignore")
+        if raw:
+            self.dropped.emit(raw)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
+
+class _GridLayoutCanvas(QWidget):
+    changed = pyqtSignal()
+    dropped = pyqtSignal(str, int, int)
+
+    def __init__(self, zone_name: str, columns: int, rows: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.zone_name = str(zone_name)
+        self._columns = max(1, int(columns))
+        self._rows = max(1, int(rows))
+        self._items: List[Dict[str, object]] = []
+        self._blocks: Dict[str, _GridLayoutButton] = {}
+        self._uid_counter = 0
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(180)
+        self.setStyleSheet("background:#15191E;")
+
+    def set_items(self, values: List[Dict[str, object]]) -> None:
+        self._items = []
+        for raw in list(values or []):
+            if not isinstance(raw, dict):
+                continue
+            button = str(raw.get("button", "")).strip()
+            if not button:
+                continue
+            self._uid_counter += 1
+            self._items.append(
+                {
+                    "uid": str(raw.get("uid", f"{self.zone_name}_{self._uid_counter}")),
+                    "button": button,
+                    "x": int(raw.get("x", 0)),
+                    "y": int(raw.get("y", 0)),
+                    "w": max(1, int(raw.get("w", 1))),
+                    "h": max(1, int(raw.get("h", 1))),
+                }
+            )
+        self._normalize_items()
+        self._apply_geometry()
+
+    def export_items(self) -> List[Dict[str, int | str]]:
+        out: List[Dict[str, int | str]] = []
+        for item in self._items:
+            out.append(
+                {
+                    "button": str(item["button"]),
+                    "x": int(item["x"]),
+                    "y": int(item["y"]),
+                    "w": int(item["w"]),
+                    "h": int(item["h"]),
+                }
+            )
+        return out
+
+    def payload_for_uid(self, uid: str) -> Optional[Dict[str, object]]:
+        for item in self._items:
+            if str(item.get("uid", "")) == str(uid):
+                return {
+                    "source": "canvas",
+                    "source_zone": self.zone_name,
+                    "uid": str(item["uid"]),
+                    "button": str(item["button"]),
+                    "w": int(item["w"]),
+                    "h": int(item["h"]),
+                }
+        return None
+
+    def get_item(self, uid: str) -> Optional[Dict[str, object]]:
+        for item in self._items:
+            if str(item.get("uid", "")) == str(uid):
+                return dict(item)
+        return None
+
+    def occupied_item_at(self, x: int, y: int, exclude_uid: str = "") -> Optional[Dict[str, object]]:
+        gx = int(x)
+        gy = int(y)
+        for item in self._items:
+            if exclude_uid and str(item.get("uid", "")) == str(exclude_uid):
+                continue
+            ix = int(item.get("x", 0))
+            iy = int(item.get("y", 0))
+            iw = int(item.get("w", 1))
+            ih = int(item.get("h", 1))
+            if gx >= ix and gx < (ix + iw) and gy >= iy and gy < (iy + ih):
+                return dict(item)
+        return None
+
+    def remove_uid(self, uid: str) -> Optional[Dict[str, object]]:
+        for idx, item in enumerate(self._items):
+            if str(item.get("uid", "")) == str(uid):
+                removed = self._items.pop(idx)
+                self._apply_geometry()
+                self.changed.emit()
+                return removed
+        return None
+
+    def upsert_item(
+        self,
+        uid: str,
+        button: str,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+    ) -> None:
+        clamped_x = max(0, min(self._columns - 1, int(x)))
+        clamped_y = max(0, min(self._rows - 1, int(y)))
+        clamped_w = max(1, min(self._columns - clamped_x, int(w)))
+        clamped_h = max(1, min(self._rows - clamped_y, int(h)))
+        for item in self._items:
+            if str(item.get("uid", "")) == str(uid):
+                item["button"] = str(button)
+                item["x"] = clamped_x
+                item["y"] = clamped_y
+                item["w"] = clamped_w
+                item["h"] = clamped_h
+                self._apply_geometry()
+                self.changed.emit()
+                return
+        self._items.append(
+            {
+                "uid": str(uid),
+                "button": str(button),
+                "x": clamped_x,
+                "y": clamped_y,
+                "w": clamped_w,
+                "h": clamped_h,
+            }
+        )
+        self._apply_geometry()
+        self.changed.emit()
+
+    def add_item(
+        self,
+        button: str,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        uid: Optional[str] = None,
+    ) -> str:
+        self._uid_counter += 1
+        token = str(uid or f"{self.zone_name}_{self._uid_counter}")
+        self._items.append({"uid": token, "button": str(button), "x": int(x), "y": int(y), "w": max(1, int(w)), "h": max(1, int(h))})
+        self._normalize_items()
+        self._apply_geometry()
+        self.changed.emit()
+        return token
+
+    def remove_all_by_button(self, button: str) -> List[Dict[str, object]]:
+        removed: List[Dict[str, object]] = []
+        keep: List[Dict[str, object]] = []
+        for item in self._items:
+            if str(item.get("button", "")) == str(button):
+                removed.append(item)
+            else:
+                keep.append(item)
+        if removed:
+            self._items = keep
+            self._apply_geometry()
+            self.changed.emit()
+        return removed
+
+    def has_button(self, button: str) -> bool:
+        return any(str(item.get("button", "")) == str(button) for item in self._items)
+
+    def update_item_from_pixel_rect(self, uid: str, rect: QRect) -> None:
+        area = self._content_rect()
+        if area.width() <= 0 or area.height() <= 0:
+            return
+        cell_w = area.width() / float(self._columns)
+        cell_h = area.height() / float(self._rows)
+        for item in self._items:
+            if str(item.get("uid", "")) != str(uid):
+                continue
+            item["x"] = int(round((rect.x() - area.x()) / cell_w))
+            item["y"] = int(round((rect.y() - area.y()) / cell_h))
+            item["w"] = max(1, int(round(rect.width() / cell_w)))
+            item["h"] = max(1, int(round(rect.height() / cell_h)))
+            break
+        self._normalize_items()
+        self._apply_geometry()
+        self.changed.emit()
+
+    def snap_to_grid(self, pos: QPoint) -> tuple[int, int]:
+        area = self._content_rect()
+        if area.width() <= 0 or area.height() <= 0:
+            return 0, 0
+        cell_w = area.width() / float(self._columns)
+        cell_h = area.height() / float(self._rows)
+        x = int(round((pos.x() - area.x()) / cell_w))
+        y = int(round((pos.y() - area.y()) / cell_h))
+        return x, y
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_geometry()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        area = self._content_rect()
+        if area.width() <= 0 or area.height() <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        pen = QPen(QColor("#303A45"))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        cell_w = area.width() / float(self._columns)
+        cell_h = area.height() / float(self._rows)
+        for col in range(self._columns + 1):
+            x = int(area.x() + round(col * cell_w))
+            painter.drawLine(x, area.y(), x, area.bottom())
+        for row in range(self._rows + 1):
+            y = int(area.y() + round(row * cell_h))
+            painter.drawLine(area.x(), y, area.right(), y)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        raw = bytes(event.mimeData().data(WINDOW_LAYOUT_DRAG_MIME)).decode("utf-8", errors="ignore")
+        if raw:
+            self.dropped.emit(raw, event.pos().x(), event.pos().y())
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
+    def _content_rect(self) -> QRect:
+        return self.rect().adjusted(8, 8, -8, -8)
+
+    def _normalize_items(self) -> None:
+        used = [[False for _ in range(self._columns)] for _ in range(self._rows)]
+        out: List[Dict[str, object]] = []
+
+        def can_place(px: int, py: int, pw: int, ph: int) -> bool:
+            if px < 0 or py < 0 or pw < 1 or ph < 1:
+                return False
+            if (px + pw) > self._columns or (py + ph) > self._rows:
+                return False
+            for yy in range(py, py + ph):
+                for xx in range(px, px + pw):
+                    if used[yy][xx]:
+                        return False
+            return True
+
+        def occupy(px: int, py: int, pw: int, ph: int) -> None:
+            for yy in range(py, py + ph):
+                for xx in range(px, px + pw):
+                    used[yy][xx] = True
+
+        def first_fit(pw: int, ph: int) -> Optional[tuple[int, int]]:
+            for yy in range(self._rows):
+                for xx in range(self._columns):
+                    if can_place(xx, yy, pw, ph):
+                        return xx, yy
+            return None
+
+        for item in list(self._items):
+            x = max(0, min(self._columns - 1, int(item.get("x", 0))))
+            y = max(0, min(self._rows - 1, int(item.get("y", 0))))
+            w = max(1, min(self._columns, int(item.get("w", 1))))
+            h = max(1, min(self._rows, int(item.get("h", 1))))
+            w = min(w, self._columns - x)
+            h = min(h, self._rows - y)
+            if not can_place(x, y, w, h):
+                target = first_fit(w, h)
+                if target is None:
+                    fallback = first_fit(1, 1)
+                    if fallback is None:
+                        continue
+                    x, y = fallback
+                    w, h = 1, 1
+                else:
+                    x, y = target
+            occupy(x, y, w, h)
+            out.append(
+                {
+                    "uid": str(item.get("uid", "")),
+                    "button": str(item.get("button", "")),
+                    "x": x,
+                    "y": y,
+                    "w": w,
+                    "h": h,
+                }
+            )
+        self._items = out
+
+    def _apply_geometry(self) -> None:
+        area = self._content_rect()
+        if area.width() <= 0 or area.height() <= 0:
+            return
+        cell_w = area.width() / float(self._columns)
+        cell_h = area.height() / float(self._rows)
+        live_uids = set()
+        for item in self._items:
+            uid = str(item["uid"])
+            live_uids.add(uid)
+            block = self._blocks.get(uid)
+            if block is None:
+                block = _GridLayoutButton(uid, str(item["button"]), self)
+                block.delete_requested.connect(self.remove_uid)
+                self._blocks[uid] = block
+            x = int(area.x() + round(int(item["x"]) * cell_w))
+            y = int(area.y() + round(int(item["y"]) * cell_h))
+            w = int(round(int(item["w"]) * cell_w))
+            h = int(round(int(item["h"]) * cell_h))
+            block.key = str(item["button"])
+            block._label.setText(str(item["button"]))
+            block.setGeometry(QRect(x + 2, y + 2, max(36, w - 4), max(26, h - 4)))
+            block.show()
+        stale = [uid for uid in self._blocks.keys() if uid not in live_uids]
+        for uid in stale:
+            widget = self._blocks.pop(uid)
+            widget.setParent(None)
+            widget.deleteLater()
 
 
 class HotkeyCaptureEdit(QLineEdit):
@@ -343,6 +839,7 @@ class OptionsDialog(QDialog):
         },
         "stage_display_text_source": "caption",
         "stage_display_gadgets": normalize_stage_display_gadgets(None),
+        "window_layout": default_window_layout(),
     }
     _DISPLAY_OPTION_SPECS = STAGE_DISPLAY_GADGET_SPECS
 
@@ -444,6 +941,7 @@ class OptionsDialog(QDialog):
         stage_display_layout: List[str],
         stage_display_visibility: Dict[str, bool],
         stage_display_text_source: str,
+        window_layout: Optional[Dict[str, object]],
         ui_language: str,
         lock_allow_quit: bool,
         lock_allow_system_hotkeys: bool,
@@ -541,6 +1039,7 @@ class OptionsDialog(QDialog):
             if str(stage_display_text_source or "").strip().lower() in {"caption", "filename", "note"}
             else "caption"
         )
+        self._window_layout = normalize_window_layout(window_layout)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
@@ -619,6 +1118,11 @@ class OptionsDialog(QDialog):
             "Stage Display",
             self._mono_icon("projector"),
             self._build_display_page(),
+        )
+        self._add_page(
+            "Window Layout",
+            self._mono_icon("layout"),
+            self._build_window_layout_page(),
         )
         self._add_page(
             "Fade",
@@ -770,6 +1274,12 @@ class OptionsDialog(QDialog):
             p.drawLine(7, 15, 5, 19)
             p.drawLine(15, 15, 17, 19)
             p.drawLine(9, 19, 13, 19)
+        elif kind == "layout":
+            p.drawRect(QRectF(3, 3, 16, 16))
+            p.drawLine(9, 3, 9, 19)
+            p.drawLine(15, 3, 15, 19)
+            p.drawLine(3, 9, 19, 9)
+            p.drawLine(3, 15, 19, 15)
         elif kind == "clock":
             p.drawEllipse(QRectF(3, 3, 16, 16))
             p.drawLine(11, 11, 11, 6)
@@ -2245,6 +2755,241 @@ class OptionsDialog(QDialog):
             visible = bool(self._stage_display_gadgets.get("alert", {}).get("visible", False))
         self._display_alert_edit_visibility_button.setText("Hide for Edit" if visible else "Show for Edit")
 
+    def _build_window_layout_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        tip = QLabel("Drag blocks to move buttons. Drag bottom-right corner to resize. Layout is snapped to the grid.")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        main_group = QGroupBox("Main Buttons (4 x 4)")
+        main_layout = QVBoxLayout(main_group)
+        self.window_layout_main_editor = _GridLayoutCanvas(
+            "main",
+            WINDOW_LAYOUT_MAIN_GRID_COLS,
+            WINDOW_LAYOUT_MAIN_GRID_ROWS,
+            main_group,
+        )
+        self.window_layout_main_editor.setMinimumHeight(280)
+        self.window_layout_main_editor.set_items(list(self._window_layout.get("main", [])))
+        self.window_layout_main_editor.changed.connect(self._capture_window_layout_from_editor)
+        self.window_layout_main_editor.dropped.connect(
+            lambda payload, x, y: self._handle_window_layout_drop("main", payload, x, y)
+        )
+        main_layout.addWidget(self.window_layout_main_editor)
+        layout.addWidget(main_group, 1)
+
+        fade_group = QGroupBox("Fade Buttons (3 x 1)")
+        fade_layout = QVBoxLayout(fade_group)
+        self.window_layout_fade_editor = _GridLayoutCanvas(
+            "fade",
+            WINDOW_LAYOUT_FADE_GRID_COLS,
+            WINDOW_LAYOUT_FADE_GRID_ROWS,
+            fade_group,
+        )
+        self.window_layout_fade_editor.setMinimumHeight(96)
+        self.window_layout_fade_editor.set_items(list(self._window_layout.get("fade", [])))
+        self.window_layout_fade_editor.changed.connect(self._capture_window_layout_from_editor)
+        self.window_layout_fade_editor.dropped.connect(
+            lambda payload, x, y: self._handle_window_layout_drop("fade", payload, x, y)
+        )
+        fade_layout.addWidget(self.window_layout_fade_editor)
+        layout.addWidget(fade_group, 0)
+
+        available_group = QGroupBox("Available Buttons")
+        available_layout = QVBoxLayout(available_group)
+        self.window_layout_show_all_checkbox = QCheckBox("Show all buttons")
+        self.window_layout_show_all_checkbox.setChecked(bool(self._window_layout.get("show_all_available", False)))
+        self.window_layout_show_all_checkbox.toggled.connect(self._on_window_layout_show_all_toggled)
+        available_layout.addWidget(self.window_layout_show_all_checkbox)
+        button_row = QHBoxLayout()
+        self.window_layout_clear_all_btn = QPushButton("Clear All")
+        self.window_layout_clear_all_btn.clicked.connect(self._clear_all_window_layout_buttons)
+        button_row.addWidget(self.window_layout_clear_all_btn)
+        button_row.addStretch(1)
+        available_layout.addLayout(button_row)
+        self.window_layout_available_list = _AvailableButtonsList()
+        self.window_layout_available_list.setMinimumHeight(120)
+        self.window_layout_available_list.dropped.connect(
+            lambda payload: self._handle_window_layout_drop("available", payload, -1, -1)
+        )
+        available_layout.addWidget(self.window_layout_available_list)
+        layout.addWidget(available_group, 0)
+
+        self._refresh_window_layout_available_list()
+        layout.addStretch(1)
+        return page
+
+    def _capture_window_layout_from_editor(self) -> None:
+        if not hasattr(self, "window_layout_main_editor") or not hasattr(self, "window_layout_fade_editor"):
+            return
+        available_buttons = (
+            self.window_layout_available_list.buttons() if hasattr(self, "window_layout_available_list") else []
+        )
+        self._window_layout = normalize_window_layout(
+            {
+                "main": self.window_layout_main_editor.export_items(),
+                "fade": self.window_layout_fade_editor.export_items(),
+                "available": available_buttons,
+                "show_all_available": bool(
+                    self.window_layout_show_all_checkbox.isChecked()
+                    if hasattr(self, "window_layout_show_all_checkbox")
+                    else False
+                ),
+            }
+        )
+        self._refresh_window_layout_available_list()
+
+    def _handle_window_layout_drop(self, target: str, raw_payload: str, px: int, py: int) -> None:
+        try:
+            payload = json.loads(str(raw_payload or ""))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        button = str(payload.get("button", "")).strip()
+        if button not in set(WINDOW_LAYOUT_MAIN_ORDER + WINDOW_LAYOUT_FADE_ORDER):
+            return
+        source_zone = str(payload.get("source_zone", "")).strip().lower()
+        uid = str(payload.get("uid", "")).strip()
+        w = max(1, int(payload.get("w", 1)))
+        h = max(1, int(payload.get("h", 1)))
+
+        src_canvas = None
+        if source_zone == "main":
+            src_canvas = self.window_layout_main_editor
+        elif source_zone == "fade":
+            src_canvas = self.window_layout_fade_editor
+
+        dst_canvas = None
+        if target == "main":
+            dst_canvas = self.window_layout_main_editor
+        elif target == "fade":
+            dst_canvas = self.window_layout_fade_editor
+
+        allow_dupes = bool(self.window_layout_show_all_checkbox.isChecked())
+        if (not allow_dupes) and target in {"main", "fade"}:
+            self.window_layout_main_editor.remove_all_by_button(button)
+            self.window_layout_fade_editor.remove_all_by_button(button)
+
+        if target == "available":
+            if src_canvas is not None and uid:
+                src_canvas.remove_uid(uid)
+            self._capture_window_layout_from_editor()
+            return
+
+        if dst_canvas is None:
+            return
+        gx, gy = dst_canvas.snap_to_grid(QPoint(px, py))
+        source_item = src_canvas.get_item(uid) if (src_canvas is not None and uid) else None
+        source_uid = str(source_item.get("uid", uid)) if source_item else str(uid)
+        source_button = str(source_item.get("button", button)) if source_item else button
+        source_w = int(source_item.get("w", w)) if source_item else w
+        source_h = int(source_item.get("h", h)) if source_item else h
+        source_x = int(source_item.get("x", 0)) if source_item else gx
+        source_y = int(source_item.get("y", 0)) if source_item else gy
+
+        occupied = dst_canvas.occupied_item_at(gx, gy, exclude_uid=(source_uid if src_canvas is dst_canvas else ""))
+        if occupied is not None:
+            decision = self._confirm_layout_overlap_action()
+            if decision == "cancel":
+                return
+            if decision == "copy":
+                if src_canvas is not None and uid and source_item is not None:
+                    src_canvas.remove_uid(uid)
+                dst_canvas.upsert_item(
+                    str(occupied.get("uid", "")),
+                    source_button,
+                    int(occupied.get("x", gx)),
+                    int(occupied.get("y", gy)),
+                    int(occupied.get("w", 1)),
+                    int(occupied.get("h", 1)),
+                )
+                self._capture_window_layout_from_editor()
+                return
+            # swap
+            target_uid = str(occupied.get("uid", ""))
+            target_button = str(occupied.get("button", ""))
+            target_x = int(occupied.get("x", gx))
+            target_y = int(occupied.get("y", gy))
+            target_w = int(occupied.get("w", 1))
+            target_h = int(occupied.get("h", 1))
+
+            if src_canvas is not None and uid and source_item is not None:
+                src_canvas.remove_uid(uid)
+            dst_canvas.upsert_item(target_uid, source_button, target_x, target_y, target_w, target_h)
+            if src_canvas is not None and source_item is not None:
+                src_canvas.add_item(target_button, source_x, source_y, source_w, source_h, uid=source_uid)
+            else:
+                current = self.window_layout_available_list.buttons()
+                if target_button not in current:
+                    current.append(target_button)
+                    self.window_layout_available_list.set_buttons(current)
+            self._capture_window_layout_from_editor()
+            return
+
+        reuse_uid = None
+        if src_canvas is not None and uid:
+            removed = src_canvas.remove_uid(uid)
+            if removed is not None:
+                reuse_uid = str(removed.get("uid", ""))
+                source_w = int(removed.get("w", source_w))
+                source_h = int(removed.get("h", source_h))
+                source_button = str(removed.get("button", source_button))
+        dst_canvas.add_item(source_button, gx, gy, source_w, source_h, uid=reuse_uid)
+        self._capture_window_layout_from_editor()
+
+    def _refresh_window_layout_available_list(self) -> None:
+        if not hasattr(self, "window_layout_available_list"):
+            return
+        show_all = bool(self._window_layout.get("show_all_available", False))
+        all_buttons = list(dict.fromkeys(WINDOW_LAYOUT_MAIN_ORDER + WINDOW_LAYOUT_FADE_ORDER))
+        if show_all:
+            self.window_layout_available_list.set_buttons(all_buttons)
+            return
+        current = list(self._window_layout.get("available", []))
+        used = {
+            str(item.get("button", ""))
+            for item in [*self.window_layout_main_editor.export_items(), *self.window_layout_fade_editor.export_items()]
+            if isinstance(item, dict)
+        }
+        output: List[str] = []
+        for token in current:
+            key = str(token).strip()
+            if key in all_buttons and key not in used and key not in output:
+                output.append(key)
+        for key in all_buttons:
+            if key not in used and key not in output:
+                output.append(key)
+        self.window_layout_available_list.set_buttons(output)
+
+    def _on_window_layout_show_all_toggled(self, checked: bool) -> None:
+        self._window_layout["show_all_available"] = bool(checked)
+        self._refresh_window_layout_available_list()
+        self._capture_window_layout_from_editor()
+
+    def _clear_all_window_layout_buttons(self) -> None:
+        self.window_layout_main_editor.set_items([])
+        self.window_layout_fade_editor.set_items([])
+        self._capture_window_layout_from_editor()
+
+    def _confirm_layout_overlap_action(self) -> str:
+        box = QMessageBox(self)
+        box.setWindowTitle("Button Overlap")
+        box.setText("Destination is already occupied.")
+        box.setInformativeText("Choose action:")
+        swap_btn = box.addButton("Swap", QMessageBox.AcceptRole)
+        copy_btn = box.addButton("Copy", QMessageBox.ActionRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is swap_btn:
+            return "swap"
+        if clicked is copy_btn:
+            return "copy"
+        return "cancel"
+
     def _build_web_remote_url_text(self, port: int) -> str:
         return f"{self._web_remote_url_scheme}://{self._web_remote_url_host}:{port}/"
 
@@ -2429,6 +3174,23 @@ class OptionsDialog(QDialog):
         if token not in {"caption", "filename", "note"}:
             return "caption"
         return token
+
+    def selected_window_layout(self) -> Dict[str, object]:
+        if (
+            hasattr(self, "window_layout_main_editor")
+            and hasattr(self, "window_layout_fade_editor")
+            and hasattr(self, "window_layout_available_list")
+            and hasattr(self, "window_layout_show_all_checkbox")
+        ):
+            return normalize_window_layout(
+                {
+                    "main": self.window_layout_main_editor.export_items(),
+                    "fade": self.window_layout_fade_editor.export_items(),
+                    "available": self.window_layout_available_list.buttons(),
+                    "show_all_available": bool(self.window_layout_show_all_checkbox.isChecked()),
+                }
+            )
+        return normalize_window_layout(deepcopy(self._window_layout))
 
     def selected_state_colors(self) -> Dict[str, str]:
         return dict(self.state_colors)
@@ -3056,21 +3818,24 @@ class OptionsDialog(QDialog):
             self._restore_display_defaults()
             return
         if idx == 7:
-            self._restore_delay_defaults()
+            self._restore_window_layout_defaults()
             return
         if idx == 8:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 9:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 10:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 11:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 12:
+            self._restore_talk_defaults()
+            return
+        if idx == 13:
             self._restore_web_remote_defaults()
             return
 
@@ -3179,6 +3944,17 @@ class OptionsDialog(QDialog):
                 combo.setCurrentIndex(max(0, combo.findData(token)))
         self._refresh_display_layer_table()
         self._sync_alert_edit_button_text()
+
+    def _restore_window_layout_defaults(self) -> None:
+        d = self._DEFAULTS
+        self._window_layout = normalize_window_layout(d.get("window_layout"))
+        if hasattr(self, "window_layout_main_editor"):
+            self.window_layout_main_editor.set_items(list(self._window_layout.get("main", [])))
+        if hasattr(self, "window_layout_fade_editor"):
+            self.window_layout_fade_editor.set_items(list(self._window_layout.get("fade", [])))
+        if hasattr(self, "window_layout_show_all_checkbox"):
+            self.window_layout_show_all_checkbox.setChecked(bool(self._window_layout.get("show_all_available", False)))
+        self._refresh_window_layout_available_list()
 
     def _restore_hotkey_defaults(self) -> None:
         d = self._DEFAULTS

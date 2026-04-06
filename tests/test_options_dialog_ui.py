@@ -123,6 +123,7 @@ def _build_dialog(**overrides):
         stage_display_layout=overrides.get("stage_display_layout", defaults["stage_display_layout"]),
         stage_display_visibility=overrides.get("stage_display_visibility", defaults["stage_display_visibility"]),
         stage_display_text_source=str(overrides.get("stage_display_text_source", defaults["stage_display_text_source"])),
+        window_layout=overrides.get("window_layout", defaults["window_layout"]),
         ui_language=defaults["ui_language"],
         lock_allow_quit=bool(overrides.get("lock_allow_quit", defaults["lock_allow_quit"])),
         lock_allow_system_hotkeys=bool(
@@ -336,3 +337,39 @@ def test_display_page_text_source_selection(qapp):
     assert dialog.selected_stage_display_text_source() == "note"
     dialog.display_text_source_combo.setCurrentIndex(dialog.display_text_source_combo.findData("filename"))
     assert dialog.selected_stage_display_text_source() == "filename"
+
+
+def test_window_layout_round_trip(qapp):
+    dialog = _build_dialog(
+        initial_page="Window Layout",
+        window_layout={
+            "main": [
+                {"button": "Cue", "x": 0, "y": 0, "w": 2, "h": 1},
+                {"button": "Multi-Play", "x": 2, "y": 0, "w": 1, "h": 1},
+                {"button": "Go To Playing", "x": 3, "y": 0, "w": 1, "h": 1},
+            ],
+            "fade": [
+                {"button": "Fade In", "x": 0, "y": 0, "w": 2, "h": 1},
+                {"button": "X", "x": 2, "y": 0, "w": 1, "h": 1},
+            ],
+            "available": [],
+            "show_all_available": True,
+        },
+    )
+    selected = dialog.selected_window_layout()
+    cue = [item for item in selected["main"] if item.get("button") == "Cue"][0]
+    fade_in = [item for item in selected["fade"] if item.get("button") == "Fade In"][0]
+    assert cue["w"] == 2
+    assert fade_in["w"] == 2
+
+
+def test_restore_defaults_window_layout_page(qapp):
+    dialog = _build_dialog(initial_page="Window Layout")
+    dialog.window_layout_main_editor.set_items([{"button": "STOP", "x": 0, "y": 0, "w": 1, "h": 1}])
+    dialog.select_page("Window Layout")
+    dialog._restore_defaults_current_page()
+    selected = dialog.selected_window_layout()
+    stop = [item for item in selected["main"] if item.get("button") == "STOP"][0]
+    x_item = [item for item in selected["fade"] if item.get("button") == "X"][0]
+    assert stop == {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2}
+    assert x_item == {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1}

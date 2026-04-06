@@ -74,7 +74,15 @@ from pyssp.audio_engine import (
 )
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
-from pyssp.settings_store import AppSettings, get_settings_path, load_settings, save_settings
+from pyssp.settings_store import (
+    WINDOW_LAYOUT_FADE_ORDER,
+    WINDOW_LAYOUT_MAIN_ORDER,
+    AppSettings,
+    get_settings_path,
+    load_settings,
+    normalize_window_layout,
+    save_settings,
+)
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.library_archive import (
     ArchiveOperationCancelled,
@@ -1836,6 +1844,7 @@ class MainWindow(QMainWindow):
         )
         source = str(getattr(self.settings, "stage_display_text_source", "caption")).strip().lower()
         self.stage_display_text_source = source if source in {"caption", "filename", "note"} else "caption"
+        self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
             "assigned": self.settings.color_unplayed,
@@ -4756,34 +4765,13 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
 
-        controls = [
-            "Cue", "Multi-Play", "DSP",
-            "Go To Playing",
-            "Loop", "Next", "Button Drag", "Pause",
-            "Rapid Fire", "Shuffle", "Reset Page", "STOP",
-            "Talk", "Play List", "Search",
-        ]
-        positions = {
-            "Cue": (0, 0, 1, 1),
-            "Multi-Play": (0, 1, 1, 1),
-            "Go To Playing": (0, 2, 1, 1),
-            "DSP": (0, 3, 1, 1),
-            "Loop": (1, 0, 1, 1),
-            "Next": (1, 1, 1, 1),
-            "Button Drag": (1, 2, 1, 1),
-            "Pause": (1, 3, 1, 1),
-            "Rapid Fire": (2, 0, 1, 1),
-            "Shuffle": (2, 1, 1, 1),
-            "Reset Page": (2, 2, 1, 1),
-            "STOP": (2, 3, 2, 1),
-            "Talk": (3, 0, 1, 1),
-            "Play List": (3, 1, 1, 1),
-            "Search": (3, 2, 1, 1),
-        }
-        ctl_grid = QGridLayout()
-        ctl_grid.setContentsMargins(0, 0, 0, 0)
-        ctl_grid.setSpacing(2)
-        for text in controls:
+        self._main_control_grid_layout = QGridLayout()
+        self._main_control_grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_control_grid_layout.setSpacing(2)
+        self._main_control_buttons_ui: Dict[str, QPushButton] = {}
+        self._control_button_instances: Dict[str, List[QPushButton]] = {}
+        self._control_button_clones: List[QPushButton] = []
+        for text in WINDOW_LAYOUT_MAIN_ORDER:
             btn = QPushButton(text)
             btn.setMinimumHeight(42)
             if text == "Pause":
@@ -4792,7 +4780,6 @@ class MainWindow(QMainWindow):
             elif text == "STOP":
                 btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
                 btn.clicked.connect(self._stop_playback)
-                btn.setMinimumHeight(86)
             elif text == "Next":
                 btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
                 btn.clicked.connect(self._play_next)
@@ -4833,9 +4820,10 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(self._go_to_current_playing_page)
             if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag"}:
                 self.control_buttons[text] = btn
-            row, col, row_span, col_span = positions[text]
-            ctl_grid.addWidget(btn, row, col, row_span, col_span)
-        left_layout.addLayout(ctl_grid)
+            self._main_control_buttons_ui[text] = btn
+            btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
+            btn.clicked.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
+        left_layout.addLayout(self._main_control_grid_layout)
 
         self.group_status.setStyleSheet("font-size: 22pt; color: #0A29E0; font-weight: bold;")
         left_layout.addWidget(self.group_status)
@@ -4848,7 +4836,10 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
 
-        fade_row = QHBoxLayout()
+        self._fade_control_grid_layout = QGridLayout()
+        self._fade_control_grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._fade_control_grid_layout.setSpacing(2)
+        self._fade_control_buttons_ui: Dict[str, QPushButton] = {}
         fade_specs = [
             ("Fade In", self._toggle_fade_in_mode, "Fade in on start"),
             ("X", self._toggle_cross_auto_mode, "Cross fade (fade out + fade in)"),
@@ -4861,8 +4852,11 @@ class MainWindow(QMainWindow):
             b.setToolTip(tooltip)
             b.clicked.connect(handler)
             self.control_buttons[label] = b
-            fade_row.addWidget(b)
-        right_layout.addLayout(fade_row)
+            self._fade_control_buttons_ui[label] = b
+            b.toggled.connect(lambda _checked=False, key=label: self._sync_control_button_instances(key))
+            b.clicked.connect(lambda _checked=False, key=label: self._sync_control_button_instances(key))
+        right_layout.addLayout(self._fade_control_grid_layout)
+        self._apply_top_control_layout()
 
         meter_row = QHBoxLayout()
         meter_labels = QVBoxLayout()
@@ -4942,6 +4936,145 @@ class MainWindow(QMainWindow):
         layout.addWidget(left, 2)
         layout.addWidget(right, 3)
         return panel
+
+    @staticmethod
+    def _clear_layout_only(layout: QGridLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                continue
+
+    def _make_control_button_clone(self, key: str) -> QPushButton:
+        primary = self.control_buttons.get(key)
+        if primary is None:
+            primary = self._main_control_buttons_ui.get(key)
+        if primary is None:
+            primary = self._fade_control_buttons_ui.get(key)
+        btn = QPushButton(key)
+        if primary is None:
+            return btn
+        btn.setCheckable(primary.isCheckable())
+        btn.setToolTip(primary.toolTip())
+        if primary.icon().isNull() is False:
+            btn.setIcon(primary.icon())
+        btn.clicked.connect(lambda _checked=False, token=key: self._click_named_button(token))
+        return btn
+
+    def _click_named_button(self, key: str) -> None:
+        primary = self.control_buttons.get(key)
+        if primary is None:
+            primary = self._main_control_buttons_ui.get(key)
+        if primary is None:
+            primary = self._fade_control_buttons_ui.get(key)
+        if primary is None or (not primary.isEnabled()):
+            return
+        primary.click()
+
+    def _sync_control_button_instances(self, key: Optional[str] = None) -> None:
+        keys = [key] if key else list(self._control_button_instances.keys())
+        for token in keys:
+            if not token:
+                continue
+            primary = self.control_buttons.get(token)
+            if primary is None:
+                primary = self._main_control_buttons_ui.get(token)
+            if primary is None:
+                primary = self._fade_control_buttons_ui.get(token)
+            if primary is None:
+                continue
+            for inst in self._control_button_instances.get(token, []):
+                if inst is primary:
+                    continue
+                inst.blockSignals(True)
+                inst.setCheckable(primary.isCheckable())
+                if primary.isCheckable():
+                    inst.setChecked(primary.isChecked())
+                inst.setEnabled(primary.isEnabled())
+                inst.setText(primary.text())
+                inst.setToolTip(primary.toolTip())
+                inst.setStyleSheet(primary.styleSheet())
+                inst.setIcon(primary.icon())
+                inst.blockSignals(False)
+
+    def _apply_top_control_layout(self) -> None:
+        if not hasattr(self, "_main_control_grid_layout") or not hasattr(self, "_fade_control_grid_layout"):
+            return
+        normalized = normalize_window_layout(self.window_layout)
+        self.window_layout = normalized
+        self._clear_layout_only(self._main_control_grid_layout)
+        self._clear_layout_only(self._fade_control_grid_layout)
+        self._control_button_instances = {key: [] for key in [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]}
+        for clone in list(self._control_button_clones):
+            clone.setParent(None)
+            clone.deleteLater()
+        self._control_button_clones = []
+
+        for key, btn in self._main_control_buttons_ui.items():
+            btn.hide()
+            self._control_button_instances.setdefault(key, []).append(btn)
+        for key, btn in self._fade_control_buttons_ui.items():
+            btn.hide()
+            self._control_button_instances.setdefault(key, []).append(btn)
+
+        all_keys = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]
+        used_main: Dict[str, int] = {}
+        for item in list(normalized.get("main", [])):
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("button", "")).strip()
+            if key not in all_keys:
+                continue
+            use_count = used_main.get(key, 0)
+            used_main[key] = use_count + 1
+            if use_count == 0:
+                btn = self._main_control_buttons_ui.get(key)
+                if btn is None:
+                    btn = self._fade_control_buttons_ui.get(key)
+            else:
+                btn = self._make_control_button_clone(key)
+                self._control_button_clones.append(btn)
+                self._control_button_instances.setdefault(key, []).append(btn)
+            if btn is None:
+                continue
+            btn.setMinimumHeight(42 * max(1, int(item.get("h", 1))))
+            self._main_control_grid_layout.addWidget(
+                btn,
+                int(item.get("y", 0)),
+                int(item.get("x", 0)),
+                int(item.get("h", 1)),
+                int(item.get("w", 1)),
+            )
+            btn.show()
+
+        used_fade: Dict[str, int] = {}
+        for item in list(normalized.get("fade", [])):
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("button", "")).strip()
+            if key not in all_keys:
+                continue
+            use_count = used_fade.get(key, 0)
+            used_fade[key] = use_count + 1
+            if use_count == 0:
+                btn = self._fade_control_buttons_ui.get(key)
+                if btn is None:
+                    btn = self._main_control_buttons_ui.get(key)
+            else:
+                btn = self._make_control_button_clone(key)
+                self._control_button_clones.append(btn)
+                self._control_button_instances.setdefault(key, []).append(btn)
+            if btn is None:
+                continue
+            btn.setMinimumHeight(38 * max(1, int(item.get("h", 1))))
+            self._fade_control_grid_layout.addWidget(
+                btn,
+                int(item.get("y", 0)),
+                int(item.get("x", 0)),
+                int(item.get("h", 1)),
+                int(item.get("w", 1)),
+            )
+            btn.show()
+        self._sync_control_button_instances()
 
     def _select_group(self, group: str) -> None:
         self.cue_mode = False
@@ -7482,14 +7615,17 @@ class MainWindow(QMainWindow):
         loop_btn = self.control_buttons.get("Loop")
         if play_btn:
             play_btn.setChecked(playlist_enabled)
+            self._sync_control_button_instances("Play List")
         if shuf_btn:
             shuf_btn.setEnabled(playlist_enabled)
             shuf_btn.setChecked(shuffle_enabled)
+            self._sync_control_button_instances("Shuffle")
         if loop_btn:
             if playlist_enabled:
                 loop_btn.setText(tr("Loop Single") if self.playlist_loop_mode == "loop_single" else tr("Loop List"))
             else:
                 loop_btn.setText(tr("Loop"))
+            self._sync_control_button_instances("Loop")
         self._update_next_button_enabled()
         self._refresh_stage_display()
 
@@ -7513,6 +7649,7 @@ class MainWindow(QMainWindow):
             else:
                 has_next = self._next_unplayed_slot_on_current_page() is not None
         next_btn.setEnabled(is_playing and has_next)
+        self._sync_control_button_instances("Next")
         self._update_button_drag_control_state()
 
     def _update_button_drag_control_state(self) -> None:
@@ -7523,6 +7660,7 @@ class MainWindow(QMainWindow):
         if playback_active and drag_btn.isChecked():
             drag_btn.setChecked(False)
         drag_btn.setEnabled(not playback_active)
+        self._sync_control_button_instances("Button Drag")
         self._update_button_drag_visual_state()
 
     def _update_button_drag_visual_state(self) -> None:
@@ -7809,6 +7947,7 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet("background:#FFE680; font-weight:bold;")
         else:
             btn.setStyleSheet("")
+        self._sync_control_button_instances(key)
 
     def _try_auto_fade_transition(self) -> None:
         if (
@@ -8010,6 +8149,7 @@ class MainWindow(QMainWindow):
             stage_display_layout=self.stage_display_layout,
             stage_display_visibility=self.stage_display_visibility,
             stage_display_text_source=self.stage_display_text_source,
+            window_layout=self.window_layout,
             lock_unlock_method=self.lock_unlock_method,
             lock_require_password=self.lock_require_password,
             lock_password=self.lock_password,
@@ -8169,6 +8309,8 @@ class MainWindow(QMainWindow):
             self.stage_display_gadgets
         )
         self.stage_display_text_source = dialog.selected_stage_display_text_source()
+        self.window_layout = normalize_window_layout(dialog.selected_window_layout())
+        self._apply_top_control_layout()
         if self._stage_display_window is not None:
             self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
             self._refresh_stage_display()
@@ -9431,6 +9573,7 @@ class MainWindow(QMainWindow):
             talk_button.setChecked(False)
             talk_button.setStyleSheet("")
             talk_button.setText(tr("Talk"))
+            self._sync_control_button_instances("Talk")
             return
         talk_button.setChecked(True)
         if self.talk_blink_button:
@@ -9450,6 +9593,7 @@ class MainWindow(QMainWindow):
             talk_button.setProperty("_blink_on", True)
             talk_button.setStyleSheet("background:#F2D74A; font-weight:bold;")
         talk_button.setText(tr("Talk*"))
+        self._sync_control_button_instances("Talk")
 
     def _stop_playback(self) -> None:
         self._manual_stop_requested = True
@@ -9795,6 +9939,7 @@ class MainWindow(QMainWindow):
         else:
             pause_button.setText("Pause")
             pause_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        self._sync_control_button_instances("Pause")
 
     def _on_seek_pressed(self) -> None:
         self._is_scrubbing = True
@@ -10527,6 +10672,7 @@ class MainWindow(QMainWindow):
         self.settings.stage_display_show_next_song = bool(self.stage_display_visibility.get("next_song", True))
         self.settings.stage_display_gadgets = normalize_stage_display_gadgets(self.stage_display_gadgets)
         self.settings.stage_display_text_source = self.stage_display_text_source
+        self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 
     def resizeEvent(self, event) -> None:

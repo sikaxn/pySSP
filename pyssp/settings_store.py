@@ -66,6 +66,210 @@ def default_stage_display_layout() -> list[str]:
     ]
 
 
+WINDOW_LAYOUT_MAIN_GRID_COLS = 4
+WINDOW_LAYOUT_MAIN_GRID_ROWS = 4
+WINDOW_LAYOUT_FADE_GRID_COLS = 3
+WINDOW_LAYOUT_FADE_GRID_ROWS = 1
+
+WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
+    "Cue",
+    "Multi-Play",
+    "Go To Playing",
+    "DSP",
+    "Loop",
+    "Next",
+    "Button Drag",
+    "Pause",
+    "Rapid Fire",
+    "Shuffle",
+    "Reset Page",
+    "STOP",
+    "Talk",
+    "Play List",
+    "Search",
+]
+WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
+WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]
+
+
+def default_window_layout() -> dict[str, object]:
+    return {
+        "main": [
+            {"button": "Cue", "x": 0, "y": 0, "w": 1, "h": 1},
+            {"button": "Multi-Play", "x": 1, "y": 0, "w": 1, "h": 1},
+            {"button": "Go To Playing", "x": 2, "y": 0, "w": 1, "h": 1},
+            {"button": "DSP", "x": 3, "y": 0, "w": 1, "h": 1},
+            {"button": "Loop", "x": 0, "y": 1, "w": 1, "h": 1},
+            {"button": "Next", "x": 1, "y": 1, "w": 1, "h": 1},
+            {"button": "Button Drag", "x": 2, "y": 1, "w": 1, "h": 1},
+            {"button": "Pause", "x": 3, "y": 1, "w": 1, "h": 1},
+            {"button": "Rapid Fire", "x": 0, "y": 2, "w": 1, "h": 1},
+            {"button": "Shuffle", "x": 1, "y": 2, "w": 1, "h": 1},
+            {"button": "Reset Page", "x": 2, "y": 2, "w": 1, "h": 1},
+            {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2},
+            {"button": "Talk", "x": 0, "y": 3, "w": 1, "h": 1},
+            {"button": "Play List", "x": 1, "y": 3, "w": 1, "h": 1},
+            {"button": "Search", "x": 2, "y": 3, "w": 1, "h": 1},
+        ],
+        "fade": [
+            {"button": "Fade In", "x": 0, "y": 0, "w": 1, "h": 1},
+            {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1},
+            {"button": "Fade Out", "x": 2, "y": 0, "w": 1, "h": 1},
+        ],
+        "available": [],
+        "show_all_available": False,
+    }
+
+
+def _normalize_window_layout_items(
+    values: list[dict[str, object]] | None,
+    valid_buttons: set[str],
+    cols: int,
+    rows: int,
+) -> list[dict[str, int | str]]:
+    used = [[False for _ in range(cols)] for _ in range(rows)]
+    normalized: list[dict[str, int | str]] = []
+    raw = list(values or [])
+
+    def can_place(px: int, py: int, pw: int, ph: int) -> bool:
+        if px < 0 or py < 0 or pw < 1 or ph < 1:
+            return False
+        if (px + pw) > cols or (py + ph) > rows:
+            return False
+        for yy in range(py, py + ph):
+            for xx in range(px, px + pw):
+                if used[yy][xx]:
+                    return False
+        return True
+
+    def place(px: int, py: int, pw: int, ph: int) -> None:
+        for yy in range(py, py + ph):
+            for xx in range(px, px + pw):
+                used[yy][xx] = True
+
+    def first_fit(pw: int, ph: int) -> tuple[int, int] | None:
+        for yy in range(rows):
+            for xx in range(cols):
+                if can_place(xx, yy, pw, ph):
+                    return xx, yy
+        return None
+
+    for raw_item in raw:
+        if not isinstance(raw_item, dict):
+            continue
+        button = str(raw_item.get("button", "")).strip()
+        if button not in valid_buttons:
+            continue
+        x = _clamp_int(_get_int(raw_item, "x", 0), 0, cols - 1)
+        y = _clamp_int(_get_int(raw_item, "y", 0), 0, rows - 1)
+        w = _clamp_int(_get_int(raw_item, "w", 1), 1, cols)
+        h = _clamp_int(_get_int(raw_item, "h", 1), 1, rows)
+        w = min(w, cols - x)
+        h = min(h, rows - y)
+
+        if not can_place(x, y, w, h):
+            target = first_fit(w, h)
+            if target is not None:
+                x, y = target
+            else:
+                found = None
+                for try_h in range(h, 0, -1):
+                    for try_w in range(w, 0, -1):
+                        target = first_fit(try_w, try_h)
+                        if target is not None:
+                            found = (target[0], target[1], try_w, try_h)
+                            break
+                    if found is not None:
+                        break
+                if found is None:
+                    continue
+                x, y, w, h = found
+
+        place(x, y, w, h)
+        normalized.append({"button": button, "x": x, "y": y, "w": w, "h": h})
+    return normalized
+
+
+def _convert_legacy_window_layout(
+    values: dict[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str], bool]:
+    legacy_main = values.get("main")
+    legacy_fade = values.get("fade")
+    available_raw = values.get("available", [])
+    show_all = bool(values.get("show_all_available", False))
+    main_items: list[dict[str, object]] = []
+    fade_items: list[dict[str, object]] = []
+    if isinstance(legacy_main, dict):
+        for key, spec in legacy_main.items():
+            if not isinstance(spec, dict):
+                continue
+            main_items.append(
+                {
+                    "button": str(key),
+                    "x": _get_int(spec, "x", 0),
+                    "y": _get_int(spec, "y", 0),
+                    "w": _get_int(spec, "w", 1),
+                    "h": _get_int(spec, "h", 1),
+                }
+            )
+    elif isinstance(legacy_main, list):
+        main_items = [dict(item) for item in legacy_main if isinstance(item, dict)]
+    if isinstance(legacy_fade, dict):
+        for key, spec in legacy_fade.items():
+            if not isinstance(spec, dict):
+                continue
+            fade_items.append(
+                {
+                    "button": str(key),
+                    "x": _get_int(spec, "x", 0),
+                    "y": _get_int(spec, "y", 0),
+                    "w": _get_int(spec, "w", 1),
+                    "h": _get_int(spec, "h", 1),
+                }
+            )
+    elif isinstance(legacy_fade, list):
+        fade_items = [dict(item) for item in legacy_fade if isinstance(item, dict)]
+    available = []
+    if isinstance(available_raw, list):
+        for token in available_raw:
+            value = str(token).strip()
+            if value:
+                available.append(value)
+    return main_items, fade_items, available, show_all
+
+
+def normalize_window_layout(values: dict[str, object] | None) -> dict[str, object]:
+    defaults = default_window_layout()
+    raw = dict(values or {})
+    main_raw, fade_raw, available_raw, show_all_available = _convert_legacy_window_layout(raw)
+    if not main_raw and not fade_raw:
+        default_main, default_fade, default_available, default_show_all = _convert_legacy_window_layout(defaults)
+        main_raw = default_main
+        fade_raw = default_fade
+        if not available_raw:
+            available_raw = default_available
+        show_all_available = default_show_all if "show_all_available" not in raw else show_all_available
+    all_valid = set(WINDOW_LAYOUT_ALL_BUTTONS)
+    main_items = _normalize_window_layout_items(main_raw, all_valid, WINDOW_LAYOUT_MAIN_GRID_COLS, WINDOW_LAYOUT_MAIN_GRID_ROWS)
+    fade_items = _normalize_window_layout_items(fade_raw, all_valid, WINDOW_LAYOUT_FADE_GRID_COLS, WINDOW_LAYOUT_FADE_GRID_ROWS)
+    available: list[str] = []
+    for button in available_raw:
+        token = str(button).strip()
+        if token in all_valid and token not in available:
+            available.append(token)
+    if not bool(show_all_available):
+        used = {str(item.get("button")) for item in [*main_items, *fade_items]}
+        for button in WINDOW_LAYOUT_ALL_BUTTONS:
+            if (button not in used) and (button not in available):
+                available.append(button)
+    return {
+        "main": main_items,
+        "fade": fade_items,
+        "available": available,
+        "show_all_available": bool(show_all_available),
+    }
+
+
 def default_stage_display_gadgets() -> dict[str, dict[str, int | bool | str]]:
     return {
         "current_time": {
@@ -467,6 +671,7 @@ class AppSettings:
     stage_display_show_next_song: bool = True
     stage_display_gadgets: dict[str, dict[str, int | bool | str]] = field(default_factory=default_stage_display_gadgets)
     stage_display_text_source: str = "caption"
+    window_layout: dict[str, object] = field(default_factory=default_window_layout)
 
 
 def get_settings_path() -> Path:
@@ -760,6 +965,10 @@ def save_settings(settings: AppSettings) -> None:
             separators=(",", ":"),
         ),
         "stage_display_text_source": settings.stage_display_text_source,
+        "window_layout": json.dumps(
+            normalize_window_layout(settings.window_layout),
+            separators=(",", ":"),
+        ),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -962,6 +1171,16 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         fallback_layout=stage_display_layout,
         fallback_visibility=stage_display_visibility,
     )
+    raw_window_layout = str(section.get("window_layout", "")).strip()
+    parsed_window_layout: dict[str, object] = {}
+    if raw_window_layout:
+        try:
+            decoded = json.loads(raw_window_layout)
+            if isinstance(decoded, dict):
+                parsed_window_layout = {str(k): v for k, v in decoded.items()}
+        except Exception:
+            parsed_window_layout = {}
+    window_layout = normalize_window_layout(parsed_window_layout)
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -1225,6 +1444,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_show_next_song=stage_display_visibility["next_song"],
         stage_display_gadgets=stage_display_gadgets,
         stage_display_text_source=stage_display_text_source,
+        window_layout=window_layout,
     )
 
 

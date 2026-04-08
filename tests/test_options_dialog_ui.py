@@ -71,6 +71,18 @@ def _build_dialog(**overrides):
         timecode_sample_rate=defaults["timecode_sample_rate"],
         timecode_bit_depth=defaults["timecode_bit_depth"],
         timecode_timeline_mode=defaults["timecode_timeline_mode"],
+        soundbutton_timecode_offset_enabled=bool(
+            overrides.get(
+                "soundbutton_timecode_offset_enabled",
+                defaults["soundbutton_timecode_offset_enabled"],
+            )
+        ),
+        respect_soundbutton_timecode_timeline_setting=bool(
+            overrides.get(
+                "respect_soundbutton_timecode_timeline_setting",
+                defaults["respect_soundbutton_timecode_timeline_setting"],
+            )
+        ),
         max_multi_play_songs=defaults["max_multi_play_songs"],
         multi_play_limit_action=defaults["multi_play_limit_action"],
         playlist_play_mode=defaults["playlist_play_mode"],

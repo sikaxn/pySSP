@@ -758,6 +758,8 @@ class OptionsDialog(QDialog):
         "timecode_sample_rate": 48000,
         "timecode_bit_depth": 16,
         "timecode_timeline_mode": "cue_region",
+        "soundbutton_timecode_offset_enabled": True,
+        "respect_soundbutton_timecode_timeline_setting": True,
         "state_colors": {
             "playing": "#66FF33",
             "played": "#FF3B30",
@@ -911,6 +913,8 @@ class OptionsDialog(QDialog):
         timecode_sample_rate: int,
         timecode_bit_depth: int,
         timecode_timeline_mode: str,
+        soundbutton_timecode_offset_enabled: bool,
+        respect_soundbutton_timecode_timeline_setting: bool,
         max_multi_play_songs: int,
         multi_play_limit_action: str,
         playlist_play_mode: str,
@@ -1193,6 +1197,8 @@ class OptionsDialog(QDialog):
                 timecode_sample_rate=timecode_sample_rate,
                 timecode_bit_depth=timecode_bit_depth,
                 timecode_timeline_mode=timecode_timeline_mode,
+                soundbutton_timecode_offset_enabled=soundbutton_timecode_offset_enabled,
+                respect_soundbutton_timecode_timeline_setting=respect_soundbutton_timecode_timeline_setting,
             ),
         )
         self._add_page(
@@ -2288,6 +2294,8 @@ class OptionsDialog(QDialog):
         timecode_sample_rate: int,
         timecode_bit_depth: int,
         timecode_timeline_mode: str,
+        soundbutton_timecode_offset_enabled: bool,
+        respect_soundbutton_timecode_timeline_setting: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -2329,6 +2337,16 @@ class OptionsDialog(QDialog):
             self.timecode_timeline_cue_region_radio.setChecked(True)
         timeline_layout.addWidget(self.timecode_timeline_cue_region_radio)
         timeline_layout.addWidget(self.timecode_timeline_audio_file_radio)
+        self.soundbutton_timecode_offset_enabled_checkbox = QCheckBox("Enable soundbutton timecode offset")
+        self.soundbutton_timecode_offset_enabled_checkbox.setChecked(bool(soundbutton_timecode_offset_enabled))
+        timeline_layout.addWidget(self.soundbutton_timecode_offset_enabled_checkbox)
+        self.respect_soundbutton_timecode_timeline_setting_checkbox = QCheckBox(
+            "Respect soundbutton timecode display timeline setting"
+        )
+        self.respect_soundbutton_timecode_timeline_setting_checkbox.setChecked(
+            bool(respect_soundbutton_timecode_timeline_setting)
+        )
+        timeline_layout.addWidget(self.respect_soundbutton_timecode_timeline_setting_checkbox)
         layout.addWidget(timeline_group)
 
         ltc_group = QGroupBox("SMPTE Timecode (LTC)")
@@ -2998,12 +3016,12 @@ class OptionsDialog(QDialog):
 
     def _confirm_layout_overlap_action(self) -> str:
         box = QMessageBox(self)
-        box.setWindowTitle("Button Overlap")
-        box.setText("Destination is already occupied.")
-        box.setInformativeText("Choose action:")
-        swap_btn = box.addButton("Swap", QMessageBox.AcceptRole)
-        copy_btn = box.addButton("Copy", QMessageBox.ActionRole)
-        cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setWindowTitle(tr("Button Overlap"))
+        box.setText(tr("Destination is already occupied."))
+        box.setInformativeText(tr("Choose action:"))
+        swap_btn = box.addButton(tr("Swap"), QMessageBox.AcceptRole)
+        copy_btn = box.addButton(tr("Copy"), QMessageBox.ActionRole)
+        cancel_btn = box.addButton(tr("Cancel"), QMessageBox.RejectRole)
         box.exec_()
         clicked = box.clickedButton()
         if clicked is swap_btn:
@@ -3126,6 +3144,12 @@ class OptionsDialog(QDialog):
         if self.timecode_timeline_audio_file_radio.isChecked():
             return "audio_file"
         return "cue_region"
+
+    def selected_soundbutton_timecode_offset_enabled(self) -> bool:
+        return bool(self.soundbutton_timecode_offset_enabled_checkbox.isChecked())
+
+    def selected_respect_soundbutton_timecode_timeline_setting(self) -> bool:
+        return bool(self.respect_soundbutton_timecode_timeline_setting_checkbox.isChecked())
 
     def selected_max_multi_play_songs(self) -> int:
         return max(1, min(32, int(self.max_multi_play_spin.value())))
@@ -4365,6 +4389,12 @@ class OptionsDialog(QDialog):
             self.timecode_timeline_audio_file_radio.setChecked(True)
         else:
             self.timecode_timeline_cue_region_radio.setChecked(True)
+        self.soundbutton_timecode_offset_enabled_checkbox.setChecked(
+            bool(d.get("soundbutton_timecode_offset_enabled", True))
+        )
+        self.respect_soundbutton_timecode_timeline_setting_checkbox.setChecked(
+            bool(d.get("respect_soundbutton_timecode_timeline_setting", True))
+        )
 
     def _restore_preload_defaults(self) -> None:
         d = self._DEFAULTS

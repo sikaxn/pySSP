@@ -30,6 +30,8 @@ class SetSlotData:
     volume_override_pct: Optional[int] = None
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
+    timecode_offset_ms: Optional[int] = None
+    timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""
     sound_midi_hotkey: str = ""
 
@@ -99,6 +101,12 @@ def load_set_file(file_path: str) -> SetLoadResult:
             migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
+            timecode_offset_ms = _parse_timecode_offset_ms(
+                section.get(f"pyssptimecodeoffset{i}", "").strip()
+            )
+            timecode_timeline_mode = _parse_slot_timecode_timeline_mode(
+                section.get(f"pyssptimecodedisplaytimeline{i}", "").strip()
+            )
             marker = False
 
             if caption.endswith("%%"):
@@ -128,6 +136,8 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 volume_override_pct=volume_override_pct,
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
+                timecode_offset_ms=timecode_offset_ms,
+                timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=sound_midi_hotkey,
             )
@@ -357,3 +367,63 @@ def _parse_sound_hotkey(value: str) -> str:
 
 def _parse_sound_midi_hotkey(value: str) -> str:
     return normalize_midi_binding(value)
+
+
+def parse_timecode_offset_ms(value: str) -> Optional[int]:
+    return _parse_timecode_offset_ms(value)
+
+
+def format_timecode_offset_hhmmss(seconds: Optional[int], fps: float = 30.0) -> Optional[str]:
+    if seconds is None:
+        return None
+    total_ms = max(0, int(seconds))
+    if total_ms <= 0:
+        return None
+    safe_fps = max(1.0, float(fps))
+    total_seconds = total_ms // 1000
+    rem_ms = total_ms % 1000
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    frames = int(round((rem_ms / 1000.0) * safe_fps))
+    fps_int = max(1, int(round(safe_fps)))
+    if frames >= fps_int:
+        frames = 0
+        secs += 1
+        if secs >= 60:
+            secs = 0
+            minutes += 1
+            if minutes >= 60:
+                minutes = 0
+                hours += 1
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}:{frames:02d}"
+
+
+def normalize_slot_timecode_timeline_mode(value: str) -> str:
+    return _parse_slot_timecode_timeline_mode(value)
+
+
+def _parse_timecode_offset_ms(value: str) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) not in {3, 4}:
+        return None
+    if not all(part.isdigit() for part in parts):
+        return None
+    hh, mm, ss = (int(parts[0]), int(parts[1]), int(parts[2]))
+    ff = int(parts[3]) if len(parts) == 4 else 0
+    if mm > 59 or ss > 59 or ff < 0 or ff > 59:
+        return None
+    # Use 30fps to keep compatibility with pySSP cue/timecode style fields.
+    total_ms = ((hh * 3600) + (mm * 60) + ss) * 1000
+    total_ms += int((ff / 30.0) * 1000)
+    return total_ms if total_ms > 0 else None
+
+
+def _parse_slot_timecode_timeline_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {"audio_file", "cue_region"}:
+        return mode
+    return "global"

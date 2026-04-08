@@ -481,6 +481,8 @@ class AppSettings:
     timecode_bit_depth: int = 16
     show_timecode_panel: bool = False
     timecode_timeline_mode: str = "cue_region"
+    soundbutton_timecode_offset_enabled: bool = True
+    respect_soundbutton_timecode_timeline_setting: bool = True
     main_transport_timeline_mode: str = "cue_region"
     main_progress_display_mode: str = "progress_bar"
     main_progress_show_text: bool = True
@@ -772,6 +774,10 @@ def save_settings(settings: AppSettings) -> None:
         "timecode_bit_depth": str(settings.timecode_bit_depth),
         "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
         "timecode_timeline_mode": settings.timecode_timeline_mode,
+        "soundbutton_timecode_offset_enabled": "1" if settings.soundbutton_timecode_offset_enabled else "0",
+        "respect_soundbutton_timecode_timeline_setting": (
+            "1" if settings.respect_soundbutton_timecode_timeline_setting else "0"
+        ),
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
         "main_progress_display_mode": settings.main_progress_display_mode,
         "main_progress_show_text": "1" if settings.main_progress_show_text else "0",
@@ -1052,6 +1058,12 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     ).strip().lower()
     if timecode_timeline_mode_raw not in {"cue_region", "audio_file"}:
         timecode_timeline_mode_raw = "cue_region"
+    soundbutton_timecode_offset_enabled = _get_bool(section, "soundbutton_timecode_offset_enabled", True)
+    respect_soundbutton_timecode_timeline_setting = _get_bool(
+        section,
+        "respect_soundbutton_timecode_timeline_setting",
+        True,
+    )
     timeline_mode_raw = str(
         section.get("main_transport_timeline_mode", section.get("cue_editor_timeline_mode", "cue_region"))
     ).strip().lower()
@@ -1254,6 +1266,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         timecode_bit_depth=timecode_bit_depth,
         show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
         timecode_timeline_mode=timecode_timeline_mode_raw,
+        soundbutton_timecode_offset_enabled=soundbutton_timecode_offset_enabled,
+        respect_soundbutton_timecode_timeline_setting=respect_soundbutton_timecode_timeline_setting,
         main_transport_timeline_mode=timeline_mode_raw,
         main_progress_display_mode=main_progress_display_mode,
         main_progress_show_text=main_progress_show_text,

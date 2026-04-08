@@ -73,7 +73,14 @@ from pyssp.audio_engine import (
     shutdown_audio_preload,
 )
 from pyssp.dsp import DSPConfig, normalize_config
-from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
+from pyssp.set_loader import (
+    format_timecode_offset_hhmmss,
+    load_set_file,
+    normalize_slot_timecode_timeline_mode,
+    parse_delphi_color,
+    parse_time_string_to_ms,
+    parse_timecode_offset_ms,
+)
 from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
@@ -125,6 +132,7 @@ from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
+from pyssp.ui.timecode_setup_dialog import TimecodeSetupDialog
 from pyssp.ui.stage_display import (
     StageDisplayWindow as GadgetStageDisplayWindow,
     gadgets_to_legacy_layout_visibility,
@@ -155,6 +163,7 @@ COLORS = {
     "volume_indicator": "#FFD45A",
     "midi_indicator": "#FF9E4A",
 }
+TIMECODE_SLOT_INDICATOR_COLOR = "#9C4DFF"
 
 HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "new_set": ("Ctrl+N", ""),
@@ -269,6 +278,8 @@ class SoundButtonData:
     volume_override_pct: Optional[int] = None
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
+    timecode_offset_ms: Optional[int] = None
+    timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""
     sound_midi_hotkey: str = ""
 
@@ -291,6 +302,11 @@ class SoundButtonData:
         has_cue = (self.cue_end_ms is not None) or ((self.cue_start_ms is not None) and int(self.cue_start_ms) > 0)
         if has_cue:
             parts.append("C")
+        has_timecode = (self.timecode_offset_ms is not None and int(self.timecode_offset_ms) > 0) or (
+            self.timecode_timeline_mode in {"audio_file", "cue_region"}
+        )
+        if has_timecode:
+            parts.append("T")
         suffix = f" {' '.join(parts)}" if parts else ""
         return f"{elide_text(self.title, 26)}\n{format_time(self.duration_ms)}{suffix}"
 
@@ -1801,6 +1817,12 @@ class MainWindow(QMainWindow):
         )
         if self.timecode_timeline_mode not in {"cue_region", "audio_file"}:
             self.timecode_timeline_mode = "cue_region"
+        self.soundbutton_timecode_offset_enabled = bool(
+            getattr(self.settings, "soundbutton_timecode_offset_enabled", True)
+        )
+        self.respect_soundbutton_timecode_timeline_setting = bool(
+            getattr(self.settings, "respect_soundbutton_timecode_timeline_setting", True)
+        )
         self.main_transport_timeline_mode = (
             self.settings.main_transport_timeline_mode
             if self.settings.main_transport_timeline_mode in {"cue_region", "audio_file"}
@@ -2490,16 +2512,29 @@ class MainWindow(QMainWindow):
 
     def _timecode_display_ms_from_absolute(self, absolute_ms: int) -> int:
         absolute = max(0, int(absolute_ms))
-        if self.timecode_timeline_mode == "audio_file":
-            return absolute
-        if self.current_playing is None:
-            return absolute
-        slot = self._slot_for_key(self.current_playing)
-        if slot is None:
-            return absolute
-        # Do not clamp to duration here; duration may still be unknown at playback start.
-        cue_start = 0 if slot.cue_start_ms is None else max(0, int(slot.cue_start_ms))
-        return max(0, absolute - cue_start)
+        slot: Optional[SoundButtonData] = None
+        if self.current_playing is not None:
+            slot = self._slot_for_key(self.current_playing)
+        timeline_mode = self.timecode_timeline_mode
+        if slot is not None:
+            timeline_mode = self._effective_slot_timecode_timeline_mode(slot)
+        if timeline_mode == "cue_region" and slot is not None:
+            cue_start = 0 if slot.cue_start_ms is None else max(0, int(slot.cue_start_ms))
+            absolute = max(0, absolute - cue_start)
+        if slot is not None and self.soundbutton_timecode_offset_enabled:
+            offset_ms = slot.timecode_offset_ms
+            if offset_ms is not None and int(offset_ms) > 0:
+                absolute += int(offset_ms)
+        return max(0, absolute)
+
+    def _effective_slot_timecode_timeline_mode(self, slot: SoundButtonData) -> str:
+        mode = self.timecode_timeline_mode
+        if not self.respect_soundbutton_timecode_timeline_setting:
+            return mode
+        slot_mode = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+        if slot_mode in {"audio_file", "cue_region"}:
+            return slot_mode
+        return mode
 
     def _timecode_output_ms(self) -> int:
         if self.timecode_mode == TIMECODE_MODE_ZERO:
@@ -5330,6 +5365,8 @@ class MainWindow(QMainWindow):
                     volume_override_pct=slot.volume_override_pct,
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
+                    timecode_offset_ms=slot.timecode_offset_ms,
+                    timecode_timeline_mode=slot.timecode_timeline_mode,
                     sound_hotkey=slot.sound_hotkey,
                     sound_midi_hotkey=slot.sound_midi_hotkey,
                 )
@@ -5361,6 +5398,8 @@ class MainWindow(QMainWindow):
                 volume_override_pct=slot.volume_override_pct,
                 cue_start_ms=slot.cue_start_ms,
                 cue_end_ms=slot.cue_end_ms,
+                timecode_offset_ms=slot.timecode_offset_ms,
+                timecode_timeline_mode=slot.timecode_timeline_mode,
                 sound_hotkey=slot.sound_hotkey,
                 sound_midi_hotkey=slot.sound_midi_hotkey,
             )
@@ -5488,6 +5527,12 @@ class MainWindow(QMainWindow):
                 lines.append(f"pysspcuestart{slot_index}={cue_start}")
             if cue_end is not None:
                 lines.append(f"pysspcueend{slot_index}={cue_end}")
+            timecode_offset = format_timecode_offset_hhmmss(slot.timecode_offset_ms, nominal_fps(self.timecode_fps))
+            if timecode_offset is not None:
+                lines.append(f"pyssptimecodeoffset{slot_index}={timecode_offset}")
+            timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+            if timecode_timeline != "global":
+                lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
         lines.append("")
         payload = "\r\n".join(lines)
         with open(file_path, "w", encoding="utf-8-sig", newline="") as fh:
@@ -5543,6 +5588,12 @@ class MainWindow(QMainWindow):
             sound_hotkey = self._parse_sound_hotkey(section.get(f"h{i}", "").strip())
             cue_start_raw = section.get(f"pysspcuestart{i}", "").strip()
             cue_end_raw = section.get(f"pysspcueend{i}", "").strip()
+            timecode_offset_ms = parse_timecode_offset_ms(
+                section.get(f"pyssptimecodeoffset{i}", "").strip()
+            )
+            timecode_timeline_mode = normalize_slot_timecode_timeline_mode(
+                section.get(f"pyssptimecodedisplaytimeline{i}", "").strip()
+            )
             if cue_start_raw or cue_end_raw:
                 cue_start_ms = self._parse_cue_time_string_to_ms(cue_start_raw)
                 cue_end_ms = self._parse_cue_time_string_to_ms(cue_end_raw)
@@ -5568,6 +5619,8 @@ class MainWindow(QMainWindow):
                 volume_override_pct=volume_override_pct,
                 cue_start_ms=cue_start_ms,
                 cue_end_ms=cue_end_ms,
+                timecode_offset_ms=timecode_offset_ms,
+                timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip()),
             )
@@ -5604,6 +5657,8 @@ class MainWindow(QMainWindow):
                     parts.append("V")
                 if has_cue:
                     parts.append("C")
+                if self._slot_has_custom_timecode(slot):
+                    parts.append("T")
                 for badge in self._active_button_trigger_badges(i, slot, sound_bindings, blocked_sound_tokens):
                     parts.append(badge)
                 suffix = f" {' '.join(parts)}" if parts else ""
@@ -5614,53 +5669,15 @@ class MainWindow(QMainWindow):
             has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
             has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
             has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
-            if has_midi_hotkey and has_volume_override and has_cue:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
-                    f"stop:0.12 {color}, stop:0.74 {color}, "
-                    f"stop:0.75 {self.state_colors['cue_indicator']}, stop:0.87 {self.state_colors['cue_indicator']}, "
-                    f"stop:0.88 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
-                )
-            elif has_midi_hotkey and has_volume_override:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
-                    f"stop:0.12 {color}, stop:0.82 {color}, "
-                    f"stop:0.83 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
-                )
-            elif has_midi_hotkey and has_cue:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
-                    f"stop:0.12 {color}, stop:0.82 {color}, "
-                    f"stop:0.83 {self.state_colors['cue_indicator']}, stop:1 {self.state_colors['cue_indicator']})"
-                )
-            elif has_midi_hotkey:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {self.state_colors['midi_indicator']}, stop:0.11 {self.state_colors['midi_indicator']}, "
-                    f"stop:0.12 {color}, stop:1 {color})"
-                )
-            elif has_volume_override and has_cue:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.74 {color}, "
-                    f"stop:0.75 {self.state_colors['cue_indicator']}, stop:0.87 {self.state_colors['cue_indicator']}, "
-                    f"stop:0.88 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
-                )
-            elif has_volume_override:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {self.state_colors['volume_indicator']}, stop:1 {self.state_colors['volume_indicator']})"
-                )
-            elif has_cue:
-                background = (
-                    "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                    f"stop:0 {color}, stop:0.82 {color}, stop:0.83 {self.state_colors['cue_indicator']}, stop:1 {self.state_colors['cue_indicator']})"
-                )
-            else:
-                background = color
+            has_custom_timecode = self._slot_has_custom_timecode(slot) and slot.assigned and (not slot.marker)
+            indicator_colors: List[str] = []
+            if has_cue:
+                indicator_colors.append(self.state_colors["cue_indicator"])
+            if has_volume_override:
+                indicator_colors.append(self.state_colors["volume_indicator"])
+            if has_custom_timecode:
+                indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
+            background = self._build_slot_background_gradient(color, has_midi_hotkey, indicator_colors)
             button.setStyleSheet(
                 "QPushButton{"
                 f"background:{background};"
@@ -5871,6 +5888,8 @@ class MainWindow(QMainWindow):
         edit_action.setEnabled(page_created)
         cue_points_action = menu.addAction("Set Cue Points...")
         cue_points_action.setEnabled(slot.assigned)
+        timecode_setup_action = menu.addAction("Timecode Setup...")
+        timecode_setup_action.setEnabled(slot.assigned)
         copy_action = menu.addAction("Copy Sound Button")
         copy_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
         paste_action = menu.addAction(tr("Paste Sound Button"))
@@ -5892,6 +5911,8 @@ class MainWindow(QMainWindow):
             self._edit_sound_button(slot_index)
         elif selected == cue_points_action:
             self._edit_slot_cue_points(slot_index)
+        elif selected == timecode_setup_action:
+            self._edit_slot_timecode_setup(slot_index)
         elif selected == copy_action:
             self._copied_slot_buffer = self._clone_slot(slot)
         elif selected == paste_action:
@@ -6132,6 +6153,8 @@ class MainWindow(QMainWindow):
             volume_override_pct=slot.volume_override_pct,
             cue_start_ms=slot.cue_start_ms,
             cue_end_ms=slot.cue_end_ms,
+            timecode_offset_ms=slot.timecode_offset_ms,
+            timecode_timeline_mode=slot.timecode_timeline_mode,
             sound_hotkey=slot.sound_hotkey,
             sound_midi_hotkey=slot.sound_midi_hotkey,
         )
@@ -6202,6 +6225,8 @@ class MainWindow(QMainWindow):
         if previous_file_path != file_path:
             slot.cue_start_ms = None
             slot.cue_end_ms = None
+            slot.timecode_offset_ms = None
+            slot.timecode_timeline_mode = "global"
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -6291,6 +6316,30 @@ class MainWindow(QMainWindow):
         slot.cue_end_ms = cue_end_ms
         self._set_dirty(True)
         self._refresh_sound_grid()
+
+    def _edit_slot_timecode_setup(self, slot_index: int) -> None:
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.locked:
+            self._show_info_notice_banner("This sound button is locked.")
+            return
+        if not slot.assigned or slot.marker:
+            return
+        dialog = TimecodeSetupDialog(
+            offset_ms=slot.timecode_offset_ms,
+            timeline_mode=slot.timecode_timeline_mode,
+            fps=nominal_fps(self.timecode_fps),
+            language=self.ui_language,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        timecode_offset_ms, timecode_timeline_mode = dialog.values()
+        slot.timecode_offset_ms = timecode_offset_ms
+        slot.timecode_timeline_mode = normalize_slot_timecode_timeline_mode(timecode_timeline_mode)
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._refresh_timecode_panel()
 
     def _is_page_created(self, group: str, page_index: int) -> bool:
         if self.cue_mode:
@@ -6466,6 +6515,62 @@ class MainWindow(QMainWindow):
     def _slot_has_custom_cue(self, slot: SoundButtonData) -> bool:
         start_ms, end_ms = self._normalized_slot_cues(slot, max(0, int(slot.duration_ms)))
         return (end_ms is not None) or (start_ms is not None and start_ms > 0)
+
+    def _slot_has_custom_timecode(self, slot: SoundButtonData) -> bool:
+        mode = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+        has_mode_override = mode in {"audio_file", "cue_region"}
+        offset_ms = slot.timecode_offset_ms
+        has_offset = offset_ms is not None and int(offset_ms) > 0
+        return has_mode_override or has_offset
+
+    def _build_slot_background_gradient(
+        self,
+        base_color: str,
+        has_midi_hotkey: bool,
+        indicator_colors: List[str],
+    ) -> str:
+        if not has_midi_hotkey and not indicator_colors:
+            return base_color
+        edge_eps = 0.0010
+        top_height = 0.11 if has_midi_hotkey else 0.0
+        bottom_count = len(indicator_colors)
+        bottom_height = 0.17 if bottom_count == 1 else 0.12
+        if (top_height + (bottom_height * bottom_count)) > 0.96 and bottom_count > 0:
+            bottom_height = max(0.06, (0.96 - top_height) / float(bottom_count))
+        main_start = top_height if has_midi_hotkey else 0.0
+        main_end = 1.0 - (bottom_height * bottom_count)
+        if main_end < main_start:
+            main_end = main_start
+
+        stops: List[Tuple[float, str]] = []
+        if has_midi_hotkey:
+            midi_color = self.state_colors["midi_indicator"]
+            stops.append((0.0, midi_color))
+            stops.append((top_height, midi_color))
+            if top_height > 0.0:
+                stops.append((max(0.0, top_height - edge_eps), midi_color))
+            stops.append((top_height, base_color))
+        stops.append((main_start, base_color))
+        stops.append((main_end, base_color))
+
+        cursor = main_end
+        prev_color = base_color
+        for color in indicator_colors:
+            start = cursor
+            end = min(1.0, start + bottom_height)
+            if start > 0.0:
+                stops.append((max(0.0, start - edge_eps), prev_color))
+            stops.append((start, color))
+            stops.append((end, color))
+            prev_color = color
+            cursor = end
+        if cursor < 1.0:
+            stops.append((max(0.0, 1.0 - edge_eps), prev_color))
+            stops.append((1.0, prev_color))
+        gradient_stops = ", ".join(
+            f"stop:{max(0.0, min(1.0, pos)):.4f} {color}" for pos, color in stops
+        )
+        return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, {gradient_stops})"
 
     def _slot_ssp_unit_scale(self, slot: SoundButtonData) -> Optional[Tuple[int, int]]:
         file_path = (slot.file_path or "").strip()
@@ -7693,6 +7798,8 @@ class MainWindow(QMainWindow):
                     volume_override_pct=slot.volume_override_pct,
                     cue_start_ms=slot.cue_start_ms,
                     cue_end_ms=slot.cue_end_ms,
+                    timecode_offset_ms=slot.timecode_offset_ms,
+                    timecode_timeline_mode=slot.timecode_timeline_mode,
                     sound_hotkey=slot.sound_hotkey,
                     sound_midi_hotkey=slot.sound_midi_hotkey,
                 )
@@ -8084,6 +8191,8 @@ class MainWindow(QMainWindow):
             timecode_sample_rate=self.timecode_sample_rate,
             timecode_bit_depth=self.timecode_bit_depth,
             timecode_timeline_mode=self.timecode_timeline_mode,
+            soundbutton_timecode_offset_enabled=self.soundbutton_timecode_offset_enabled,
+            respect_soundbutton_timecode_timeline_setting=self.respect_soundbutton_timecode_timeline_setting,
             max_multi_play_songs=self.max_multi_play_songs,
             multi_play_limit_action=self.multi_play_limit_action,
             playlist_play_mode=self.playlist_play_mode,
@@ -8221,6 +8330,10 @@ class MainWindow(QMainWindow):
         self.main_jog_outside_cue_action = dialog.selected_main_jog_outside_cue_action()
         self._refresh_main_jog_meta(self.seek_slider.value(), self._transport_total_ms())
         self.timecode_timeline_mode = dialog.selected_timecode_timeline_mode()
+        self.soundbutton_timecode_offset_enabled = dialog.selected_soundbutton_timecode_offset_enabled()
+        self.respect_soundbutton_timecode_timeline_setting = (
+            dialog.selected_respect_soundbutton_timecode_timeline_setting()
+        )
         self.timecode_audio_output_device = dialog.selected_timecode_audio_output_device()
         self.timecode_midi_output_device = dialog.selected_timecode_midi_output_device()
         selected_timecode_mode = dialog.selected_timecode_mode()
@@ -10299,6 +10412,15 @@ class MainWindow(QMainWindow):
                             lines.append(f"pysspcuestart{slot_index}={cue_start}")
                         if cue_end is not None:
                             lines.append(f"pysspcueend{slot_index}={cue_end}")
+                        timecode_offset = format_timecode_offset_hhmmss(
+                            slot.timecode_offset_ms,
+                            nominal_fps(self.timecode_fps),
+                        )
+                        if timecode_offset is not None:
+                            lines.append(f"pyssptimecodeoffset{slot_index}={timecode_offset}")
+                        timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+                        if timecode_timeline != "global":
+                            lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
                 lines.append("")
 
         lines.extend(
@@ -10356,6 +10478,8 @@ class MainWindow(QMainWindow):
                         volume_override_pct=src.volume_override_pct,
                         cue_start_ms=src.cue_start_ms,
                         cue_end_ms=src.cue_end_ms,
+                        timecode_offset_ms=src.timecode_offset_ms,
+                        timecode_timeline_mode=src.timecode_timeline_mode,
                         sound_hotkey=src.sound_hotkey,
                         sound_midi_hotkey=src.sound_midi_hotkey,
                     )
@@ -10483,6 +10607,10 @@ class MainWindow(QMainWindow):
         self.settings.timecode_bit_depth = self.timecode_bit_depth
         self.settings.show_timecode_panel = bool(self.show_timecode_panel)
         self.settings.timecode_timeline_mode = self.timecode_timeline_mode
+        self.settings.soundbutton_timecode_offset_enabled = bool(self.soundbutton_timecode_offset_enabled)
+        self.settings.respect_soundbutton_timecode_timeline_setting = bool(
+            self.respect_soundbutton_timecode_timeline_setting
+        )
         self.settings.main_transport_timeline_mode = self.main_transport_timeline_mode
         self.settings.main_progress_display_mode = self.main_progress_display_mode
         self.settings.main_progress_show_text = bool(self.main_progress_show_text)

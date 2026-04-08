@@ -18,6 +18,10 @@ Python SSP is an independent project and has no affiliation with, endorsement by
 
 This project is actively developed and experimental. Validate behavior in your own environment before production use.
 
+## Baidu Netdisk release download for user in Mainland China
+
+链接: https://pan.baidu.com/s/1xFaeUc9y4ClNr3DfFCGLFg?pwd=5516 提取码: 5516
+
 ## Requirements
 
 - Python `3.12` (see `Pipfile`)

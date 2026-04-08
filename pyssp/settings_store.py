@@ -417,6 +417,7 @@ class AppSettings:
     inactive_group_color: str = "#ECECEC"
     title_char_limit: int = 26
     show_file_notifications: bool = True
+    now_playing_display_mode: str = "caption"
     lock_allow_quit: bool = True
     lock_allow_system_hotkeys: bool = False
     lock_allow_quick_action_hotkeys: bool = False
@@ -710,6 +711,7 @@ def save_settings(settings: AppSettings) -> None:
         "inactive_group_color": settings.inactive_group_color,
         "title_char_limit": str(settings.title_char_limit),
         "show_file_notifications": "1" if settings.show_file_notifications else "0",
+        "now_playing_display_mode": settings.now_playing_display_mode,
         "lock_allow_quit": "1" if settings.lock_allow_quit else "0",
         "lock_allow_system_hotkeys": "1" if settings.lock_allow_system_hotkeys else "0",
         "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
@@ -1009,6 +1011,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     search_double_click_action = str(section.get("search_double_click_action", "find_highlight")).strip().lower()
     if search_double_click_action not in {"find_highlight", "play_highlight"}:
         search_double_click_action = "find_highlight"
+    now_playing_display_mode = str(section.get("now_playing_display_mode", "caption")).strip().lower()
+    if now_playing_display_mode not in {"filename", "filepath", "caption", "note", "caption_note"}:
+        now_playing_display_mode = "caption"
     set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
     if set_file_encoding not in {"utf8", "gbk"}:
         set_file_encoding = "utf8"
@@ -1202,6 +1207,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         inactive_group_color=_coerce_hex(str(section.get("inactive_group_color", "#ECECEC")), "#ECECEC"),
         title_char_limit=title_limit,
         show_file_notifications=_get_bool(section, "show_file_notifications", True),
+        now_playing_display_mode=now_playing_display_mode,
         lock_allow_quit=_get_bool(section, "lock_allow_quit", True),
         lock_allow_system_hotkeys=_get_bool(section, "lock_allow_system_hotkeys", False),
         lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),

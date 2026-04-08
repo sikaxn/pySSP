@@ -700,6 +700,7 @@ class OptionsDialog(QDialog):
         "inactive_group_color": "#ECECEC",
         "title_char_limit": 26,
         "show_file_notifications": True,
+        "now_playing_display_mode": "caption",
         "log_file_enabled": False,
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
@@ -873,6 +874,7 @@ class OptionsDialog(QDialog):
         inactive_group_color: str,
         title_char_limit: int,
         show_file_notifications: bool,
+        now_playing_display_mode: str,
         fade_in_sec: float,
         cross_fade_sec: float,
         fade_out_sec: float,
@@ -1094,6 +1096,7 @@ class OptionsDialog(QDialog):
             self._build_general_page(
                 title_char_limit=title_char_limit,
                 show_file_notifications=show_file_notifications,
+                now_playing_display_mode=now_playing_display_mode,
                 log_file_enabled=log_file_enabled,
                 reset_all_on_startup=reset_all_on_startup,
                 click_playing_action=click_playing_action,
@@ -1364,6 +1367,7 @@ class OptionsDialog(QDialog):
         self,
         title_char_limit: int,
         show_file_notifications: bool,
+        now_playing_display_mode: str,
         log_file_enabled: bool,
         reset_all_on_startup: bool,
         click_playing_action: str,
@@ -1388,6 +1392,31 @@ class OptionsDialog(QDialog):
         self.reset_on_startup_checkbox = QCheckBox("Reset ALL on Start-up")
         self.reset_on_startup_checkbox.setChecked(reset_all_on_startup)
         form.addRow("Startup:", self.reset_on_startup_checkbox)
+        mode_token = str(now_playing_display_mode or "caption").strip().lower()
+        if mode_token not in {"filename", "filepath", "caption", "note", "caption_note"}:
+            mode_token = "caption"
+        self.now_playing_caption_radio = QRadioButton("Show Caption (Default)")
+        self.now_playing_filename_radio = QRadioButton("Show File Name")
+        self.now_playing_filepath_radio = QRadioButton("Show File Name with Full Path")
+        self.now_playing_note_radio = QRadioButton("Show Notes")
+        self.now_playing_caption_note_radio = QRadioButton("Show Caption with Notes")
+        if mode_token == "filename":
+            self.now_playing_filename_radio.setChecked(True)
+        elif mode_token == "filepath":
+            self.now_playing_filepath_radio.setChecked(True)
+        elif mode_token == "note":
+            self.now_playing_note_radio.setChecked(True)
+        elif mode_token == "caption_note":
+            self.now_playing_caption_note_radio.setChecked(True)
+        else:
+            self.now_playing_caption_radio.setChecked(True)
+        now_playing_group = QGroupBox("Now Playing Display")
+        now_playing_layout = QVBoxLayout(now_playing_group)
+        now_playing_layout.addWidget(self.now_playing_caption_radio)
+        now_playing_layout.addWidget(self.now_playing_filename_radio)
+        now_playing_layout.addWidget(self.now_playing_filepath_radio)
+        now_playing_layout.addWidget(self.now_playing_note_radio)
+        now_playing_layout.addWidget(self.now_playing_caption_note_radio)
 
         encoding_group = QGroupBox(".set Save Encoding")
         encoding_layout = QVBoxLayout(encoding_group)
@@ -1407,6 +1436,7 @@ class OptionsDialog(QDialog):
         encoding_layout.addWidget(encoding_note)
         layout.addWidget(encoding_group)
         layout.addLayout(form)
+        layout.addWidget(now_playing_group)
 
         click_group = QGroupBox("Clicking on a Playing Sound will:")
         click_layout = QVBoxLayout(click_group)
@@ -3077,6 +3107,17 @@ class OptionsDialog(QDialog):
     def selected_main_progress_show_text(self) -> bool:
         return bool(self.main_progress_show_text_checkbox.isChecked())
 
+    def selected_now_playing_display_mode(self) -> str:
+        if self.now_playing_filename_radio.isChecked():
+            return "filename"
+        if self.now_playing_filepath_radio.isChecked():
+            return "filepath"
+        if self.now_playing_note_radio.isChecked():
+            return "note"
+        if self.now_playing_caption_note_radio.isChecked():
+            return "caption_note"
+        return "caption"
+
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
 
@@ -3896,6 +3937,17 @@ class OptionsDialog(QDialog):
         self.title_limit_spin.setValue(int(d["title_char_limit"]))
         self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
         self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
+        token = str(d.get("now_playing_display_mode", "caption")).strip().lower()
+        if token == "filename":
+            self.now_playing_filename_radio.setChecked(True)
+        elif token == "filepath":
+            self.now_playing_filepath_radio.setChecked(True)
+        elif token == "note":
+            self.now_playing_note_radio.setChecked(True)
+        elif token == "caption_note":
+            self.now_playing_caption_note_radio.setChecked(True)
+        else:
+            self.now_playing_caption_radio.setChecked(True)
         if str(d["set_file_encoding"]).strip().lower() == "gbk":
             self.set_file_encoding_gbk_radio.setChecked(True)
         else:

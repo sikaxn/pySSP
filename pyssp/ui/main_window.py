@@ -5,6 +5,7 @@ import sys
 import time
 import random
 import queue
+import html
 import socket
 import ipaddress
 import subprocess
@@ -46,6 +47,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QProgressDialog,
     QInputDialog,
+    QScrollArea,
     QTabWidget,
     QSpinBox,
     QSlider,
@@ -393,6 +395,52 @@ class SoundButton(QPushButton):
         y = max(2, self.height() - d - 3)
         p.drawEllipse(x, y, d, d)
         p.end()
+
+
+class NowPlayingLabel(QWidget):
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._prefix = "NOW PLAYING:"
+        self._value = ""
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(1)
+        self._prefix_label = QLabel(self._prefix, self)
+        self._prefix_label.setStyleSheet("color:#0A29E0; font-weight:700; font-size:11pt;")
+        self._value_label = QLabel("", self)
+        self._value_label.setStyleSheet("color:#101010; font-size:11pt;")
+        self._value_label.setWordWrap(True)
+        self._value_label.setTextFormat(Qt.RichText)
+        self._value_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._value_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._value_label.setMinimumWidth(0)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setWidget(self._value_label)
+        root.addWidget(self._prefix_label)
+        root.addWidget(self._scroll, 1)
+        line_h = self.fontMetrics().lineSpacing()
+        self.setFixedHeight((line_h * 3) + 10)
+
+    def set_now_playing_text(self, prefix: str, value: str) -> None:
+        self._prefix = prefix
+        self._value = value
+        self._refresh_text()
+
+    @staticmethod
+    def _to_wrapped_html(value: str) -> str:
+        escaped = html.escape(str(value or ""))
+        for token in ["/", "\\", "_", "-", ".", ":"]:
+            escaped = escaped.replace(token, f"{token}<wbr/>")
+        return escaped
+
+    def _refresh_text(self) -> None:
+        self._prefix_label.setText(self._prefix)
+        self._value_label.setText(self._to_wrapped_html(self._value))
 
 
 class GroupButton(QPushButton):
@@ -1866,6 +1914,12 @@ class MainWindow(QMainWindow):
         )
         source = str(getattr(self.settings, "stage_display_text_source", "caption")).strip().lower()
         self.stage_display_text_source = source if source in {"caption", "filename", "note"} else "caption"
+        now_playing_mode = str(getattr(self.settings, "now_playing_display_mode", "caption")).strip().lower()
+        self.now_playing_display_mode = (
+            now_playing_mode
+            if now_playing_mode in {"filename", "filepath", "caption", "note", "caption_note"}
+            else "caption"
+        )
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
@@ -2082,7 +2136,7 @@ class MainWindow(QMainWindow):
         self.page_list = QListWidget()
         self.group_status = QLabel("")
         self.page_status = QLabel("")
-        self.now_playing_label = QLabel("")
+        self.now_playing_label = NowPlayingLabel()
         self.drag_mode_banner = QLabel("")
         self.timecode_multiplay_banner = QLabel("")
         self.web_remote_warning_banner = QLabel("")
@@ -4864,6 +4918,9 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.group_status)
         self.page_status.setStyleSheet("font-size: 18pt; color: #0A29E0; font-weight: bold;")
         left_layout.addWidget(self.page_status)
+        self.now_playing_label.set_now_playing_text("NOW PLAYING:", "")
+        self.now_playing_label.setVisible(True)
+        left_layout.addWidget(self.now_playing_label)
         left_layout.addStretch(1)
 
         right = QWidget()
@@ -4961,12 +5018,6 @@ class MainWindow(QMainWindow):
         jog_meta_row.addStretch(1)
         jog_meta_row.addWidget(self.jog_out_label)
         right_layout.addLayout(jog_meta_row)
-
-        self.now_playing_label.setStyleSheet("font-size: 10pt; color: #101010; background: #EFEFEF;")
-        self.now_playing_label.setMinimumHeight(24)
-        self.now_playing_label.setText("NOW PLAYING:")
-        self.now_playing_label.setVisible(True)
-        right_layout.addWidget(self.now_playing_label)
 
         layout.addWidget(left, 2)
         layout.addWidget(right, 3)
@@ -7411,17 +7462,29 @@ class MainWindow(QMainWindow):
 
     def _update_now_playing_label(self, text: str) -> None:
         if text:
-            self.now_playing_label.setText(f"{tr('NOW PLAYING: ')}{text}")
+            self.now_playing_label.set_now_playing_text(tr("NOW PLAYING:"), text)
         else:
-            self.now_playing_label.setText(tr("NOW PLAYING:"))
+            self.now_playing_label.set_now_playing_text(tr("NOW PLAYING:"), "")
         self._refresh_stage_display()
 
     def _build_now_playing_text(self, slot: SoundButtonData) -> str:
-        title = slot.title.strip()
-        if title:
-            return title
-        base_name = os.path.basename(slot.file_path)
-        return os.path.splitext(base_name)[0]
+        mode = str(self.now_playing_display_mode or "caption").strip().lower()
+        caption = str(slot.title or "").strip()
+        notes = str(slot.notes or "").strip()
+        path = str(slot.file_path or "").strip()
+        base_name = os.path.basename(path) if path else ""
+        stem = os.path.splitext(base_name)[0] if base_name else ""
+        if mode == "filepath":
+            return path or caption or notes or stem
+        if mode == "filename":
+            return stem or base_name or caption or notes
+        if mode == "note":
+            return notes or caption or stem
+        if mode == "caption_note":
+            if caption and notes and notes.casefold() != caption.casefold():
+                return f"{caption} - {notes}"
+            return caption or notes or stem
+        return caption or stem or notes
 
     def _show_stage_display(self) -> None:
         if self._stage_display_window is None:
@@ -8144,6 +8207,7 @@ class MainWindow(QMainWindow):
             inactive_group_color=self.inactive_group_color,
             title_char_limit=self.title_char_limit,
             show_file_notifications=self.show_file_notifications,
+            now_playing_display_mode=self.now_playing_display_mode,
             lock_allow_quit=self.lock_allow_quit,
             lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
@@ -8308,6 +8372,7 @@ class MainWindow(QMainWindow):
         self.reset_all_on_startup = dialog.reset_on_startup_checkbox.isChecked()
         self.click_playing_action = dialog.selected_click_playing_action()
         self.search_double_click_action = dialog.selected_search_double_click_action()
+        self.now_playing_display_mode = dialog.selected_now_playing_display_mode()
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
             self.set_file_encoding = selected_set_file_encoding
@@ -8454,6 +8519,11 @@ class MainWindow(QMainWindow):
         self._update_timecode_multiplay_warning_banner()
         self._refresh_group_buttons()
         self._refresh_sound_grid()
+        if self.current_playing is None:
+            self._update_now_playing_label("")
+        else:
+            slot = self._slot_for_key(self.current_playing)
+            self._update_now_playing_label(self._build_now_playing_text(slot) if slot is not None else "")
         self._apply_web_remote_state()
         self._sync_lock_ui_state()
         self._save_settings()
@@ -10800,6 +10870,7 @@ class MainWindow(QMainWindow):
         self.settings.stage_display_show_next_song = bool(self.stage_display_visibility.get("next_song", True))
         self.settings.stage_display_gadgets = normalize_stage_display_gadgets(self.stage_display_gadgets)
         self.settings.stage_display_text_source = self.stage_display_text_source
+        self.settings.now_playing_display_mode = self.now_playing_display_mode
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 

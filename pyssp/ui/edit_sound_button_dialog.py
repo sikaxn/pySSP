@@ -74,6 +74,7 @@ class EditSoundButtonDialog(QDialog):
         file_path: str,
         caption: str,
         notes: str,
+        lyric_file: str = "",
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         sound_midi_hotkey: str = "",
@@ -85,7 +86,7 @@ class EditSoundButtonDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Sound Button")
-        self.resize(700, 280)
+        self.resize(760, 320)
         self._start_dir = start_dir
 
         root = QVBoxLayout(self)
@@ -106,6 +107,19 @@ class EditSoundButtonDialog(QDialog):
 
         self.notes_edit = QLineEdit(notes)
         form.addRow("Notes", self.notes_edit)
+
+        lyric_row = QWidget()
+        lyric_layout = QHBoxLayout(lyric_row)
+        lyric_layout.setContentsMargins(0, 0, 0, 0)
+        self.lyric_file_edit = QLineEdit(lyric_file)
+        self.lyric_browse_btn = QPushButton("Browse")
+        self.lyric_browse_btn.clicked.connect(self._browse_lyric_file)
+        self.lyric_clear_btn = QPushButton("Clear")
+        self.lyric_clear_btn.clicked.connect(lambda _=False: self.lyric_file_edit.setText(""))
+        lyric_layout.addWidget(self.lyric_file_edit, 1)
+        lyric_layout.addWidget(self.lyric_browse_btn)
+        lyric_layout.addWidget(self.lyric_clear_btn)
+        form.addRow("Lyric File", lyric_row)
 
         hk_row = QWidget()
         hk_layout = QHBoxLayout(hk_row)
@@ -195,7 +209,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, str, Optional[int], str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -203,10 +217,26 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.text().strip(),
             self.caption_edit.text().strip(),
             self.notes_edit.text().strip(),
+            self.lyric_file_edit.text().strip(),
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
             self._midi_binding,
         )
+
+    def _browse_lyric_file(self) -> None:
+        start_dir = self._start_dir
+        current = self.lyric_file_edit.text().strip()
+        if current:
+            start_dir = os.path.dirname(current) or start_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Lyric File",
+            start_dir,
+            "Lyric Files (*.lrc *.srt);;All Files (*.*)",
+        )
+        if file_path:
+            self.lyric_file_edit.setText(file_path)
+            self._start_dir = os.path.dirname(file_path)
 
     def _set_midi_binding(self, token: str) -> None:
         normalized = normalize_midi_binding(token)

@@ -61,6 +61,7 @@ def default_stage_display_layout() -> list[str]:
         "remaining",
         "progress_bar",
         "song_name",
+        "lyric",
         "next_song",
         "alert",
     ]
@@ -342,8 +343,19 @@ def default_stage_display_gadgets() -> dict[str, dict[str, int | bool | str]]:
             "x": 500,
             "y": 4300,
             "w": 9000,
-            "h": 2100,
+            "h": 1500,
             "z": 5,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "lyric": {
+            "x": 500,
+            "y": 5900,
+            "w": 9000,
+            "h": 1700,
+            "z": 6,
             "visible": True,
             "orientation": "vertical",
             "hide_text": False,
@@ -351,10 +363,10 @@ def default_stage_display_gadgets() -> dict[str, dict[str, int | bool | str]]:
         },
         "next_song": {
             "x": 500,
-            "y": 6800,
+            "y": 7700,
             "w": 9000,
-            "h": 2100,
-            "z": 6,
+            "h": 1300,
+            "z": 7,
             "visible": True,
             "orientation": "vertical",
             "hide_text": False,
@@ -671,6 +683,7 @@ class AppSettings:
     stage_display_show_remaining: bool = True
     stage_display_show_progress_bar: bool = True
     stage_display_show_song_name: bool = True
+    stage_display_show_lyric: bool = True
     stage_display_show_next_song: bool = True
     stage_display_gadgets: dict[str, dict[str, int | bool | str]] = field(default_factory=default_stage_display_gadgets)
     stage_display_text_source: str = "caption"
@@ -967,6 +980,7 @@ def save_settings(settings: AppSettings) -> None:
         "stage_display_show_remaining": "1" if settings.stage_display_show_remaining else "0",
         "stage_display_show_progress_bar": "1" if settings.stage_display_show_progress_bar else "0",
         "stage_display_show_song_name": "1" if settings.stage_display_show_song_name else "0",
+        "stage_display_show_lyric": "1" if settings.stage_display_show_lyric else "0",
         "stage_display_show_next_song": "1" if settings.stage_display_show_next_song else "0",
         "stage_display_gadgets": json.dumps(
             _normalize_stage_display_gadgets(settings.stage_display_gadgets),
@@ -1146,6 +1160,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         "remaining",
         "progress_bar",
         "song_name",
+        "lyric",
         "next_song",
     }
     stage_display_layout = [
@@ -1181,6 +1196,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         "remaining": _get_bool(section, "stage_display_show_remaining", True),
         "progress_bar": _get_bool(section, "stage_display_show_progress_bar", True),
         "song_name": _get_bool(section, "stage_display_show_song_name", True),
+        "lyric": _get_bool(section, "stage_display_show_lyric", True),
         "next_song": _get_bool(section, "stage_display_show_next_song", True),
     }
     stage_display_gadgets = _normalize_stage_display_gadgets(
@@ -1461,6 +1477,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_show_remaining=stage_display_visibility["remaining"],
         stage_display_show_progress_bar=stage_display_visibility["progress_bar"],
         stage_display_show_song_name=stage_display_visibility["song_name"],
+        stage_display_show_lyric=stage_display_visibility["lyric"],
         stage_display_show_next_song=stage_display_visibility["next_song"],
         stage_display_gadgets=stage_display_gadgets,
         stage_display_text_source=stage_display_text_source,

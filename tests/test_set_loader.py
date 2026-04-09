@@ -220,3 +220,28 @@ def test_load_set_prefers_pyssp_cue_fields_over_legacy_cs_ce(tmp_path):
     assert slot.cue_start_ms == 1000
     assert slot.cue_end_ms == 10000
     assert result.migrated_legacy_cues is False
+
+
+def test_load_set_lyric_file_field(tmp_path):
+    set_path = tmp_path / "lyrics.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "pyssplyric1=C:\\\\Lyrics\\\\song1.lrc",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.lyric_file == "C:\\Lyrics\\song1.lrc"

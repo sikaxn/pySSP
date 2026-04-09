@@ -18,6 +18,7 @@ STAGE_DISPLAY_GADGET_SPECS: List[Tuple[str, str]] = [
     ("remaining", "Remaining"),
     ("progress_bar", "Progress Bar"),
     ("song_name", "Song Name"),
+    ("lyric", "Lyric"),
     ("next_song", "Next Song"),
 ]
 STAGE_DISPLAY_GADGET_KEYS = [key for key, _label in STAGE_DISPLAY_GADGET_SPECS]
@@ -95,8 +96,19 @@ def default_stage_display_gadgets() -> Dict[str, Dict[str, int | bool | str]]:
             "x": 500,
             "y": 4300,
             "w": 9000,
-            "h": 2100,
+            "h": 1500,
             "z": 5,
+            "visible": True,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "lyric": {
+            "x": 500,
+            "y": 5900,
+            "w": 9000,
+            "h": 1700,
+            "z": 6,
             "visible": True,
             "orientation": "vertical",
             "hide_text": False,
@@ -104,10 +116,10 @@ def default_stage_display_gadgets() -> Dict[str, Dict[str, int | bool | str]]:
         },
         "next_song": {
             "x": 500,
-            "y": 6800,
+            "y": 7700,
             "w": 9000,
-            "h": 2100,
-            "z": 6,
+            "h": 1300,
+            "z": 7,
             "visible": True,
             "orientation": "vertical",
             "hide_text": False,
@@ -499,6 +511,7 @@ class StageDisplayWindow(QWidget):
         remaining: str,
         progress_percent: int,
         song_name: str,
+        lyric: str,
         next_song: str,
         progress_text: str = "",
         progress_style: str = "",
@@ -511,6 +524,7 @@ class StageDisplayWindow(QWidget):
             "remaining": remaining,
             "progress_bar": progress_text or f"{max(0, min(100, int(progress_percent)))}%",
             "song_name": song_name,
+            "lyric": lyric,
             "next_song": next_song,
         }
         for key, value in values.items():

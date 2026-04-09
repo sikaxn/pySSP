@@ -21,6 +21,7 @@ class SetSlotData:
     file_path: str = ""
     title: str = ""
     notes: str = ""
+    lyric_file: str = ""
     duration_ms: int = 0
     copied_to_cue: bool = False
     custom_color: Optional[str] = None
@@ -101,6 +102,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
+            lyric_file = section.get(f"pyssplyric{i}", "").strip()
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -127,6 +129,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 file_path=path,
                 title=title,
                 notes=notes,
+                lyric_file=lyric_file,
                 duration_ms=duration,
                 copied_to_cue=copied,
                 custom_color=custom_color,

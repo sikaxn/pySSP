@@ -115,6 +115,7 @@ from pyssp.midi_control import (
     normalize_midi_binding,
     split_midi_binding,
 )
+from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,
@@ -134,6 +135,8 @@ from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.options_dialog import OptionsDialog
+from pyssp.ui.link_lyric_dialog import LinkLyricDialog
+from pyssp.ui.lyric_display import LyricDisplayWindow
 from pyssp.ui.timecode_setup_dialog import TimecodeSetupDialog
 from pyssp.ui.stage_display import (
     StageDisplayWindow as GadgetStageDisplayWindow,
@@ -268,6 +271,7 @@ class SoundButtonData:
     file_path: str = ""
     title: str = ""
     notes: str = ""
+    lyric_file: str = ""
     duration_ms: int = 0
     custom_color: Optional[str] = None
     highlighted: bool = False
@@ -1901,6 +1905,7 @@ class MainWindow(QMainWindow):
                 "remaining": bool(getattr(self.settings, "stage_display_show_remaining", True)),
                 "progress_bar": bool(getattr(self.settings, "stage_display_show_progress_bar", True)),
                 "song_name": bool(getattr(self.settings, "stage_display_show_song_name", True)),
+                "lyric": bool(getattr(self.settings, "stage_display_show_lyric", True)),
                 "next_song": bool(getattr(self.settings, "stage_display_show_next_song", True)),
             }
         )
@@ -2233,6 +2238,11 @@ class MainWindow(QMainWindow):
         self._info_notice_token = 0
         self._midi_connection_warning_token = 0
         self._stage_display_window: Optional[GadgetStageDisplayWindow] = None
+        self._stage_lyric_cache_path: str = ""
+        self._stage_lyric_cache_mtime: float = -1.0
+        self._stage_lyric_cache_lines: List[LyricLine] = []
+        self._stage_lyric_cache_error: str = ""
+        self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._hover_slot_index: Optional[int] = None
         self._stage_alert_dialog: Optional[QDialog] = None
         self._stage_alert_text_edit: Optional[QPlainTextEdit] = None
@@ -2853,15 +2863,18 @@ class MainWindow(QMainWindow):
         self._menu_actions["options"] = options_action
 
         display_menu = self.menuBar().addMenu("Display")
-        show_display_action = QAction("Show Display", self)
+        show_display_action = QAction("Show Stage Display", self)
         show_display_action.triggered.connect(self._show_stage_display)
         display_menu.addAction(show_display_action)
-        stage_display_setting_action = QAction("Stage Display Setting", self)
-        stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage Display"))
-        display_menu.addAction(stage_display_setting_action)
         send_alert_action = QAction("Send Alert", self)
         send_alert_action.triggered.connect(self._open_stage_alert_panel)
         display_menu.addAction(send_alert_action)
+        lyric_display_action = QAction("Open Lyric Display", self)
+        lyric_display_action.triggered.connect(self._open_lyric_display)
+        display_menu.addAction(lyric_display_action)
+        stage_display_setting_action = QAction("Stage Display Setting", self)
+        stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage Display"))
+        display_menu.addAction(stage_display_setting_action)
 
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
@@ -2888,6 +2901,10 @@ class MainWindow(QMainWindow):
         verify_sound_buttons_action = QAction("Verify Sound Buttons", self)
         verify_sound_buttons_action.triggered.connect(self._run_verify_sound_buttons)
         tools_menu.addAction(verify_sound_buttons_action)
+
+        scan_sound_button_lyrics_action = QAction("Scan Sound Buttons Lyrics", self)
+        scan_sound_button_lyrics_action.triggered.connect(self._scan_sound_button_lyrics)
+        tools_menu.addAction(scan_sound_button_lyrics_action)
 
         disable_playlist_all_pages_action = QAction("Disable Play List on All Pages", self)
         disable_playlist_all_pages_action.triggered.connect(self._disable_playlist_on_all_pages)
@@ -3030,7 +3047,17 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_stage_display_layout(values: List[str]) -> List[str]:
-        valid = ["current_time", "alert", "total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        valid = [
+            "current_time",
+            "alert",
+            "total_time",
+            "elapsed",
+            "remaining",
+            "progress_bar",
+            "song_name",
+            "lyric",
+            "next_song",
+        ]
         output: List[str] = []
         for raw in list(values or []):
             key = str(raw or "").strip().lower()
@@ -3043,7 +3070,17 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_stage_display_visibility(values: Dict[str, bool]) -> Dict[str, bool]:
-        valid = ["current_time", "alert", "total_time", "elapsed", "remaining", "progress_bar", "song_name", "next_song"]
+        valid = [
+            "current_time",
+            "alert",
+            "total_time",
+            "elapsed",
+            "remaining",
+            "progress_bar",
+            "song_name",
+            "lyric",
+            "next_song",
+        ]
         output: Dict[str, bool] = {}
         for key in valid:
             output[key] = bool(values.get(key, True))
@@ -4383,8 +4420,14 @@ class MainWindow(QMainWindow):
                 cancelled = True
                 break
             progress.setLabelText(f"Checking {location} - Button {slot_index + 1}...")
-            cause = slot_cause(slot)
-            if cause:
+            causes: List[str] = []
+            audio_cause = slot_cause(slot)
+            if audio_cause:
+                causes.append(audio_cause)
+            lyric_cause = self._diagnose_slot_lyric_issue(slot)
+            if lyric_cause:
+                causes.append(lyric_cause)
+            if causes:
                 title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
                 matches.append(
                     {
@@ -4394,7 +4437,7 @@ class MainWindow(QMainWindow):
                         "title": title,
                         "file_path": slot.file_path,
                         "location": location,
-                        "cause": cause,
+                        "cause": "; ".join(causes),
                     }
                 )
             processed += 1
@@ -4427,6 +4470,88 @@ class MainWindow(QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()
+
+    def _scan_sound_button_lyrics(self) -> None:
+        entries: List[Tuple[str, int, int, SoundButtonData, str]] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                location = self._page_display_name(group, page_index)
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    entries.append((group, page_index, slot_index, slot, location))
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            entries.append(("Q", 0, slot_index, slot, "Cue Page"))
+
+        total = len(entries)
+        if total <= 0:
+            self._show_info_notice_banner("No sound buttons assigned.")
+            return
+
+        progress = QProgressDialog("Scanning lyric files...", "Cancel", 0, max(1, total), self)
+        progress.setWindowTitle("Scan Sound Buttons Lyrics")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        processed = 0
+        cancelled = False
+        rows: List[Tuple[str, str]] = []
+        refs: List[SoundButtonData] = []
+        for _group, _page, slot_index, slot, location in entries:
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(f"Scanning {location} - Button {slot_index + 1}...")
+            if str(slot.lyric_file or "").strip():
+                processed += 1
+                progress.setValue(processed)
+                QApplication.processEvents()
+                continue
+            candidate = self._find_matching_lyric_file(slot.file_path)
+            if candidate:
+                rows.append((slot.file_path, candidate))
+                refs.append(slot)
+            processed += 1
+            progress.setValue(processed)
+            QApplication.processEvents()
+        progress.close()
+
+        if cancelled:
+            self._show_info_notice_banner(f"Lyric scan cancelled ({processed}/{total}).")
+            return
+        if not rows:
+            self._show_info_notice_banner("No matching lyric files found.")
+            return
+
+        dialog = LinkLyricDialog(rows, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        flags = dialog.link_flags()
+        changed = False
+        linked = 0
+        unlinked = 0
+        for idx, slot in enumerate(refs):
+            candidate = rows[idx][1]
+            should_link = idx < len(flags) and bool(flags[idx])
+            next_value = candidate if should_link else ""
+            if str(slot.lyric_file or "").strip() != next_value:
+                slot.lyric_file = next_value
+                changed = True
+                if should_link:
+                    linked += 1
+                else:
+                    unlinked += 1
+
+        if changed:
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            self._show_save_notice_banner(f"Lyrics scan complete. Linked: {linked}, Unlinked: {unlinked}.")
+            return
+        self._show_info_notice_banner("Lyrics scan complete. No changes.")
 
     def _diagnose_sound_button_issue(self, file_path: str) -> Optional[str]:
         path = str(file_path or "").strip()
@@ -5404,6 +5529,7 @@ class MainWindow(QMainWindow):
                     file_path=slot.file_path,
                     title=slot.title,
                     notes=slot.notes,
+                    lyric_file=slot.lyric_file,
                     duration_ms=slot.duration_ms,
                     custom_color=slot.custom_color,
                     highlighted=slot.highlighted,
@@ -5437,6 +5563,7 @@ class MainWindow(QMainWindow):
                 file_path=slot.file_path,
                 title=slot.title,
                 notes=slot.notes,
+                lyric_file=slot.lyric_file,
                 duration_ms=slot.duration_ms,
                 custom_color=slot.custom_color,
                 highlighted=slot.highlighted,
@@ -5569,6 +5696,9 @@ class MainWindow(QMainWindow):
             midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
             if midi_hotkey_code:
                 lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+            lyric_file = clean_set_value(slot.lyric_file)
+            if lyric_file:
+                lines.append(f"pyssplyric{slot_index}={lyric_file}")
             lines.append(f"activity{slot_index}={'2' if slot.played else '8'}")
             lines.append(f"co{slot_index}={to_set_color_value(slot.custom_color)}")
             if slot.copied_to_cue:
@@ -5661,6 +5791,7 @@ class MainWindow(QMainWindow):
                 file_path=path,
                 title=title,
                 notes=notes,
+                lyric_file=section.get(f"pyssplyric{i}", "").strip(),
                 duration_ms=duration,
                 custom_color=color,
                 played=played,
@@ -6192,6 +6323,7 @@ class MainWindow(QMainWindow):
             file_path=slot.file_path,
             title=slot.title,
             notes=slot.notes,
+            lyric_file=slot.lyric_file,
             duration_ms=slot.duration_ms,
             custom_color=slot.custom_color,
             highlighted=slot.highlighted,
@@ -6221,6 +6353,7 @@ class MainWindow(QMainWindow):
             file_path=slot.file_path,
             caption=slot.title,
             notes=slot.notes,
+            lyric_file=slot.lyric_file,
             volume_override_pct=slot.volume_override_pct,
             sound_hotkey=slot.sound_hotkey,
             sound_midi_hotkey=slot.sound_midi_hotkey,
@@ -6237,7 +6370,7 @@ class MainWindow(QMainWindow):
         self._midi_context_block_actions = False
         if not accepted:
             return
-        file_path, caption, notes, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
+        file_path, caption, notes, lyric_file, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
@@ -6266,6 +6399,7 @@ class MainWindow(QMainWindow):
         slot.file_path = file_path
         slot.title = caption or os.path.splitext(os.path.basename(file_path))[0]
         slot.notes = notes
+        slot.lyric_file = lyric_file
         slot.marker = False
         slot.played = False
         slot.activity_code = "8"
@@ -6420,6 +6554,9 @@ class MainWindow(QMainWindow):
         )
         if not file_paths:
             return
+        lyric_links = self._prompt_lyric_link_selection(file_paths)
+        if lyric_links is None:
+            return
         self.settings.last_sound_dir = os.path.dirname(file_paths[0])
         self._save_settings()
 
@@ -6432,11 +6569,13 @@ class MainWindow(QMainWindow):
             is_unused = (not target.assigned) and (not target.marker) and (not target.title.strip()) and (not target.notes.strip())
             if not is_unused:
                 continue
-            file_path = file_paths[next_file_idx]
+            file_idx = next_file_idx
+            file_path = file_paths[file_idx]
             next_file_idx += 1
             target.file_path = file_path
             target.title = os.path.splitext(os.path.basename(file_path))[0]
             target.notes = ""
+            target.lyric_file = lyric_links[file_idx] if file_idx < len(lyric_links) else ""
             target.duration_ms = 0
             target.custom_color = None
             target.marker = False
@@ -6451,6 +6590,55 @@ class MainWindow(QMainWindow):
             self._set_dirty(True)
             self._refresh_page_list()
             self._refresh_sound_grid()
+
+    def _prompt_lyric_link_selection(self, audio_files: List[str]) -> Optional[List[str]]:
+        candidates = [self._find_matching_lyric_file(path) for path in audio_files]
+        if not any(candidates):
+            return ["" for _ in audio_files]
+        rows = list(zip(audio_files, candidates))
+        dialog = LinkLyricDialog(rows, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        flags = dialog.link_flags()
+        linked: List[str] = []
+        for idx, candidate in enumerate(candidates):
+            should_link = idx < len(flags) and bool(flags[idx])
+            linked.append(candidate if (should_link and candidate) else "")
+        return linked
+
+    def _find_matching_lyric_file(self, audio_path: str) -> str:
+        path = str(audio_path or "").strip()
+        if not path:
+            return ""
+        directory = os.path.dirname(path)
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if not directory or not stem:
+            return ""
+        matches: List[str] = []
+        try:
+            for name in os.listdir(directory):
+                base, ext = os.path.splitext(name)
+                if base.casefold() != stem.casefold():
+                    continue
+                if ext.lower() not in {".lrc", ".srt"}:
+                    continue
+                full = os.path.join(directory, name)
+                if os.path.isfile(full):
+                    matches.append(full)
+        except OSError:
+            return ""
+        if not matches:
+            return ""
+        matches.sort(key=lambda value: (0 if os.path.splitext(value)[1].lower() == ".lrc" else 1, value.casefold()))
+        return matches[0]
+
+    def _diagnose_slot_lyric_issue(self, slot: SoundButtonData) -> Optional[str]:
+        linked_path = str(slot.lyric_file or "").strip()
+        if not linked_path:
+            return None
+        if os.path.exists(linked_path):
+            return None
+        return "Linked lyric file path is missing."
 
     def _verify_slot(self, slot: SoundButtonData) -> None:
         if slot.missing:
@@ -7372,6 +7560,7 @@ class MainWindow(QMainWindow):
             self._update_now_playing_label("")
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+        self._refresh_lyric_display()
 
     def _stop_player_internal(self, player: ExternalMediaPlayer) -> None:
         self._ignore_state_changes += 1
@@ -7443,6 +7632,7 @@ class MainWindow(QMainWindow):
         self.left_meter.setLevel(self._vu_levels[0])
         self.right_meter.setLevel(self._vu_levels[1])
         self._refresh_stage_display()
+        self._refresh_lyric_display()
 
     def _update_group_status(self) -> None:
         if self.cue_mode:
@@ -7496,6 +7686,45 @@ class MainWindow(QMainWindow):
         self._stage_display_window.show()
         self._stage_display_window.raise_()
         self._stage_display_window.activateWindow()
+
+    def _open_lyric_display(self) -> None:
+        if self._lyric_display_window is None:
+            self._lyric_display_window = LyricDisplayWindow(self)
+            self._lyric_display_window.destroyed.connect(self._on_lyric_display_destroyed)
+        self._lyric_display_window.retranslate_ui()
+        self._lyric_display_window.show()
+        self._lyric_display_window.raise_()
+        self._lyric_display_window.activateWindow()
+        self._refresh_lyric_display(force=True)
+
+    def _on_lyric_display_destroyed(self, _obj=None) -> None:
+        self._lyric_display_window = None
+
+    def _refresh_lyric_display(self, force: bool = False) -> None:
+        if self._lyric_display_window is None:
+            return
+        if not self._lyric_display_window.isVisible() and not force:
+            return
+        has_active_track = False
+        lyric_path = ""
+        position_ms = max(0, int(self.seek_slider.value()))
+        if self.current_playing is not None:
+            slot = self._slot_for_key(self.current_playing)
+            if slot is not None:
+                has_active_track = True
+                lyric_path = str(slot.lyric_file or "").strip()
+                player = self._player_for_slot_key(self.current_playing)
+                if player is not None:
+                    try:
+                        position_ms = max(0, int(player.position()))
+                    except Exception:
+                        position_ms = max(0, int(self.seek_slider.value()))
+        self._lyric_display_window.update_playback_state(
+            has_active_track=has_active_track,
+            lyric_path=lyric_path,
+            position_ms=position_ms,
+            force=force,
+        )
 
     def _open_stage_alert_panel(self) -> None:
         if self._stage_alert_dialog is None:
@@ -7612,6 +7841,7 @@ class MainWindow(QMainWindow):
             slot = self._slot_for_key(self.current_playing)
             if slot is not None:
                 song_name = self._build_stage_slot_text(slot) or "-"
+        lyric = self._stage_display_current_lyric()
         next_song = self._next_stage_song_name()
         self._stage_display_window.update_values(
             total_time=total_text,
@@ -7619,6 +7849,7 @@ class MainWindow(QMainWindow):
             remaining=remaining_text,
             progress_percent=progress,
             song_name=song_name,
+            lyric=lyric,
             next_song=next_song,
             progress_text=self.progress_label.text().strip(),
             progress_style=self._build_progress_bar_stylesheet(progress_ratio, cue_in_ms, cue_out_ms),
@@ -7680,6 +7911,49 @@ class MainWindow(QMainWindow):
         if not slot.assigned or slot.marker:
             return "-"
         return self._build_stage_slot_text(slot) or "-"
+
+    def _stage_display_current_lyric(self) -> str:
+        if self.current_playing is None:
+            return "-"
+        slot = self._slot_for_key(self.current_playing)
+        if slot is None:
+            return "-"
+        lyric_path = str(slot.lyric_file or "").strip()
+        if not lyric_path:
+            return "-"
+        lines, error = self._load_stage_lyric_lines(lyric_path)
+        if error or not lines:
+            return "-"
+        player = self._player_for_slot_key(self.current_playing)
+        if player is not None:
+            try:
+                position_ms = max(0, int(player.position()))
+            except Exception:
+                position_ms = max(0, int(self.seek_slider.value()))
+        else:
+            position_ms = max(0, int(self.seek_slider.value()))
+        text = line_for_position(lines, position_ms)
+        return text.strip() if text and text.strip() else "-"
+
+    def _load_stage_lyric_lines(self, lyric_path: str) -> tuple[List[LyricLine], str]:
+        mtime = -1.0
+        try:
+            mtime = os.path.getmtime(lyric_path)
+        except OSError:
+            return [], f"Lyric file not found:\n{lyric_path}"
+        if lyric_path == self._stage_lyric_cache_path and abs(mtime - self._stage_lyric_cache_mtime) < 0.0001:
+            return self._stage_lyric_cache_lines, self._stage_lyric_cache_error
+        try:
+            lines = parse_lyric_file(lyric_path)
+            error = ""
+        except Exception as exc:
+            lines = []
+            error = f"Failed to read lyric file:\n{exc}"
+        self._stage_lyric_cache_path = lyric_path
+        self._stage_lyric_cache_mtime = mtime
+        self._stage_lyric_cache_lines = lines
+        self._stage_lyric_cache_error = error
+        return lines, error
 
     def _next_slot_for_next_action(self, blocked: Optional[set[int]] = None) -> Optional[int]:
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
@@ -7853,6 +8127,7 @@ class MainWindow(QMainWindow):
                     file_path=slot.file_path,
                     title=slot.title,
                     notes=slot.notes,
+                    lyric_file=slot.lyric_file,
                     duration_ms=slot.duration_ms,
                     custom_color=slot.custom_color,
                     played=slot.played,
@@ -10170,6 +10445,7 @@ class MainWindow(QMainWindow):
         self._refresh_main_jog_meta(display, total_ms)
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+        self._refresh_lyric_display()
 
     def _refresh_main_jog_meta(self, display_ms: int, total_ms: int) -> None:
         cue_in_ms, cue_out_ms = self._current_transport_cue_bounds()
@@ -10363,6 +10639,7 @@ class MainWindow(QMainWindow):
         self.seek_slider.setValue(0)
         self.seek_slider.setRange(0, 0)
         self._vu_levels = [0.0, 0.0]
+        self._refresh_lyric_display(force=True)
         self._save_settings()
 
     def _save_set(self) -> None:
@@ -10477,6 +10754,9 @@ class MainWindow(QMainWindow):
                         midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
                         if midi_hotkey_code:
                             lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+                        lyric_file = clean_set_value(slot.lyric_file)
+                        if lyric_file:
+                            lines.append(f"pyssplyric{slot_index}={lyric_file}")
                         cue_start, cue_end = self._cue_time_fields_for_set(slot)
                         if cue_start is not None:
                             lines.append(f"pysspcuestart{slot_index}={cue_start}")
@@ -10539,6 +10819,7 @@ class MainWindow(QMainWindow):
                         file_path=src.file_path,
                         title=src.title,
                         notes=src.notes,
+                        lyric_file=src.lyric_file,
                         duration_ms=src.duration_ms,
                         custom_color=src.custom_color,
                         played=src.played,
@@ -10579,6 +10860,7 @@ class MainWindow(QMainWindow):
         self._update_page_status()
         self._update_now_playing_label("")
         self._set_dirty(bool(result.migrated_legacy_cues))
+        self._refresh_lyric_display(force=True)
         self.settings.last_set_path = file_path
         self.settings.last_open_dir = os.path.dirname(file_path)
         self.settings.last_group = self.current_group
@@ -10867,6 +11149,7 @@ class MainWindow(QMainWindow):
         self.settings.stage_display_show_remaining = bool(self.stage_display_visibility.get("remaining", True))
         self.settings.stage_display_show_progress_bar = bool(self.stage_display_visibility.get("progress_bar", True))
         self.settings.stage_display_show_song_name = bool(self.stage_display_visibility.get("song_name", True))
+        self.settings.stage_display_show_lyric = bool(self.stage_display_visibility.get("lyric", True))
         self.settings.stage_display_show_next_song = bool(self.stage_display_visibility.get("next_song", True))
         self.settings.stage_display_gadgets = normalize_stage_display_gadgets(self.stage_display_gadgets)
         self.settings.stage_display_text_source = self.stage_display_text_source
@@ -11522,6 +11805,11 @@ class MainWindow(QMainWindow):
         try:
             if self._stage_display_window is not None:
                 self._stage_display_window.close()
+        except Exception:
+            pass
+        try:
+            if self._lyric_display_window is not None:
+                self._lyric_display_window.close()
         except Exception:
             pass
         self._stop_web_remote_service()

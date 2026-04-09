@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Lyric Overlay</title>
+  <link rel="shortcut icon" type="image/x-icon" href="../shared/pyssp.ico" />
+  <link rel="stylesheet" href="stage.css" />
+  <script type="text/javascript" src="../shared/jquery.min.js"></script>
+  <script type="text/javascript" src="stage.js"></script>
+</head>
+<body>
+  <!-- Used by stage.js when at the end of the item -->
+  <input type="hidden" id="next-text" value="next" />
+
+  <!-- Overlay container for OBS / vMix -->
+  <div id="overlay-container">
+    <div id="lyric-container">
+  <div id="lyricA" class="lyric-layer"></div>
+  <div id="lyricB" class="lyric-layer"></div>
+</div>
+
+  </div>
+
+  <!-- Kept for compatibility with stage.js, but hidden via CSS -->
+  <div id="right" aria-hidden="true">
+    <div id="clock"></div>
+    <div id="notes"></div>
+  </div>
+  <div id="verseorder" aria-hidden="true"></div>
+  <div id="nextslide" aria-hidden="true"></div>
+</body>
+</html>

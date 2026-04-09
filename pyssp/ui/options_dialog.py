@@ -754,6 +754,7 @@ class OptionsDialog(QDialog):
         "talk_blink_button": False,
         "web_remote_enabled": False,
         "web_remote_port": 5050,
+        "web_remote_ws_port": 5051,
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
         "timecode_mode": TIMECODE_MODE_FOLLOW,
@@ -2597,7 +2598,12 @@ class OptionsDialog(QDialog):
 
         return page
 
-    def _build_web_remote_page(self, web_remote_enabled: bool, web_remote_port: int, web_remote_url: str) -> QWidget:
+    def _build_web_remote_page(
+        self,
+        web_remote_enabled: bool,
+        web_remote_port: int,
+        web_remote_url: str,
+    ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         form = QFormLayout()
@@ -2605,9 +2611,12 @@ class OptionsDialog(QDialog):
         self.web_remote_enabled_checkbox.setChecked(web_remote_enabled)
         form.addRow("Web Remote:", self.web_remote_enabled_checkbox)
         self.web_remote_port_spin = QSpinBox()
-        self.web_remote_port_spin.setRange(1, 65535)
-        self.web_remote_port_spin.setValue(max(1, min(65535, int(web_remote_port))))
+        self.web_remote_port_spin.setRange(1, 65534)
+        self.web_remote_port_spin.setValue(max(1, min(65534, int(web_remote_port))))
         form.addRow("Port:", self.web_remote_port_spin)
+        self.web_remote_ws_port_value = QLabel("")
+        self.web_remote_ws_port_value.setWordWrap(True)
+        form.addRow("WS Port (auto):", self.web_remote_ws_port_value)
         parsed = urlparse(web_remote_url.strip() or "http://127.0.0.1:5050/")
         self._web_remote_url_scheme = parsed.scheme or "http"
         self._web_remote_url_host = parsed.hostname or "127.0.0.1"
@@ -2617,6 +2626,7 @@ class OptionsDialog(QDialog):
         self.web_remote_url_value.setWordWrap(True)
         form.addRow("Open URL:", self.web_remote_url_value)
         self._set_web_remote_url_label(self._build_web_remote_url_text(self.web_remote_port_spin.value()))
+        self._set_web_remote_ws_port_label(self._build_web_remote_ws_port_text(self.web_remote_port_spin.value()))
         layout.addLayout(form)
 
         companion_group = QGroupBox(tr("Bitfocus Companion"))
@@ -3147,11 +3157,22 @@ class OptionsDialog(QDialog):
     def _build_web_remote_url_text(self, port: int) -> str:
         return f"{self._web_remote_url_scheme}://{self._web_remote_url_host}:{port}/"
 
+    @staticmethod
+    def _build_web_remote_ws_port_text(port: int) -> str:
+        token = int(port)
+        if token >= 65535:
+            return "Unavailable (choose Web Remote port 65534 or lower)"
+        return str(token + 1)
+
     def _set_web_remote_url_label(self, url: str) -> None:
         self.web_remote_url_value.setText(f'<a href="{url}">{url}</a>')
 
+    def _set_web_remote_ws_port_label(self, ws_port_text: str) -> None:
+        self.web_remote_ws_port_value.setText(ws_port_text)
+
     def _update_web_remote_page_labels(self, port: int) -> None:
         self._set_web_remote_url_label(self._build_web_remote_url_text(port))
+        self._set_web_remote_ws_port_label(self._build_web_remote_ws_port_text(port))
         self._set_web_remote_companion_text(port)
 
     def _set_web_remote_companion_text(self, port: int) -> None:
@@ -4577,6 +4598,7 @@ class OptionsDialog(QDialog):
         d = self._DEFAULTS
         self.web_remote_enabled_checkbox.setChecked(bool(d["web_remote_enabled"]))
         self.web_remote_port_spin.setValue(int(d["web_remote_port"]))
+        self._update_web_remote_page_labels(int(self.web_remote_port_spin.value()))
 
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS

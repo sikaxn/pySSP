@@ -487,6 +487,7 @@ class AppSettings:
     candidate_error_action: str = "stop_playback"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
+    web_remote_ws_port: int = 5051
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
     timecode_mode: str = "follow_media"
@@ -790,6 +791,7 @@ def save_settings(settings: AppSettings) -> None:
         "candidate_error_action": settings.candidate_error_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
+        "web_remote_ws_port": str(settings.web_remote_ws_port),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
         "timecode_midi_output_device": settings.timecode_midi_output_device,
         "timecode_mode": settings.timecode_mode,
@@ -1079,6 +1081,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if candidate_error_action not in {"stop_playback", "keep_playing"}:
         candidate_error_action = "stop_playback"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
+    web_remote_ws_port = _clamp_int(_get_int(section, "web_remote_ws_port", web_remote_port + 1), 1, 65535)
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
     timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
@@ -1304,6 +1307,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         candidate_error_action=candidate_error_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
+        web_remote_ws_port=web_remote_ws_port,
         timecode_audio_output_device=timecode_audio_output_device,
         timecode_midi_output_device=timecode_midi_output_device,
         timecode_mode=timecode_mode,

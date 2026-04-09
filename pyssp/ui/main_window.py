@@ -1847,7 +1847,8 @@ class MainWindow(QMainWindow):
         )
         self.web_remote_enabled = self.settings.web_remote_enabled
         self.web_remote_host = "0.0.0.0"
-        self.web_remote_port = max(1, min(65535, int(self.settings.web_remote_port or 5050)))
+        self.web_remote_port = max(1, min(65534, int(self.settings.web_remote_port or 5050)))
+        self.web_remote_ws_port = int(self.web_remote_port) + 1
         self._local_ip_cache = "127.0.0.1"
         self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
@@ -2904,6 +2905,19 @@ class MainWindow(QMainWindow):
         lyric_display_action = QAction("Open Lyric Display", self)
         lyric_display_action.triggered.connect(self._open_lyric_display)
         display_menu.addAction(lyric_display_action)
+        web_lyric_display_menu = display_menu.addMenu("Web Lyric Display")
+        web_lyric_caption_action = QAction("Caption", self)
+        web_lyric_caption_action.triggered.connect(lambda: self._open_web_lyric_display("caption"))
+        web_lyric_display_menu.addAction(web_lyric_caption_action)
+        web_lyric_overhead_action = QAction("Overhead", self)
+        web_lyric_overhead_action.triggered.connect(lambda: self._open_web_lyric_display("overhead"))
+        web_lyric_display_menu.addAction(web_lyric_overhead_action)
+        web_lyric_banner_action = QAction("Banner", self)
+        web_lyric_banner_action.triggered.connect(lambda: self._open_web_lyric_display("banner"))
+        web_lyric_display_menu.addAction(web_lyric_banner_action)
+        web_lyric_vmix_action = QAction("vMix Overlay", self)
+        web_lyric_vmix_action.triggered.connect(lambda: self._open_web_lyric_display("vmixoverlay"))
+        web_lyric_display_menu.addAction(web_lyric_vmix_action)
         stage_display_setting_action = QAction("Stage Display Setting", self)
         stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage Display"))
         display_menu.addAction(stage_display_setting_action)
@@ -4112,6 +4126,19 @@ class MainWindow(QMainWindow):
                 self,
                 "Help Open Failed",
                 f"Could not open URL with the default browser.\n\nURL:\n{releases_url.toString()}",
+            )
+
+    def _open_web_lyric_display(self, view_name: str) -> None:
+        target = str(view_name or "").strip().lower()
+        if target not in {"caption", "overhead", "banner", "vmixoverlay"}:
+            return
+        base = self._web_remote_open_url().rstrip("/")
+        url = QUrl(f"{base}/lyric/{target}/?ws_port={int(self.web_remote_ws_port)}&ws_path=/ws")
+        if not QDesktopServices.openUrl(url):
+            QMessageBox.warning(
+                self,
+                "Web Lyric Display Open Failed",
+                f"Could not open URL with the default browser.\n\nURL:\n{url.toString()}",
             )
 
     def _open_tips_window(self, startup: bool = False) -> None:
@@ -9295,7 +9322,8 @@ class MainWindow(QMainWindow):
             self._apply_language()
         self._apply_hotkeys()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
-        self.web_remote_port = max(1, min(65535, int(dialog.web_remote_port_spin.value())))
+        self.web_remote_port = max(1, min(65534, int(dialog.web_remote_port_spin.value())))
+        self.web_remote_ws_port = int(self.web_remote_port) + 1
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
@@ -9560,6 +9588,81 @@ class MainWindow(QMainWindow):
             "web_remote_url": self._web_remote_open_url(),
         }
 
+    def _api_primary_playing_key(self) -> Optional[Tuple[str, int, int]]:
+        if self.current_playing is not None:
+            return self.current_playing
+        if self._active_playing_keys:
+            return sorted(self._active_playing_keys)[0]
+        return None
+
+    def _api_lyric_openlp(self) -> dict:
+        slot_key = self._api_primary_playing_key()
+        slides: List[dict] = []
+        current_slide_index = 0
+        item_id = ""
+        service_id = ""
+        current_title = ""
+        current_notes = ""
+
+        if slot_key is not None:
+            slot = self._slot_for_key(slot_key)
+            if slot is not None:
+                item_id = self._format_button_key(slot_key).lower()
+                current_title = self._build_now_playing_text(slot)
+                current_notes = str(slot.notes or "")
+                lyric_path = str(slot.lyric_file or "").strip()
+                if lyric_path:
+                    lines, error = self._load_stage_lyric_lines(lyric_path)
+                    if not error and lines:
+                        position_ms = self._lyric_position_ms_for_key(slot_key)
+                        for idx, line in enumerate(lines):
+                            if line.start_ms <= position_ms:
+                                current_slide_index = idx
+                            text_value = str(line.text or "")
+                            html_value = "<br />".join(html.escape(part) for part in text_value.splitlines())
+                            slides.append(
+                                {
+                                    "title": current_title,
+                                    "text": text_value,
+                                    "html": html_value,
+                                    "img": "",
+                                    "tag": f"L{idx + 1}",
+                                    "selected": False,
+                                }
+                            )
+                        if slides:
+                            current_slide_index = max(0, min(current_slide_index, len(slides) - 1))
+                            slides[current_slide_index]["selected"] = True
+
+        next_song = self._next_stage_song_name()
+        next_title = "" if next_song == "-" else str(next_song or "").strip()
+        service_items: List[dict] = []
+        if current_title:
+            service_items.append({"title": current_title, "notes": current_notes, "selected": True})
+        if next_title:
+            service_items.append({"title": next_title, "notes": "", "selected": False})
+        service_id = "|".join([item_id, current_title, next_title])
+
+        blank = (slot_key is None) or (len(slides) == 0)
+        display = "blank" if blank else "show"
+
+        return {
+            "ws": {
+                "item": item_id,
+                "service": service_id,
+                "slide": int(current_slide_index),
+                "twelve": False,
+                "display": display,
+                "blank": bool(blank),
+                "theme": False,
+            },
+            "live_items": {
+                "item": item_id,
+                "slides": slides,
+            },
+            "service_items": service_items,
+        }
+
     def _resolve_local_ip(self) -> str:
         now = time.perf_counter()
         if (now - float(self._local_ip_cache_at)) < 10.0 and self._local_ip_cache:
@@ -9671,6 +9774,7 @@ class MainWindow(QMainWindow):
         self._update_pause_button_label()
 
     def _apply_web_remote_state(self) -> None:
+        self.web_remote_ws_port = int(self.web_remote_port) + 1
         if not self.web_remote_enabled:
             self._stop_web_remote_service()
             self._update_web_remote_status_label()
@@ -9678,7 +9782,8 @@ class MainWindow(QMainWindow):
         if self._web_remote_server is not None and self._web_remote_server.is_running:
             same_host = self._web_remote_server.host == self.web_remote_host
             same_port = int(self._web_remote_server.port) == int(self.web_remote_port)
-            if same_host and same_port:
+            same_ws_port = int(self._web_remote_server.ws_port) == int(self.web_remote_ws_port)
+            if same_host and same_port and same_ws_port:
                 self._update_web_remote_status_label()
                 return
             self._stop_web_remote_service()
@@ -9692,11 +9797,16 @@ class MainWindow(QMainWindow):
         if self._is_port_listening_by_other_process(self.web_remote_port):
             self._set_web_remote_warning_banner(self._web_remote_port_conflict_text())
             return
+        self.web_remote_ws_port = int(self.web_remote_port) + 1
+        if self._is_port_listening_by_other_process(self.web_remote_ws_port):
+            self._set_web_remote_warning_banner(self._web_remote_ws_port_conflict_text())
+            return
         try:
             self._web_remote_server = WebRemoteServer(
                 dispatch=self._dispatch_web_remote_command_threadsafe,
                 host=self.web_remote_host,
                 port=self.web_remote_port,
+                ws_port=self.web_remote_ws_port,
             )
             self._web_remote_server.start()
             self._set_web_remote_warning_banner("")
@@ -9836,6 +9946,13 @@ class MainWindow(QMainWindow):
             f"{tr('Restart pySSP to resolve the issue.')}"
         )
 
+    def _web_remote_ws_port_conflict_text(self) -> str:
+        return (
+            f"{tr('WEB REMOTE WS PORT CONFLICT:')} {tr('Port')} {self.web_remote_ws_port} {tr('is already in use.')}\n"
+            f"{tr('Change WS Port, disable Web Remote, or close the program using this port.')}\n"
+            f"{tr('Restart pySSP to resolve the issue.')}"
+        )
+
     def _dispatch_web_remote_command_threadsafe(self, command: str, params: dict) -> dict:
         try:
             return self._main_thread_executor.call(lambda: self._handle_web_remote_command(command, params))
@@ -9872,6 +9989,8 @@ class MainWindow(QMainWindow):
             page = self._api_page_state(group, page_index)
             page["buttons"] = self._api_page_buttons(group, page_index)
             return self._api_success(page)
+        if cmd == "query_lyric_openlp":
+            return self._api_success(self._api_lyric_openlp())
         if cmd == "lock":
             self._engage_lock_screen()
             return self._api_success({"screen_locked": True, "automation_locked": False, "state": self._api_state()})
@@ -11473,6 +11592,7 @@ class MainWindow(QMainWindow):
         self.settings.candidate_error_action = self.candidate_error_action
         self.settings.web_remote_enabled = self.web_remote_enabled
         self.settings.web_remote_port = self.web_remote_port
+        self.settings.web_remote_ws_port = self.web_remote_ws_port
         self.settings.timecode_audio_output_device = self.timecode_audio_output_device
         self.settings.timecode_midi_output_device = self.timecode_midi_output_device
         self.settings.timecode_mode = self.timecode_mode

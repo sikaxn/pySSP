@@ -1,0 +1,109 @@
+/******************************************************************************
+ * LED BANNER VIEW (192 px tall, center aligned, supports up to two lines)
+ ******************************************************************************/
+
+@font-face {
+  font-family: "BannerFont";
+  src: url("../shared/NotoSansSC-VariableFont_wght.ttf") format("truetype");
+}
+
+:root {
+  --font-stack:
+    "BannerFont",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Source Han Sans SC",
+    "Source Han Sans TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    sans-serif;
+
+  --banner-height: 192px;
+  --vertical-padding: 8px;
+  --horizontal-padding: 150px;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: black;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-stack);
+}
+
+#banner-container {
+  width: 100%;
+  height: var(--banner-height);
+  padding-top: var(--vertical-padding);
+  padding-bottom: var(--vertical-padding);
+  padding-left: var(--horizontal-padding);
+  padding-right: var(--horizontal-padding);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: black;
+  position: relative;
+  box-sizing: border-box;
+
+  overflow: hidden;   /* <<<< CRITICAL FIX */
+}
+
+.banner-layer {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  max-width: 100%;     /* <<<< CRITICAL FIX */
+  overflow: hidden;    /* <<<< CRITICAL FIX */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding-left: var(--horizontal-padding);
+  padding-right: var(--horizontal-padding);
+  box-sizing: border-box;
+  white-space: pre-line;
+  text-align: center;
+
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.2s linear;
+}
+
+
+#banner-layerA { z-index: 1; }
+#banner-layerB { z-index: 2; }
+
+/* Hidden measurement element */
+#text-measure {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+
+  visibility: hidden;
+
+  white-space: pre-line;
+  overflow: visible;
+  text-align: center;
+  display: inline-block;
+
+  /* IMPORTANT: do NOT clamp font-size here */
+  font-size: 200px; /* JS will overwrite */
+  line-height: 1;
+  color: #fff;
+  font-weight: 700;
+  font-family: var(--font-stack);
+}
+
+
+/* Hide OpenLP originals */
+#right, #clock, #notes, #verseorder, #currentslide, #nextslide {
+  display: none !important;
+}

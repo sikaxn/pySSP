@@ -1,0 +1,150 @@
+/******************************************************************************
+ * Caption Style Stage View (Adaptive 4-line Lyrics + Highlight + Title)
+ ******************************************************************************/
+
+/* Optional local CJK font */
+@font-face {
+  font-family: "CaptionLyric";
+  src: url("../shared/NotoSansSC-VariableFont_wght.ttf") format("truetype");
+}
+
+:root {
+  --font-stack:
+    "CaptionLyric",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Source Han Sans SC",
+    "Source Han Sans TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    sans-serif;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: var(--font-stack);
+}
+
+#caption-container {
+  position: fixed;
+  inset: 0;
+  padding: 3vh 4vw;
+  box-sizing: border-box;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+/* container for 4 lines */
+#lines {
+  width: 100%;
+  text-align: center;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+
+  /* allow dynamic height */
+  flex-grow: 1;
+}
+
+
+.line {
+  color: #ffffff;
+  margin: 1.2vh 0;
+
+  /* Much larger & more adaptive */
+  font-size: clamp(32px, 5vw, 180px);
+  line-height: 1.1;
+
+  /*opacity: 0.65;*/
+  max-width: 90%;
+  word-wrap: break-word;
+}
+
+
+/* current line: slightly larger, bold, no glow */
+.line-current {
+
+  color: #e5ff00;
+
+  font-size: clamp(38px, 6vw, 200px);
+  font-weight: 700;
+  opacity: 1;
+}
+
+#song-title {
+  text-align: center;
+  font-size: clamp(14px, 2vw, 60px);
+  margin-top: 2vh;
+  color: #44ccff;
+  opacity: 0.85;
+}
+
+/* Hide original OpenLP elements */
+#right, #clock, #notes, #verseorder, #currentslide, #nextslide {
+  display: none !important;
+}
+
+/* Image inside caption view */
+.caption-image {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+
+  object-fit: contain;      /* keep aspect ratio */
+  display: block;
+  margin: 0 auto;           /* center horizontally */
+}
+
+#caption-scale-wrapper {
+  flex: 1 1 auto;
+  height: calc(100vh - 60px);  /* leave space for title */
+}
+
+/* IMAGE MODE LAYOUT: make image fill the screen area */
+#caption-container.image-mode {
+  padding: 0; /* optional: removes outer padding for true fullscreen */
+}
+
+#caption-container.image-mode #lines {
+  flex-grow: 1;
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  flex-direction: row;      /* single flex item: the image line */
+  justify-content: center;
+  align-items: center;
+}
+
+#caption-container.image-mode .line {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#caption-container.image-mode .caption-image {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;      /* keep aspect ratio */
+  display: block;
+}

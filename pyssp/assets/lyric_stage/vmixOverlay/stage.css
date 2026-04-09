@@ -1,0 +1,172 @@
+/******************************************************************************
+ * Lyric overlay stage view for OBS / vMix
+ * Shows ONLY the current slide, bottom-centred, over a transparent background.
+ ******************************************************************************/
+
+/* OPTIONAL: Local overlay font with full Latin + CJK support.
+ *
+ * 1. Download a font that supports English + Simplified + Traditional Chinese
+ *    (for example, a Noto Sans CJK or Source Han Sans variant).
+ * 2. Copy the .ttf/.otf file into this same folder.
+ * 3. Rename it to: OverlayLyric-Regular.otf
+ *    OR change the filename below to match your actual file name.
+ */
+@font-face {
+  font-family: "OverlayLyric";
+  src: url("../shared/NotoSansSC-VariableFont_wght.ttf") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* Fallback stack using common CJK system fonts */
+:root {
+  --lyric-font-stack:
+    "OverlayLyric",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "Microsoft YaHei",       /* 简体中文 Windows */
+    "PingFang SC",           /* 简体中文 macOS */
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "Microsoft JhengHei",    /* 繁體中文 Windows */
+    "PingFang TC",           /* 繁體中文 macOS */
+    "Heiti TC",
+    "Source Han Sans SC",
+    "Source Han Sans TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "SimHei",
+    "SimSun",
+    sans-serif;
+}
+
+/* Full-screen overlay, transparent background for OBS Browser source
+ * (enable "Allow transparency" in OBS / set alpha in vMix if needed).
+ */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--lyric-font-stack);
+}
+
+/* Container that positions lyrics near the bottom centre */
+#overlay-container {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;      /* bottom */
+  justify-content: center;    /* centre horizontally */
+  padding: 7vh 6vw;           /* bottom padding so text is above lower edge */
+  box-sizing: border-box;
+  padding-bottom: 150px;
+}
+
+/* Current lyric styling */
+#currentslide {
+  max-width: 80vw;
+  text-align: center;
+  font-size: clamp(32px, 4vw, 64px);
+  line-height: 1.2;
+  color: #ffffff;
+  word-wrap: break-word;
+  /* Make text readable over video using a soft outline/glow */
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 0.8),
+    0 0 8px rgba(0, 0, 0, 0.9),
+    0 0 16px rgba(0, 0, 0, 1);
+}
+
+/* Hide any images that might be part of the slide (we only want lyrics) */
+#currentslide img {
+  display: none;
+}
+
+/* Completely hide the other stage elements; they still get updated by stage.js */
+#right,
+#clock,
+#notes,
+#verseorder,
+#nextslide {
+  display: none !important;
+}
+
+/* Safety: if stage.js ever adds these classes, keep them invisible */
+.currenttag,
+.nextslide {
+  display: none !important;
+}
+
+/* If current lyric is empty, collapse completely */
+#currentslide:empty {
+  display: none;
+}
+
+/* If OpenLP sends only whitespace/newlines, also collapse */
+#currentslide:blank {
+  display: none;
+}
+
+#currentslide {
+  /* existing styles... */
+
+  opacity: 1;
+  transition: opacity 0.08s ease-in-out; /* < 0.1 sec */
+}
+
+/* NEW: container that replaces #currentslide */
+/* Container replacing #currentslide */
+#lyric-container {
+  position: relative;
+
+  /* Match original behavior */
+  width: 100%;
+  max-width: 80vw;
+  text-align: center;
+
+  /* keep at bottom from #overlay-container padding */
+  display: block;
+
+  /* Prevent shrinking */
+  min-height: 1em;
+}
+
+/* TRUE overlay layers (fill entire container) */
+.lyric-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  /* Fill full width like old #currentslide */
+  width: 100%;
+
+  /* Let text wrap properly */
+  white-space: normal;
+  word-wrap: break-word;
+
+  /* Maintain same styling as original */
+  font-size: clamp(32px, 4vw, 64px);
+  line-height: 1.2;
+  color: #fff;
+
+  text-shadow:
+    0 0 4px rgba(0,0,0,.8),
+    0 0 8px rgba(0,0,0,.9),
+    0 0 16px rgba(0,0,0,1);
+
+  opacity: 0;
+  transition: opacity 0.08s linear;
+
+  /* For perfect height: content determines height */
+  display: block;
+}
+
+
+
+#lyricA { z-index: 1; }
+#lyricB { z-index: 2; }

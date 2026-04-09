@@ -129,3 +129,26 @@ def test_seek_routes_dispatch_payload():
     assert response.get_json()["ok"] is True
     assert calls[-1][0] == "seek"
     assert calls[-1][1]["percent"] == 25
+
+
+def test_lyric_stage_routes_and_openlp_api_dispatch():
+    calls = []
+    client = _make_client(calls)
+
+    response = client.get("/lyric/caption", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Audience Caption View" in response.data
+
+    response = client.get("/stage/vmixoverlay", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Lyric Overlay" in response.data
+
+    response = client.get("/lyric/api/v2/controller/live-items")
+    assert response.status_code == 200
+    assert isinstance(response.get_json(), dict)
+    assert calls[-1][0] == "query_lyric_openlp"
+
+    response = client.get("/stage/api/v2/service/items")
+    assert response.status_code == 200
+    assert isinstance(response.get_json(), list)
+    assert calls[-1][0] == "query_lyric_openlp"

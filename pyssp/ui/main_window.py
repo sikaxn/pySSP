@@ -6581,6 +6581,9 @@ class MainWindow(QMainWindow):
             return
         if not slot.assigned or slot.marker:
             return
+        if self._is_playback_in_progress():
+            self._show_info_notice_banner(tr("Stop playback before opening Set Cue Points."))
+            return
         # Guard against transient stop/start events while the cue dialog initializes.
         self._timecode_event_guard_until = time.perf_counter() + 0.40
         dialog = CuePointDialog(
@@ -6607,6 +6610,9 @@ class MainWindow(QMainWindow):
             self._show_info_notice_banner("This sound button is locked.")
             return
         if not slot.assigned or slot.marker:
+            return
+        if self._is_playback_in_progress():
+            self._show_info_notice_banner(tr("Stop playback before opening Lyric Editor."))
             return
 
         lyric_path = str(slot.lyric_file or "").strip()

@@ -67,6 +67,7 @@ class UnpackDialogResult:
     restore_settings: bool
     open_set_after_unpack: bool
     maintain_directory_structure: bool
+    unpack_lyrics: bool
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class UnpackResult:
     extracted_set_path: str
     extracted_settings_path: str
     audio_path_map: dict[str, str]
+    lyric_path_map: dict[str, str]
     manifest: dict
 
 
@@ -123,6 +125,10 @@ class PackAudioLibraryDialog(QDialog):
         self.maintain_structure_checkbox = QCheckBox(tr("Maintain directory structure"), self)
         self.maintain_structure_checkbox.setChecked(True)
         layout.addWidget(self.maintain_structure_checkbox)
+
+        self.pack_lyrics_checkbox = QCheckBox(tr("Pack lyric"), self)
+        self.pack_lyrics_checkbox.setChecked(True)
+        layout.addWidget(self.pack_lyrics_checkbox)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
@@ -188,6 +194,10 @@ class UnpackLibraryDialog(QDialog):
         self.maintain_structure_checkbox.setChecked(True)
         layout.addWidget(self.maintain_structure_checkbox)
 
+        self.unpack_lyrics_checkbox = QCheckBox(tr("Unpack lyric"), self)
+        self.unpack_lyrics_checkbox.setChecked(True)
+        layout.addWidget(self.unpack_lyrics_checkbox)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -226,6 +236,7 @@ class UnpackLibraryDialog(QDialog):
             restore_settings=bool(self.restore_settings_checkbox.isChecked()),
             open_set_after_unpack=bool(self.open_set_checkbox.isChecked()),
             maintain_directory_structure=bool(self.maintain_structure_checkbox.isChecked()),
+            unpack_lyrics=bool(self.unpack_lyrics_checkbox.isChecked()),
         )
 
 
@@ -283,13 +294,25 @@ def default_unpack_directory(package_path: str) -> str:
 
 
 def build_archive_audio_entries(file_paths: list[str], maintain_directory_structure: bool) -> list[PackedAudioEntry]:
+    return _build_archive_entries(file_paths, maintain_directory_structure, root_prefix="audio")
+
+
+def build_archive_lyric_entries(file_paths: list[str], maintain_directory_structure: bool) -> list[PackedAudioEntry]:
+    return _build_archive_entries(file_paths, maintain_directory_structure, root_prefix="lyric")
+
+
+def _build_archive_entries(
+    file_paths: list[str],
+    maintain_directory_structure: bool,
+    root_prefix: str,
+) -> list[PackedAudioEntry]:
     entries: list[PackedAudioEntry] = []
     used_members: set[str] = set()
     for index, source_path in enumerate(file_paths, start=1):
         archive_member = (
-            _structured_archive_member(source_path)
+            _structured_archive_member(source_path, root_prefix=root_prefix)
             if maintain_directory_structure
-            else _flattened_archive_member(source_path, index)
+            else _flattened_archive_member(source_path, index, root_prefix=root_prefix)
         )
         candidate = archive_member
         suffix = 2
@@ -302,7 +325,13 @@ def build_archive_audio_entries(file_paths: list[str], maintain_directory_struct
     return entries
 
 
-def build_manifest(set_member_name: str, audio_entries: list[PackedAudioEntry], settings_included: bool) -> dict:
+def build_manifest(
+    set_member_name: str,
+    audio_entries: list[PackedAudioEntry],
+    settings_included: bool,
+    lyric_entries: Optional[list[PackedAudioEntry]] = None,
+) -> dict:
+    lyric_entries = lyric_entries or []
     return {
         "format": "pyssppak",
         "version": 1,
@@ -315,6 +344,14 @@ def build_manifest(set_member_name: str, audio_entries: list[PackedAudioEntry], 
                 "set_path": entry.set_path,
             }
             for entry in audio_entries
+        ],
+        "lyric_entries": [
+            {
+                "source_name": os.path.basename(entry.source_path),
+                "archive_member": entry.archive_member,
+                "set_path": entry.set_path,
+            }
+            for entry in lyric_entries
         ],
     }
 
@@ -340,20 +377,23 @@ def unpack_pyssppak(
     package_path: str,
     destination_dir: str,
     maintain_directory_structure: bool,
+    unpack_lyrics: bool = True,
     progress_callback=None,
     is_cancelled=None,
 ) -> UnpackResult:
     manifest = read_pyssppak_manifest(package_path)
     audio_entries = manifest.get("audio_entries", []) if isinstance(manifest.get("audio_entries"), list) else []
+    lyric_entries = manifest.get("lyric_entries", []) if isinstance(manifest.get("lyric_entries"), list) else []
     set_member = str(manifest.get("set_member") or "")
     settings_member = str(manifest.get("settings_member") or "")
     if not set_member:
         raise ValueError("Package manifest is missing the packed .set entry.")
 
     os.makedirs(destination_dir, exist_ok=True)
-    total = 1 + len(audio_entries) + (1 if settings_member else 0)
+    total = 1 + len(audio_entries) + ((len(lyric_entries)) if unpack_lyrics else 0) + (1 if settings_member else 0)
     step = 0
     audio_path_map: dict[str, str] = {}
+    lyric_path_map: dict[str, str] = {}
     used_targets: set[str] = set()
 
     with zipfile.ZipFile(package_path, "r") as archive:
@@ -380,6 +420,21 @@ def unpack_pyssppak(
             step += 1
             _report_progress(progress_callback, step, total, f"Extracting {os.path.basename(extracted_audio_path)}...")
 
+        if unpack_lyrics:
+            for item in lyric_entries:
+                _check_cancelled(is_cancelled)
+                if not isinstance(item, dict):
+                    continue
+                archive_member = str(item.get("archive_member") or "")
+                set_path = str(item.get("set_path") or archive_member)
+                if not archive_member:
+                    continue
+                target_path = build_unpack_target_path(destination_dir, archive_member, maintain_directory_structure, used_targets)
+                extracted_lyric_path = _extract_to_file(archive, archive_member, target_path)
+                lyric_path_map[set_path] = extracted_lyric_path
+                step += 1
+                _report_progress(progress_callback, step, total, f"Extracting {os.path.basename(extracted_lyric_path)}...")
+
         extracted_settings_path = ""
         if settings_member:
             _check_cancelled(is_cancelled)
@@ -395,6 +450,7 @@ def unpack_pyssppak(
         extracted_set_path=os.path.abspath(extracted_set_path),
         extracted_settings_path=os.path.abspath(extracted_settings_path) if extracted_settings_path else "",
         audio_path_map=audio_path_map,
+        lyric_path_map=lyric_path_map,
         manifest=manifest,
     )
 
@@ -409,25 +465,42 @@ def build_unpack_target_path(
         target_path = os.path.join(destination_dir, *archive_member.split("/"))
     else:
         basename = os.path.basename(archive_member)
-        target_path = os.path.join(destination_dir, "audio", basename)
+        root = "audio"
+        if "/" in archive_member:
+            first = archive_member.split("/", 1)[0].strip().lower()
+            if first:
+                root = _sanitize_segment(first)
+        target_path = os.path.join(destination_dir, root, basename)
     target_path = _unique_target_path(target_path, used_targets)
     return os.path.abspath(target_path)
 
 
-def rewrite_packed_set_paths(set_file_path: str, replacements: dict[str, str]) -> None:
+def rewrite_packed_set_paths(
+    set_file_path: str,
+    replacements: dict[str, str],
+    lyric_replacements: Optional[dict[str, str]] = None,
+    clear_missing_lyrics: bool = False,
+) -> None:
     text, encoding = _read_text_with_fallback(set_file_path)
     lines = text.splitlines(True)
+    lyric_replacements = lyric_replacements or {}
     output: list[str] = []
     for line in lines:
         updated = line
         if "=" in line:
             key, value = line.split("=", 1)
+            raw_value = value.rstrip("\r\n").strip()
+            line_ending = value[len(value.rstrip("\r\n")) :]
             if re.fullmatch(r"s\d+", key.strip(), re.IGNORECASE):
-                raw_value = value.rstrip("\r\n").strip()
                 replacement = replacements.get(raw_value)
                 if replacement:
-                    line_ending = value[len(value.rstrip("\r\n")) :]
                     updated = f"{key}={replacement}{line_ending}"
+            elif re.fullmatch(r"pyssplyric\d+", key.strip(), re.IGNORECASE):
+                replacement = lyric_replacements.get(raw_value)
+                if replacement:
+                    updated = f"{key}={replacement}{line_ending}"
+                elif clear_missing_lyrics:
+                    updated = f"{key}={line_ending}"
         output.append(updated)
     with open(set_file_path, "w", encoding=encoding, newline="") as fh:
         fh.write("".join(output))
@@ -463,19 +536,19 @@ def write_pack_report_csv(file_path: str, rows: list[PackReportRow]) -> None:
         fh.write("\r\n".join(lines))
 
 
-def _flattened_archive_member(source_path: str, index: int) -> str:
-    basename = os.path.basename(source_path) or f"audio_{index}"
-    return f"audio/{index:03d}_{_sanitize_segment(basename)}"
+def _flattened_archive_member(source_path: str, index: int, root_prefix: str = "audio") -> str:
+    basename = os.path.basename(source_path) or f"{root_prefix}_{index}"
+    return f"{root_prefix}/{index:03d}_{_sanitize_segment(basename)}"
 
 
-def _structured_archive_member(source_path: str) -> str:
+def _structured_archive_member(source_path: str, root_prefix: str = "audio") -> str:
     path = os.path.abspath(source_path)
     drive, tail = os.path.splitdrive(path)
     segments = [segment for segment in re.split(r"[\\/]+", tail.strip("\\/")) if segment]
     safe_segments = [_sanitize_segment(segment) for segment in segments]
     if drive:
         safe_segments.insert(0, _sanitize_segment(drive.replace(":", "")))
-    return "/".join(["audio", *safe_segments]) if safe_segments else "audio/file"
+    return "/".join([root_prefix, *safe_segments]) if safe_segments else f"{root_prefix}/file"
 
 
 def _sanitize_segment(value: str) -> str:

@@ -101,6 +101,7 @@ from pyssp.library_archive import (
     PageSelectionItem,
     UnpackLibraryDialog,
     build_archive_audio_entries,
+    build_archive_lyric_entries,
     build_manifest,
     default_unpack_directory,
     rewrite_packed_set_paths,
@@ -3201,6 +3202,7 @@ class MainWindow(QMainWindow):
             package_path = f"{package_path}.pyssppak"
 
         include_settings = bool(dialog.include_settings_checkbox.isChecked())
+        include_lyrics = bool(dialog.pack_lyrics_checkbox.isChecked())
         maintain_structure = bool(dialog.maintain_structure_checkbox.isChecked())
         settings_source = None
         if include_settings:
@@ -3215,7 +3217,13 @@ class MainWindow(QMainWindow):
         entry_by_path = {
             os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_audio_entries
         }
-        total_steps = len(planned_audio_entries) + 2 + (1 if settings_source else 0)
+        lyric_path_usage = self._collect_pack_lyric_path_usage(selected_pages) if include_lyrics else {}
+        lyric_ordered_paths = [item["source_path"] for item in lyric_path_usage.values()]
+        planned_lyric_entries = build_archive_lyric_entries(lyric_ordered_paths, maintain_structure) if include_lyrics else []
+        lyric_entry_by_path = {
+            os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_lyric_entries
+        }
+        total_steps = len(planned_audio_entries) + len(planned_lyric_entries) + 2 + (1 if settings_source else 0)
         progress = QProgressDialog(tr("Packing audio library..."), tr("Cancel"), 0, max(1, total_steps), self)
         progress.setWindowTitle(tr("Pack Audio Library"))
         progress.setWindowModality(Qt.WindowModal)
@@ -3224,7 +3232,9 @@ class MainWindow(QMainWindow):
 
         set_member_name = f"{os.path.splitext(os.path.basename(package_path))[0]}.set"
         packed_audio_entries: List[object] = []
+        packed_lyric_entries: List[object] = []
         slot_path_overrides: Dict[Tuple[str, int, int], str] = {}
+        lyric_path_overrides: Dict[Tuple[str, int, int], str] = {}
         skipped_slots: set[Tuple[str, int, int]] = set()
         report_rows: List[PackReportRow] = []
         try:
@@ -3277,10 +3287,34 @@ class MainWindow(QMainWindow):
                                 f"{tr('Processed')} {os.path.basename(source_path)}",
                             )
 
+                    for normalized_path, path_info in lyric_path_usage.items():
+                        if progress.wasCanceled():
+                            raise ArchiveOperationCancelled()
+                        source_path = str(path_info["source_path"])
+                        if not os.path.exists(source_path):
+                            continue
+                        progress.setLabelText(f"{tr('Verifying and packing')} {os.path.basename(source_path)}...")
+                        entry = lyric_entry_by_path.get(normalized_path)
+                        if entry is None:
+                            raise RuntimeError(f"Missing lyric archive entry for {source_path}")
+                        archive.write(source_path, arcname=entry.archive_member)
+                        packed_lyric_entries.append(entry)
+                        for slot_info in path_info["slots"]:
+                            slot_key = (slot_info["group"], slot_info["page"], slot_info["slot"])
+                            lyric_path_overrides[slot_key] = entry.set_path
+                        step += 1
+                        self._update_archive_progress(
+                            progress,
+                            step,
+                            total_steps,
+                            f"{tr('Processed')} {os.path.basename(source_path)}",
+                        )
+
                     temp_set_path = os.path.join(temp_dir, set_member_name)
                     pack_lines = self._build_set_file_lines(
                         selected_pages=selected_pages,
                         slot_path_overrides=slot_path_overrides,
+                        lyric_path_overrides=lyric_path_overrides,
                         skipped_slots=skipped_slots,
                     )
                     self._write_set_payload(temp_set_path, pack_lines)
@@ -3295,7 +3329,12 @@ class MainWindow(QMainWindow):
                         step += 1
                         self._update_archive_progress(progress, step, total_steps, tr("Packing settings.ini..."))
 
-                    manifest = build_manifest(set_member_name, packed_audio_entries, bool(settings_source))
+                    manifest = build_manifest(
+                        set_member_name,
+                        packed_audio_entries,
+                        bool(settings_source),
+                        lyric_entries=packed_lyric_entries,
+                    )
                     write_manifest(archive, manifest)
                     step += 1
                     self._update_archive_progress(progress, step, total_steps, tr("Writing package manifest..."))
@@ -3344,13 +3383,21 @@ class MainWindow(QMainWindow):
                 package_path=package_path,
                 destination_dir=destination_dir,
                 maintain_directory_structure=values.maintain_directory_structure,
+                unpack_lyrics=values.unpack_lyrics,
                 progress_callback=lambda current, total, label: self._update_archive_progress(
                     progress, current, total, label
                 ),
                 is_cancelled=progress.wasCanceled,
             )
-            if result.audio_path_map:
-                rewrite_packed_set_paths(result.extracted_set_path, result.audio_path_map)
+            if result.audio_path_map or result.lyric_path_map or (bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics)):
+                rewrite_packed_set_paths(
+                    result.extracted_set_path,
+                    result.audio_path_map,
+                    lyric_replacements=result.lyric_path_map,
+                    clear_missing_lyrics=(
+                        bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics)
+                    ),
+                )
         except ArchiveOperationCancelled:
             progress.close()
             QMessageBox.information(self, tr("Unpack Audio Library"), tr("Unpack operation cancelled."))
@@ -3448,6 +3495,28 @@ class MainWindow(QMainWindow):
                         "slot": slot_index,
                         "location": location,
                         "title": slot.title.strip() or os.path.splitext(os.path.basename(path))[0],
+                    }
+                )
+        return usage
+
+    def _collect_pack_lyric_path_usage(self, selected_pages: set[Tuple[str, int]]) -> Dict[str, dict]:
+        usage: Dict[str, dict] = {}
+        for group, page_index in sorted(selected_pages):
+            location = self._page_display_name(group, page_index)
+            for slot_index, slot in enumerate(self.data[group][page_index]):
+                lyric_path = str(slot.lyric_file or "").strip()
+                if not lyric_path:
+                    continue
+                normalized = os.path.normcase(os.path.abspath(lyric_path))
+                if normalized not in usage:
+                    usage[normalized] = {"source_path": lyric_path, "slots": []}
+                usage[normalized]["slots"].append(
+                    {
+                        "group": group,
+                        "page": page_index,
+                        "slot": slot_index,
+                        "location": location,
+                        "title": slot.title.strip() or "",
                     }
                 )
         return usage
@@ -11095,9 +11164,11 @@ class MainWindow(QMainWindow):
         self,
         selected_pages: Optional[set[Tuple[str, int]]] = None,
         slot_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
+        lyric_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         skipped_slots: Optional[set[Tuple[str, int, int]]] = None,
     ) -> List[str]:
         overrides = slot_path_overrides or {}
+        lyric_overrides = lyric_path_overrides or {}
         skipped = skipped_slots or set()
         lines: List[str] = [
             "[Main]",
@@ -11153,7 +11224,7 @@ class MainWindow(QMainWindow):
                         midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
                         if midi_hotkey_code:
                             lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
-                        lyric_file = clean_set_value(slot.lyric_file)
+                        lyric_file = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                         if lyric_file:
                             lines.append(f"pyssplyric{slot_index}={lyric_file}")
                         cue_start, cue_end = self._cue_time_fields_for_set(slot)

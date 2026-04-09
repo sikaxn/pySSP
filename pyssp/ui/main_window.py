@@ -9603,6 +9603,7 @@ class MainWindow(QMainWindow):
         service_id = ""
         current_title = ""
         current_notes = ""
+        blank_until_first_line = False
 
         if slot_key is not None:
             slot = self._slot_for_key(slot_key)
@@ -9615,9 +9616,22 @@ class MainWindow(QMainWindow):
                     lines, error = self._load_stage_lyric_lines(lyric_path)
                     if not error and lines:
                         position_ms = self._lyric_position_ms_for_key(slot_key)
+                        first_line_start_ms = max(0, int(lines[0].start_ms))
+                        if first_line_start_ms > 0:
+                            slides.append(
+                                {
+                                    "title": current_title,
+                                    "text": "",
+                                    "html": "",
+                                    "img": "",
+                                    "tag": "L0",
+                                    "selected": False,
+                                }
+                            )
+                            blank_until_first_line = position_ms < first_line_start_ms
                         for idx, line in enumerate(lines):
                             if line.start_ms <= position_ms:
-                                current_slide_index = idx
+                                current_slide_index = len(slides)
                             text_value = str(line.text or "")
                             html_value = "<br />".join(html.escape(part) for part in text_value.splitlines())
                             slides.append(
@@ -9643,7 +9657,7 @@ class MainWindow(QMainWindow):
             service_items.append({"title": next_title, "notes": "", "selected": False})
         service_id = "|".join([item_id, current_title, next_title])
 
-        blank = (slot_key is None) or (len(slides) == 0)
+        blank = (slot_key is None) or (len(slides) == 0) or blank_until_first_line
         display = "blank" if blank else "show"
 
         return {

@@ -36,11 +36,9 @@ def line_for_position(lines: List[LyricLine], position_ms: int) -> str:
     for line in lines:
         if line.start_ms <= pos <= line.end_ms:
             return line.text
-        if line.start_ms <= pos and line.text:
+        if line.start_ms <= pos:
             previous_text = line.text
-    if previous_text:
-        return previous_text
-    return ""
+    return previous_text
 
 
 def _parse_lrc(text: str) -> List[LyricLine]:
@@ -59,8 +57,6 @@ def _parse_lrc(text: str) -> List[LyricLine]:
         if not matches:
             continue
         lyric_text = _clean_text(raw_line[matches[-1].end() :])
-        if not lyric_text:
-            continue
         for match in matches:
             start_ms = _lrc_timestamp_to_ms(match.group(1), match.group(2), match.group(3))
             start_ms = max(0, start_ms + offset_ms)
@@ -97,8 +93,6 @@ def _parse_srt(text: str) -> List[LyricLine]:
             end_ms = start_ms
         text_lines = raw_lines[time_row_index + 1 :]
         content = _clean_text("\n".join(text_lines))
-        if not content:
-            continue
         lines.append(LyricLine(start_ms=start_ms, end_ms=end_ms, text=content))
     lines.sort(key=lambda item: item.start_ms)
     return lines

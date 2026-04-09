@@ -112,3 +112,21 @@ def test_parse_lrc_offset(tmp_path):
     lines = parse_lyric_file(str(path))
     assert line_for_position(lines, 1500) == "Line"
     assert line_for_position(lines, 2000) == "Line"
+
+
+def test_empty_lrc_line_is_respected(tmp_path):
+    path = tmp_path / "blank_line.lrc"
+    path.write_text(
+        "\n".join(
+            [
+                "[00:01.00]A",
+                "[00:02.00]",
+                "[00:03.00]B",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    lines = parse_lyric_file(str(path))
+    assert line_for_position(lines, 1500) == "A"
+    assert line_for_position(lines, 2500) == ""
+    assert line_for_position(lines, 3500) == "B"

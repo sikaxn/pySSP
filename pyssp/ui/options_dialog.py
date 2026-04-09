@@ -1169,6 +1169,15 @@ class OptionsDialog(QDialog):
             self._build_display_page(),
         )
         self._add_page(
+            "Lyric",
+            self._mono_icon("lyric"),
+            self._build_lyric_page(
+                main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
+                search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
+                new_lyric_file_format=self._new_lyric_file_format,
+            ),
+        )
+        self._add_page(
             "Window Layout",
             self._mono_icon("layout"),
             self._build_window_layout_page(),
@@ -1254,15 +1263,6 @@ class OptionsDialog(QDialog):
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
                 web_remote_url=web_remote_url,
-            ),
-        )
-        self._add_page(
-            "Lyric",
-            self._mono_icon("display"),
-            self._build_lyric_page(
-                main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
-                search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
-                new_lyric_file_format=self._new_lyric_file_format,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -1362,6 +1362,12 @@ class OptionsDialog(QDialog):
             p.drawArc(QRectF(7, 11, 8, 8), 35 * 16, 110 * 16)
             p.drawArc(QRectF(5, 9, 12, 12), 35 * 16, 110 * 16)
             p.drawArc(QRectF(3, 7, 16, 16), 35 * 16, 110 * 16)
+        elif kind == "lyric":
+            p.drawRoundedRect(QRectF(4, 3, 14, 16), 1.5, 1.5)
+            p.drawLine(7, 8, 15, 8)
+            p.drawLine(7, 11, 15, 11)
+            p.drawLine(7, 14, 12, 14)
+            p.drawEllipse(QRectF(13, 14, 3, 3))
         elif kind == "ram":
             p.drawRoundedRect(QRectF(4, 6, 14, 10), 1.5, 1.5)
             p.drawLine(6, 9, 16, 9)
@@ -3995,28 +4001,28 @@ class OptionsDialog(QDialog):
             self._restore_display_defaults()
             return
         if idx == 7:
-            self._restore_window_layout_defaults()
+            self._restore_lyric_defaults()
             return
         if idx == 8:
-            self._restore_delay_defaults()
+            self._restore_window_layout_defaults()
             return
         if idx == 9:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 10:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 11:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 12:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 13:
-            self._restore_web_remote_defaults()
+            self._restore_talk_defaults()
             return
         if idx == 14:
-            self._restore_lyric_defaults()
+            self._restore_web_remote_defaults()
             return
 
     def _restore_language_defaults(self) -> None:

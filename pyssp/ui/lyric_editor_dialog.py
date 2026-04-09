@@ -30,7 +30,7 @@ from pyssp.audio_engine import (
     is_audio_preloaded,
     request_audio_preload,
 )
-from pyssp.i18n import localize_widget_tree
+from pyssp.i18n import localize_widget_tree, tr
 from pyssp.lyrics import parse_lyric_file
 from pyssp.ui.cue_point_dialog import CueRangeIndicator
 
@@ -50,7 +50,7 @@ class LyricEditorDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Lyric Editor")
+        self.setWindowTitle(tr("Lyric Editor"))
         self.resize(860, 590)
 
         self._lyric_path = str(lyric_path or "").strip()
@@ -139,14 +139,16 @@ class LyricEditorDialog(QDialog):
         self._highlight_follow_checkbox = QCheckBox("Highlight now playing lyric (follow playhead)")
         self._highlight_follow_checkbox.setChecked(True)
         self._add_line_btn = QPushButton("Add Line At Current Timestamp")
+        self._replace_with_blank_btn = QPushButton(tr("Replace This Line With Blank"))
         self._delete_line_btn = QPushButton("Delete Selected Line")
         actions.addWidget(self._highlight_follow_checkbox)
         actions.addWidget(self._add_line_btn)
+        actions.addWidget(self._replace_with_blank_btn)
         actions.addWidget(self._delete_line_btn)
         actions.addStretch(1)
         root.addLayout(actions)
 
-        self._rapid_toggle_btn = QPushButton("Expand Rapid Editor")
+        self._rapid_toggle_btn = QPushButton(tr("Expand Rapid Editor"))
         root.addWidget(self._rapid_toggle_btn)
 
         self._rapid_panel = QWidget(self)
@@ -154,13 +156,13 @@ class LyricEditorDialog(QDialog):
         rapid_layout.setContentsMargins(0, 0, 0, 0)
         rapid_layout.setSpacing(6)
         self._rapid_text = QPlainTextEdit(self._rapid_panel)
-        self._rapid_text.setPlaceholderText("Paste lyric lines here, one line per row...")
+        self._rapid_text.setPlaceholderText(tr("Paste lyric lines here, one line per row..."))
         self._rapid_text.setMinimumHeight(220)
         rapid_layout.addWidget(self._rapid_text, 1)
         rapid_actions = QHBoxLayout()
-        self._rapid_insert_line_btn = QPushButton("Insert Line At Current Timestamp")
-        self._rapid_insert_blank_btn = QPushButton("Insert Blank At Current Timestamp")
-        self._rapid_undo_btn = QPushButton("Undo")
+        self._rapid_insert_line_btn = QPushButton(tr("Insert Line At Current Timestamp"))
+        self._rapid_insert_blank_btn = QPushButton(tr("Insert Blank At Current Timestamp"))
+        self._rapid_undo_btn = QPushButton(tr("Undo"))
         self._rapid_undo_btn.setEnabled(False)
         rapid_actions.addWidget(self._rapid_insert_line_btn)
         rapid_actions.addWidget(self._rapid_insert_blank_btn)
@@ -191,6 +193,7 @@ class LyricEditorDialog(QDialog):
         self._slider.sliderReleased.connect(self._on_slider_released)
         self._slider.valueChanged.connect(self._on_slider_value_changed)
         self._add_line_btn.clicked.connect(self._add_line_at_current)
+        self._replace_with_blank_btn.clicked.connect(self._replace_current_line_with_blank)
         self._delete_line_btn.clicked.connect(self._delete_selected_lines)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._highlight_follow_checkbox.toggled.connect(
@@ -213,11 +216,20 @@ class LyricEditorDialog(QDialog):
     def closeEvent(self, event) -> None:
         if self._load_poll_timer.isActive():
             self._load_poll_timer.stop()
+        self._stop_preview_player()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        if self._load_poll_timer.isActive():
+            self._load_poll_timer.stop()
+        self._stop_preview_player()
+        super().done(result)
+
+    def _stop_preview_player(self) -> None:
         try:
             self._player.stop()
         except Exception:
             pass
-        super().closeEvent(event)
 
     def _set_loading_state(self, loading: bool) -> None:
         self._is_loading_media = bool(loading)
@@ -284,7 +296,6 @@ class LyricEditorDialog(QDialog):
                 rows = [
                     (max(0, int(line.start_ms)), str(line.text or ""))
                     for line in parsed
-                    if str(line.text or "").strip()
                 ]
             except Exception:
                 rows = []
@@ -342,12 +353,11 @@ class LyricEditorDialog(QDialog):
         for row in range(self._table.rowCount()):
             ts_item = self._table.item(row, 0)
             text_item = self._table.item(row, 1)
-            lyric = str(text_item.text() if text_item is not None else "").strip()
-            if not lyric:
-                continue
+            lyric = str(text_item.text() if text_item is not None else "")
             timestamp = self._parse_timestamp(ts_item.text() if ts_item is not None else "")
             if timestamp is None:
-                QMessageBox.warning(self, "Lyric Editor", f"Invalid timestamp at row {row + 1}.")
+                message = tr("Invalid timestamp at row {row}.").format(row=row + 1)
+                QMessageBox.warning(self, tr("Lyric Editor"), message)
                 return None
             rows.append((max(0, int(timestamp)), lyric))
         rows.sort(key=lambda item: item[0])
@@ -395,7 +405,7 @@ class LyricEditorDialog(QDialog):
     def _toggle_rapid_editor(self) -> None:
         show = not self._rapid_panel.isVisible()
         self._rapid_panel.setVisible(show)
-        self._rapid_toggle_btn.setText("Collapse Rapid Editor" if show else "Expand Rapid Editor")
+        self._rapid_toggle_btn.setText(tr("Collapse Rapid Editor") if show else tr("Expand Rapid Editor"))
 
     def _rapid_snapshot(self) -> Tuple[List[Tuple[str, str]], str]:
         rows: List[Tuple[str, str]] = []
@@ -436,7 +446,7 @@ class LyricEditorDialog(QDialog):
         snapshot = self._rapid_snapshot()
         top = self._rapid_take_top_line()
         if top is None:
-            QMessageBox.information(self, "Rapid Editor", "Rapid editor is empty.")
+            QMessageBox.information(self, tr("Rapid Editor"), tr("Rapid editor is empty."))
             return
         self._rapid_undo_stack.append(snapshot)
         if len(self._rapid_undo_stack) > 100:
@@ -454,6 +464,25 @@ class LyricEditorDialog(QDialog):
         snapshot = self._rapid_undo_stack.pop()
         self._rapid_restore(snapshot)
         self._rapid_undo_btn.setEnabled(bool(self._rapid_undo_stack))
+
+    def _replace_current_line_with_blank(self) -> None:
+        row = self._table.currentRow()
+        if row < 0:
+            row = self._active_row
+        if row < 0 or row >= self._table.rowCount():
+            QMessageBox.information(self, tr("Rapid Editor"), tr("Select a lyric row first."))
+            return
+        item = self._table.item(row, 1)
+        if item is None:
+            item = QTableWidgetItem("")
+            self._table.setItem(row, 1, item)
+        if not str(item.text() or "").strip():
+            return
+        self._rapid_undo_stack.append(self._rapid_snapshot())
+        if len(self._rapid_undo_stack) > 100:
+            self._rapid_undo_stack = self._rapid_undo_stack[-100:]
+        item.setText("")
+        self._rapid_undo_btn.setEnabled(True)
 
     def _delete_selected_lines(self) -> None:
         rows = sorted({index.row() for index in self._table.selectionModel().selectedRows()}, reverse=True)
@@ -629,6 +658,6 @@ class LyricEditorDialog(QDialog):
             else:
                 self._write_srt(rows)
         except OSError as exc:
-            QMessageBox.warning(self, "Lyric Editor", f"Failed to save lyric file:\n{exc}")
+            QMessageBox.warning(self, tr("Lyric Editor"), f"{tr('Failed to save lyric file:')}\n{exc}")
             return
         self.accept()

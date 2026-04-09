@@ -136,6 +136,7 @@ from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.lyric_editor_dialog import LyricEditorDialog
+from pyssp.ui.lyric_navigator import LyricNavigatorWindow
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.link_lyric_dialog import LinkLyricDialog
 from pyssp.ui.lyric_display import LyricDisplayWindow
@@ -206,6 +207,7 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "volume_up": ("", ""),
     "volume_down": ("", ""),
     "lock_toggle": ("Ctrl+L", ""),
+    "open_hide_lyric_navigator": ("", ""),
 }
 
 MIDI_HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {key: ("", "") for key in HOTKEY_DEFAULTS.keys()}
@@ -243,6 +245,7 @@ SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "volume_up",
     "volume_down",
     "lock_toggle",
+    "open_hide_lyric_navigator",
 ]
 
 
@@ -2002,6 +2005,10 @@ class MainWindow(QMainWindow):
             "volume_up": (self.settings.hotkey_volume_up_1, self.settings.hotkey_volume_up_2),
             "volume_down": (self.settings.hotkey_volume_down_1, self.settings.hotkey_volume_down_2),
             "lock_toggle": (self.settings.hotkey_lock_toggle_1, self.settings.hotkey_lock_toggle_2),
+            "open_hide_lyric_navigator": (
+                self.settings.hotkey_open_hide_lyric_navigator_1,
+                self.settings.hotkey_open_hide_lyric_navigator_2,
+            ),
         }
         self.quick_action_enabled = bool(self.settings.quick_action_enabled)
         self.quick_action_keys = list(self.settings.quick_action_keys[:48])
@@ -2052,6 +2059,10 @@ class MainWindow(QMainWindow):
             "volume_up": (self.settings.midi_hotkey_volume_up_1, self.settings.midi_hotkey_volume_up_2),
             "volume_down": (self.settings.midi_hotkey_volume_down_1, self.settings.midi_hotkey_volume_down_2),
             "lock_toggle": (self.settings.midi_hotkey_lock_toggle_1, self.settings.midi_hotkey_lock_toggle_2),
+            "open_hide_lyric_navigator": (
+                self.settings.midi_hotkey_open_hide_lyric_navigator_1,
+                self.settings.midi_hotkey_open_hide_lyric_navigator_2,
+            ),
         }
         self.midi_quick_action_enabled = bool(self.settings.midi_quick_action_enabled)
         self.midi_quick_action_bindings = [normalize_midi_binding(v) for v in self.settings.midi_quick_action_bindings[:48]]
@@ -2263,6 +2274,7 @@ class MainWindow(QMainWindow):
         self._stage_lyric_cache_lines: List[LyricLine] = []
         self._stage_lyric_cache_error: str = ""
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
+        self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
         self._hover_slot_index: Optional[int] = None
         self._stage_alert_dialog: Optional[QDialog] = None
         self._stage_alert_text_edit: Optional[QPlainTextEdit] = None
@@ -2925,6 +2937,10 @@ class MainWindow(QMainWindow):
         scan_sound_button_lyrics_action = QAction("Scan Sound Buttons Lyrics", self)
         scan_sound_button_lyrics_action.triggered.connect(self._scan_sound_button_lyrics)
         tools_menu.addAction(scan_sound_button_lyrics_action)
+
+        lyric_navigator_action = QAction("Lyric Navigator", self)
+        lyric_navigator_action.triggered.connect(self._open_lyric_navigator)
+        tools_menu.addAction(lyric_navigator_action)
 
         remove_linked_lyrics_action = QAction("Remove All Linked Lyric File", self)
         remove_linked_lyrics_action.triggered.connect(self._remove_all_linked_lyric_files)
@@ -3977,6 +3993,7 @@ class MainWindow(QMainWindow):
             "volume_up": self._volume_up_hotkey,
             "volume_down": self._volume_down_hotkey,
             "lock_toggle": self._hotkey_lock_toggle,
+            "open_hide_lyric_navigator": self._hotkey_toggle_lyric_navigator,
         }
 
     def _normalized_midi_pair(self, action_key: str) -> tuple[str, str]:
@@ -5209,7 +5226,15 @@ class MainWindow(QMainWindow):
         self.main_lyric_label.setVisible(True)
         self.main_lyric_label.setFixedHeight(42)
         self.main_lyric_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        left_layout.addWidget(self.main_lyric_label)
+        lyric_row = QHBoxLayout()
+        lyric_row.setContentsMargins(0, 0, 0, 0)
+        lyric_row.setSpacing(6)
+        lyric_row.addWidget(self.main_lyric_label, 1)
+        self.lyric_navigator_button = QPushButton("Lyric Navigator")
+        self.lyric_navigator_button.setMinimumHeight(36)
+        self.lyric_navigator_button.clicked.connect(self._open_lyric_navigator)
+        lyric_row.addWidget(self.lyric_navigator_button, 0)
+        left_layout.addLayout(lyric_row)
         left_layout.addStretch(1)
 
         right = QWidget()
@@ -8084,6 +8109,8 @@ class MainWindow(QMainWindow):
         else:
             visible = True
         self.main_lyric_label.setVisible(visible)
+        if hasattr(self, "lyric_navigator_button") and self.lyric_navigator_button is not None:
+            self.lyric_navigator_button.setVisible(visible)
 
     def _main_ui_current_lyric_text(self) -> str:
         if self.current_playing is None:
@@ -8163,12 +8190,31 @@ class MainWindow(QMainWindow):
     def _on_lyric_display_destroyed(self, _obj=None) -> None:
         self._lyric_display_window = None
 
+    def _open_lyric_navigator(self) -> None:
+        if self._lyric_navigator_window is None:
+            self._lyric_navigator_window = LyricNavigatorWindow(
+                on_seek_to_ms=self._seek_to_lyric_timestamp,
+                language=self.ui_language,
+                parent=self,
+            )
+            self._lyric_navigator_window.destroyed.connect(self._on_lyric_navigator_destroyed)
+        self._lyric_navigator_window.retranslate_ui(self.ui_language)
+        self._lyric_navigator_window.show()
+        self._lyric_navigator_window.raise_()
+        self._lyric_navigator_window.activateWindow()
+        self._refresh_lyric_display(force=True)
+
+    def _on_lyric_navigator_destroyed(self, _obj=None) -> None:
+        self._lyric_navigator_window = None
+
+    def _seek_to_lyric_timestamp(self, position_ms: int) -> None:
+        if self.current_playing is None:
+            return
+        self._seek_transport_display_ms(max(0, int(position_ms)))
+        self._refresh_lyric_display(force=True)
+
     def _refresh_lyric_display(self, force: bool = False) -> None:
         self._update_main_lyric_label(self._main_ui_current_lyric_text())
-        if self._lyric_display_window is None:
-            return
-        if not self._lyric_display_window.isVisible() and not force:
-            return
         has_active_track = False
         lyric_path = ""
         position_ms = 0
@@ -8178,12 +8224,20 @@ class MainWindow(QMainWindow):
                 has_active_track = True
                 lyric_path = str(slot.lyric_file or "").strip()
                 position_ms = self._lyric_position_ms_for_key(self.current_playing)
-        self._lyric_display_window.update_playback_state(
-            has_active_track=has_active_track,
-            lyric_path=lyric_path,
-            position_ms=position_ms,
-            force=force,
-        )
+        if self._lyric_display_window is not None and (self._lyric_display_window.isVisible() or force):
+            self._lyric_display_window.update_playback_state(
+                has_active_track=has_active_track,
+                lyric_path=lyric_path,
+                position_ms=position_ms,
+                force=force,
+            )
+        if self._lyric_navigator_window is not None and (self._lyric_navigator_window.isVisible() or force):
+            self._lyric_navigator_window.update_playback_state(
+                has_active_track=has_active_track,
+                lyric_path=lyric_path,
+                position_ms=position_ms,
+                force=force,
+            )
 
     def _open_stage_alert_panel(self) -> None:
         if self._stage_alert_dialog is None:
@@ -11515,6 +11569,8 @@ class MainWindow(QMainWindow):
         self.settings.hotkey_volume_down_2 = self.hotkeys.get("volume_down", ("", ""))[1]
         self.settings.hotkey_lock_toggle_1 = self.hotkeys.get("lock_toggle", ("", ""))[0]
         self.settings.hotkey_lock_toggle_2 = self.hotkeys.get("lock_toggle", ("", ""))[1]
+        self.settings.hotkey_open_hide_lyric_navigator_1 = self.hotkeys.get("open_hide_lyric_navigator", ("", ""))[0]
+        self.settings.hotkey_open_hide_lyric_navigator_2 = self.hotkeys.get("open_hide_lyric_navigator", ("", ""))[1]
         self.settings.quick_action_enabled = bool(self.quick_action_enabled)
         self.settings.quick_action_keys = list(self.quick_action_keys[:48])
         self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
@@ -11585,6 +11641,8 @@ class MainWindow(QMainWindow):
         self.settings.midi_hotkey_volume_down_2 = self.midi_hotkeys.get("volume_down", ("", ""))[1]
         self.settings.midi_hotkey_lock_toggle_1 = self.midi_hotkeys.get("lock_toggle", ("", ""))[0]
         self.settings.midi_hotkey_lock_toggle_2 = self.midi_hotkeys.get("lock_toggle", ("", ""))[1]
+        self.settings.midi_hotkey_open_hide_lyric_navigator_1 = self.midi_hotkeys.get("open_hide_lyric_navigator", ("", ""))[0]
+        self.settings.midi_hotkey_open_hide_lyric_navigator_2 = self.midi_hotkeys.get("open_hide_lyric_navigator", ("", ""))[1]
         self.settings.midi_quick_action_enabled = bool(self.midi_quick_action_enabled)
         self.settings.midi_quick_action_bindings = list(self.midi_quick_action_bindings[:48])
         self.settings.midi_sound_button_hotkey_enabled = bool(self.midi_sound_button_hotkey_enabled)
@@ -11740,6 +11798,12 @@ class MainWindow(QMainWindow):
 
     def _hotkey_toggle_talk(self) -> None:
         self._toggle_control_button("Talk")
+
+    def _hotkey_toggle_lyric_navigator(self) -> None:
+        if self._lyric_navigator_window is not None and self._lyric_navigator_window.isVisible():
+            self._lyric_navigator_window.hide()
+            return
+        self._open_lyric_navigator()
 
     def _hotkey_select_group_delta(self, delta: int) -> None:
         if self.cue_mode:
@@ -12326,6 +12390,11 @@ class MainWindow(QMainWindow):
         try:
             if self._lyric_display_window is not None:
                 self._lyric_display_window.close()
+        except Exception:
+            pass
+        try:
+            if self._lyric_navigator_window is not None:
+                self._lyric_navigator_window.close()
         except Exception:
             pass
         self._stop_web_remote_service()

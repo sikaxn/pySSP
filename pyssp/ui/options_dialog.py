@@ -693,6 +693,7 @@ class OptionsDialog(QDialog):
         ("volume_up", "Volume Up"),
         ("volume_down", "Volume Down"),
         ("lock_toggle", "Lock / Unlock"),
+        ("open_hide_lyric_navigator", "Open / Hide Lyric Navigator"),
     ]
 
     _DEFAULTS = {
@@ -813,6 +814,7 @@ class OptionsDialog(QDialog):
             "volume_up": ("", ""),
             "volume_down": ("", ""),
             "lock_toggle": ("Ctrl+L", ""),
+            "open_hide_lyric_navigator": ("", ""),
         },
         "sound_button_hotkey_enabled": False,
         "sound_button_hotkey_priority": "system_first",

@@ -581,6 +581,8 @@ class AppSettings:
     hotkey_volume_down_2: str = ""
     hotkey_lock_toggle_1: str = "Ctrl+L"
     hotkey_lock_toggle_2: str = ""
+    hotkey_open_hide_lyric_navigator_1: str = ""
+    hotkey_open_hide_lyric_navigator_2: str = ""
     quick_action_enabled: bool = False
     quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
     sound_button_hotkey_enabled: bool = False
@@ -652,6 +654,8 @@ class AppSettings:
     midi_hotkey_volume_down_2: str = ""
     midi_hotkey_lock_toggle_1: str = ""
     midi_hotkey_lock_toggle_2: str = ""
+    midi_hotkey_open_hide_lyric_navigator_1: str = ""
+    midi_hotkey_open_hide_lyric_navigator_2: str = ""
     midi_quick_action_enabled: bool = False
     midi_quick_action_bindings: list[str] = field(default_factory=default_midi_quick_action_bindings)
     midi_sound_button_hotkey_enabled: bool = False
@@ -882,6 +886,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_volume_down_2": settings.hotkey_volume_down_2,
         "hotkey_lock_toggle_1": settings.hotkey_lock_toggle_1,
         "hotkey_lock_toggle_2": settings.hotkey_lock_toggle_2,
+        "hotkey_open_hide_lyric_navigator_1": settings.hotkey_open_hide_lyric_navigator_1,
+        "hotkey_open_hide_lyric_navigator_2": settings.hotkey_open_hide_lyric_navigator_2,
         "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
         "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
         "sound_button_hotkey_enabled": "1" if settings.sound_button_hotkey_enabled else "0",
@@ -953,6 +959,8 @@ def save_settings(settings: AppSettings) -> None:
         "midi_hotkey_volume_down_2": settings.midi_hotkey_volume_down_2,
         "midi_hotkey_lock_toggle_1": settings.midi_hotkey_lock_toggle_1,
         "midi_hotkey_lock_toggle_2": settings.midi_hotkey_lock_toggle_2,
+        "midi_hotkey_open_hide_lyric_navigator_1": settings.midi_hotkey_open_hide_lyric_navigator_1,
+        "midi_hotkey_open_hide_lyric_navigator_2": settings.midi_hotkey_open_hide_lyric_navigator_2,
         "midi_quick_action_enabled": "1" if settings.midi_quick_action_enabled else "0",
         "midi_quick_action_bindings": "\t".join(_normalize_midi_quick_action_bindings(settings.midi_quick_action_bindings)),
         "midi_sound_button_hotkey_enabled": "1" if settings.midi_sound_button_hotkey_enabled else "0",
@@ -1390,6 +1398,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_volume_down_2=str(section.get("hotkey_volume_down_2", "")).strip(),
         hotkey_lock_toggle_1=str(section.get("hotkey_lock_toggle_1", "Ctrl+L")).strip(),
         hotkey_lock_toggle_2=str(section.get("hotkey_lock_toggle_2", "")).strip(),
+        hotkey_open_hide_lyric_navigator_1=str(section.get("hotkey_open_hide_lyric_navigator_1", "")).strip(),
+        hotkey_open_hide_lyric_navigator_2=str(section.get("hotkey_open_hide_lyric_navigator_2", "")).strip(),
         quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
         quick_action_keys=quick_action_keys,
         sound_button_hotkey_enabled=_get_bool(section, "sound_button_hotkey_enabled", False),
@@ -1461,6 +1471,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_hotkey_volume_down_2=str(section.get("midi_hotkey_volume_down_2", "")).strip(),
         midi_hotkey_lock_toggle_1=str(section.get("midi_hotkey_lock_toggle_1", "")).strip(),
         midi_hotkey_lock_toggle_2=str(section.get("midi_hotkey_lock_toggle_2", "")).strip(),
+        midi_hotkey_open_hide_lyric_navigator_1=str(section.get("midi_hotkey_open_hide_lyric_navigator_1", "")).strip(),
+        midi_hotkey_open_hide_lyric_navigator_2=str(section.get("midi_hotkey_open_hide_lyric_navigator_2", "")).strip(),
         midi_quick_action_enabled=_get_bool(section, "midi_quick_action_enabled", False),
         midi_quick_action_bindings=midi_quick_action_bindings,
         midi_sound_button_hotkey_enabled=_get_bool(section, "midi_sound_button_hotkey_enabled", False),

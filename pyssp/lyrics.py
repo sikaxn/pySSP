@@ -40,9 +40,6 @@ def line_for_position(lines: List[LyricLine], position_ms: int) -> str:
             previous_text = line.text
     if previous_text:
         return previous_text
-    for line in lines:
-        if line.text:
-            return line.text
     return ""
 
 
@@ -136,9 +133,36 @@ def _clean_text(value: str) -> str:
 
 def _read_text_with_fallback(file_path: str) -> str:
     raw = open(file_path, "rb").read()
-    for encoding in ("utf-8-sig", "utf-16", "gbk", "cp1252", "latin1"):
+    for encoding in ("utf-8-sig", "utf-16"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return raw.decode("latin1", errors="replace")
+    gbk_text = ""
+    cp1252_text = ""
+    latin1_text = raw.decode("latin1", errors="replace")
+    try:
+        gbk_text = raw.decode("gbk")
+    except UnicodeDecodeError:
+        gbk_text = ""
+    try:
+        cp1252_text = raw.decode("cp1252")
+    except UnicodeDecodeError:
+        cp1252_text = ""
+    if gbk_text and cp1252_text:
+        # Prefer GBK only when decoded text clearly contains CJK content.
+        return gbk_text if _count_cjk_chars(gbk_text) >= 4 else cp1252_text
+    if cp1252_text:
+        return cp1252_text
+    if gbk_text:
+        return gbk_text
+    return latin1_text
+
+
+def _count_cjk_chars(text: str) -> int:
+    total = 0
+    for ch in str(text or ""):
+        code = ord(ch)
+        if 0x4E00 <= code <= 0x9FFF:
+            total += 1
+    return total

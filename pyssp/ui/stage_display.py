@@ -530,7 +530,10 @@ class StageDisplayWindow(QWidget):
         for key, value in values.items():
             widget = self._canvas._widgets.get(key)
             if widget is not None:
-                widget.value_label.setText(str(value or "-"))
+                if key == "lyric":
+                    widget.value_label.setText(str(value or ""))
+                else:
+                    widget.value_label.setText(str(value or "-"))
                 if key == "progress_bar" and progress_style:
                     widget.value_label.setStyleSheet(_strip_font_size_style(progress_style) or "color:#FFFFFF;")
                 elif key == "alert":

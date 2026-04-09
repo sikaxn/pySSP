@@ -430,6 +430,9 @@ class AppSettings:
     title_char_limit: int = 26
     show_file_notifications: bool = True
     now_playing_display_mode: str = "caption"
+    main_ui_lyric_display_mode: str = "always"
+    search_lyric_on_add_sound_button: bool = True
+    new_lyric_file_format: str = "srt"
     lock_allow_quit: bool = True
     lock_allow_system_hotkeys: bool = False
     lock_allow_quick_action_hotkeys: bool = False
@@ -512,6 +515,7 @@ class AppSettings:
     color_cue_indicator: str = "#61D6FF"
     color_volume_indicator: str = "#FFD45A"
     color_midi_indicator: str = "#FF9E4A"
+    color_lyric_indicator: str = "#57C3A4"
     sound_button_text_color: str = "#000000"
     hotkey_new_set_1: str = "Ctrl+N"
     hotkey_new_set_2: str = ""
@@ -725,6 +729,9 @@ def save_settings(settings: AppSettings) -> None:
         "title_char_limit": str(settings.title_char_limit),
         "show_file_notifications": "1" if settings.show_file_notifications else "0",
         "now_playing_display_mode": settings.now_playing_display_mode,
+        "main_ui_lyric_display_mode": settings.main_ui_lyric_display_mode,
+        "search_lyric_on_add_sound_button": "1" if settings.search_lyric_on_add_sound_button else "0",
+        "new_lyric_file_format": settings.new_lyric_file_format,
         "lock_allow_quit": "1" if settings.lock_allow_quit else "0",
         "lock_allow_system_hotkeys": "1" if settings.lock_allow_system_hotkeys else "0",
         "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
@@ -809,6 +816,7 @@ def save_settings(settings: AppSettings) -> None:
         "color_cue_indicator": settings.color_cue_indicator,
         "color_volume_indicator": settings.color_volume_indicator,
         "color_midi_indicator": settings.color_midi_indicator,
+        "color_lyric_indicator": settings.color_lyric_indicator,
         "sound_button_text_color": settings.sound_button_text_color,
         "hotkey_new_set_1": settings.hotkey_new_set_1,
         "hotkey_new_set_2": settings.hotkey_new_set_2,
@@ -1028,6 +1036,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     now_playing_display_mode = str(section.get("now_playing_display_mode", "caption")).strip().lower()
     if now_playing_display_mode not in {"filename", "filepath", "caption", "note", "caption_note"}:
         now_playing_display_mode = "caption"
+    main_ui_lyric_display_mode = str(section.get("main_ui_lyric_display_mode", "always")).strip().lower()
+    if main_ui_lyric_display_mode not in {"always", "when_available", "never"}:
+        main_ui_lyric_display_mode = "always"
+    search_lyric_on_add_sound_button = _get_bool(section, "search_lyric_on_add_sound_button", True)
+    new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
+    if new_lyric_file_format not in {"srt", "lrc"}:
+        new_lyric_file_format = "srt"
     set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
     if set_file_encoding not in {"utf8", "gbk"}:
         set_file_encoding = "utf8"
@@ -1224,6 +1239,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         title_char_limit=title_limit,
         show_file_notifications=_get_bool(section, "show_file_notifications", True),
         now_playing_display_mode=now_playing_display_mode,
+        main_ui_lyric_display_mode=main_ui_lyric_display_mode,
+        search_lyric_on_add_sound_button=search_lyric_on_add_sound_button,
+        new_lyric_file_format=new_lyric_file_format,
         lock_allow_quit=_get_bool(section, "lock_allow_quit", True),
         lock_allow_system_hotkeys=_get_bool(section, "lock_allow_system_hotkeys", False),
         lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),
@@ -1306,6 +1324,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
         color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),
         color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
+        color_lyric_indicator=_coerce_hex(str(section.get("color_lyric_indicator", "#57C3A4")), "#57C3A4"),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
         hotkey_new_set_1=str(section.get("hotkey_new_set_1", "Ctrl+N")).strip(),
         hotkey_new_set_2=str(section.get("hotkey_new_set_2", "")).strip(),

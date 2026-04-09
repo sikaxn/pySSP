@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
@@ -49,6 +49,7 @@ class LyricDisplayWindow(QWidget):
         self._lyric_widget = self._canvas._widgets.get("lyric")
         if self._lyric_widget is not None:
             self._lyric_widget.title_label.setText(tr("Lyric"))
+        self._install_fullscreen_toggle_filter(self)
 
         self._cache_path: str = ""
         self._cache_mtime: float = -1.0
@@ -86,8 +87,6 @@ class LyricDisplayWindow(QWidget):
                     text = "No lyrics were found in this file."
                 else:
                     text = line_for_position(lines, max(0, int(position_ms))) or ""
-                    if not text:
-                        text = "..."
 
         if force or text != self._last_text:
             self._last_text = text
@@ -117,3 +116,36 @@ class LyricDisplayWindow(QWidget):
         self.setWindowTitle(tr("Lyric Display"))
         if self._lyric_widget is not None:
             self._lyric_widget.title_label.setText(tr("Lyric"))
+
+    def _install_fullscreen_toggle_filter(self, root: QWidget) -> None:
+        root.installEventFilter(self)
+        for child in root.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.MouseButtonDblClick:
+            if getattr(event, "button", lambda: None)() == Qt.LeftButton:
+                self._toggle_fullscreen()
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._toggle_fullscreen()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+            event.accept()
+            return
+        super().keyPressEvent(event)

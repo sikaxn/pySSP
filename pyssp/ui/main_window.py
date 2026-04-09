@@ -134,6 +134,7 @@ from pyssp.timecode import (
 from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
+from pyssp.ui.lyric_editor_dialog import LyricEditorDialog
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.link_lyric_dialog import LinkLyricDialog
 from pyssp.ui.lyric_display import LyricDisplayWindow
@@ -167,6 +168,7 @@ COLORS = {
     "cue_indicator": "#61D6FF",
     "volume_indicator": "#FFD45A",
     "midi_indicator": "#FF9E4A",
+    "lyric_indicator": "#57C3A4",
 }
 TIMECODE_SLOT_INDICATOR_COLOR = "#9C4DFF"
 
@@ -1925,6 +1927,15 @@ class MainWindow(QMainWindow):
             if now_playing_mode in {"filename", "filepath", "caption", "note", "caption_note"}
             else "caption"
         )
+        lyric_mode = str(getattr(self.settings, "main_ui_lyric_display_mode", "always")).strip().lower()
+        self.main_ui_lyric_display_mode = (
+            lyric_mode if lyric_mode in {"always", "when_available", "never"} else "always"
+        )
+        self.search_lyric_on_add_sound_button = bool(
+            getattr(self.settings, "search_lyric_on_add_sound_button", True)
+        )
+        new_lyric_fmt = str(getattr(self.settings, "new_lyric_file_format", "srt")).strip().lower()
+        self.new_lyric_file_format = new_lyric_fmt if new_lyric_fmt in {"srt", "lrc"} else "srt"
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
@@ -1939,6 +1950,7 @@ class MainWindow(QMainWindow):
             "cue_indicator": self.settings.color_cue_indicator,
             "volume_indicator": self.settings.color_volume_indicator,
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
+            "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
         }
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":
@@ -2142,6 +2154,7 @@ class MainWindow(QMainWindow):
         self.group_status = QLabel("")
         self.page_status = QLabel("")
         self.now_playing_label = NowPlayingLabel()
+        self.main_lyric_label = NowPlayingLabel()
         self.drag_mode_banner = QLabel("")
         self.timecode_multiplay_banner = QLabel("")
         self.web_remote_warning_banner = QLabel("")
@@ -2905,6 +2918,10 @@ class MainWindow(QMainWindow):
         scan_sound_button_lyrics_action = QAction("Scan Sound Buttons Lyrics", self)
         scan_sound_button_lyrics_action.triggered.connect(self._scan_sound_button_lyrics)
         tools_menu.addAction(scan_sound_button_lyrics_action)
+
+        remove_linked_lyrics_action = QAction("Remove All Linked Lyric File", self)
+        remove_linked_lyrics_action.triggered.connect(self._remove_all_linked_lyric_files)
+        tools_menu.addAction(remove_linked_lyrics_action)
 
         disable_playlist_all_pages_action = QAction("Disable Play List on All Pages", self)
         disable_playlist_all_pages_action.triggered.connect(self._disable_playlist_on_all_pages)
@@ -4553,6 +4570,61 @@ class MainWindow(QMainWindow):
             return
         self._show_info_notice_banner("Lyrics scan complete. No changes.")
 
+    def _remove_all_linked_lyric_files(self) -> None:
+        linked_count = 0
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot in self.data[group][page_index]:
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if str(slot.lyric_file or "").strip():
+                        linked_count += 1
+        for slot in self.cue_page:
+            if not slot.assigned or slot.marker:
+                continue
+            if str(slot.lyric_file or "").strip():
+                linked_count += 1
+
+        if linked_count <= 0:
+            self._show_info_notice_banner("No linked lyric files to remove.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Remove All Linked Lyric File",
+            f"Remove linked lyric files from {linked_count} sound button(s)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        changed = 0
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot in self.data[group][page_index]:
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if str(slot.lyric_file or "").strip():
+                        slot.lyric_file = ""
+                        changed += 1
+        for slot in self.cue_page:
+            if not slot.assigned or slot.marker:
+                continue
+            if str(slot.lyric_file or "").strip():
+                slot.lyric_file = ""
+                changed += 1
+
+        if changed <= 0:
+            self._show_info_notice_banner("No linked lyric files were removed.")
+            return
+
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._refresh_stage_display()
+        self._refresh_lyric_display(force=True)
+        self._show_save_notice_banner(f"Removed linked lyric files from {changed} sound button(s).")
+
     def _diagnose_sound_button_issue(self, file_path: str) -> Optional[str]:
         path = str(file_path or "").strip()
         if not path:
@@ -5039,13 +5111,30 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
         left_layout.addLayout(self._main_control_grid_layout)
 
-        self.group_status.setStyleSheet("font-size: 22pt; color: #0A29E0; font-weight: bold;")
-        left_layout.addWidget(self.group_status)
-        self.page_status.setStyleSheet("font-size: 18pt; color: #0A29E0; font-weight: bold;")
-        left_layout.addWidget(self.page_status)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
+        self.page_status.setStyleSheet("font-size: 13pt; color: #0A29E0; font-weight: bold;")
+        self.page_status.setWordWrap(False)
+        page_status_scroll = QScrollArea()
+        page_status_scroll.setWidgetResizable(True)
+        page_status_scroll.setFrameShape(QFrame.NoFrame)
+        page_status_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        page_status_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page_status_scroll.setWidget(self.page_status)
+        page_status_scroll.setMinimumHeight(30)
+        page_status_scroll.setMaximumHeight(34)
+        status_row.addWidget(page_status_scroll, 1)
+        left_layout.addLayout(status_row)
         self.now_playing_label.set_now_playing_text("NOW PLAYING:", "")
         self.now_playing_label.setVisible(True)
+        self.now_playing_label.setFixedHeight(40)
         left_layout.addWidget(self.now_playing_label)
+        self.main_lyric_label.set_now_playing_text("LYRIC:", "")
+        self.main_lyric_label.setVisible(True)
+        self.main_lyric_label.setFixedHeight(42)
+        self.main_lyric_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        left_layout.addWidget(self.main_lyric_label)
         left_layout.addStretch(1)
 
         right = QWidget()
@@ -5852,11 +5941,14 @@ class MainWindow(QMainWindow):
             has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
             has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
             has_custom_timecode = self._slot_has_custom_timecode(slot) and slot.assigned and (not slot.marker)
+            has_linked_lyric = bool(str(slot.lyric_file or "").strip()) and slot.assigned and (not slot.marker)
             indicator_colors: List[str] = []
             if has_cue:
                 indicator_colors.append(self.state_colors["cue_indicator"])
             if has_volume_override:
                 indicator_colors.append(self.state_colors["volume_indicator"])
+            if has_linked_lyric:
+                indicator_colors.append(self.state_colors["lyric_indicator"])
             if has_custom_timecode:
                 indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
             background = self._build_slot_background_gradient(color, has_midi_hotkey, indicator_colors)
@@ -6070,6 +6162,8 @@ class MainWindow(QMainWindow):
         edit_action.setEnabled(page_created)
         cue_points_action = menu.addAction("Set Cue Points...")
         cue_points_action.setEnabled(slot.assigned)
+        lyric_editor_action = menu.addAction("Lyric Editor...")
+        lyric_editor_action.setEnabled(slot.assigned)
         timecode_setup_action = menu.addAction("Timecode Setup...")
         timecode_setup_action.setEnabled(slot.assigned)
         copy_action = menu.addAction("Copy Sound Button")
@@ -6093,6 +6187,8 @@ class MainWindow(QMainWindow):
             self._edit_sound_button(slot_index)
         elif selected == cue_points_action:
             self._edit_slot_cue_points(slot_index)
+        elif selected == lyric_editor_action:
+            self._edit_slot_lyric(slot_index)
         elif selected == timecode_setup_action:
             self._edit_slot_timecode_setup(slot_index)
         elif selected == copy_action:
@@ -6502,6 +6598,93 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
         self._refresh_sound_grid()
 
+    def _edit_slot_lyric(self, slot_index: int) -> None:
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.locked:
+            self._show_info_notice_banner("This sound button is locked.")
+            return
+        if not slot.assigned or slot.marker:
+            return
+
+        lyric_path = str(slot.lyric_file or "").strip()
+        if not lyric_path:
+            answer = QMessageBox.question(
+                self,
+                "Lyric Editor",
+                "This sound has no lyric linked. Create a lyric file now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            default_ext = ".lrc" if self.new_lyric_file_format == "lrc" else ".srt"
+            audio_dir = os.path.dirname(str(slot.file_path or "").strip()) or (self.settings.last_sound_dir or "")
+            base_name = os.path.splitext(os.path.basename(str(slot.file_path or "").strip()))[0].strip() or "new_lyric"
+            suggestion = os.path.join(audio_dir, f"{base_name}{default_ext}")
+            if self.new_lyric_file_format == "lrc":
+                lyric_filter = "LRC Files (*.lrc);;SRT Files (*.srt);;All Files (*.*)"
+            else:
+                lyric_filter = "SRT Files (*.srt);;LRC Files (*.lrc);;All Files (*.*)"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Create Lyric File",
+                suggestion,
+                lyric_filter,
+            )
+            save_path = str(save_path or "").strip()
+            if not save_path:
+                return
+            ext = os.path.splitext(save_path)[1].lower()
+            if ext not in {".srt", ".lrc"}:
+                save_path = f"{save_path}{default_ext}"
+            try:
+                os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+                if not os.path.exists(save_path):
+                    with open(save_path, "w", encoding="utf-8-sig", newline="") as fh:
+                        fh.write("")
+            except OSError as exc:
+                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                return
+            slot.lyric_file = save_path
+            lyric_path = save_path
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+        elif not os.path.exists(lyric_path):
+            answer = QMessageBox.question(
+                self,
+                "Lyric Editor",
+                f"Linked lyric file does not exist:\n{lyric_path}\n\nCreate this file now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                os.makedirs(os.path.dirname(lyric_path) or ".", exist_ok=True)
+                with open(lyric_path, "w", encoding="utf-8-sig", newline="") as fh:
+                    fh.write("")
+            except OSError as exc:
+                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                return
+
+        preferred_mode = "lrc" if os.path.splitext(lyric_path)[1].lower() == ".lrc" else "srt"
+        dialog = LyricEditorDialog(
+            lyric_path=lyric_path,
+            audio_path=slot.file_path,
+            title=slot.title,
+            language=self.ui_language,
+            preferred_mode=preferred_mode,
+            cue_start_ms=slot.cue_start_ms,
+            cue_end_ms=slot.cue_end_ms,
+            stop_host_playback=self._hard_stop_all,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        self._refresh_lyric_display(force=True)
+        self._refresh_stage_display()
+
     def _edit_slot_timecode_setup(self, slot_index: int) -> None:
         page = self._current_page_slots()
         slot = page[slot_index]
@@ -6554,9 +6737,12 @@ class MainWindow(QMainWindow):
         )
         if not file_paths:
             return
-        lyric_links = self._prompt_lyric_link_selection(file_paths)
-        if lyric_links is None:
-            return
+        if self.search_lyric_on_add_sound_button:
+            lyric_links = self._prompt_lyric_link_selection(file_paths)
+            if lyric_links is None:
+                return
+        else:
+            lyric_links = ["" for _ in file_paths]
         self.settings.last_sound_dir = os.path.dirname(file_paths[0])
         self._save_settings()
 
@@ -7635,27 +7821,75 @@ class MainWindow(QMainWindow):
         self._refresh_lyric_display()
 
     def _update_group_status(self) -> None:
-        if self.cue_mode:
-            self.group_status.setText(tr("Group - Cue"))
-        else:
-            self.group_status.setText(f"{tr('Group - ')}{self.current_group}")
+        self.group_status.setText("")
+        self._update_page_status()
 
     def _update_page_status(self) -> None:
         if self.cue_mode:
-            self.page_status.setText(tr("Page - Cue"))
+            self.page_status.setText("Current Page: Cue")
             return
+        group = str(self.current_group or "").strip().upper()
+        index = self.current_page + 1
         page_name = self.page_names[self.current_group][self.current_page].strip()
         if page_name:
-            self.page_status.setText(f"{tr('Page - ')}{page_name}")
+            self.page_status.setText(f"Current Page: {group} - [{index}]{page_name}")
         else:
-            self.page_status.setText(f"{tr('Page - ')}{self.current_page + 1}")
+            self.page_status.setText(f"Current Page: {group} - [{index}]")
 
     def _update_now_playing_label(self, text: str) -> None:
         if text:
             self.now_playing_label.set_now_playing_text(tr("NOW PLAYING:"), text)
         else:
             self.now_playing_label.set_now_playing_text(tr("NOW PLAYING:"), "")
+        self._refresh_lyric_display()
         self._refresh_stage_display()
+
+    def _update_main_lyric_label(self, text: str) -> None:
+        value = str(text or "")
+        self.main_lyric_label.set_now_playing_text(tr("LYRIC:"), value)
+        mode = str(getattr(self, "main_ui_lyric_display_mode", "always")).strip().lower()
+        if mode == "never":
+            visible = False
+        elif mode == "when_available":
+            visible = bool(value.strip())
+        else:
+            visible = True
+        self.main_lyric_label.setVisible(visible)
+
+    def _main_ui_current_lyric_text(self) -> str:
+        if self.current_playing is None:
+            return ""
+        slot = self._slot_for_key(self.current_playing)
+        if slot is None:
+            return ""
+        lyric_path = str(slot.lyric_file or "").strip()
+        if not lyric_path:
+            return "This audio has no lyric linked."
+        lines, error = self._load_stage_lyric_lines(lyric_path)
+        if error:
+            return "Lyric file is unavailable."
+        if not lines:
+            return "No lyrics were found in this file."
+        position_ms = self._lyric_position_ms_for_key(self.current_playing)
+        text = line_for_position(lines, position_ms)
+        return text.strip() if text and text.strip() else ""
+
+    def _lyric_position_ms_for_key(self, slot_key: Optional[Tuple[str, int, int]]) -> int:
+        if slot_key is None:
+            return 0
+        player = self._player_for_slot_key(slot_key)
+        if player is None:
+            return 0
+        try:
+            state = player.state()
+        except Exception:
+            return 0
+        if state not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+            return 0
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
 
     def _build_now_playing_text(self, slot: SoundButtonData) -> str:
         mode = str(self.now_playing_display_mode or "caption").strip().lower()
@@ -7701,24 +7935,20 @@ class MainWindow(QMainWindow):
         self._lyric_display_window = None
 
     def _refresh_lyric_display(self, force: bool = False) -> None:
+        self._update_main_lyric_label(self._main_ui_current_lyric_text())
         if self._lyric_display_window is None:
             return
         if not self._lyric_display_window.isVisible() and not force:
             return
         has_active_track = False
         lyric_path = ""
-        position_ms = max(0, int(self.seek_slider.value()))
+        position_ms = 0
         if self.current_playing is not None:
             slot = self._slot_for_key(self.current_playing)
             if slot is not None:
                 has_active_track = True
                 lyric_path = str(slot.lyric_file or "").strip()
-                player = self._player_for_slot_key(self.current_playing)
-                if player is not None:
-                    try:
-                        position_ms = max(0, int(player.position()))
-                    except Exception:
-                        position_ms = max(0, int(self.seek_slider.value()))
+                position_ms = self._lyric_position_ms_for_key(self.current_playing)
         self._lyric_display_window.update_playback_state(
             has_active_track=has_active_track,
             lyric_path=lyric_path,
@@ -7924,16 +8154,9 @@ class MainWindow(QMainWindow):
         lines, error = self._load_stage_lyric_lines(lyric_path)
         if error or not lines:
             return "-"
-        player = self._player_for_slot_key(self.current_playing)
-        if player is not None:
-            try:
-                position_ms = max(0, int(player.position()))
-            except Exception:
-                position_ms = max(0, int(self.seek_slider.value()))
-        else:
-            position_ms = max(0, int(self.seek_slider.value()))
+        position_ms = self._lyric_position_ms_for_key(self.current_playing)
         text = line_for_position(lines, position_ms)
-        return text.strip() if text and text.strip() else "-"
+        return text.strip() if text and text.strip() else ""
 
     def _load_stage_lyric_lines(self, lyric_path: str) -> tuple[List[LyricLine], str]:
         mtime = -1.0
@@ -8483,6 +8706,9 @@ class MainWindow(QMainWindow):
             title_char_limit=self.title_char_limit,
             show_file_notifications=self.show_file_notifications,
             now_playing_display_mode=self.now_playing_display_mode,
+            main_ui_lyric_display_mode=self.main_ui_lyric_display_mode,
+            search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
+            new_lyric_file_format=self.new_lyric_file_format,
             lock_allow_quit=self.lock_allow_quit,
             lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
@@ -8557,6 +8783,7 @@ class MainWindow(QMainWindow):
                 "cue_indicator": self.state_colors["cue_indicator"],
                 "volume_indicator": self.state_colors["volume_indicator"],
                 "midi_indicator": self.state_colors["midi_indicator"],
+                "lyric_indicator": self.state_colors["lyric_indicator"],
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
@@ -8648,6 +8875,10 @@ class MainWindow(QMainWindow):
         self.click_playing_action = dialog.selected_click_playing_action()
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.now_playing_display_mode = dialog.selected_now_playing_display_mode()
+        self.main_ui_lyric_display_mode = dialog.selected_main_ui_lyric_display_mode()
+        self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
+        self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
+        self._refresh_lyric_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
             self.set_file_encoding = selected_set_file_encoding
@@ -8704,6 +8935,10 @@ class MainWindow(QMainWindow):
             self.state_colors["volume_indicator"],
         )
         self.state_colors["midi_indicator"] = selected_colors.get("midi_indicator", self.state_colors["midi_indicator"])
+        self.state_colors["lyric_indicator"] = selected_colors.get(
+            "lyric_indicator",
+            self.state_colors["lyric_indicator"],
+        )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()
         self.quick_action_enabled = dialog.selected_quick_action_enabled()
@@ -10979,6 +11214,7 @@ class MainWindow(QMainWindow):
         self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
         self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
         self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
+        self.settings.color_lyric_indicator = self.state_colors["lyric_indicator"]
         self.settings.sound_button_text_color = self.sound_button_text_color
         self.settings.hotkey_new_set_1 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[0]
         self.settings.hotkey_new_set_2 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[1]
@@ -11154,6 +11390,9 @@ class MainWindow(QMainWindow):
         self.settings.stage_display_gadgets = normalize_stage_display_gadgets(self.stage_display_gadgets)
         self.settings.stage_display_text_source = self.stage_display_text_source
         self.settings.now_playing_display_mode = self.now_playing_display_mode
+        self.settings.main_ui_lyric_display_mode = self.main_ui_lyric_display_mode
+        self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
+        self.settings.new_lyric_file_format = self.new_lyric_file_format
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 

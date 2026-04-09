@@ -701,6 +701,9 @@ class OptionsDialog(QDialog):
         "title_char_limit": 26,
         "show_file_notifications": True,
         "now_playing_display_mode": "caption",
+        "main_ui_lyric_display_mode": "always",
+        "search_lyric_on_add_sound_button": True,
+        "new_lyric_file_format": "srt",
         "log_file_enabled": False,
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
@@ -774,6 +777,7 @@ class OptionsDialog(QDialog):
             "cue_indicator": "#61D6FF",
             "volume_indicator": "#FFD45A",
             "midi_indicator": "#FF9E4A",
+            "lyric_indicator": "#57C3A4",
         },
         "sound_button_text_color": "#000000",
         "hotkeys": {
@@ -877,6 +881,9 @@ class OptionsDialog(QDialog):
         title_char_limit: int,
         show_file_notifications: bool,
         now_playing_display_mode: str,
+        main_ui_lyric_display_mode: str,
+        search_lyric_on_add_sound_button: bool,
+        new_lyric_file_format: str,
         fade_in_sec: float,
         cross_fade_sec: float,
         fade_out_sec: float,
@@ -1070,6 +1077,17 @@ class OptionsDialog(QDialog):
             else "caption"
         )
         self._window_layout = normalize_window_layout(window_layout)
+        self._main_ui_lyric_display_mode = (
+            str(main_ui_lyric_display_mode or "").strip().lower()
+            if str(main_ui_lyric_display_mode or "").strip().lower() in {"always", "when_available", "never"}
+            else "always"
+        )
+        self._search_lyric_on_add_sound_button = bool(search_lyric_on_add_sound_button)
+        self._new_lyric_file_format = (
+            str(new_lyric_file_format or "").strip().lower()
+            if str(new_lyric_file_format or "").strip().lower() in {"srt", "lrc"}
+            else "srt"
+        )
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
@@ -1236,6 +1254,15 @@ class OptionsDialog(QDialog):
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
                 web_remote_url=web_remote_url,
+            ),
+        )
+        self._add_page(
+            "Lyric",
+            self._mono_icon("display"),
+            self._build_lyric_page(
+                main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
+                search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
+                new_lyric_file_format=self._new_lyric_file_format,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -2043,6 +2070,7 @@ class OptionsDialog(QDialog):
         self._add_state_color_row(indicator_form, "cue_indicator", "Cue Indicator")
         self._add_state_color_row(indicator_form, "volume_indicator", "Volume Indicator")
         self._add_state_color_row(indicator_form, "midi_indicator", "MIDI Indicator")
+        self._add_state_color_row(indicator_form, "lyric_indicator", "Lyric Indicator")
         self.sound_text_color_btn = QPushButton()
         self.sound_text_color_btn.clicked.connect(self._pick_sound_text_color)
         self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
@@ -2614,6 +2642,52 @@ class OptionsDialog(QDialog):
         )
         return page
 
+    def _build_lyric_page(
+        self,
+        main_ui_lyric_display_mode: str,
+        search_lyric_on_add_sound_button: bool,
+        new_lyric_file_format: str,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        display_group = QGroupBox("Main UI Lyric Display")
+        display_layout = QVBoxLayout(display_group)
+        token = str(main_ui_lyric_display_mode or "").strip().lower()
+        if token not in {"always", "when_available", "never"}:
+            token = "always"
+        self.main_ui_lyric_display_always_radio = QRadioButton("Always")
+        self.main_ui_lyric_display_when_available_radio = QRadioButton("When Lyric Available")
+        self.main_ui_lyric_display_never_radio = QRadioButton("Never")
+        if token == "when_available":
+            self.main_ui_lyric_display_when_available_radio.setChecked(True)
+        elif token == "never":
+            self.main_ui_lyric_display_never_radio.setChecked(True)
+        else:
+            self.main_ui_lyric_display_always_radio.setChecked(True)
+        display_layout.addWidget(self.main_ui_lyric_display_always_radio)
+        display_layout.addWidget(self.main_ui_lyric_display_when_available_radio)
+        display_layout.addWidget(self.main_ui_lyric_display_never_radio)
+        layout.addWidget(display_group)
+
+        link_group = QGroupBox("Lyric Link")
+        link_layout = QFormLayout(link_group)
+        self.search_lyric_on_add_sound_button_checkbox = QCheckBox("Search lyric file when adding sound button")
+        self.search_lyric_on_add_sound_button_checkbox.setChecked(bool(search_lyric_on_add_sound_button))
+        link_layout.addRow(self.search_lyric_on_add_sound_button_checkbox)
+        self.new_lyric_file_format_combo = QComboBox()
+        self.new_lyric_file_format_combo.addItem("SRT", "srt")
+        self.new_lyric_file_format_combo.addItem("LRC", "lrc")
+        token = str(new_lyric_file_format or "").strip().lower()
+        if token not in {"srt", "lrc"}:
+            token = "srt"
+        self._set_combo_data_or_default(self.new_lyric_file_format_combo, token, "srt")
+        link_layout.addRow("Default format for new lyric file:", self.new_lyric_file_format_combo)
+        layout.addWidget(link_group)
+
+        layout.addStretch(1)
+        return page
+
     @classmethod
     def _normalize_stage_display_layout(cls, values: List[str]) -> List[str]:
         gadgets = normalize_stage_display_gadgets({}, legacy_layout=values)
@@ -3119,6 +3193,20 @@ class OptionsDialog(QDialog):
         if self.now_playing_caption_note_radio.isChecked():
             return "caption_note"
         return "caption"
+
+    def selected_main_ui_lyric_display_mode(self) -> str:
+        if self.main_ui_lyric_display_when_available_radio.isChecked():
+            return "when_available"
+        if self.main_ui_lyric_display_never_radio.isChecked():
+            return "never"
+        return "always"
+
+    def selected_search_lyric_on_add_sound_button(self) -> bool:
+        return bool(self.search_lyric_on_add_sound_button_checkbox.isChecked())
+
+    def selected_new_lyric_file_format(self) -> str:
+        value = str(self.new_lyric_file_format_combo.currentData() or "srt").strip().lower()
+        return value if value in {"srt", "lrc"} else "srt"
 
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
@@ -3927,6 +4015,9 @@ class OptionsDialog(QDialog):
         if idx == 13:
             self._restore_web_remote_defaults()
             return
+        if idx == 14:
+            self._restore_lyric_defaults()
+            return
 
     def _restore_language_defaults(self) -> None:
         d = self._DEFAULTS
@@ -4478,3 +4569,21 @@ class OptionsDialog(QDialog):
         d = self._DEFAULTS
         self.web_remote_enabled_checkbox.setChecked(bool(d["web_remote_enabled"]))
         self.web_remote_port_spin.setValue(int(d["web_remote_port"]))
+
+    def _restore_lyric_defaults(self) -> None:
+        d = self._DEFAULTS
+        token = str(d.get("main_ui_lyric_display_mode", "always")).strip().lower()
+        if token == "when_available":
+            self.main_ui_lyric_display_when_available_radio.setChecked(True)
+        elif token == "never":
+            self.main_ui_lyric_display_never_radio.setChecked(True)
+        else:
+            self.main_ui_lyric_display_always_radio.setChecked(True)
+        self.search_lyric_on_add_sound_button_checkbox.setChecked(
+            bool(d.get("search_lyric_on_add_sound_button", True))
+        )
+        self._set_combo_data_or_default(
+            self.new_lyric_file_format_combo,
+            str(d.get("new_lyric_file_format", "srt")),
+            "srt",
+        )

@@ -457,14 +457,18 @@ class GroupButton(QPushButton):
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event) -> None:
-        if self._host._can_accept_sound_button_drop(event.mimeData()):
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_page_button_drop(
+            event.mimeData()
+        ):
             self._host._handle_drag_over_group(self.group)
             event.acceptProposedAction()
             return
         event.ignore()
 
     def dragMoveEvent(self, event) -> None:
-        if self._host._can_accept_sound_button_drop(event.mimeData()):
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_page_button_drop(
+            event.mimeData()
+        ):
             self._host._handle_drag_over_group(self.group)
             event.acceptProposedAction()
             return
@@ -2195,6 +2199,8 @@ class MainWindow(QMainWindow):
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
+        self._page_drag_source_key: Optional[Tuple[str, int]] = None
+        self._page_drag_start_pos = None
         self._track_started_at = 0.0
         self._ignore_state_changes = 0
         self._dirty = False
@@ -5905,6 +5911,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_sound_grid(self) -> None:
         page = self._current_page_slots()
+        ram_indicator_enabled = not self._is_button_drag_enabled()
         sound_bindings = self._collect_sound_button_hotkey_bindings() if self.sound_button_hotkey_enabled else {}
         blocked_sound_tokens = (
             self._registered_system_and_quick_tokens()
@@ -5921,7 +5928,7 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
-                button.set_ram_loaded(is_audio_preloaded(slot.file_path))
+                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(slot.file_path))
                 has_cue = self._slot_has_custom_cue(slot)
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:
@@ -6241,6 +6248,9 @@ class MainWindow(QMainWindow):
             return
         if not checked:
             self._drag_source_key = None
+            self._page_drag_source_key = None
+            self._page_drag_start_pos = None
+        self._sync_preload_pause_state(self._is_playback_in_progress())
         self._update_button_drag_visual_state()
 
     def _on_sound_button_clicked(self, slot_index: int) -> None:
@@ -6254,11 +6264,22 @@ class MainWindow(QMainWindow):
     def _can_accept_sound_button_drop(self, mime_data: QMimeData) -> bool:
         return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-slot")
 
+    def _can_accept_page_button_drop(self, mime_data: QMimeData) -> bool:
+        return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-page")
+
     def _build_drag_mime(self, slot_key: Tuple[str, int, int]) -> QMimeData:
         mime = QMimeData()
         mime.setData(
             "application/x-pyssp-slot",
             f"{slot_key[0]}|{slot_key[1]}|{slot_key[2]}".encode("utf-8"),
+        )
+        return mime
+
+    def _build_page_drag_mime(self, page_key: Tuple[str, int]) -> QMimeData:
+        mime = QMimeData()
+        mime.setData(
+            "application/x-pyssp-page",
+            f"{page_key[0]}|{page_key[1]}".encode("utf-8"),
         )
         return mime
 
@@ -6281,6 +6302,24 @@ class MainWindow(QMainWindow):
             return None
         return (group, page, slot)
 
+    def _parse_page_drag_mime(self, mime_data: QMimeData) -> Optional[Tuple[str, int]]:
+        if not mime_data.hasFormat("application/x-pyssp-page"):
+            return None
+        raw = bytes(mime_data.data("application/x-pyssp-page")).decode("utf-8", errors="ignore")
+        parts = raw.split("|")
+        if len(parts) != 2:
+            return None
+        group = parts[0].strip().upper()
+        if group not in GROUPS:
+            return None
+        try:
+            page = int(parts[1])
+        except ValueError:
+            return None
+        if page < 0 or page >= PAGE_COUNT:
+            return None
+        return (group, page)
+
     def _start_sound_button_drag(self, slot_index: int) -> None:
         if not self._is_button_drag_enabled() or self.cue_mode:
             return
@@ -6299,6 +6338,28 @@ class MainWindow(QMainWindow):
         drag.setHotSpot(self.sound_buttons[slot_index].rect().center())
         drag.exec_(Qt.MoveAction)
 
+    def _start_page_button_drag(self, source_page_index: int) -> None:
+        if not self._is_button_drag_enabled() or self.cue_mode:
+            return
+        if source_page_index < 0 or source_page_index >= PAGE_COUNT:
+            return
+        source_key = (self.current_group, source_page_index)
+        self._page_drag_source_key = source_key
+        if not self._is_page_created(source_key[0], source_key[1]):
+            return
+        if self._page_has_active_playing_slot(source_key[0], source_key[1]):
+            self._show_info_notice_banner("Cannot drag currently playing pages.")
+            return
+        drag = QDrag(self.page_list.viewport())
+        drag.setMimeData(self._build_page_drag_mime(source_key))
+        source_item = self.page_list.item(source_page_index)
+        if source_item is not None:
+            source_rect = self.page_list.visualItemRect(source_item)
+            if source_rect.isValid() and (not source_rect.isEmpty()):
+                drag.setPixmap(self.page_list.viewport().grab(source_rect))
+                drag.setHotSpot(source_rect.center() - source_rect.topLeft())
+        drag.exec_(Qt.MoveAction)
+
     def _handle_drag_over_group(self, group: str) -> None:
         if not self._is_button_drag_enabled() or self.cue_mode:
             return
@@ -6308,12 +6369,12 @@ class MainWindow(QMainWindow):
             return
         self._select_group(group)
 
-    def _handle_drag_over_page(self, page_index: int) -> bool:
+    def _handle_drag_over_page(self, page_index: int, require_created: bool = True) -> bool:
         if not self._is_button_drag_enabled() or self.cue_mode:
             return False
         if page_index < 0 or page_index >= PAGE_COUNT:
             return False
-        if not self._is_page_created(self.current_group, page_index):
+        if require_created and (not self._is_page_created(self.current_group, page_index)):
             return False
         if page_index == self.current_page:
             return True
@@ -6373,6 +6434,97 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+        return True
+
+    def _page_has_active_playing_slot(self, group: str, page_index: int) -> bool:
+        for key in self._active_playing_keys:
+            if key[0] == group and key[1] == page_index:
+                return True
+        return False
+
+    def _capture_page_payload(self, group: str, page_index: int) -> dict:
+        return {
+            "slots": [self._clone_slot(slot) for slot in self.data[group][page_index]],
+            "page_name": self.page_names[group][page_index],
+            "page_color": self.page_colors[group][page_index],
+            "playlist_enabled": bool(self.page_playlist_enabled[group][page_index]),
+            "shuffle_enabled": bool(self.page_shuffle_enabled[group][page_index]),
+        }
+
+    def _apply_page_payload(self, group: str, page_index: int, payload: dict) -> None:
+        self.data[group][page_index] = [self._clone_slot(slot) for slot in payload.get("slots", [])]
+        if len(self.data[group][page_index]) < SLOTS_PER_PAGE:
+            self.data[group][page_index].extend(SoundButtonData() for _ in range(SLOTS_PER_PAGE - len(self.data[group][page_index])))
+        self.page_names[group][page_index] = str(payload.get("page_name", ""))
+        self.page_colors[group][page_index] = payload.get("page_color")
+        self.page_playlist_enabled[group][page_index] = bool(payload.get("playlist_enabled", False))
+        self.page_shuffle_enabled[group][page_index] = bool(payload.get("shuffle_enabled", False))
+
+    def _clear_page_payload(self, group: str, page_index: int) -> None:
+        self.data[group][page_index] = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.page_names[group][page_index] = ""
+        self.page_colors[group][page_index] = None
+        self.page_playlist_enabled[group][page_index] = False
+        self.page_shuffle_enabled[group][page_index] = False
+
+    def _handle_page_button_drop(self, dest_page_index: int, mime_data: QMimeData) -> bool:
+        source_key = self._parse_page_drag_mime(mime_data)
+        if source_key is None:
+            return False
+        if self.cue_mode:
+            return False
+        if dest_page_index < 0 or dest_page_index >= PAGE_COUNT:
+            return False
+        dest_key = (self.current_group, dest_page_index)
+        if source_key == dest_key:
+            return False
+        if not self._is_page_created(source_key[0], source_key[1]):
+            return False
+        if self._page_has_active_playing_slot(source_key[0], source_key[1]) or self._page_has_active_playing_slot(
+            dest_key[0], dest_key[1]
+        ):
+            self._show_info_notice_banner("Cannot drag currently playing pages.")
+            return False
+
+        source_payload = self._capture_page_payload(source_key[0], source_key[1])
+        dest_has_content = self._is_page_created(dest_key[0], dest_key[1])
+        if not dest_has_content:
+            self._apply_page_payload(dest_key[0], dest_key[1], source_payload)
+            self._clear_page_payload(source_key[0], source_key[1])
+        else:
+            box = QMessageBox(self)
+            box.setWindowTitle("Page Drag")
+            box.setText("Destination has content.")
+            replace_btn = box.addButton("Replace", QMessageBox.AcceptRole)
+            swap_btn = box.addButton("Swap", QMessageBox.ActionRole)
+            cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec_()
+            clicked = box.clickedButton()
+            if clicked == cancel_btn or clicked is None:
+                return False
+            if clicked == replace_btn:
+                self._apply_page_payload(dest_key[0], dest_key[1], source_payload)
+                self._clear_page_payload(source_key[0], source_key[1])
+            elif clicked == swap_btn:
+                dest_payload = self._capture_page_payload(dest_key[0], dest_key[1])
+                self._apply_page_payload(dest_key[0], dest_key[1], source_payload)
+                self._apply_page_payload(source_key[0], source_key[1], dest_payload)
+            else:
+                return False
+
+        self.current_group = dest_key[0]
+        self.current_page = dest_key[1]
+        self.settings.last_group = self.current_group
+        self.settings.last_page = self.current_page
+        self.current_playlist_start = None
+        self._set_dirty(True)
+        self._sync_playlist_shuffle_buttons()
+        self._refresh_group_buttons()
+        self._refresh_page_list()
+        self._refresh_sound_grid()
+        self._update_group_status()
+        self._update_page_status()
+        self._queue_current_page_audio_preload()
         return True
 
     def _insert_place_marker(self, slot_index: int) -> None:
@@ -8226,7 +8378,7 @@ class MainWindow(QMainWindow):
         self._queue_current_page_audio_preload()
 
     def _queue_current_page_audio_preload(self) -> None:
-        if not self.preload_audio_enabled or not self.preload_current_page_audio:
+        if not self.preload_audio_enabled or not self.preload_current_page_audio or self._is_button_drag_enabled():
             return
         # Cache stores float32 stereo PCM (~352.8 bytes/ms @ 44.1kHz), use this as a practical estimate.
         bytes_per_ms = 352.8
@@ -8256,6 +8408,10 @@ class MainWindow(QMainWindow):
             request_audio_preload(paths, prioritize=True)
 
     def _refresh_current_page_ram_loaded_indicators(self) -> None:
+        if self._is_button_drag_enabled():
+            for button in self.sound_buttons:
+                button.set_ram_loaded(False)
+            return
         page = self._current_page_slots()
         for i, button in enumerate(self.sound_buttons):
             if i >= len(page):
@@ -8268,7 +8424,7 @@ class MainWindow(QMainWindow):
                 button.set_ram_loaded(False)
 
     def _sync_preload_pause_state(self, playback_active: bool) -> None:
-        should_pause = bool(self.preload_pause_on_playback and playback_active)
+        should_pause = bool((self.preload_pause_on_playback and playback_active) or self._is_button_drag_enabled())
         if should_pause == self._preload_runtime_paused:
             return
         self._preload_runtime_paused = should_pause
@@ -11414,8 +11570,38 @@ class MainWindow(QMainWindow):
         if obj is self.page_list.viewport():
             if event.type() == QEvent.Resize:
                 self._update_page_list_item_heights()
+            elif event.type() == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    item = self.page_list.itemAt(event.pos())
+                    row = self.page_list.row(item) if item is not None else -1
+                    if 0 <= row < PAGE_COUNT:
+                        self._page_drag_source_key = (self.current_group, row)
+                        self._page_drag_start_pos = event.pos()
+                    else:
+                        self._page_drag_source_key = None
+                        self._page_drag_start_pos = None
+            elif event.type() == QEvent.MouseMove:
+                if (
+                    self._page_drag_start_pos is not None
+                    and (event.buttons() & Qt.LeftButton)
+                    and self._is_button_drag_enabled()
+                    and self._page_drag_source_key is not None
+                ):
+                    if (event.pos() - self._page_drag_start_pos).manhattanLength() >= QApplication.startDragDistance():
+                        source_group, source_page = self._page_drag_source_key
+                        if source_group == self.current_group:
+                            self._start_page_button_drag(source_page)
+                        self._page_drag_start_pos = None
+                        self._page_drag_source_key = None
+                        return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._page_drag_start_pos = None
+                self._page_drag_source_key = None
             elif event.type() == QEvent.DragEnter:
                 if self._can_accept_sound_button_drop(event.mimeData()):
+                    event.acceptProposedAction()
+                    return True
+                if self._can_accept_page_button_drop(event.mimeData()):
                     event.acceptProposedAction()
                     return True
             elif event.type() == QEvent.DragMove:
@@ -11425,10 +11611,22 @@ class MainWindow(QMainWindow):
                     if self._handle_drag_over_page(row):
                         event.acceptProposedAction()
                         return True
+                if self._can_accept_page_button_drop(event.mimeData()):
+                    item = self.page_list.itemAt(event.pos())
+                    row = self.page_list.row(item) if item is not None else -1
+                    if self._handle_drag_over_page(row, require_created=False):
+                        event.acceptProposedAction()
+                        return True
             elif event.type() == QEvent.Drop:
                 if self._can_accept_sound_button_drop(event.mimeData()):
                     event.acceptProposedAction()
                     return True
+                if self._can_accept_page_button_drop(event.mimeData()):
+                    item = self.page_list.itemAt(event.pos())
+                    row = self.page_list.row(item) if item is not None else -1
+                    if self._handle_page_button_drop(row, event.mimeData()):
+                        event.acceptProposedAction()
+                        return True
         return super().eventFilter(obj, event)
 
     def _handle_space_bar_action(self) -> None:

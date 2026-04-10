@@ -94,6 +94,7 @@ class _GridLayoutButton(QFrame):
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setWordWrap(True)
         self._label.setStyleSheet("color:#FFFFFF;")
+        self._label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._drag_mode = ""
         self._drag_start_local = QPoint()
         self._start_pos = QPoint()
@@ -106,6 +107,7 @@ class _GridLayoutButton(QFrame):
         self._resize_handle = QFrame(self)
         self._resize_handle.setFixedSize(10, 10)
         self._resize_handle.setStyleSheet("QFrame{background:#A8C4E8;border:1px solid #D6E4F8;border-radius:2px;}")
+        self._resize_handle.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._delete_btn = QPushButton("x", self)
         self._delete_btn.setFixedSize(16, 16)
         self._delete_btn.setStyleSheet(
@@ -160,7 +162,7 @@ class _GridLayoutButton(QFrame):
             )
             event.accept()
             return
-        if (event.pos() - self._drag_start_local).manhattanLength() < 6:
+        if (event.globalPos() - self._start_pos).manhattanLength() < 6:
             return
         payload = parent.payload_for_uid(self.uid)
         if payload is None:
@@ -171,9 +173,10 @@ class _GridLayoutButton(QFrame):
         drag.setMimeData(mime)
         drag.setPixmap(self.grab())
         drag.setHotSpot(self.rect().center())
-        drag.exec_(Qt.MoveAction | Qt.CopyAction, Qt.MoveAction)
-        self.setCursor(Qt.OpenHandCursor)
+        # The source widget may be deleted during drop handling; do not touch `self` after exec_.
         self._drag_mode = ""
+        self.setCursor(Qt.OpenHandCursor)
+        drag.exec_(Qt.MoveAction | Qt.CopyAction, Qt.MoveAction)
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -272,6 +275,7 @@ class _GridLayoutCanvas(QWidget):
         self._items: List[Dict[str, object]] = []
         self._blocks: Dict[str, _GridLayoutButton] = {}
         self._uid_counter = 0
+        self._drag_hover_cell: Optional[tuple[int, int]] = None
         self.setAcceptDrops(True)
         self.setMinimumHeight(180)
         self.setStyleSheet("background:#15191E;")
@@ -407,11 +411,13 @@ class _GridLayoutCanvas(QWidget):
         self.changed.emit()
         return token
 
-    def remove_all_by_button(self, button: str) -> List[Dict[str, object]]:
+    def remove_all_by_button(self, button: str, exclude_uid: str = "") -> List[Dict[str, object]]:
         removed: List[Dict[str, object]] = []
         keep: List[Dict[str, object]] = []
         for item in self._items:
-            if str(item.get("button", "")) == str(button):
+            if str(item.get("button", "")) == str(button) and (
+                not exclude_uid or str(item.get("uid", "")) != str(exclude_uid)
+            ):
                 removed.append(item)
             else:
                 keep.append(item)
@@ -474,20 +480,43 @@ class _GridLayoutCanvas(QWidget):
         for row in range(self._rows + 1):
             y = int(area.y() + round(row * cell_h))
             painter.drawLine(area.x(), y, area.right(), y)
+        if self._drag_hover_cell is not None:
+            hx = int(max(0, min(self._columns - 1, self._drag_hover_cell[0])))
+            hy = int(max(0, min(self._rows - 1, self._drag_hover_cell[1])))
+            x = int(area.x() + round(hx * cell_w))
+            y = int(area.y() + round(hy * cell_h))
+            w = int(round(cell_w))
+            h = int(round(cell_h))
+            painter.fillRect(QRect(x + 1, y + 1, max(2, w - 2), max(2, h - 2)), QColor(102, 163, 255, 70))
+            hi_pen = QPen(QColor("#66A3FF"))
+            hi_pen.setWidth(2)
+            painter.setPen(hi_pen)
+            painter.drawRect(QRect(x + 1, y + 1, max(2, w - 2), max(2, h - 2)))
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            self._drag_hover_cell = self.snap_to_grid(event.pos())
+            self.update()
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:
         if event.mimeData().hasFormat(WINDOW_LAYOUT_DRAG_MIME):
+            self._drag_hover_cell = self.snap_to_grid(event.pos())
+            self.update()
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
 
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_hover_cell = None
+        self.update()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:
+        self._drag_hover_cell = None
+        self.update()
         raw = bytes(event.mimeData().data(WINDOW_LAYOUT_DRAG_MIME)).decode("utf-8", errors="ignore")
         if raw:
             self.dropped.emit(raw, event.pos().x(), event.pos().y())
@@ -1080,6 +1109,8 @@ class OptionsDialog(QDialog):
             else "caption"
         )
         self._window_layout = normalize_window_layout(window_layout)
+        self._window_layout_drop_in_progress = False
+        self._window_layout_capture_pending = False
         self._main_ui_lyric_display_mode = (
             str(main_ui_lyric_display_mode or "").strip().lower()
             if str(main_ui_lyric_display_mode or "").strip().lower() in {"always", "when_available", "never"}
@@ -2986,6 +3017,9 @@ class OptionsDialog(QDialog):
         return page
 
     def _capture_window_layout_from_editor(self) -> None:
+        if getattr(self, "_window_layout_drop_in_progress", False):
+            self._window_layout_capture_pending = True
+            return
         if not hasattr(self, "window_layout_main_editor") or not hasattr(self, "window_layout_fade_editor"):
             return
         available_buttons = (
@@ -3004,6 +3038,7 @@ class OptionsDialog(QDialog):
             }
         )
         self._refresh_window_layout_available_list()
+        self._window_layout_capture_pending = False
 
     def _handle_window_layout_drop(self, target: str, raw_payload: str, px: int, py: int) -> None:
         try:
@@ -3017,8 +3052,14 @@ class OptionsDialog(QDialog):
             return
         source_zone = str(payload.get("source_zone", "")).strip().lower()
         uid = str(payload.get("uid", "")).strip()
-        w = max(1, int(payload.get("w", 1)))
-        h = max(1, int(payload.get("h", 1)))
+        try:
+            w = max(1, int(payload.get("w", 1)))
+        except Exception:
+            w = 1
+        try:
+            h = max(1, int(payload.get("h", 1)))
+        except Exception:
+            h = 1
 
         src_canvas = None
         if source_zone == "main":
@@ -3032,77 +3073,94 @@ class OptionsDialog(QDialog):
         elif target == "fade":
             dst_canvas = self.window_layout_fade_editor
 
-        allow_dupes = bool(self.window_layout_show_all_checkbox.isChecked())
-        if (not allow_dupes) and target in {"main", "fade"}:
-            self.window_layout_main_editor.remove_all_by_button(button)
-            self.window_layout_fade_editor.remove_all_by_button(button)
-
-        if target == "available":
-            if src_canvas is not None and uid:
-                src_canvas.remove_uid(uid)
-            self._capture_window_layout_from_editor()
-            return
-
-        if dst_canvas is None:
-            return
-        gx, gy = dst_canvas.snap_to_grid(QPoint(px, py))
         source_item = src_canvas.get_item(uid) if (src_canvas is not None and uid) else None
         source_uid = str(source_item.get("uid", uid)) if source_item else str(uid)
         source_button = str(source_item.get("button", button)) if source_item else button
         source_w = int(source_item.get("w", w)) if source_item else w
         source_h = int(source_item.get("h", h)) if source_item else h
-        source_x = int(source_item.get("x", 0)) if source_item else gx
-        source_y = int(source_item.get("y", 0)) if source_item else gy
+        source_x = int(source_item.get("x", 0)) if source_item else 0
+        source_y = int(source_item.get("y", 0)) if source_item else 0
 
-        occupied = dst_canvas.occupied_item_at(gx, gy, exclude_uid=(source_uid if src_canvas is dst_canvas else ""))
-        if occupied is not None:
-            decision = self._confirm_layout_overlap_action()
-            if decision == "cancel":
-                return
-            if decision == "copy":
-                if src_canvas is not None and uid and source_item is not None:
-                    src_canvas.remove_uid(uid)
-                dst_canvas.upsert_item(
-                    str(occupied.get("uid", "")),
+        changed = False
+        self._window_layout_drop_in_progress = True
+        try:
+            allow_dupes = bool(self.window_layout_show_all_checkbox.isChecked())
+            if (not allow_dupes) and target in {"main", "fade"}:
+                removed_main = self.window_layout_main_editor.remove_all_by_button(
                     source_button,
-                    int(occupied.get("x", gx)),
-                    int(occupied.get("y", gy)),
-                    int(occupied.get("w", 1)),
-                    int(occupied.get("h", 1)),
+                    exclude_uid=(source_uid if src_canvas is self.window_layout_main_editor else ""),
                 )
-                self._capture_window_layout_from_editor()
+                removed_fade = self.window_layout_fade_editor.remove_all_by_button(
+                    source_button,
+                    exclude_uid=(source_uid if src_canvas is self.window_layout_fade_editor else ""),
+                )
+                changed = bool(removed_main or removed_fade) or changed
+
+            if target == "available":
+                if src_canvas is not None and uid:
+                    changed = src_canvas.remove_uid(uid) is not None or changed
                 return
-            # swap
-            target_uid = str(occupied.get("uid", ""))
-            target_button = str(occupied.get("button", ""))
-            target_x = int(occupied.get("x", gx))
-            target_y = int(occupied.get("y", gy))
-            target_w = int(occupied.get("w", 1))
-            target_h = int(occupied.get("h", 1))
 
-            if src_canvas is not None and uid and source_item is not None:
-                src_canvas.remove_uid(uid)
-            dst_canvas.upsert_item(target_uid, source_button, target_x, target_y, target_w, target_h)
-            if src_canvas is not None and source_item is not None:
-                src_canvas.add_item(target_button, source_x, source_y, source_w, source_h, uid=source_uid)
-            else:
-                current = self.window_layout_available_list.buttons()
-                if target_button not in current:
-                    current.append(target_button)
-                    self.window_layout_available_list.set_buttons(current)
+            if dst_canvas is None:
+                return
+            gx, gy = dst_canvas.snap_to_grid(QPoint(px, py))
+            if source_item is None:
+                source_x, source_y = gx, gy
+
+            occupied = dst_canvas.occupied_item_at(gx, gy, exclude_uid=(source_uid if src_canvas is dst_canvas else ""))
+            if occupied is not None:
+                decision = self._confirm_layout_overlap_action()
+                if decision == "cancel":
+                    return
+                if decision == "copy":
+                    if src_canvas is not None and uid and source_item is not None:
+                        changed = src_canvas.remove_uid(uid) is not None or changed
+                    dst_canvas.upsert_item(
+                        str(occupied.get("uid", "")),
+                        source_button,
+                        int(occupied.get("x", gx)),
+                        int(occupied.get("y", gy)),
+                        int(occupied.get("w", 1)),
+                        int(occupied.get("h", 1)),
+                    )
+                    changed = True
+                    return
+                # swap
+                target_uid = str(occupied.get("uid", ""))
+                target_button = str(occupied.get("button", ""))
+                target_x = int(occupied.get("x", gx))
+                target_y = int(occupied.get("y", gy))
+                target_w = int(occupied.get("w", 1))
+                target_h = int(occupied.get("h", 1))
+
+                if src_canvas is not None and uid and source_item is not None:
+                    changed = src_canvas.remove_uid(uid) is not None or changed
+                dst_canvas.upsert_item(target_uid, source_button, target_x, target_y, target_w, target_h)
+                if src_canvas is not None and source_item is not None:
+                    src_canvas.add_item(target_button, source_x, source_y, source_w, source_h, uid=source_uid)
+                else:
+                    current = self.window_layout_available_list.buttons()
+                    if target_button not in current:
+                        current.append(target_button)
+                        self.window_layout_available_list.set_buttons(current)
+                changed = True
+                return
+
+            reuse_uid = None
+            if src_canvas is not None and uid:
+                removed = src_canvas.remove_uid(uid)
+                if removed is not None:
+                    changed = True
+                    reuse_uid = str(removed.get("uid", ""))
+                    source_w = int(removed.get("w", source_w))
+                    source_h = int(removed.get("h", source_h))
+                    source_button = str(removed.get("button", source_button))
+            dst_canvas.add_item(source_button, gx, gy, source_w, source_h, uid=reuse_uid)
+            changed = True
+        finally:
+            self._window_layout_drop_in_progress = False
+        if changed or self._window_layout_capture_pending:
             self._capture_window_layout_from_editor()
-            return
-
-        reuse_uid = None
-        if src_canvas is not None and uid:
-            removed = src_canvas.remove_uid(uid)
-            if removed is not None:
-                reuse_uid = str(removed.get("uid", ""))
-                source_w = int(removed.get("w", source_w))
-                source_h = int(removed.get("h", source_h))
-                source_button = str(removed.get("button", source_button))
-        dst_canvas.add_item(source_button, gx, gy, source_w, source_h, uid=reuse_uid)
-        self._capture_window_layout_from_editor()
 
     def _refresh_window_layout_available_list(self) -> None:
         if not hasattr(self, "window_layout_available_list"):

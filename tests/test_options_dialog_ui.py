@@ -389,3 +389,58 @@ def test_restore_defaults_window_layout_page(qapp):
     x_item = [item for item in selected["fade"] if item.get("button") == "X"][0]
     assert stop == {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2}
     assert x_item == {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1}
+
+
+def test_window_layout_drop_invalid_size_payload_is_tolerated(qapp):
+    dialog = _build_dialog(initial_page="Window Layout")
+    raw_payload = '{"source":"available","source_zone":"available","uid":"","button":"Cue","w":"bad","h":"bad"}'
+    dialog._handle_window_layout_drop("main", raw_payload, 10, 10)
+    selected = dialog.selected_window_layout()
+    cue_items = [item for item in selected["main"] if item.get("button") == "Cue"]
+    assert len(cue_items) == 1
+    assert cue_items[0]["w"] >= 1
+    assert cue_items[0]["h"] >= 1
+
+
+def test_window_layout_move_between_grids_without_duplicates(qapp):
+    dialog = _build_dialog(
+        initial_page="Window Layout",
+        window_layout={
+            "main": [{"button": "Cue", "x": 0, "y": 0, "w": 1, "h": 1}],
+            "fade": [],
+            "available": [],
+            "show_all_available": False,
+        },
+    )
+    src = dialog.window_layout_main_editor
+    uid = str(src._items[0]["uid"])
+    payload = src.payload_for_uid(uid)
+    assert payload is not None
+    dialog._handle_window_layout_drop("fade", json.dumps(payload), 10, 10)
+    selected = dialog.selected_window_layout()
+    assert [item for item in selected["main"] if item.get("button") == "Cue"] == []
+    fade_items = [item for item in selected["fade"] if item.get("button") == "Cue"]
+    assert len(fade_items) == 1
+
+
+def test_window_layout_swap_between_grids_replaces_both_sides(qapp):
+    dialog = _build_dialog(
+        initial_page="Window Layout",
+        window_layout={
+            "main": [{"button": "Cue", "x": 0, "y": 0, "w": 1, "h": 1}],
+            "fade": [{"button": "X", "x": 0, "y": 0, "w": 1, "h": 1}],
+            "available": [],
+            "show_all_available": False,
+        },
+    )
+    dialog._confirm_layout_overlap_action = lambda: "swap"
+    src = dialog.window_layout_main_editor
+    uid = str(src._items[0]["uid"])
+    payload = src.payload_for_uid(uid)
+    assert payload is not None
+    dialog._handle_window_layout_drop("fade", json.dumps(payload), 10, 10)
+    selected = dialog.selected_window_layout()
+    main_buttons = [item.get("button") for item in selected["main"]]
+    fade_buttons = [item.get("button") for item in selected["fade"]]
+    assert "X" in main_buttons
+    assert "Cue" in fade_buttons

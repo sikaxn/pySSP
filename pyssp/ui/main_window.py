@@ -358,21 +358,30 @@ class SoundButton(QPushButton):
 
     def dragEnterEvent(self, event) -> None:
         if self._host._can_accept_sound_button_drop(event.mimeData()):
+            self._host._set_sound_button_drop_target(self.slot_index)
             event.acceptProposedAction()
             return
         event.ignore()
 
     def dragMoveEvent(self, event) -> None:
         if self._host._can_accept_sound_button_drop(event.mimeData()):
+            self._host._set_sound_button_drop_target(self.slot_index)
             event.acceptProposedAction()
             return
         event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:
+        self._host._clear_sound_button_drop_target()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:
         if not self._host._can_accept_sound_button_drop(event.mimeData()):
+            self._host._clear_sound_button_drop_target()
             event.ignore()
             return
-        if self._host._handle_sound_button_drop(self.slot_index, event.mimeData()):
+        dropped = self._host._handle_sound_button_drop(self.slot_index, event.mimeData())
+        self._host._clear_sound_button_drop_target()
+        if dropped:
             event.acceptProposedAction()
             return
         event.ignore()
@@ -2212,6 +2221,7 @@ class MainWindow(QMainWindow):
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
+        self._drag_target_slot_key: Optional[Tuple[str, int, int]] = None
         self._page_drag_source_key: Optional[Tuple[str, int]] = None
         self._page_drag_start_pos = None
         self._track_started_at = 0.0
@@ -6105,11 +6115,18 @@ class MainWindow(QMainWindow):
             if has_custom_timecode:
                 indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
             background = self._build_slot_background_gradient(color, has_midi_hotkey, indicator_colors)
+            slot_key = (self.current_group, self.current_page, i)
+            if self._drag_target_slot_key == slot_key:
+                border = "3px solid #2FCBFF"
+            elif self._hotkey_selected_slot_key == (self._view_group_key(), self.current_page, i):
+                border = "3px solid #FFE04A"
+            else:
+                border = "1px solid #94B8BA"
             button.setStyleSheet(
                 "QPushButton{"
                 f"background:{background};"
                 f"color:{text_color};"
-                f"font-size:10pt;font-weight:bold;border:{'3px solid #FFE04A' if self._hotkey_selected_slot_key == (self._view_group_key(), self.current_page, i) else '1px solid #94B8BA'};"
+                f"font-size:10pt;font-weight:bold;border:{border};"
                 "padding:4px;"
                 "}"
             )
@@ -6407,6 +6424,7 @@ class MainWindow(QMainWindow):
             return
         if not checked:
             self._drag_source_key = None
+            self._clear_sound_button_drop_target()
             self._page_drag_source_key = None
             self._page_drag_start_pos = None
         self._sync_preload_pause_state(self._is_playback_in_progress())
@@ -6496,6 +6514,29 @@ class MainWindow(QMainWindow):
         drag.setPixmap(self.sound_buttons[slot_index].grab())
         drag.setHotSpot(self.sound_buttons[slot_index].rect().center())
         drag.exec_(Qt.MoveAction)
+        self._clear_sound_button_drop_target()
+
+    def _set_sound_button_drop_target(self, slot_index: Optional[int]) -> None:
+        if (
+            slot_index is None
+            or (not self._is_button_drag_enabled())
+            or self.cue_mode
+            or slot_index < 0
+            or slot_index >= SLOTS_PER_PAGE
+        ):
+            target = None
+        else:
+            target = (self.current_group, self.current_page, int(slot_index))
+        if target == self._drag_target_slot_key:
+            return
+        self._drag_target_slot_key = target
+        self._refresh_sound_grid()
+
+    def _clear_sound_button_drop_target(self) -> None:
+        if self._drag_target_slot_key is None:
+            return
+        self._drag_target_slot_key = None
+        self._refresh_sound_grid()
 
     def _start_page_button_drag(self, source_page_index: int) -> None:
         if not self._is_button_drag_enabled() or self.cue_mode:

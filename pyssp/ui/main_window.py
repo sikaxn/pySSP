@@ -648,7 +648,7 @@ class ToolListWindow(QDialog):
 
 
 class AboutWindowDialog(QDialog):
-    def __init__(self, title: str, logo_path: str, parent=None) -> None:
+    def __init__(self, title: str, logo_path: str, version_text: str = "", website_url: str = "", parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(False)
@@ -679,6 +679,18 @@ class AboutWindowDialog(QDialog):
         self.notice_label.setAlignment(Qt.AlignCenter)
         self.notice_label.setWordWrap(True)
         root.addWidget(self.notice_label)
+        self.version_label = QLabel("", self)
+        self.version_label.setAlignment(Qt.AlignCenter)
+        self.version_label.setWordWrap(True)
+        root.addWidget(self.version_label)
+        self.website_label = QLabel("", self)
+        self.website_label.setAlignment(Qt.AlignCenter)
+        self.website_label.setWordWrap(True)
+        self.website_label.setOpenExternalLinks(True)
+        self.website_label.setTextFormat(Qt.RichText)
+        self.website_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        root.addWidget(self.website_label)
+        self.set_version_and_website(version_text, website_url)
 
         self.tabs = QTabWidget(self)
         root.addWidget(self.tabs, 1)
@@ -724,6 +736,23 @@ class AboutWindowDialog(QDialog):
         self.about_viewer.setPlainText(about_text)
         self.credits_viewer.setPlainText(credits_text)
         self.license_viewer.setPlainText(license_text)
+
+    def set_version_and_website(self, version_text: str, website_url: str) -> None:
+        version_value = str(version_text or "").strip()
+        if version_value:
+            self.version_label.setText(f"{tr('Version:')} {version_value}")
+            self.version_label.setVisible(True)
+        else:
+            self.version_label.setText("")
+            self.version_label.setVisible(False)
+        site = str(website_url or "").strip()
+        if site:
+            safe_site = html.escape(site, quote=True)
+            self.website_label.setText(f'<a href="{safe_site}">{safe_site}</a>')
+            self.website_label.setVisible(True)
+        else:
+            self.website_label.setText("")
+            self.website_label.setVisible(False)
 
 
 class TimecodePanel(QWidget):
@@ -3029,6 +3058,9 @@ class MainWindow(QMainWindow):
         latest_version_action = QAction("Get the Latest Version", self)
         latest_version_action.triggered.connect(self._open_latest_version_page)
         help_menu.addAction(latest_version_action)
+        website_action = QAction("Website", self)
+        website_action.triggered.connect(self._open_website_page)
+        help_menu.addAction(website_action)
 
         tips_action = QAction("Tips", self)
         tips_action.triggered.connect(lambda _=False: self._open_tips_window(startup=False))
@@ -4108,6 +4140,8 @@ class MainWindow(QMainWindow):
             self._about_window = AboutWindowDialog(
                 title="About",
                 logo_path=self._asset_file_path("logo2.png"),
+                version_text=self.app_version_text,
+                website_url=self._website_url(),
                 parent=self,
             )
             self._about_window.destroyed.connect(lambda _=None: self._clear_about_window_ref())
@@ -4115,6 +4149,7 @@ class MainWindow(QMainWindow):
         about_text = self._load_asset_text_file("about", "about.md").replace("{{VERSION}}", self.app_version_text)
         credits_text = self._load_asset_text_file("about", "credits.md")
         license_text = self._load_asset_text_file("about", "license.md")
+        self._about_window.set_version_and_website(self.app_version_text, self._website_url())
         self._about_window.set_content(about_text=about_text, credits_text=credits_text, license_text=license_text)
         self._about_window.show()
         self._about_window.raise_()
@@ -4146,6 +4181,18 @@ class MainWindow(QMainWindow):
                 self,
                 "Help Open Failed",
                 f"Could not open URL with the default browser.\n\nURL:\n{releases_url.toString()}",
+            )
+
+    def _website_url(self) -> str:
+        return "https://pyssp.studenttechsupport.com/"
+
+    def _open_website_page(self) -> None:
+        website_url = QUrl(self._website_url())
+        if not QDesktopServices.openUrl(website_url):
+            QMessageBox.warning(
+                self,
+                "Help Open Failed",
+                f"Could not open URL with the default browser.\n\nURL:\n{website_url.toString()}",
             )
 
     def _open_web_lyric_display(self, view_name: str) -> None:

@@ -2894,6 +2894,9 @@ class MainWindow(QMainWindow):
         options_action.triggered.connect(self._open_options_dialog)
         setup_menu.addAction(options_action)
         self._menu_actions["options"] = options_action
+        open_web_remote_action = QAction("Open Web Remote", self)
+        open_web_remote_action.triggered.connect(self._open_web_remote)
+        setup_menu.addAction(open_web_remote_action)
 
         display_menu = self.menuBar().addMenu("Display")
         show_display_action = QAction("Show Stage Display", self)
@@ -4132,6 +4135,8 @@ class MainWindow(QMainWindow):
         target = str(view_name or "").strip().lower()
         if target not in {"caption", "overhead", "banner", "vmixoverlay"}:
             return
+        if not self._require_web_remote_enabled(tr("Web Lyric Display")):
+            return
         base = self._web_remote_open_url().rstrip("/")
         url = QUrl(f"{base}/lyric/{target}/?ws_port={int(self.web_remote_ws_port)}&ws_path=/ws")
         if not QDesktopServices.openUrl(url):
@@ -4140,6 +4145,25 @@ class MainWindow(QMainWindow):
                 "Web Lyric Display Open Failed",
                 f"Could not open URL with the default browser.\n\nURL:\n{url.toString()}",
             )
+
+    def _open_web_remote(self) -> None:
+        if not self._require_web_remote_enabled(tr("Open Web Remote")):
+            return
+        url = QUrl(self._web_remote_open_url())
+        if not QDesktopServices.openUrl(url):
+            QMessageBox.warning(
+                self,
+                "Web Remote Open Failed",
+                f"Could not open URL with the default browser.\n\nURL:\n{url.toString()}",
+            )
+
+    def _require_web_remote_enabled(self, feature_name: str) -> bool:
+        if self.web_remote_enabled:
+            return True
+        template = tr("Web Remote is not enabled. Please enable Web Remote for {feature} to work.")
+        feature = str(feature_name or "").strip() or tr("Web Remote")
+        self._show_playback_warning_banner(template.format(feature=feature))
+        return False
 
     def _open_tips_window(self, startup: bool = False) -> None:
         was_visible = self._tips_window is not None and self._tips_window.isVisible()
@@ -5644,6 +5668,7 @@ class MainWindow(QMainWindow):
         clear_color_action = menu.addAction("Clear Page Color")
         clear_color_action.setEnabled(bool(self.page_colors[self.current_group][row]))
 
+        self._apply_strike_to_disabled_menu_actions(menu)
         selected = menu.exec_(self.page_list.mapToGlobal(pos))
         if selected == add_action:
             self._add_page(row)
@@ -6225,7 +6250,7 @@ class MainWindow(QMainWindow):
         is_unused = (not slot.assigned) and (not slot.marker) and (not slot.title.strip()) and (not slot.notes.strip())
 
         if not page_created:
-            blank_action = menu.addAction(tr("This page is blank."))
+            blank_action = menu.addAction(tr("This page has not been created yet."))
             blank_action.setEnabled(False)
             guidance_action = menu.addAction(tr("Please add a page first."))
             guidance_action.setEnabled(False)
@@ -6243,6 +6268,7 @@ class MainWindow(QMainWindow):
             marker_action.setEnabled(page_created)
             paste_action = menu.addAction(tr("Paste Sound Button"))
             paste_action.setEnabled(self._copied_slot_buffer is not None and page_created and not slot.locked)
+            self._apply_strike_to_disabled_menu_actions(menu)
             selected = menu.exec_(button.mapToGlobal(pos))
             if selected == add_action:
                 self._pick_sound(slot_index)
@@ -6268,6 +6294,7 @@ class MainWindow(QMainWindow):
             remove_color_action = menu.addAction(tr("Remove Colour"))
             remove_color_action.setEnabled(bool(slot.custom_color))
             delete_action = menu.addAction(tr("Delete"))
+            self._apply_strike_to_disabled_menu_actions(menu)
             selected = menu.exec_(button.mapToGlobal(pos))
             if selected == edit_marker_action:
                 self._edit_place_marker(slot_index)
@@ -6320,6 +6347,7 @@ class MainWindow(QMainWindow):
         delete_action = menu.addAction(tr("Delete Button"))
         delete_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
 
+        self._apply_strike_to_disabled_menu_actions(menu)
         selected = menu.exec_(button.mapToGlobal(pos))
         if selected == cue_it_action:
             self._cue_slot(slot)
@@ -10397,9 +10425,21 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu(self)
         clear_action = menu.addAction("Clear Cue")
+        self._apply_strike_to_disabled_menu_actions(menu)
         selected = menu.exec_(cue_btn.mapToGlobal(pos))
         if selected == clear_action:
             self._clear_cue_page()
+
+    def _apply_strike_to_disabled_menu_actions(self, menu: QMenu) -> None:
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            font = action.font()
+            font.setStrikeOut(not action.isEnabled())
+            action.setFont(font)
+            submenu = action.menu()
+            if submenu is not None:
+                self._apply_strike_to_disabled_menu_actions(submenu)
 
     def _toggle_playlist_mode(self, checked: bool) -> None:
         if self.cue_mode:

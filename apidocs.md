@@ -104,6 +104,9 @@ Mode values: `enable`, `disable`, `toggle`
 - `GET/POST /api/fadein/<mode>`
 - `GET/POST /api/fadeout/<mode>`
 - `GET/POST /api/crossfade/<mode>`
+- `GET/POST /api/lyric/<mode>`
+  - Mode values: `show`, `blank`, `toggle`
+  - Controls lyric output visibility for Web Lyric Display and native Qt Lyric Display.
 
 ## Navigation/Reset
 

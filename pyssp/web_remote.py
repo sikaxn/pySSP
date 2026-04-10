@@ -202,6 +202,10 @@ class WebRemoteServer:
             cmd, cmd_params = fixed
             return send(cmd, **cmd_params)
 
+        m = re.fullmatch(r"/api/lyric/([^/]+)", endpoint)
+        if m:
+            return send("lyric_display", mode=m.group(1))
+
         m = re.fullmatch(r"/api/talk/([^/]+)", endpoint)
         if m:
             return send("talk", mode=m.group(1))
@@ -383,7 +387,19 @@ class WebRemoteServer:
                     }
         return {
             "ws": {"item": "", "service": "", "slide": 0, "twelve": False, "display": "blank", "blank": True, "theme": False},
-            "live_items": {"item": "", "slides": []},
+            "live_items": {
+                "item": "",
+                "slides": [
+                    {
+                        "title": "no song is playing",
+                        "text": "\u200b",
+                        "html": "&#8203;",
+                        "img": "",
+                        "tag": "L0",
+                        "selected": True,
+                    }
+                ],
+            },
             "service_items": [],
         }
 

@@ -2286,6 +2286,8 @@ class MainWindow(QMainWindow):
         self._stage_lyric_cache_error: str = ""
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
+        self._lyric_force_blank = False
+        self._lyric_blank_toggle_action: Optional[QAction] = None
         self._hover_slot_index: Optional[int] = None
         self._stage_alert_dialog: Optional[QDialog] = None
         self._stage_alert_text_edit: Optional[QPlainTextEdit] = None
@@ -2931,9 +2933,14 @@ class MainWindow(QMainWindow):
         web_lyric_vmix_action = QAction("vMix Overlay", self)
         web_lyric_vmix_action.triggered.connect(lambda: self._open_web_lyric_display("vmixoverlay"))
         web_lyric_display_menu.addAction(web_lyric_vmix_action)
+        self._lyric_blank_toggle_action = QAction("Blank Lyric", self)
+        self._lyric_blank_toggle_action.setCheckable(True)
+        self._lyric_blank_toggle_action.triggered.connect(lambda checked=False: self._set_lyric_force_blank(bool(checked)))
+        display_menu.addAction(self._lyric_blank_toggle_action)
         stage_display_setting_action = QAction("Stage Display Setting", self)
         stage_display_setting_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage Display"))
         display_menu.addAction(stage_display_setting_action)
+        self._sync_lyric_display_controls()
 
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
@@ -5295,6 +5302,12 @@ class MainWindow(QMainWindow):
         self.lyric_navigator_button.setMinimumHeight(36)
         self.lyric_navigator_button.clicked.connect(self._open_lyric_navigator)
         lyric_row.addWidget(self.lyric_navigator_button, 0)
+        self.lyric_blank_toggle_button = QPushButton("Blank Lyric")
+        self.lyric_blank_toggle_button.setMinimumHeight(36)
+        self.lyric_blank_toggle_button.setCheckable(True)
+        self.lyric_blank_toggle_button.clicked.connect(self._toggle_lyric_force_blank)
+        lyric_row.addWidget(self.lyric_blank_toggle_button, 0)
+        self._sync_lyric_display_controls()
         left_layout.addLayout(lyric_row)
         left_layout.addStretch(1)
 
@@ -8217,6 +8230,32 @@ class MainWindow(QMainWindow):
         self.main_lyric_label.setVisible(visible)
         if hasattr(self, "lyric_navigator_button") and self.lyric_navigator_button is not None:
             self.lyric_navigator_button.setVisible(visible)
+        if hasattr(self, "lyric_blank_toggle_button") and self.lyric_blank_toggle_button is not None:
+            self.lyric_blank_toggle_button.setVisible(visible)
+
+    def _toggle_lyric_force_blank(self, checked: bool = False) -> None:
+        self._set_lyric_force_blank(bool(checked))
+
+    def _set_lyric_force_blank(self, blank: bool) -> None:
+        new_value = bool(blank)
+        if new_value == bool(self._lyric_force_blank):
+            self._sync_lyric_display_controls()
+            return
+        self._lyric_force_blank = new_value
+        self._sync_lyric_display_controls()
+        self._refresh_lyric_display(force=True)
+
+    def _sync_lyric_display_controls(self) -> None:
+        blank = bool(self._lyric_force_blank)
+        if hasattr(self, "lyric_blank_toggle_button") and self.lyric_blank_toggle_button is not None:
+            self.lyric_blank_toggle_button.blockSignals(True)
+            self.lyric_blank_toggle_button.setChecked(blank)
+            self.lyric_blank_toggle_button.setText(tr("Show Lyric") if blank else tr("Blank Lyric"))
+            self.lyric_blank_toggle_button.blockSignals(False)
+        if self._lyric_blank_toggle_action is not None:
+            self._lyric_blank_toggle_action.blockSignals(True)
+            self._lyric_blank_toggle_action.setChecked(blank)
+            self._lyric_blank_toggle_action.blockSignals(False)
 
     def _main_ui_current_lyric_text(self) -> str:
         if self.current_playing is None:
@@ -8335,6 +8374,7 @@ class MainWindow(QMainWindow):
                 has_active_track=has_active_track,
                 lyric_path=lyric_path,
                 position_ms=position_ms,
+                force_blank=bool(self._lyric_force_blank),
                 force=force,
             )
         if self._lyric_navigator_window is not None and (self._lyric_navigator_window.isVisible() or force):
@@ -9448,6 +9488,16 @@ class MainWindow(QMainWindow):
             return "toggle"
         return None
 
+    def _parse_lyric_display_mode(self, raw: str) -> Optional[str]:
+        value = str(raw or "").strip().lower()
+        if value in {"show", "enable", "on", "true", "1"}:
+            return "show"
+        if value in {"blank", "hide", "disable", "off", "false", "0"}:
+            return "blank"
+        if value in {"toggle", "flip"}:
+            return "toggle"
+        return None
+
     @staticmethod
     def _parse_api_bool(raw: object) -> Optional[bool]:
         if isinstance(raw, bool):
@@ -9665,6 +9715,7 @@ class MainWindow(QMainWindow):
             "current_playing": self._format_button_key(self.current_playing).lower() if self.current_playing else None,
             "playing_tracks": playing_tracks,
             "web_remote_url": self._web_remote_open_url(),
+            "lyric_display": "blank" if self._lyric_force_blank else "show",
         }
 
     def _api_primary_playing_key(self) -> Optional[Tuple[str, int, int]]:
@@ -9682,7 +9733,6 @@ class MainWindow(QMainWindow):
         service_id = ""
         current_title = ""
         current_notes = ""
-        blank_until_first_line = False
 
         if slot_key is not None:
             slot = self._slot_for_key(slot_key)
@@ -9700,14 +9750,13 @@ class MainWindow(QMainWindow):
                             slides.append(
                                 {
                                     "title": current_title,
-                                    "text": "",
-                                    "html": "",
+                                    "text": "\u200b",
+                                    "html": "&#8203;",
                                     "img": "",
                                     "tag": "L0",
                                     "selected": False,
                                 }
                             )
-                            blank_until_first_line = position_ms < first_line_start_ms
                         for idx, line in enumerate(lines):
                             if line.start_ms <= position_ms:
                                 current_slide_index = len(slides)
@@ -9726,6 +9775,43 @@ class MainWindow(QMainWindow):
                         if slides:
                             current_slide_index = max(0, min(current_slide_index, len(slides) - 1))
                             slides[current_slide_index]["selected"] = True
+                if not slides:
+                    slides.append(
+                        {
+                            "title": current_title,
+                            "text": "\u200b",
+                            "html": "&#8203;",
+                            "img": "",
+                            "tag": "L0",
+                            "selected": True,
+                        }
+                    )
+                    current_slide_index = 0
+        else:
+            current_title = tr("no song is playing")
+            slides.append(
+                {
+                    "title": current_title,
+                    "text": "\u200b",
+                    "html": "&#8203;",
+                    "img": "",
+                    "tag": "L0",
+                    "selected": True,
+                }
+            )
+            current_slide_index = 0
+        if not slides:
+            slides.append(
+                {
+                    "title": current_title,
+                    "text": "\u200b",
+                    "html": "&#8203;",
+                    "img": "",
+                    "tag": "L0",
+                    "selected": True,
+                }
+            )
+            current_slide_index = 0
 
         next_song = self._next_stage_song_name()
         next_title = "" if next_song == "-" else str(next_song or "").strip()
@@ -9736,7 +9822,7 @@ class MainWindow(QMainWindow):
             service_items.append({"title": next_title, "notes": "", "selected": False})
         service_id = "|".join([item_id, current_title, next_title])
 
-        blank = (slot_key is None) or (len(slides) == 0) or blank_until_first_line
+        blank = bool(self._lyric_force_blank)
         display = "blank" if blank else "show"
 
         return {
@@ -10084,6 +10170,20 @@ class MainWindow(QMainWindow):
             return self._api_success(page)
         if cmd == "query_lyric_openlp":
             return self._api_success(self._api_lyric_openlp())
+        if cmd == "lyric_display":
+            mode = self._parse_lyric_display_mode(params.get("mode", ""))
+            if mode is None:
+                return self._api_error("invalid_mode", "Mode must be show, blank, or toggle.")
+            if mode == "toggle":
+                self._set_lyric_force_blank(not self._lyric_force_blank)
+            else:
+                self._set_lyric_force_blank(mode == "blank")
+            return self._api_success(
+                {
+                    "lyric_display": "blank" if self._lyric_force_blank else "show",
+                    "state": self._api_state(),
+                }
+            )
         if cmd == "lock":
             self._engage_lock_screen()
             return self._api_success({"screen_locked": True, "automation_locked": False, "state": self._api_state()})

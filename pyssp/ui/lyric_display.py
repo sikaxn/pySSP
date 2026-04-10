@@ -68,10 +68,13 @@ class LyricDisplayWindow(QWidget):
         has_active_track: bool,
         lyric_path: str,
         position_ms: int,
+        force_blank: bool = False,
         force: bool = False,
     ) -> None:
         text = ""
-        if not has_active_track:
+        if force_blank:
+            text = ""
+        elif not has_active_track:
             text = "No sound is currently playing."
         else:
             path = str(lyric_path or "").strip()

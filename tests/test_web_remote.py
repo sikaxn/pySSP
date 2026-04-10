@@ -205,6 +205,9 @@ def test_dispatch_api_path_matches_http_routes():
         ("/api/fadein/toggle", "fade"),
         ("/api/fadeout/toggle", "fade"),
         ("/api/crossfade/toggle", "fade"),
+        ("/api/lyric/show", "lyric_display"),
+        ("/api/lyric/blank", "lyric_display"),
+        ("/api/lyric/toggle", "lyric_display"),
         ("/api/volume/73", "volume_set"),
         ("/api/mute", "mute"),
         ("/api/lock", "lock"),
@@ -267,6 +270,7 @@ def test_ws_api_request_dispatches_same_commands_as_http():
         ("/api/play/a-1-1", "play"),
         ("/api/seek/percent/22.5", "seek"),
         ("/api/seek/time/01:23", "seek"),
+        ("/api/lyric/toggle", "lyric_display"),
         ("/api/alert/clear", "alert"),
         ("/api/query/page/a-1", "query_page"),
     ]
@@ -301,3 +305,16 @@ def test_ws_api_request_protocol_errors():
     unknown_type = server._handle_ws_message(json.dumps({"type": "something_else"}))
     assert unknown_type["type"] == "ws_error"
     assert unknown_type["error"]["code"] == "unknown_type"
+
+
+def test_lyric_payload_fallback_includes_single_blank_slide():
+    def dispatch(_command, _params):
+        return {"ok": False, "status": 500, "error": {"code": "bad", "message": "bad"}}
+
+    server = WebRemoteServer(dispatch=dispatch, host="127.0.0.1", port=5050)
+    payload = server._lyric_payload_bundle()
+    slides = payload["live_items"]["slides"]
+    assert isinstance(slides, list)
+    assert len(slides) == 1
+    assert slides[0]["selected"] is True
+    assert slides[0]["text"] == "\u200b"

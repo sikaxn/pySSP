@@ -41,6 +41,9 @@ window.OpenLP = {
   },
   _pollTimer: null,
   _wsConnected: false,
+  isBlank: false,
+  isThemeBlank: false,
+  display: "",
   startPollingFallback: function () {
     if (OpenLP._pollTimer) return;
     const tick = () => {
@@ -64,6 +67,9 @@ window.OpenLP = {
       const applyPayload = (rawText) => {
         const info = JSON.parse(String(rawText || "{}")).results || {};
 
+        OpenLP.display = info.display || "";       // "show", "blank", "theme", "desktop"
+        OpenLP.isBlank = info.blank || false;      // boolean
+        OpenLP.isThemeBlank = info.theme || false; // theme blank
         OpenLP.myTwelve = info.twelve;
 
         // reset global font max when item changes
@@ -140,7 +146,8 @@ window.OpenLP = {
       OpenLP.display === "blank" ||
       OpenLP.display === "desktop" ||
       OpenLP.display === "theme" ||
-      OpenLP.isBlank === true;
+      OpenLP.isBlank === true ||
+      OpenLP.isThemeBlank === true;
 
     if (!forceBlank && slide) {
 

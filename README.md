@@ -86,7 +86,7 @@ python -m venv .venv
 
 - Optional browser UI and JSON HTTP API (default port `5050`)
 - Toggle in `Options -> Web Remote`
-- API docs in `apidocs.md`
+- API docs in `docs/source/web_remote_api.md`
 
 ### Settings and localization
 
@@ -104,7 +104,7 @@ The Bitfocus Companion module is included at `companion-modules\pyssp`.
 
 To use Companion with `pySSP`, Web Remote must be enabled in `Options -> Web Remote`.
 
-See `apidocs.md` for endpoint details and payload formats.
+See `docs/source/web_remote_api.md` for endpoint details and payload formats.
 
 ## Tests
 

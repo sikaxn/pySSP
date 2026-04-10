@@ -22,6 +22,15 @@ A sound button can be:
 - Locked/marked/highlighted: control and visual states.
 - Missing: referenced media file is not available.
 
+## Button Drag Behaviour
+
+- Normal mode: clicking a sound button attempts playback.
+- In `Button Drag` mode:
+  - clicking does not play.
+  - drag-and-drop can move/copy sound buttons and pages.
+  - currently playing sound buttons cannot be dragged.
+- Sound button state colors/indicators still reflect runtime state (assigned, playing, played, lock, marker, missing, copied-to-cue, lyric/midi/volume indicators).
+
 ## Right-Click Menus
 
 Page context menu:

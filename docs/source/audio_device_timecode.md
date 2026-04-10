@@ -16,6 +16,20 @@ The Timecode panel shows active output and mode state for timecode features.
 
 ![Timecode Panel](images/timecode_panel.png)
 
+## Timecode Timeline Mode
+
+Timecode display can use one of two timeline references:
+
+- `Relative to Cue Set Points`
+- `Relative to Actual Audio File`
+
+These settings are independent from the Main Transport timeline mode.
+
+You can also enable:
+
+- `Soundbutton timecode offset`
+- `Respect soundbutton timecode display timeline setting`
+
 ## Stage Display and Timing Context
 
 Stage Display can be used together with playback and timecode workflows for live operations.

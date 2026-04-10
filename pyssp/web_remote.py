@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 from simple_websocket import ConnectionClosed, Server
 from werkzeug.serving import WSGIRequestHandler, make_server
 try:
@@ -36,6 +38,7 @@ class WebRemoteServer:
         self.ws_port = int(ws_port) if ws_port is not None else (int(port) + 1)
         self._app = Flask("pyssp_web_remote")
         self._lyric_assets_root = Path(__file__).resolve().parent / "assets" / "lyric_stage"
+        self._web_remote_assets_root = Path(__file__).resolve().parent / "assets" / "web_remote"
         self._server = None
         self._thread: threading.Thread | None = None
         self._lyric_push_thread: threading.Thread | None = None
@@ -110,13 +113,182 @@ class WebRemoteServer:
             self._ws_clients.add(websocket)
         try:
             await websocket.send(json.dumps({"results": self._lyric_payload_bundle()["ws"]}, ensure_ascii=False))
-            async for _ in websocket:
-                pass
+            async for raw_message in websocket:
+                response = self._handle_ws_message(raw_message)
+                if response is None:
+                    continue
+                await websocket.send(json.dumps(response, ensure_ascii=False))
         except Exception:
             pass
         finally:
             with self._ws_lock:
                 self._ws_clients.discard(websocket)
+
+    @staticmethod
+    def _safe_int(raw: Any, default: int = 0) -> int:
+        try:
+            return int(raw)
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _merge_params(*sources: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for source in sources:
+            if isinstance(source, dict):
+                merged.update(source)
+        return merged
+
+    def _dispatch_api_path(self, path: str, method: str = "GET", params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        merged_params = dict(params or {})
+        raw_path = str(path or "").strip()
+        if not raw_path:
+            raw_path = "/api/health"
+        split = urlsplit(raw_path)
+        endpoint = unquote(split.path or "")
+        if not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
+        query_params_raw = parse_qs(split.query or "", keep_blank_values=True)
+        query_params: Dict[str, Any] = {k: (v[-1] if isinstance(v, list) and v else "") for k, v in query_params_raw.items()}
+        merged_params = self._merge_params(query_params, merged_params)
+
+        def send(command: str, **cmd_params: Any) -> Dict[str, Any]:
+            payload = self._dispatch(command, cmd_params)
+            if not isinstance(payload, dict):
+                return {"ok": False, "status": 500, "error": {"code": "invalid_payload", "message": "Invalid dispatch payload."}}
+            if "status" not in payload:
+                payload = dict(payload)
+                payload["status"] = 200
+            return payload
+
+        norm_method = str(method or "GET").strip().upper()
+        if norm_method not in {"GET", "POST"}:
+            return {"ok": False, "status": 405, "error": {"code": "method_not_allowed", "message": "Only GET and POST are supported."}}
+
+        if endpoint == "/api/health":
+            return send("health")
+
+        m = re.fullmatch(r"/api/play/([^/]+)", endpoint)
+        if m:
+            return send("play", button_id=m.group(1))
+
+        fixed_routes: Dict[str, tuple[str, Dict[str, Any]]] = {
+            "/api/pause": ("pause", {}),
+            "/api/resume": ("resume", {}),
+            "/api/stop": ("stop", {}),
+            "/api/forcestop": ("forcestop", {}),
+            "/api/rapidfire": ("rapidfire", {}),
+            "/api/playnext": ("playnext", {}),
+            "/api/playlist/enableshuffle": ("playlist_shuffle", {"mode": "enable"}),
+            "/api/playlist/disableshuffle": ("playlist_shuffle", {"mode": "disable"}),
+            "/api/mute": ("mute", {}),
+            "/api/lock": ("lock", {}),
+            "/api/automation-lock": ("automation_lock", {}),
+            "/api/automation_lock": ("automation_lock", {}),
+            "/api/unlock": ("unlock", {}),
+            "/api/group/next": ("navigate", {"target": "group", "direction": "next"}),
+            "/api/group/prev": ("navigate", {"target": "group", "direction": "prev"}),
+            "/api/page/next": ("navigate", {"target": "page", "direction": "next"}),
+            "/api/page/prev": ("navigate", {"target": "page", "direction": "prev"}),
+            "/api/soundbutton/next": ("navigate", {"target": "sound_button", "direction": "next"}),
+            "/api/soundbutton/prev": ("navigate", {"target": "sound_button", "direction": "prev"}),
+            "/api/playselected": ("playselected", {}),
+            "/api/playselectedpause": ("playselectedpause", {}),
+            "/api/alert/clear": ("alert", {"clear": True}),
+            "/api/query": ("query_all", {}),
+        }
+        fixed = fixed_routes.get(endpoint)
+        if fixed is not None:
+            cmd, cmd_params = fixed
+            return send(cmd, **cmd_params)
+
+        m = re.fullmatch(r"/api/talk/([^/]+)", endpoint)
+        if m:
+            return send("talk", mode=m.group(1))
+        m = re.fullmatch(r"/api/playlist/([^/]+)", endpoint)
+        if m:
+            return send("playlist", mode=m.group(1))
+        m = re.fullmatch(r"/api/playlist/shuffle/([^/]+)", endpoint)
+        if m:
+            return send("playlist_shuffle", mode=m.group(1))
+        m = re.fullmatch(r"/api/goto/(.+)", endpoint)
+        if m:
+            return send("goto", target=m.group(1))
+        m = re.fullmatch(r"/api/resetpage/([^/]+)", endpoint)
+        if m:
+            return send("resetpage", scope=m.group(1))
+        m = re.fullmatch(r"/api/multiplay/([^/]+)", endpoint)
+        if m:
+            return send("multiplay", mode=m.group(1))
+        m = re.fullmatch(r"/api/fadein/([^/]+)", endpoint)
+        if m:
+            return send("fade", kind="fadein", mode=m.group(1))
+        m = re.fullmatch(r"/api/fadeout/([^/]+)", endpoint)
+        if m:
+            return send("fade", kind="fadeout", mode=m.group(1))
+        m = re.fullmatch(r"/api/crossfade/([^/]+)", endpoint)
+        if m:
+            return send("fade", kind="crossfade", mode=m.group(1))
+        m = re.fullmatch(r"/api/volume/([^/]+)", endpoint)
+        if m:
+            return send("volume_set", level=self._safe_int(m.group(1), default=-1))
+        m = re.fullmatch(r"/api/seek/percent/(.+)", endpoint)
+        if m:
+            return send("seek", percent=m.group(1))
+        m = re.fullmatch(r"/api/seek/time/(.+)", endpoint)
+        if m:
+            return send("seek", time=m.group(1))
+        if endpoint == "/api/seek":
+            return send("seek", percent=merged_params.get("percent"), time=merged_params.get("time"))
+        if endpoint == "/api/alert":
+            return send(
+                "alert",
+                text=merged_params.get("text", ""),
+                keep=merged_params.get("keep"),
+                seconds=merged_params.get("seconds"),
+                clear=merged_params.get("clear"),
+                mode=merged_params.get("mode"),
+            )
+        m = re.fullmatch(r"/api/query/button/(.+)", endpoint)
+        if m:
+            return send("query_button", button_id=m.group(1))
+        m = re.fullmatch(r"/api/query/pagegroup/([^/]+)", endpoint)
+        if m:
+            return send("query_pagegroup", group_id=m.group(1))
+        m = re.fullmatch(r"/api/query/page/(.+)", endpoint)
+        if m:
+            return send("query_page", page_id=m.group(1))
+
+        return {"ok": False, "status": 404, "error": {"code": "not_found", "message": f"Unknown API path '{endpoint}'."}}
+
+    def _handle_ws_message(self, raw_message: Any) -> Dict[str, Any] | None:
+        if raw_message is None:
+            return None
+        try:
+            if isinstance(raw_message, bytes):
+                raw_message = raw_message.decode("utf-8", errors="ignore")
+            payload = json.loads(str(raw_message))
+        except Exception:
+            return {"type": "ws_error", "error": {"code": "invalid_json", "message": "Message must be valid JSON."}}
+        if not isinstance(payload, dict):
+            return {"type": "ws_error", "error": {"code": "invalid_message", "message": "Message must be a JSON object."}}
+
+        msg_type = str(payload.get("type", "")).strip().lower()
+        if msg_type in {"ping", "heartbeat"}:
+            return {"type": "pong", "at": int(time.time())}
+        if msg_type in {"api_request", "api"} or ("path" in payload):
+            req_id = payload.get("id")
+            path = str(payload.get("path", "")).strip()
+            method = str(payload.get("method", "GET")).strip().upper()
+            body = payload.get("body", {})
+            query = payload.get("query", {})
+            params = self._merge_params(query if isinstance(query, dict) else {}, body if isinstance(body, dict) else {})
+            result = self._dispatch_api_path(path=path, method=method, params=params)
+            status = int(result.get("status", 200))
+            body_result = {k: v for k, v in result.items() if k != "status"}
+            return {"type": "api_response", "id": req_id, "status": status, "payload": body_result}
+
+        return {"type": "ws_error", "error": {"code": "unknown_type", "message": f"Unknown message type '{msg_type or '<empty>'}'."}}
 
     def _run_dedicated_ws_server(self) -> None:
         loop = asyncio.new_event_loop()
@@ -291,404 +463,23 @@ class WebRemoteServer:
     def _register_routes(self) -> None:
         app = self._app
 
-        def send(command: str, **params: Any):
-            payload = self._dispatch(command, params)
-            status = int(payload.get("status", 200))
-            body = {k: v for k, v in payload.items() if k != "status"}
-            return jsonify(body), status
-
         @app.get("/")
         def index():
-            return render_template_string(
-                """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>pySSP Web Remote</title>
-  <style>
-    :root{
-      --bg:#eef3f6; --panel:#ffffff; --ink:#1d2b34; --muted:#4f6472;
-      --accent:#0b868a; --danger:#c13f29; --ok:#2e7d32; --line:#d5e1e7;
-      --empty:#0B868A; --assigned:#B0B0B0; --playing:#66FF33; --played:#FF3B30; --missing:#7B3FB3; --locked:#F2D74A; --marker:#D0D0D0;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;padding:14px;background:linear-gradient(180deg,#edf3f7,#dde8ef);font-family:Segoe UI,Arial,sans-serif;color:var(--ink)}
-    .shell{max-width:1280px;margin:0 auto;display:grid;grid-template-columns:320px 1fr;gap:12px}
-    @media (max-width:980px){.shell{grid-template-columns:1fr}}
-    .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}
-    h1{margin:0 0 8px 0;font-size:20px}
-    .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:7px}
-    .row:last-child{margin-bottom:0}
-    button{height:32px;padding:0 10px;border:0;border-radius:6px;background:#8da1af;color:#fff;font-weight:600;cursor:pointer}
-    button.primary{background:var(--accent)}
-    button.warn{background:var(--danger)}
-    button.good{background:var(--ok)}
-    button.small{height:28px;padding:0 8px;font-size:12px}
-    .status{font-size:12px;color:var(--muted)}
-    .mono{font-family:Consolas,Menlo,monospace}
-    .group-list,.page-list{display:grid;grid-template-columns:repeat(6,1fr);gap:4px}
-    .group-list button{height:28px;padding:0;font-size:12px}
-    .page-list button{height:48px;padding:2px 4px;font-size:11px;line-height:1.15}
-    .group-list button.active,.page-list button.active{outline:2px solid #1f4f66}
-    .btn-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
-    .btn-grid button{height:62px;padding:4px;font-size:11px;line-height:1.2;color:#111;overflow:hidden}
-    .btn-grid button.empty{background:var(--empty);color:#fff}
-    .btn-grid button.assigned{background:var(--assigned)}
-    .btn-grid button.playing{background:var(--playing)}
-    .btn-grid button.played{background:var(--played);color:#fff}
-    .btn-grid button.missing{background:var(--missing);color:#fff}
-    .btn-grid button.locked{background:var(--locked)}
-    .btn-grid button.marker{background:var(--marker);color:#111}
-    .tracks{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
-    .track{padding:4px 0;border-bottom:1px dotted #d9e5eb}
-    .track:last-child{border-bottom:0}
-    .section{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
-    .links a{display:block;color:#0a5a8a;text-decoration:none;padding:2px 0}
-    .links a:hover{text-decoration:underline}
-    textarea,input[type="number"]{width:100%;border:1px solid var(--line);border-radius:6px;padding:6px;font:inherit}
-    textarea{min-height:68px;resize:vertical}
-    .alert-box{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
-    .warn-box{margin-top:8px;padding:8px 10px;border-radius:8px;background:#ffe3df;border:1px solid #e09b8f;color:#7f2415;font-size:12px;font-weight:600}
-  </style>
-</head>
-<body>
-<div class="shell">
-  <div class="card">
-    <h1>Web Remote</h1>
-    <div class="section links" style="margin-top:0;padding-top:0;border-top:0;">
-      <div><strong>Web Lyric Display</strong></div>
-      <div class="status" style="margin-top:6px;">Web lyric WebSocket uses Web Remote port + 1.</div>
-      <a href="#" onclick="openLyricDisplay('caption'); return false;">/lyric/caption/</a>
-      <a href="#" onclick="openLyricDisplay('overhead'); return false;">/lyric/overhead/</a>
-      <a href="#" onclick="openLyricDisplay('banner'); return false;">/lyric/banner/</a>
-      <a href="#" onclick="openLyricDisplay('vmixoverlay'); return false;">/lyric/vmixoverlay/</a>
-      <div style="margin-top:6px;"><strong>Lyric JSON API</strong></div>
-      <a href="/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/api/v2/controller/live-items</a>
-      <a href="/api/v2/service/items" target="_blank" rel="noopener noreferrer">/api/v2/service/items</a>
-      <a href="/lyric/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/controller/live-items</a>
-      <a href="/lyric/api/v2/service/items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/service/items</a>
-    </div>
-    <div class="row">
-      <button class="good" onclick="refreshAll()">Refresh</button>
-      <span id="lastStatus" class="status">Ready</span>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/pause')">Pause</button>
-      <button onclick="callApi('/api/resume')">Resume</button>
-      <button onclick="callApi('/api/stop')">Stop</button>
-      <button class="warn" onclick="callApi('/api/forcestop')">Force Stop</button>
-      <button onclick="callApi('/api/playnext')">Next</button>
-      <button onclick="callApi('/api/rapidfire')">Rapid Fire</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/talk/toggle')">Talk</button>
-      <button onclick="callApi('/api/playlist/toggle')">Playlist</button>
-      <button onclick="callApi('/api/playlist/shuffle/toggle')">Shuffle</button>
-      <button onclick="callApi('/api/multiplay/toggle')">Multi</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/fadein/toggle')">Fade In</button>
-      <button onclick="callApi('/api/fadeout/toggle')">Fade Out</button>
-      <button onclick="callApi('/api/crossfade/toggle')">Crossfade</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/resetpage/current')">Reset Page</button>
-      <button class="warn" onclick="callApi('/api/resetpage/all')">Reset All</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/mute')">Mute</button>
-      <label>Volume
-        <input type="number" id="volumeLevel" min="0" max="100" value="90" style="width:72px;">
-      </label>
-      <button onclick="setVolumeFromInput()">Set Volume</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/lock')">Lock</button>
-      <button class="warn" onclick="callApi('/api/automation-lock')">Automation Lock</button>
-      <button class="good" onclick="unlockFromRemote()">Unlock</button>
-    </div>
-    <div id="automationWarning" class="warn-box" style="display:none;"></div>
+            index_path = self._web_remote_assets_root / "index.html"
+            if not index_path.exists() or not index_path.is_file():
+                return jsonify({"ok": False, "error": {"code": "not_found", "message": "Web Remote index asset not found."}}), 404
+            return send_from_directory(self._web_remote_assets_root, "index.html")
 
-    <div class="section">
-      <div class="row"><strong>Hotkey-style Controls</strong></div>
-      <div class="row">
-        <button onclick="callApi('/api/group/prev')">Prev Group</button>
-        <button onclick="callApi('/api/group/next')">Next Group</button>
-        <button onclick="callApi('/api/page/prev')">Prev Page</button>
-        <button onclick="callApi('/api/page/next')">Next Page</button>
-      </div>
-      <div class="row">
-        <button onclick="callApi('/api/soundbutton/prev')">Prev Button</button>
-        <button onclick="callApi('/api/soundbutton/next')">Next Button</button>
-        <button onclick="callApi('/api/playselected')">Play Selected</button>
-        <button onclick="callApi('/api/playselectedpause')">Play Sel/Pause</button>
-      </div>
-    </div>
-    <div class="alert-box">
-      <div class="row"><strong>Send Alert</strong></div>
-      <div class="row">
-        <textarea id="alertText" placeholder="Type alert text..."></textarea>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="alertKeep" checked> Keep on screen</label>
-        <label>Seconds <input type="number" id="alertSeconds" min="1" max="600" value="10" style="width:86px;"></label>
-      </div>
-      <div class="row">
-        <button class="primary" onclick="sendAlert()">Send Alert</button>
-        <button class="warn" onclick="clearAlert()">Clear Alert</button>
-      </div>
-    </div>
-    <div id="stateView" class="status mono"></div>
-    <div class="tracks">
-      <strong>Now Playing</strong>
-      <div id="tracksView" class="status"></div>
-    </div>
-  </div>
+        @app.get("/webremote/<path:filename>")
+        def webremote_asset(filename: str):
+            clean_name = str(filename or "").replace("\\", "/")
+            if clean_name.startswith("../") or "/../" in clean_name:
+                return jsonify({"ok": False, "error": {"code": "invalid_path", "message": "Invalid asset path."}}), 400
+            asset_path = self._web_remote_assets_root / clean_name
+            if not asset_path.exists() or not asset_path.is_file():
+                return jsonify({"ok": False, "error": {"code": "not_found", "message": "Asset not found."}}), 404
+            return send_from_directory(self._web_remote_assets_root, clean_name)
 
-  <div class="card">
-    <div class="row"><strong>Groups</strong></div>
-    <div id="groups" class="group-list"></div>
-    <div class="row" style="margin-top:8px;"><strong>Pages</strong></div>
-    <div id="pages" class="page-list"></div>
-    <div class="row" style="margin-top:8px;"><strong>Buttons</strong></div>
-    <div id="buttons" class="btn-grid"></div>
-  </div>
-</div>
-
-<script>
-  const groups = ['A','B','C','D','E','F','G','H','I','J'];
-  let selectedGroup = 'A';
-  let selectedPage = 1;
-  let pageMeta = [];
-  let lastState = null;
-
-  function openLyricDisplay(view){
-    const url = '/lyric/' + String(view || '').toLowerCase() + '/';
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
-
-  function setStatus(text){ document.getElementById('lastStatus').textContent = text; }
-
-  async function callApi(path){
-    try{
-      const res = await fetch(path, {method:'POST'});
-      const data = await res.json();
-      if(!data.ok){ setStatus('Error: ' + (data.error?.message || 'request failed')); }
-      else { setStatus('OK'); }
-      await refreshAll(false);
-      return data;
-    }catch(err){ setStatus('Error: ' + err); }
-  }
-
-  async function sendAlert(){
-    const textEl = document.getElementById('alertText');
-    const keepEl = document.getElementById('alertKeep');
-    const secondsEl = document.getElementById('alertSeconds');
-    const text = (textEl?.value || '').trim();
-    if(!text){ setStatus('Error: alert text required'); return; }
-    const keep = !!(keepEl && keepEl.checked);
-    const seconds = Math.max(1, Math.min(600, parseInt(secondsEl?.value || '10', 10) || 10));
-    try{
-      const res = await fetch('/api/alert', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({text, keep, seconds})
-      });
-      const data = await res.json();
-      if(!data.ok){ setStatus('Error: ' + (data.error?.message || 'request failed')); }
-      else { setStatus('OK'); }
-      await refreshAll(false);
-      return data;
-    }catch(err){ setStatus('Error: ' + err); }
-  }
-
-  async function clearAlert(){
-    await callApi('/api/alert/clear');
-  }
-
-  async function setVolumeFromInput(){
-    const input = document.getElementById('volumeLevel');
-    const raw = parseInt(input?.value || '0', 10);
-    const level = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 0));
-    if(input){ input.value = String(level); }
-    await callApi('/api/volume/' + level);
-  }
-
-  function escapeHtml(value){
-    return String(value ?? '').replace(/[&<>"']/g, function(ch){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
-    });
-  }
-
-  function idealTextColor(hex){
-    if(!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)){ return '#111'; }
-    const r = parseInt(hex.slice(1,3), 16);
-    const g = parseInt(hex.slice(3,5), 16);
-    const b = parseInt(hex.slice(5,7), 16);
-    const yiq = ((r*299)+(g*587)+(b*114))/1000;
-    return yiq >= 140 ? '#111' : '#fff';
-  }
-
-  function renderGroups(){
-    const root = document.getElementById('groups');
-    root.innerHTML = groups.map(g =>
-      `<button class="small ${g===selectedGroup?'active':''}" onclick="selectGroup('${g}')">${g}</button>`
-    ).join('');
-  }
-
-  function renderPages(){
-    const root = document.getElementById('pages');
-    const source = pageMeta.length ? pageMeta : Array.from({length:18}, (_, i) => ({page:i+1,page_name:'',page_color:null}));
-    root.innerHTML = source.map(info => {
-      const p = Number(info.page || 0);
-      const color = info.page_color || '';
-      const style = color ? `background:${color};color:${idealTextColor(color)};` : '';
-      const pageName = (info.page_name || '').trim();
-      const label = pageName ? `${p}<br>${escapeHtml(pageName)}` : `${p}`;
-      return `<button class="${p===selectedPage?'active':''}" style="${style}" onclick="selectPage(${p})" title="${escapeHtml(pageName || ('Page ' + p))}">${label}</button>`;
-    }).join('');
-  }
-
-  function buttonClass(button){
-    if(button.marker) return 'marker';
-    if(button.locked) return 'locked';
-    if(button.missing) return 'missing';
-    if(button.is_playing) return 'playing';
-    if(button.played) return 'played';
-    if(button.assigned) return 'assigned';
-    return 'empty';
-  }
-
-  function renderButtons(buttons){
-    const root = document.getElementById('buttons');
-    root.innerHTML = (buttons || []).map(b => {
-      let title = '';
-      if(b.marker){
-        title = (b.marker_text && b.marker_text.trim()) ? b.marker_text : (b.title || '').trim();
-      }else{
-        title = (b.title && b.title.trim()) ? b.title : ('Button ' + b.button);
-      }
-      const safeTitle = escapeHtml(title);
-      return `<button class="${buttonClass(b)}" onclick="playButton('${b.button_id}')">${b.button}<br>${safeTitle}</button>`;
-    }).join('');
-  }
-
-  async function selectGroup(group){
-    selectedGroup = group;
-    selectedPage = 1;
-    renderGroups();
-    renderPages();
-    await callApi('/api/goto/' + group.toLowerCase() + '-1');
-  }
-
-  async function selectPage(page){
-    selectedPage = page;
-    renderPages();
-    await callApi('/api/goto/' + selectedGroup.toLowerCase() + '-' + page);
-  }
-
-  async function playButton(buttonId){
-    await callApi('/api/play/' + buttonId);
-  }
-
-  async function unlockFromRemote(){
-    if(lastState?.automation_locked){
-      const ok = window.confirm(
-        'Automation lock is active. Unlock only for troubleshooting when you are sure pySSP should stop being remotely controlled.'
-      );
-      if(!ok){ return; }
-    }
-    await callApi('/api/unlock');
-  }
-
-  function renderTracks(tracks){
-    const root = document.getElementById('tracksView');
-    if(!tracks || tracks.length===0){ root.innerHTML = '<div class="track">None</div>'; return; }
-    root.innerHTML = tracks.map(t =>
-      `<div class="track"><strong>${t.button_id}</strong> - ${t.title || '(untitled)'}<br>` +
-      `Remaining: ${t.remaining} (${t.remaining_ms} ms)</div>`
-    ).join('');
-  }
-
-  async function refreshState(updateSelection){
-    const res = await fetch('/api/query');
-    const payload = await res.json();
-    if(!payload.ok){ setStatus('Error: ' + (payload.error?.message || 'query failed')); return null; }
-    const s = payload.result || {};
-    lastState = s;
-    if(updateSelection){
-      if(s.current_group && groups.includes(s.current_group)){ selectedGroup = s.current_group; }
-      if(s.current_page){ selectedPage = Math.max(1, Math.min(18, s.current_page)); }
-    }
-    document.getElementById('stateView').textContent = JSON.stringify({
-      current_group: s.current_group,
-      current_page: s.current_page,
-      is_playing: s.is_playing,
-      screen_locked: s.screen_locked,
-      automation_locked: s.automation_locked,
-      talk_active: s.talk_active,
-      playlist_enabled: s.playlist_enabled,
-      shuffle_enabled: s.shuffle_enabled,
-      multi_play_enabled: s.multi_play_enabled,
-      web_remote_url: s.web_remote_url
-    }, null, 2);
-    const automationWarning = document.getElementById('automationWarning');
-    if(automationWarning){
-      if(s.automation_locked){
-        automationWarning.textContent =
-          'Automation lock is active. pySSP is expected to be controlled remotely. Unlock only for troubleshooting when you are sure.';
-        automationWarning.style.display = 'block';
-      }else{
-        automationWarning.textContent = '';
-        automationWarning.style.display = 'none';
-      }
-    }
-    renderTracks(s.playing_tracks || []);
-    renderGroups();
-    renderPages();
-    return s;
-  }
-
-  async function refreshPageButtons(){
-    const id = selectedGroup.toLowerCase() + '-' + selectedPage;
-    const res = await fetch('/api/query/page/' + id);
-    const payload = await res.json();
-    if(!payload.ok){
-      setStatus('Error: ' + (payload.error?.message || 'page query failed'));
-      return;
-    }
-    renderButtons(payload.result?.buttons || []);
-  }
-
-  async function refreshPageMeta(){
-    const res = await fetch('/api/query/pagegroup/' + selectedGroup.toLowerCase());
-    const payload = await res.json();
-    if(!payload.ok){
-      setStatus('Error: ' + (payload.error?.message || 'pagegroup query failed'));
-      return;
-    }
-    pageMeta = payload.result?.pages || [];
-    renderPages();
-  }
-
-  async function refreshAll(updateSelection=true){
-    try{
-      await refreshState(updateSelection);
-      await refreshPageMeta();
-      await refreshPageButtons();
-      setStatus('State refreshed');
-    }catch(err){
-      setStatus('Error: ' + err);
-    }
-  }
-
-  refreshAll(true);
-  setInterval(() => refreshAll(false), 1800);
-</script>
-</body>
-</html>"""
-            )
 
         @app.get("/lyric")
         @app.get("/lyric/")
@@ -781,145 +572,10 @@ class WebRemoteServer:
                 return jsonify({"ok": False, "error": {"code": "not_found", "message": "Asset not found."}}), 404
             return send_from_directory(stage_dir, clean_name)
 
-        @app.get("/api/health")
-        def api_health():
-            return send("health")
-
-        @app.route("/api/play/<string:button_id>", methods=["GET", "POST"])
-        def api_play(button_id: str):
-            return send("play", button_id=button_id)
-
-        @app.route("/api/pause", methods=["GET", "POST"])
-        def api_pause():
-            return send("pause")
-
-        @app.route("/api/resume", methods=["GET", "POST"])
-        def api_resume():
-            return send("resume")
-
-        @app.route("/api/stop", methods=["GET", "POST"])
-        def api_stop():
-            return send("stop")
-
-        @app.route("/api/forcestop", methods=["GET", "POST"])
-        def api_forcestop():
-            return send("forcestop")
-
-        @app.route("/api/rapidfire", methods=["GET", "POST"])
-        def api_rapidfire():
-            return send("rapidfire")
-
-        @app.route("/api/playnext", methods=["GET", "POST"])
-        def api_playnext():
-            return send("playnext")
-
-        @app.route("/api/talk/<string:mode>", methods=["GET", "POST"])
-        def api_talk(mode: str):
-            return send("talk", mode=mode)
-
-        @app.route("/api/playlist/<string:mode>", methods=["GET", "POST"])
-        def api_playlist(mode: str):
-            return send("playlist", mode=mode)
-
-        @app.route("/api/playlist/shuffle/<string:mode>", methods=["GET", "POST"])
-        def api_playlist_shuffle(mode: str):
-            return send("playlist_shuffle", mode=mode)
-
-        @app.route("/api/playlist/enableshuffle", methods=["GET", "POST"])
-        def api_playlist_enable_shuffle():
-            return send("playlist_shuffle", mode="enable")
-
-        @app.route("/api/playlist/disableshuffle", methods=["GET", "POST"])
-        def api_playlist_disable_shuffle():
-            return send("playlist_shuffle", mode="disable")
-
-        @app.route("/api/goto/<string:target>", methods=["GET", "POST"])
-        def api_goto(target: str):
-            return send("goto", target=target)
-
-        @app.route("/api/resetpage/<string:scope>", methods=["GET", "POST"])
-        def api_resetpage(scope: str):
-            return send("resetpage", scope=scope)
-
-        @app.route("/api/multiplay/<string:mode>", methods=["GET", "POST"])
-        def api_multiplay(mode: str):
-            return send("multiplay", mode=mode)
-
-        @app.route("/api/fadein/<string:mode>", methods=["GET", "POST"])
-        def api_fadein(mode: str):
-            return send("fade", kind="fadein", mode=mode)
-
-        @app.route("/api/fadeout/<string:mode>", methods=["GET", "POST"])
-        def api_fadeout(mode: str):
-            return send("fade", kind="fadeout", mode=mode)
-
-        @app.route("/api/crossfade/<string:mode>", methods=["GET", "POST"])
-        def api_crossfade(mode: str):
-            return send("fade", kind="crossfade", mode=mode)
-
-        @app.route("/api/volume/<int:level>", methods=["GET", "POST"])
-        def api_volume_set(level: int):
-            return send("volume_set", level=level)
-
-        @app.route("/api/mute", methods=["GET", "POST"])
-        def api_mute():
-            return send("mute")
-
-        @app.route("/api/lock", methods=["GET", "POST"])
-        def api_lock():
-            return send("lock")
-
-        @app.route("/api/automation-lock", methods=["GET", "POST"])
-        @app.route("/api/automation_lock", methods=["GET", "POST"])
-        def api_automation_lock():
-            return send("automation_lock")
-
-        @app.route("/api/unlock", methods=["GET", "POST"])
-        def api_unlock():
-            return send("unlock")
-
-        @app.route("/api/group/next", methods=["GET", "POST"])
-        def api_group_next():
-            return send("navigate", target="group", direction="next")
-
-        @app.route("/api/group/prev", methods=["GET", "POST"])
-        def api_group_prev():
-            return send("navigate", target="group", direction="prev")
-
-        @app.route("/api/page/next", methods=["GET", "POST"])
-        def api_page_next():
-            return send("navigate", target="page", direction="next")
-
-        @app.route("/api/page/prev", methods=["GET", "POST"])
-        def api_page_prev():
-            return send("navigate", target="page", direction="prev")
-
-        @app.route("/api/soundbutton/next", methods=["GET", "POST"])
-        def api_soundbutton_next():
-            return send("navigate", target="sound_button", direction="next")
-
-        @app.route("/api/soundbutton/prev", methods=["GET", "POST"])
-        def api_soundbutton_prev():
-            return send("navigate", target="sound_button", direction="prev")
-
-        @app.route("/api/playselected", methods=["GET", "POST"])
-        def api_playselected():
-            return send("playselected")
-
-        @app.route("/api/playselectedpause", methods=["GET", "POST"])
-        def api_playselectedpause():
-            return send("playselectedpause")
-
-        @app.route("/api/seek/percent/<string:percent>", methods=["GET", "POST"])
-        def api_seek_percent(percent: str):
-            return send("seek", percent=percent)
-
-        @app.route("/api/seek/time/<path:timecode>", methods=["GET", "POST"])
-        def api_seek_time(timecode: str):
-            return send("seek", time=timecode)
-
-        @app.route("/api/seek", methods=["GET", "POST"])
-        def api_seek():
+        @app.route("/api", defaults={"subpath": ""}, methods=["GET", "POST"])
+        @app.route("/api/<path:subpath>", methods=["GET", "POST"])
+        def api_dispatch(subpath: str):
+            endpoint = "/api" if not str(subpath or "").strip() else f"/api/{subpath}"
             params: Dict[str, Any] = {}
             if request.method == "POST":
                 payload = request.get_json(silent=True)
@@ -927,42 +583,7 @@ class WebRemoteServer:
                     params.update(payload)
                 params.update(request.form.to_dict())
             params.update(request.args.to_dict())
-            return send("seek", percent=params.get("percent"), time=params.get("time"))
-
-        @app.route("/api/alert", methods=["GET", "POST"])
-        def api_alert():
-            params: Dict[str, Any] = {}
-            if request.method == "POST":
-                payload = request.get_json(silent=True)
-                if isinstance(payload, dict):
-                    params.update(payload)
-                params.update(request.form.to_dict())
-            params.update(request.args.to_dict())
-            return send(
-                "alert",
-                text=params.get("text", ""),
-                keep=params.get("keep"),
-                seconds=params.get("seconds"),
-                clear=params.get("clear"),
-                mode=params.get("mode"),
-            )
-
-        @app.route("/api/alert/clear", methods=["GET", "POST"])
-        def api_alert_clear():
-            return send("alert", clear=True)
-
-        @app.get("/api/query")
-        def api_query_all():
-            return send("query_all")
-
-        @app.get("/api/query/button/<string:button_id>")
-        def api_query_button(button_id: str):
-            return send("query_button", button_id=button_id)
-
-        @app.get("/api/query/pagegroup/<string:group_id>")
-        def api_query_pagegroup(group_id: str):
-            return send("query_pagegroup", group_id=group_id)
-
-        @app.get("/api/query/page/<string:page_id>")
-        def api_query_page(page_id: str):
-            return send("query_page", page_id=page_id)
+            payload = self._dispatch_api_path(endpoint, method=request.method, params=params)
+            status = int(payload.get("status", 200))
+            body = {k: v for k, v in payload.items() if k != "status"}
+            return jsonify(body), status

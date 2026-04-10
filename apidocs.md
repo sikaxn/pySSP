@@ -7,6 +7,10 @@ The Web Remote service is controlled from **Options -> Web Remote**:
 - Set listening port
 - View the LAN URL to open in browser
 
+The Web Remote browser page now supports selecting transport mode:
+- `HTTP` (existing REST calls)
+- `WebSocket` (same API paths over WS request/response)
+
 All responses are JSON.
 
 - Success shape:
@@ -16,6 +20,44 @@ All responses are JSON.
   "result": {}
 }
 ```
+
+## WebSocket Transport (API Parity)
+
+WebSocket endpoint:
+- `ws://<host-ip>:<ws-port>/ws`
+- `wss://<host-ip>:<ws-port>/ws` (if behind TLS proxy)
+
+`ws-port` is the Web Remote port + 1.
+
+Request message:
+```json
+{
+  "type": "api_request",
+  "id": "req-1",
+  "path": "/api/play/a-1-1",
+  "method": "POST",
+  "body": {}
+}
+```
+
+Response message:
+```json
+{
+  "type": "api_response",
+  "id": "req-1",
+  "status": 200,
+  "payload": {
+    "ok": true,
+    "result": {}
+  }
+}
+```
+
+Notes:
+- `path` supports the same HTTP API paths documented below.
+- `method` supports `GET` and `POST`.
+- `body` is optional and maps to JSON/form-style params used by the HTTP routes.
+- Query strings in `path` are also supported (example: `/api/seek?percent=33.5`).
 - Error shape:
 ```json
 {

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pySSP Web Remote</title>
+  <link rel="stylesheet" href="/webremote/style.css">
+</head>
+<body>
+<div class="shell">
+  <div class="card">
+    <h1>Web Remote</h1>
+    <div class="section links" style="margin-top:0;padding-top:0;border-top:0;">
+      <div><strong>Web Lyric Display</strong></div>
+      <div class="status" style="margin-top:6px;">Web lyric WebSocket uses Web Remote port + 1.</div>
+      <a href="#" onclick="openLyricDisplay('caption'); return false;">/lyric/caption/</a>
+      <a href="#" onclick="openLyricDisplay('overhead'); return false;">/lyric/overhead/</a>
+      <a href="#" onclick="openLyricDisplay('banner'); return false;">/lyric/banner/</a>
+      <a href="#" onclick="openLyricDisplay('vmixoverlay'); return false;">/lyric/vmixoverlay/</a>
+      <div style="margin-top:6px;"><strong>Lyric JSON API</strong></div>
+      <a href="/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/api/v2/controller/live-items</a>
+      <a href="/api/v2/service/items" target="_blank" rel="noopener noreferrer">/api/v2/service/items</a>
+      <a href="/lyric/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/controller/live-items</a>
+      <a href="/lyric/api/v2/service/items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/service/items</a>
+    </div>
+    <div class="row">
+      <button class="good" onclick="refreshAll()">Refresh</button>
+      <label>Transport
+        <select id="transportMode" style="height:30px;border:1px solid var(--line);border-radius:6px;padding:0 6px;">
+          <option value="http">HTTP</option>
+          <option value="ws">WebSocket</option>
+        </select>
+      </label>
+      <span id="lastStatus" class="status">Ready</span>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/pause')">Pause</button>
+      <button onclick="callApi('/api/resume')">Resume</button>
+      <button onclick="callApi('/api/stop')">Stop</button>
+      <button class="warn" onclick="callApi('/api/forcestop')">Force Stop</button>
+      <button onclick="callApi('/api/playnext')">Next</button>
+      <button onclick="callApi('/api/rapidfire')">Rapid Fire</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/talk/toggle')">Talk</button>
+      <button onclick="callApi('/api/playlist/toggle')">Playlist</button>
+      <button onclick="callApi('/api/playlist/shuffle/toggle')">Shuffle</button>
+      <button onclick="callApi('/api/multiplay/toggle')">Multi</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/fadein/toggle')">Fade In</button>
+      <button onclick="callApi('/api/fadeout/toggle')">Fade Out</button>
+      <button onclick="callApi('/api/crossfade/toggle')">Crossfade</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/resetpage/current')">Reset Page</button>
+      <button class="warn" onclick="callApi('/api/resetpage/all')">Reset All</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/mute')">Mute</button>
+      <label>Volume
+        <input type="number" id="volumeLevel" min="0" max="100" value="90" style="width:72px;">
+      </label>
+      <button onclick="setVolumeFromInput()">Set Volume</button>
+    </div>
+    <div class="row">
+      <button onclick="callApi('/api/lock')">Lock</button>
+      <button class="warn" onclick="callApi('/api/automation-lock')">Automation Lock</button>
+      <button class="good" onclick="unlockFromRemote()">Unlock</button>
+    </div>
+    <div id="automationWarning" class="warn-box" style="display:none;"></div>
+
+    <div class="section">
+      <div class="row"><strong>Hotkey-style Controls</strong></div>
+      <div class="row">
+        <button onclick="callApi('/api/group/prev')">Prev Group</button>
+        <button onclick="callApi('/api/group/next')">Next Group</button>
+        <button onclick="callApi('/api/page/prev')">Prev Page</button>
+        <button onclick="callApi('/api/page/next')">Next Page</button>
+      </div>
+      <div class="row">
+        <button onclick="callApi('/api/soundbutton/prev')">Prev Button</button>
+        <button onclick="callApi('/api/soundbutton/next')">Next Button</button>
+        <button onclick="callApi('/api/playselected')">Play Selected</button>
+        <button onclick="callApi('/api/playselectedpause')">Play Sel/Pause</button>
+      </div>
+    </div>
+    <div class="alert-box">
+      <div class="row"><strong>Send Alert</strong></div>
+      <div class="row">
+        <textarea id="alertText" placeholder="Type alert text..."></textarea>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="alertKeep" checked> Keep on screen</label>
+        <label>Seconds <input type="number" id="alertSeconds" min="1" max="600" value="10" style="width:86px;"></label>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="sendAlert()">Send Alert</button>
+        <button class="warn" onclick="clearAlert()">Clear Alert</button>
+      </div>
+    </div>
+    <div id="stateView" class="status mono"></div>
+    <div class="tracks">
+      <strong>Now Playing</strong>
+      <div id="tracksView" class="status"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row"><strong>Groups</strong></div>
+    <div id="groups" class="group-list"></div>
+    <div class="row" style="margin-top:8px;"><strong>Pages</strong></div>
+    <div id="pages" class="page-list"></div>
+    <div class="row" style="margin-top:8px;"><strong>Buttons</strong></div>
+    <div id="buttons" class="btn-grid"></div>
+  </div>
+</div>
+
+<script src="/webremote/app.js"></script>
+</body>
+</html>

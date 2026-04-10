@@ -6224,6 +6224,16 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         is_unused = (not slot.assigned) and (not slot.marker) and (not slot.title.strip()) and (not slot.notes.strip())
 
+        if not page_created:
+            blank_action = menu.addAction(tr("This page is blank."))
+            blank_action.setEnabled(False)
+            guidance_action = menu.addAction(tr("Please add a page first."))
+            guidance_action.setEnabled(False)
+            detail_action = menu.addAction(tr("Then you can add sound buttons."))
+            detail_action.setEnabled(False)
+            menu.exec_(button.mapToGlobal(pos))
+            return
+
         if is_unused:
             add_action = menu.addAction(tr("Add Sound Button"))
             add_action.setEnabled(page_created)

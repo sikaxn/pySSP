@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
+from pyssp.system_info_probe import main as system_info_probe_main
 from pyssp.ui.main_window import MainWindow
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.version import get_display_version
@@ -44,11 +45,13 @@ def _force_light_qt_theme(app: QApplication) -> None:
     app.setPalette(palette)
 
 
-def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool]:
+def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool, bool]:
     clean_tokens = {"--cleanstart", "/cleanstart"}
     debug_tokens = {"-debug", "--debug", "/debug"}
+    system_info_probe_tokens = {"--system-info-probe", "/system-info-probe"}
     cleanstart = False
     debug = False
+    system_info_probe = False
     filtered = [argv[0]] if argv else [""]
     for arg in argv[1:]:
         token = str(arg or "").strip().lower()
@@ -58,8 +61,11 @@ def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool]:
         if token in debug_tokens:
             debug = True
             continue
+        if token in system_info_probe_tokens:
+            system_info_probe = True
+            continue
         filtered.append(arg)
-    return filtered, cleanstart, debug
+    return filtered, cleanstart, debug, system_info_probe
 
 
 def _enable_debug_console(enabled: bool) -> None:
@@ -298,7 +304,9 @@ class _StartupSplash(QSplashScreen):
 
 
 def main() -> int:
-    qt_argv, cleanstart_requested, debug_requested = _parse_startup_args(list(sys.argv))
+    qt_argv, cleanstart_requested, debug_requested, system_info_probe_requested = _parse_startup_args(list(sys.argv))
+    if system_info_probe_requested:
+        return system_info_probe_main(qt_argv)
     _enable_debug_console(debug_requested)
     _ensure_standard_streams(debug_requested)
     app = QApplication(qt_argv)

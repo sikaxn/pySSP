@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import configparser
-import glob
 import importlib.metadata
 import os
 import platform
@@ -15,6 +14,7 @@ import uuid
 from dataclasses import dataclass
 from typing import List, Optional
 
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -236,154 +236,41 @@ def _list_midi_outputs_cross_platform() -> List[str]:
         return []
 
 
-def _resolve_sdl_mixer_library_path(pygame_module) -> str:
-    base = os.path.dirname(getattr(pygame_module, "__file__", "") or "")
-    if not base:
-        return ""
-    candidates = [
-        os.path.join(base, "SDL2_mixer.dll"),
-        os.path.join(base, "libSDL2_mixer-2.0.0.dylib"),
-        os.path.join(base, "libSDL2_mixer.dylib"),
-    ]
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-    for pattern in ["*SDL2_mixer*.dll", "*SDL2_mixer*.dylib", "*SDL2_mixer*.so", "*SDL2_mixer*.so.*"]:
-        matches = glob.glob(os.path.join(base, pattern))
-        if matches:
-            return matches[0]
-    return ""
-
-
 def _get_pygame_decoder_report() -> List[str]:
-    lines: List[str] = []
-    original_audio_driver = os.environ.get("SDL_AUDIODRIVER")
-    touched_audio_driver = False
+    cmd: List[str]
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env.setdefault("SDL_AUDIODRIVER", "dummy")
+    env.setdefault("SDL_VIDEODRIVER", "dummy")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--system-info-probe"]
+    else:
+        cmd = [sys.executable, "-m", "pyssp.system_info_probe"]
     try:
-        import ctypes
-        import pygame
-
-        if not pygame.get_init():
-            pygame.init()
-        if not pygame.mixer.get_init():
-            try:
-                pygame.mixer.init()
-            except Exception:
-                os.environ["SDL_AUDIODRIVER"] = "dummy"
-                touched_audio_driver = True
-                pygame.mixer.init()
-
-        lines.append(f"pygame version: {getattr(pygame.version, 'ver', 'unknown')}")
-        try:
-            lines.append(f"SDL version: {pygame.get_sdl_version()}")
-        except Exception as exc:
-            lines.append(f"SDL version: unavailable ({exc})")
-
-        try:
-            lines.append(f"SDL_mixer version: {pygame.mixer.get_sdl_mixer_version()}")
-        except Exception as exc:
-            lines.append(f"SDL_mixer version: unavailable ({exc})")
-
-        mixer_lib = _resolve_sdl_mixer_library_path(pygame)
-        lines.append(f"SDL_mixer shared library path: {mixer_lib or 'not found'}")
-        if not mixer_lib:
-            lines.append("pygame-ce supported format: unable to locate SDL2_mixer shared library")
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+            env=env,
+            creationflags=creationflags,
+        )
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        lines = [line.rstrip() for line in stdout.splitlines() if line.strip()]
+        if stderr:
+            lines.append(f"probe stderr: {stderr}")
+        if lines:
             return lines
-
-        lib = ctypes.CDLL(mixer_lib)
-        mix_init_features = []
-        if hasattr(lib, "Mix_Init"):
-            lib.Mix_Init.argtypes = [ctypes.c_int]
-            lib.Mix_Init.restype = ctypes.c_int
-            mix_init_flac = 0x1
-            mix_init_mod = 0x2
-            mix_init_mp3 = 0x8
-            mix_init_ogg = 0x10
-            mix_init_mid = 0x20
-            mix_init_opus = 0x40
-            mix_init_wavpack = 0x80
-            all_flags = (
-                mix_init_flac
-                | mix_init_mod
-                | mix_init_mp3
-                | mix_init_ogg
-                | mix_init_mid
-                | mix_init_opus
-                | mix_init_wavpack
-            )
-            mask = int(lib.Mix_Init(all_flags))
-            lines.append(f"Mix_Init mask: 0x{mask:X}")
-            for name, flag in [
-                ("FLAC", mix_init_flac),
-                ("MOD", mix_init_mod),
-                ("MP3", mix_init_mp3),
-                ("OGG", mix_init_ogg),
-                ("MID", mix_init_mid),
-                ("OPUS", mix_init_opus),
-                ("WAVPACK", mix_init_wavpack),
-            ]:
-                if mask & flag:
-                    mix_init_features.append(name)
-            lines.append("Mix_Init features: " + (", ".join(mix_init_features) if mix_init_features else "none"))
-
-        lib.Mix_GetNumChunkDecoders.restype = ctypes.c_int
-        lib.Mix_GetChunkDecoder.argtypes = [ctypes.c_int]
-        lib.Mix_GetChunkDecoder.restype = ctypes.c_char_p
-
-        chunk_decoders: List[str] = []
-        chunk_count = int(lib.Mix_GetNumChunkDecoders())
-        lines.append(f"Chunk decoders count: {chunk_count}")
-        for idx in range(max(0, chunk_count)):
-            raw = lib.Mix_GetChunkDecoder(idx)
-            if not raw:
-                continue
-            decoder_name = raw.decode("utf-8", errors="replace")
-            chunk_decoders.append(decoder_name)
-            lines.append(f"Chunk decoder [{idx}]: {decoder_name}")
-
-        music_decoders: List[str] = []
-        if hasattr(lib, "Mix_GetNumMusicDecoders") and hasattr(lib, "Mix_GetMusicDecoder"):
-            lib.Mix_GetNumMusicDecoders.restype = ctypes.c_int
-            lib.Mix_GetMusicDecoder.argtypes = [ctypes.c_int]
-            lib.Mix_GetMusicDecoder.restype = ctypes.c_char_p
-            music_count = int(lib.Mix_GetNumMusicDecoders())
-            lines.append(f"Music decoders count: {music_count}")
-            for idx in range(max(0, music_count)):
-                raw = lib.Mix_GetMusicDecoder(idx)
-                if not raw:
-                    continue
-                decoder_name = raw.decode("utf-8", errors="replace")
-                music_decoders.append(decoder_name)
-                lines.append(f"Music decoder [{idx}]: {decoder_name}")
-
-        lines.append("pygame-ce supported format (chunk): " + (", ".join(_dedupe(chunk_decoders)) or "none"))
-        lines.append("pygame-ce supported format (music): " + (", ".join(_dedupe(music_decoders)) or "none"))
-        base = os.path.dirname(getattr(pygame, "__file__", "") or "")
-        codec_bins = []
-        for token in ["ogg", "vorbis", "opus", "flac", "mp3", "wavpack", "xmp", "modplug", "mikmod"]:
-            codec_bins.extend(glob.glob(os.path.join(base, f"*{token}*.dll")))
-            codec_bins.extend(glob.glob(os.path.join(base, f"*{token}*.dylib")))
-            codec_bins.extend(glob.glob(os.path.join(base, f"*{token}*.so")))
-            codec_bins.extend(glob.glob(os.path.join(base, f"*{token}*.so.*")))
-        codec_bins = _dedupe([os.path.basename(path) for path in codec_bins])
-        lines.append("Detected codec shared libraries: " + (", ".join(codec_bins) if codec_bins else "none"))
+        if proc.returncode != 0:
+            return [f"pygame-ce supported format: probe failed with exit code {proc.returncode}"]
+        return ["pygame-ce supported format: probe returned no data"]
+    except subprocess.TimeoutExpired:
+        return ["pygame-ce supported format: probe timed out"]
     except Exception as exc:
-        lines.append(f"pygame-ce supported format: unavailable ({exc})")
-    finally:
-        try:
-            import pygame
-
-            if pygame.mixer.get_init():
-                pygame.mixer.quit()
-        except Exception:
-            pass
-        if touched_audio_driver:
-            if original_audio_driver is None:
-                if "SDL_AUDIODRIVER" in os.environ:
-                    del os.environ["SDL_AUDIODRIVER"]
-            else:
-                os.environ["SDL_AUDIODRIVER"] = original_audio_driver
-    return lines
+        return [f"pygame-ce supported format: unavailable ({exc})"]
 
 
 def _get_current_running_config_report() -> List[str]:
@@ -518,10 +405,27 @@ def build_system_information_text(app_version_text: str) -> str:
     return "\n".join(lines)
 
 
+class _SystemInfoWorker(QObject):
+    finished = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, app_version_text: str) -> None:
+        super().__init__()
+        self._app_version_text = str(app_version_text or "")
+
+    def run(self) -> None:
+        try:
+            self.finished.emit(build_system_information_text(self._app_version_text))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class SystemInformationDialog(QDialog):
     def __init__(self, app_version_text: str, parent=None) -> None:
         super().__init__(parent)
         self._app_version_text = str(app_version_text or "")
+        self._refresh_thread: Optional[QThread] = None
+        self._refresh_worker: Optional[_SystemInfoWorker] = None
         self.setWindowTitle("System Information")
         self.resize(980, 700)
 
@@ -537,6 +441,7 @@ class SystemInformationDialog(QDialog):
         self._text_box = QPlainTextEdit(self)
         self._text_box.setReadOnly(True)
         self._text_box.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._text_box.setPlainText("Refreshing system information...")
         root.addWidget(self._text_box, 1)
 
         btn_row = QHBoxLayout()
@@ -565,7 +470,43 @@ class SystemInformationDialog(QDialog):
         self._app_version_text = str(value or "")
 
     def refresh(self) -> None:
-        self._text_box.setPlainText(build_system_information_text(self._app_version_text))
+        if self._refresh_thread is not None:
+            return
+        self._set_refresh_in_progress(True)
+        self._text_box.setPlainText("Refreshing system information...")
+        thread = QThread(self)
+        worker = _SystemInfoWorker(self._app_version_text)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._handle_refresh_finished)
+        worker.failed.connect(self._handle_refresh_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(self._clear_refresh_thread)
+        thread.finished.connect(thread.deleteLater)
+        self._refresh_thread = thread
+        self._refresh_worker = worker
+        thread.start()
+
+    def _set_refresh_in_progress(self, active: bool) -> None:
+        self._refresh_btn.setEnabled(not active)
+        self._copy_btn.setEnabled(not active)
+        self._export_btn.setEnabled(not active)
+        self._export_settings_btn.setEnabled(not active)
+
+    def _handle_refresh_finished(self, text: str) -> None:
+        self._text_box.setPlainText(text)
+        self._set_refresh_in_progress(False)
+
+    def _handle_refresh_failed(self, error: str) -> None:
+        self._text_box.setPlainText(f"Could not collect system information.\n\n{error}")
+        self._set_refresh_in_progress(False)
+
+    def _clear_refresh_thread(self) -> None:
+        self._refresh_thread = None
+        self._refresh_worker = None
 
     def _copy_text(self) -> None:
         clipboard = QApplication.clipboard()

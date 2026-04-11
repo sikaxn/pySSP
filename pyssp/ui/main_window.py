@@ -3074,6 +3074,11 @@ class MainWindow(QMainWindow):
         register_action = QAction("Register", self)
         register_action.triggered.connect(self._show_register_message)
         help_menu.addAction(register_action)
+
+        if not getattr(sys, "frozen", False):
+            debug_crash_action = QAction("Crash for Debug", self)
+            debug_crash_action.triggered.connect(self._trigger_debug_crash)
+            help_menu.addAction(debug_crash_action)
         if sys.platform != "darwin":
             self.lock_screen_button = self._create_lock_screen_button(self.menuBar(), auto_raise=True)
             self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
@@ -4200,6 +4205,10 @@ class MainWindow(QMainWindow):
                 "Help Open Failed",
                 f"Could not open URL with the default browser.\n\nURL:\n{releases_url.toString()}",
             )
+
+    def _trigger_debug_crash(self) -> None:
+        nonsense = None
+        nonsense.setWindowTitle("This should crash")
 
     def _website_url(self) -> str:
         return "https://pyssp.studenttechsupport.com/"

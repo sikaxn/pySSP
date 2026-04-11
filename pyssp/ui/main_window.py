@@ -59,6 +59,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from pyssp.audio_format_support import build_audio_file_dialog_filter, normalize_supported_audio_extensions
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
     configure_audio_preload_cache_policy,
@@ -1984,6 +1985,13 @@ class MainWindow(QMainWindow):
         )
         new_lyric_fmt = str(getattr(self.settings, "new_lyric_file_format", "srt")).strip().lower()
         self.new_lyric_file_format = new_lyric_fmt if new_lyric_fmt in {"srt", "lrc"} else "srt"
+        self.supported_audio_format_extensions = normalize_supported_audio_extensions(
+            list(getattr(self.settings, "supported_audio_format_extensions", []))
+        )
+        self.verify_sound_file_on_add = bool(getattr(self.settings, "verify_sound_file_on_add", True))
+        self.allow_other_unsupported_audio_files = bool(
+            getattr(self.settings, "allow_other_unsupported_audio_files", False)
+        )
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
@@ -4895,6 +4903,71 @@ class MainWindow(QMainWindow):
             return "Audio decode failed: data does not appear to be valid MP3."
         return f"Audio decode failed: {reason}"
 
+    def _audio_file_dialog_filter(self) -> str:
+        return build_audio_file_dialog_filter(
+            self.supported_audio_format_extensions,
+            self.allow_other_unsupported_audio_files,
+        )
+
+    def _verify_audio_files_before_add(self, file_paths: List[str]) -> List[dict]:
+        matches: List[dict] = []
+        progress = QProgressDialog("Verifying audio files...", "Skip", 0, max(1, len(file_paths)), self)
+        progress.setWindowTitle("Verify Added Sound Files")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        for index, file_path in enumerate(file_paths):
+            if progress.wasCanceled():
+                break
+            progress.setLabelText(f"Checking {os.path.basename(file_path)}...")
+            cause = self._diagnose_sound_button_issue(file_path)
+            if cause:
+                matches.append(
+                    {
+                        "group": self.current_group,
+                        "page": self.current_page,
+                        "slot": index,
+                        "title": os.path.splitext(os.path.basename(file_path))[0],
+                        "file_path": file_path,
+                        "location": "Add Sound Button",
+                        "cause": cause,
+                    }
+                )
+            progress.setValue(index + 1)
+            QApplication.processEvents()
+        progress.close()
+        return matches
+
+    def _show_audio_add_verification_results(self, matches: List[dict]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Verify Added Sound Files")
+        dialog.resize(820, 420)
+        root = QVBoxLayout(dialog)
+        note = QLabel(
+            "Some files could not be verified. They will still be added. Close this window to continue lyric scanning.",
+            dialog,
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        lines: List[str] = []
+        for match in matches:
+            lines.append(str(match.get("title", "")).strip())
+            lines.append(f"  Path: {match.get('file_path', '')}")
+            lines.append(f"  Reason: {match.get('cause', '')}")
+            lines.append("")
+        text.setPlainText("\n".join(lines).strip())
+        root.addWidget(text, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.clicked.connect(dialog.accept)
+        root.addWidget(buttons)
+        dialog.exec_()
+
     def _disable_playlist_on_all_pages(self) -> None:
         changed = False
         for group in GROUPS:
@@ -7183,10 +7256,14 @@ class MainWindow(QMainWindow):
             self,
             tr("Select Sound Files"),
             start_dir,
-            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
+            self._audio_file_dialog_filter(),
         )
         if not file_paths:
             return
+        if self.verify_sound_file_on_add:
+            matches = self._verify_audio_files_before_add(file_paths)
+            if matches:
+                self._show_audio_add_verification_results(matches)
         if self.search_lyric_on_add_sound_button:
             lyric_links = self._prompt_lyric_link_selection(file_paths)
             if lyric_links is None:
@@ -9219,6 +9296,9 @@ class MainWindow(QMainWindow):
             main_ui_lyric_display_mode=self.main_ui_lyric_display_mode,
             search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
             new_lyric_file_format=self.new_lyric_file_format,
+            supported_audio_format_extensions=self.supported_audio_format_extensions,
+            verify_sound_file_on_add=self.verify_sound_file_on_add,
+            allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
             lock_allow_quit=self.lock_allow_quit,
             lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
@@ -9388,6 +9468,9 @@ class MainWindow(QMainWindow):
         self.main_ui_lyric_display_mode = dialog.selected_main_ui_lyric_display_mode()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
+        self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
+        self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
+        self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
         self._refresh_lyric_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
@@ -12088,6 +12171,9 @@ class MainWindow(QMainWindow):
         self.settings.main_ui_lyric_display_mode = self.main_ui_lyric_display_mode
         self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
         self.settings.new_lyric_file_format = self.new_lyric_file_format
+        self.settings.supported_audio_format_extensions = list(self.supported_audio_format_extensions)
+        self.settings.verify_sound_file_on_add = bool(self.verify_sound_file_on_add)
+        self.settings.allow_other_unsupported_audio_files = bool(self.allow_other_unsupported_audio_files)
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 

@@ -277,7 +277,16 @@ def build_decoder_report() -> List[str]:
         functional_support, functional_details = _probe_functional_support(pygame)
         supported_formats = [name for name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"] if functional_support.get(name)]
         unsupported_formats = [name for name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"] if functional_support.get(name) is False]
+        extension_map = {
+            "WAV": ".wav",
+            "AIFF": ".aiff",
+            "MP3": ".mp3",
+            "OGG": ".ogg",
+            "FLAC": ".flac",
+        }
+        supported_extensions = [extension_map[name] for name in supported_formats if name in extension_map]
         lines.append("pySSP functional playback support (tested): " + (", ".join(supported_formats) if supported_formats else "none"))
+        lines.append("pySSP supported audio extensions: " + (", ".join(supported_extensions) if supported_extensions else "none"))
         if unsupported_formats:
             lines.append("pySSP functional playback not supported (tested): " + ", ".join(unsupported_formats))
         for fmt_name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"]:

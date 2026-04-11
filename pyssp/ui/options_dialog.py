@@ -734,6 +734,9 @@ class OptionsDialog(QDialog):
         "main_ui_lyric_display_mode": "always",
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
+        "supported_audio_format_extensions": [],
+        "verify_sound_file_on_add": True,
+        "allow_other_unsupported_audio_files": False,
         "log_file_enabled": False,
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
@@ -916,6 +919,9 @@ class OptionsDialog(QDialog):
         main_ui_lyric_display_mode: str,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
+        supported_audio_format_extensions: List[str],
+        verify_sound_file_on_add: bool,
+        allow_other_unsupported_audio_files: bool,
         fade_in_sec: float,
         cross_fade_sec: float,
         fade_out_sec: float,
@@ -1122,6 +1128,13 @@ class OptionsDialog(QDialog):
             if str(new_lyric_file_format or "").strip().lower() in {"srt", "lrc"}
             else "srt"
         )
+        self._supported_audio_format_extensions = [
+            str(token).strip().lower()
+            for token in supported_audio_format_extensions
+            if str(token).strip()
+        ]
+        self._verify_sound_file_on_add = bool(verify_sound_file_on_add)
+        self._allow_other_unsupported_audio_files = bool(allow_other_unsupported_audio_files)
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
@@ -1209,6 +1222,15 @@ class OptionsDialog(QDialog):
                 main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
                 search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
                 new_lyric_file_format=self._new_lyric_file_format,
+            ),
+        )
+        self._add_page(
+            "Audio Format",
+            self._mono_icon("speaker"),
+            self._build_audio_format_page(
+                supported_audio_format_extensions=self._supported_audio_format_extensions,
+                verify_sound_file_on_add=self._verify_sound_file_on_add,
+                allow_other_unsupported_audio_files=self._allow_other_unsupported_audio_files,
             ),
         )
         self._add_page(
@@ -2737,6 +2759,44 @@ class OptionsDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_audio_format_page(
+        self,
+        supported_audio_format_extensions: List[str],
+        verify_sound_file_on_add: bool,
+        allow_other_unsupported_audio_files: bool,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        detected_group = QGroupBox("Detected Supported Audio Format Extensions")
+        detected_layout = QVBoxLayout(detected_group)
+        supported = [str(token).strip().lower() for token in supported_audio_format_extensions if str(token).strip()]
+        self.supported_audio_format_extensions_value = QLabel(", ".join(supported) if supported else "(none detected)")
+        self.supported_audio_format_extensions_value.setWordWrap(True)
+        self.supported_audio_format_extensions_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        detected_layout.addWidget(self.supported_audio_format_extensions_value)
+        layout.addWidget(detected_group)
+
+        behavior_group = QGroupBox("Add Sound Button Behavior")
+        behavior_layout = QVBoxLayout(behavior_group)
+        self.verify_sound_file_on_add_checkbox = QCheckBox("Verify sound file upon adding sound button")
+        self.verify_sound_file_on_add_checkbox.setChecked(bool(verify_sound_file_on_add))
+        behavior_layout.addWidget(self.verify_sound_file_on_add_checkbox)
+        self.allow_other_unsupported_audio_files_checkbox = QCheckBox(
+            "Allow other unsupported file"
+        )
+        self.allow_other_unsupported_audio_files_checkbox.setChecked(bool(allow_other_unsupported_audio_files))
+        behavior_layout.addWidget(self.allow_other_unsupported_audio_files_checkbox)
+        note = QLabel(
+            "When disabled, Add Sound Button file selection is limited to the detected supported audio extensions."
+        )
+        note.setWordWrap(True)
+        behavior_layout.addWidget(note)
+        layout.addWidget(behavior_group)
+
+        layout.addStretch(1)
+        return page
+
     @classmethod
     def _normalize_stage_display_layout(cls, values: List[str]) -> List[str]:
         gadgets = normalize_stage_display_gadgets({}, legacy_layout=values)
@@ -3294,6 +3354,23 @@ class OptionsDialog(QDialog):
     def selected_new_lyric_file_format(self) -> str:
         value = str(self.new_lyric_file_format_combo.currentData() or "srt").strip().lower()
         return value if value in {"srt", "lrc"} else "srt"
+
+    def selected_supported_audio_format_extensions(self) -> List[str]:
+        text = str(self.supported_audio_format_extensions_value.text() or "").strip()
+        if (not text) or text == "(none detected)":
+            return []
+        output: List[str] = []
+        for token in text.split(","):
+            value = str(token or "").strip().lower()
+            if value:
+                output.append(value)
+        return output
+
+    def selected_verify_sound_file_on_add(self) -> bool:
+        return bool(self.verify_sound_file_on_add_checkbox.isChecked())
+
+    def selected_allow_other_unsupported_audio_files(self) -> bool:
+        return bool(self.allow_other_unsupported_audio_files_checkbox.isChecked())
 
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
@@ -4085,24 +4162,27 @@ class OptionsDialog(QDialog):
             self._restore_lyric_defaults()
             return
         if idx == 8:
-            self._restore_window_layout_defaults()
+            self._restore_audio_format_defaults()
             return
         if idx == 9:
-            self._restore_delay_defaults()
+            self._restore_window_layout_defaults()
             return
         if idx == 10:
-            self._restore_playback_defaults()
+            self._restore_delay_defaults()
             return
         if idx == 11:
-            self._restore_audio_device_defaults()
+            self._restore_playback_defaults()
             return
         if idx == 12:
-            self._restore_preload_defaults()
+            self._restore_audio_device_defaults()
             return
         if idx == 13:
-            self._restore_talk_defaults()
+            self._restore_preload_defaults()
             return
         if idx == 14:
+            self._restore_talk_defaults()
+            return
+        if idx == 15:
             self._restore_web_remote_defaults()
             return
 
@@ -4674,4 +4754,13 @@ class OptionsDialog(QDialog):
             self.new_lyric_file_format_combo,
             str(d.get("new_lyric_file_format", "srt")),
             "srt",
+        )
+
+    def _restore_audio_format_defaults(self) -> None:
+        d = self._DEFAULTS
+        supported = [str(token).strip().lower() for token in d.get("supported_audio_format_extensions", []) if str(token).strip()]
+        self.supported_audio_format_extensions_value.setText(", ".join(supported) if supported else "(none detected)")
+        self.verify_sound_file_on_add_checkbox.setChecked(bool(d.get("verify_sound_file_on_add", True)))
+        self.allow_other_unsupported_audio_files_checkbox.setChecked(
+            bool(d.get("allow_other_unsupported_audio_files", False))
         )

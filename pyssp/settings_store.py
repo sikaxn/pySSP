@@ -67,6 +67,26 @@ def default_stage_display_layout() -> list[str]:
     ]
 
 
+def default_supported_audio_format_extensions() -> list[str]:
+    return []
+
+
+def _normalize_supported_audio_format_extensions(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in list(values or []):
+        token = str(raw or "").strip().lower()
+        if not token:
+            continue
+        if not token.startswith("."):
+            token = f".{token.lstrip('.')}"
+        if token in seen:
+            continue
+        seen.add(token)
+        output.append(token)
+    return output
+
+
 WINDOW_LAYOUT_MAIN_GRID_COLS = 4
 WINDOW_LAYOUT_MAIN_GRID_ROWS = 4
 WINDOW_LAYOUT_FADE_GRID_COLS = 3
@@ -433,6 +453,9 @@ class AppSettings:
     main_ui_lyric_display_mode: str = "always"
     search_lyric_on_add_sound_button: bool = True
     new_lyric_file_format: str = "srt"
+    supported_audio_format_extensions: list[str] = field(default_factory=default_supported_audio_format_extensions)
+    verify_sound_file_on_add: bool = True
+    allow_other_unsupported_audio_files: bool = False
     lock_allow_quit: bool = True
     lock_allow_system_hotkeys: bool = False
     lock_allow_quick_action_hotkeys: bool = False
@@ -737,6 +760,11 @@ def save_settings(settings: AppSettings) -> None:
         "main_ui_lyric_display_mode": settings.main_ui_lyric_display_mode,
         "search_lyric_on_add_sound_button": "1" if settings.search_lyric_on_add_sound_button else "0",
         "new_lyric_file_format": settings.new_lyric_file_format,
+        "supported_audio_format_extensions": "\t".join(
+            _normalize_supported_audio_format_extensions(settings.supported_audio_format_extensions)
+        ),
+        "verify_sound_file_on_add": "1" if settings.verify_sound_file_on_add else "0",
+        "allow_other_unsupported_audio_files": "1" if settings.allow_other_unsupported_audio_files else "0",
         "lock_allow_quit": "1" if settings.lock_allow_quit else "0",
         "lock_allow_system_hotkeys": "1" if settings.lock_allow_system_hotkeys else "0",
         "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
@@ -1053,6 +1081,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
         new_lyric_file_format = "srt"
+    supported_audio_format_extensions = _normalize_supported_audio_format_extensions(
+        [item.strip() for item in str(section.get("supported_audio_format_extensions", "")).split("\t") if item.strip()]
+    )
+    verify_sound_file_on_add = _get_bool(section, "verify_sound_file_on_add", True)
+    allow_other_unsupported_audio_files = _get_bool(section, "allow_other_unsupported_audio_files", False)
     set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
     if set_file_encoding not in {"utf8", "gbk"}:
         set_file_encoding = "utf8"
@@ -1253,6 +1286,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         main_ui_lyric_display_mode=main_ui_lyric_display_mode,
         search_lyric_on_add_sound_button=search_lyric_on_add_sound_button,
         new_lyric_file_format=new_lyric_file_format,
+        supported_audio_format_extensions=supported_audio_format_extensions,
+        verify_sound_file_on_add=verify_sound_file_on_add,
+        allow_other_unsupported_audio_files=allow_other_unsupported_audio_files,
         lock_allow_quit=_get_bool(section, "lock_allow_quit", True),
         lock_allow_system_hotkeys=_get_bool(section, "lock_allow_system_hotkeys", False),
         lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),

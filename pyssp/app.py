@@ -15,6 +15,7 @@ from PyQt5.QtCore import QLockFile, QRect, Qt, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
+from pyssp.audio_format_support import ensure_supported_audio_formats_ready
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
 from pyssp.system_info_probe import main as system_info_probe_main
@@ -283,7 +284,6 @@ def _resolve_startup_language(preferred_if_missing: Optional[str] = None) -> str
     settings = load_settings()
     return normalize_language(getattr(settings, "ui_language", "en"))
 
-
 def _asset_path(*parts: str) -> Path:
     if getattr(sys, "frozen", False):
         base_dir = Path(sys.executable).resolve().parent
@@ -410,6 +410,32 @@ def main() -> int:
         startup_language = "en"
     set_current_language(startup_language)
     apply_application_font(app, startup_language)
+    splash_status_cb = None
+    splash_hide_cb = None
+    splash_show_cb = None
+    if splash is not None:
+        def _set_splash_status(text: str) -> None:
+            splash.set_status(text)
+            app.processEvents()
+
+        def _hide_splash() -> None:
+            splash.hide()
+            app.processEvents()
+
+        def _show_splash() -> None:
+            splash.show()
+            app.processEvents()
+
+        splash_status_cb = _set_splash_status
+        splash_hide_cb = _hide_splash
+        splash_show_cb = _show_splash
+    if not ensure_supported_audio_formats_ready(
+        timeout_sec=10.0,
+        set_status=splash_status_cb,
+        before_prompt=splash_hide_cb,
+        after_prompt=splash_show_cb,
+    ):
+        return 1
     if splash is not None:
         splash.set_status("Loading main window...")
         app.processEvents()

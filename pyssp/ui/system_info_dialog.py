@@ -237,7 +237,8 @@ def _list_midi_outputs_cross_platform() -> List[str]:
 
 
 def _get_pygame_decoder_report(
-    register_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None
+    register_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None,
+    timeout_sec: float = 12.0,
 ) -> List[str]:
     cmd: List[str]
     env = os.environ.copy()
@@ -261,7 +262,7 @@ def _get_pygame_decoder_report(
         )
         if register_process is not None:
             register_process(proc)
-        stdout, stderr = proc.communicate(timeout=12)
+        stdout, stderr = proc.communicate(timeout=max(1.0, float(timeout_sec)))
         stdout = (stdout or "").strip()
         stderr = (stderr or "").strip()
         lines = [line.rstrip() for line in stdout.splitlines() if line.strip()]
@@ -284,6 +285,34 @@ def _get_pygame_decoder_report(
     finally:
         if register_process is not None:
             register_process(None)
+
+
+def detect_supported_audio_format_extensions(
+    timeout_sec: float = 10.0,
+    register_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None,
+) -> List[str]:
+    lines = _get_pygame_decoder_report(register_process=register_process, timeout_sec=timeout_sec)
+    for line in lines:
+        text = str(line or "").strip()
+        if not text.lower().startswith("pyssp supported audio extensions:"):
+            continue
+        raw = text.split(":", 1)[1].strip()
+        if raw.lower() == "none":
+            return []
+        output: List[str] = []
+        seen: set[str] = set()
+        for token in raw.split(","):
+            value = str(token or "").strip().lower()
+            if not value:
+                continue
+            if not value.startswith("."):
+                value = f".{value.lstrip('.')}"
+            if value in seen:
+                continue
+            seen.add(value)
+            output.append(value)
+        return output
+    return []
 
 
 def _get_current_running_config_report() -> List[str]:

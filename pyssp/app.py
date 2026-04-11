@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import ctypes
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import traceback
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import QLockFile, QRect, Qt
+from PyQt5.QtCore import QLockFile, QRect, Qt, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
 from pyssp.system_info_probe import main as system_info_probe_main
+from pyssp.ui.crash_report_dialog import CrashReportDialog
 from pyssp.ui.main_window import MainWindow
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.version import get_display_version
@@ -23,6 +27,8 @@ _INSTANCE_LOCK: Optional[QLockFile] = None
 _STDOUT_FALLBACK = None
 _STDERR_FALLBACK = None
 _STDIN_FALLBACK = None
+_CRASH_DIALOG_VISIBLE = False
+_KEYBOARD_INTERRUPT_COUNT = 0
 
 
 def _force_light_qt_theme(app: QApplication) -> None:
@@ -111,6 +117,66 @@ def _ensure_standard_streams(debug_enabled: bool) -> None:
             sys.stdin = _STDIN_FALLBACK
     except Exception:
         pass
+
+
+def _install_crash_handler(app: QApplication) -> None:
+    original_excepthook = sys.excepthook
+    original_threading_excepthook = getattr(threading, "excepthook", None)
+
+    def _show_crash_dialog(exc_type, exc_value, exc_tb) -> None:
+        global _CRASH_DIALOG_VISIBLE
+        if _CRASH_DIALOG_VISIBLE:
+            return
+        _CRASH_DIALOG_VISIBLE = True
+        try:
+            dialog_parent = app.activeWindow()
+            dialog = CrashReportDialog(exc_type, exc_value, exc_tb, parent=dialog_parent)
+            dialog.exec_()
+        finally:
+            _CRASH_DIALOG_VISIBLE = False
+
+    def _handle_keyboard_interrupt() -> None:
+        global _KEYBOARD_INTERRUPT_COUNT
+        _KEYBOARD_INTERRUPT_COUNT += 1
+        if _KEYBOARD_INTERRUPT_COUNT == 1:
+            QTimer.singleShot(
+                0,
+                lambda: QMessageBox.warning(
+                    app.activeWindow(),
+                    tr("Interrupt Received"),
+                    tr("Press Ctrl+C again to quit pySSP."),
+                ),
+            )
+            return
+        QTimer.singleShot(0, app.quit)
+
+    def _handle_exception(exc_type, exc_value, exc_tb) -> None:
+        if exc_type is KeyboardInterrupt:
+            _handle_keyboard_interrupt()
+            return
+        try:
+            traceback_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            print(traceback_text, file=sys.stderr)
+        except Exception:
+            pass
+        try:
+            if threading.current_thread() is threading.main_thread():
+                _show_crash_dialog(exc_type, exc_value, exc_tb)
+            else:
+                QTimer.singleShot(0, lambda: _show_crash_dialog(exc_type, exc_value, exc_tb))
+        except Exception:
+            original_excepthook(exc_type, exc_value, exc_tb)
+
+    def _thread_exception_hook(args) -> None:
+        _handle_exception(args.exc_type, args.exc_value, args.exc_traceback)
+
+    def _sigint_handler(signum, frame) -> None:
+        _handle_keyboard_interrupt()
+
+    sys.excepthook = _handle_exception
+    if original_threading_excepthook is not None:
+        threading.excepthook = _thread_exception_hook
+    signal.signal(signal.SIGINT, _sigint_handler)
 
 
 def _apply_cleanstart() -> bool:
@@ -310,6 +376,7 @@ def main() -> int:
     _enable_debug_console(debug_requested)
     _ensure_standard_streams(debug_requested)
     app = QApplication(qt_argv)
+    _install_crash_handler(app)
     splash: Optional[_StartupSplash] = None
     splash_path = _asset_path("logo2.png")
     if splash_path.exists():

@@ -3,8 +3,11 @@ from __future__ import annotations
 import glob
 import os
 import sys
+import tempfile
+import wave
+import aifc
 from ctypes.util import find_library
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 
 def _dedupe(values: List[str]) -> List[str]:
@@ -20,6 +23,21 @@ def _dedupe(values: List[str]) -> List[str]:
         seen.add(key)
         out.append(token)
     return out
+
+
+def _asset_root() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+        bundled = os.path.join(base_dir, "pyssp", "assets")
+        if os.path.isdir(bundled):
+            return bundled
+        meipass_dir = str(getattr(sys, "_MEIPASS", "") or "").strip()
+        if meipass_dir:
+            candidate = os.path.join(meipass_dir, "pyssp", "assets")
+            if os.path.isdir(candidate):
+                return candidate
+        return bundled
+    return os.path.join(os.path.dirname(__file__), "assets")
 
 
 def _iter_existing_dirs(paths: Sequence[str]) -> Iterable[str]:
@@ -174,6 +192,62 @@ def _load_sdl_mixer_ctypes(pygame_module):
     return None, resolved_path, search_roots, attempts
 
 
+def _write_pcm_wav(path: str) -> None:
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(11025)
+        handle.writeframes(b"\x00\x00" * 256)
+
+
+def _write_pcm_aiff(path: str) -> None:
+    with aifc.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(11025)
+        handle.writeframes(b"\x00\x00" * 256)
+
+
+def _functional_sample_paths() -> Dict[str, str]:
+    samples: Dict[str, str] = {}
+    sample_root = os.path.join(_asset_root(), "system_info_probe")
+    for fmt in ["wav", "mp3", "ogg", "flac"]:
+        candidate = os.path.join(sample_root, f"sample.{fmt}")
+        if os.path.exists(candidate):
+            samples[fmt.upper()] = candidate
+    return samples
+
+
+def _probe_functional_support(pygame_module) -> Tuple[Dict[str, bool], Dict[str, str]]:
+    support: Dict[str, bool] = {}
+    details: Dict[str, str] = {}
+
+    for fmt_name, sample_path in _functional_sample_paths().items():
+        try:
+            sound = pygame_module.mixer.Sound(sample_path)
+            support[fmt_name] = True
+            details[fmt_name] = f"loaded {os.path.basename(sample_path)} ({int(len(sound.get_raw()))} bytes raw)"
+        except Exception as exc:
+            support[fmt_name] = False
+            details[fmt_name] = str(exc)
+
+    with tempfile.TemporaryDirectory(prefix="pyssp_format_probe_") as temp_dir:
+        wav_path = os.path.join(temp_dir, "probe.wav")
+        aiff_path = os.path.join(temp_dir, "probe.aiff")
+        _write_pcm_wav(wav_path)
+        _write_pcm_aiff(aiff_path)
+        for fmt_name, sample_path in [("WAV", wav_path), ("AIFF", aiff_path)]:
+            try:
+                sound = pygame_module.mixer.Sound(sample_path)
+                support[fmt_name] = True
+                details[fmt_name] = f"generated sample loaded ({int(len(sound.get_raw()))} bytes raw)"
+            except Exception as exc:
+                support[fmt_name] = False
+                details[fmt_name] = str(exc)
+
+    return support, details
+
+
 def build_decoder_report() -> List[str]:
     lines: List[str] = []
     original_audio_driver = os.environ.get("SDL_AUDIODRIVER")
@@ -199,6 +273,17 @@ def build_decoder_report() -> List[str]:
             lines.append(f"pygame mixer initialized: False ({exc})")
         else:
             lines.append("pygame mixer initialized: True")
+
+        functional_support, functional_details = _probe_functional_support(pygame)
+        supported_formats = [name for name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"] if functional_support.get(name)]
+        unsupported_formats = [name for name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"] if functional_support.get(name) is False]
+        lines.append("pySSP functional playback support (tested): " + (", ".join(supported_formats) if supported_formats else "none"))
+        if unsupported_formats:
+            lines.append("pySSP functional playback not supported (tested): " + ", ".join(unsupported_formats))
+        for fmt_name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"]:
+            detail = functional_details.get(fmt_name)
+            if detail:
+                lines.append(f"Functional probe [{fmt_name}]: {detail}")
 
         try:
             lines.append(f"SDL_mixer version: {pygame.mixer.get_sdl_mixer_version()}")
@@ -274,6 +359,10 @@ def build_decoder_report() -> List[str]:
         else:
             os.environ["SDL_VIDEODRIVER"] = original_video_driver
     return lines
+
+
+def run_decoder_probe_process() -> List[str]:
+    return build_decoder_report()
 
 
 def main(argv: List[str] | None = None) -> int:

@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -236,7 +236,9 @@ def _list_midi_outputs_cross_platform() -> List[str]:
         return []
 
 
-def _get_pygame_decoder_report() -> List[str]:
+def _get_pygame_decoder_report(
+    register_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None
+) -> List[str]:
     cmd: List[str]
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -247,18 +249,21 @@ def _get_pygame_decoder_report() -> List[str]:
         cmd = [sys.executable, "--system-info-probe"]
     else:
         cmd = [sys.executable, "-m", "pyssp.system_info_probe"]
+    proc: Optional[subprocess.Popen[str]] = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=12,
-            check=False,
             env=env,
             creationflags=creationflags,
         )
-        stdout = (proc.stdout or "").strip()
-        stderr = (proc.stderr or "").strip()
+        if register_process is not None:
+            register_process(proc)
+        stdout, stderr = proc.communicate(timeout=12)
+        stdout = (stdout or "").strip()
+        stderr = (stderr or "").strip()
         lines = [line.rstrip() for line in stdout.splitlines() if line.strip()]
         if stderr:
             lines.append(f"probe stderr: {stderr}")
@@ -268,9 +273,17 @@ def _get_pygame_decoder_report() -> List[str]:
             return [f"pygame-ce supported format: probe failed with exit code {proc.returncode}"]
         return ["pygame-ce supported format: probe returned no data"]
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return ["pygame-ce supported format: probe timed out"]
     except Exception as exc:
         return [f"pygame-ce supported format: unavailable ({exc})"]
+    finally:
+        if register_process is not None:
+            register_process(None)
 
 
 def _get_current_running_config_report() -> List[str]:
@@ -326,7 +339,10 @@ def _get_current_running_config_report() -> List[str]:
     return lines
 
 
-def build_system_information_text(app_version_text: str) -> str:
+def build_system_information_text(
+    app_version_text: str,
+    register_probe_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None,
+) -> str:
     now_local = time.strftime("%Y-%m-%d %H:%M:%S")
     system_name = f"{platform.system()} {platform.release()} ({platform.machine()})"
 
@@ -371,7 +387,7 @@ def build_system_information_text(app_version_text: str) -> str:
     lines.append("")
 
     lines.append("pygame-ce / SDL_mixer supported format:")
-    for item in _get_pygame_decoder_report():
+    for item in _get_pygame_decoder_report(register_process=register_probe_process):
         lines.append(f"- {item}")
     lines.append("")
 
@@ -408,16 +424,41 @@ def build_system_information_text(app_version_text: str) -> str:
 class _SystemInfoWorker(QObject):
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
+    cancel_requested = pyqtSignal()
 
     def __init__(self, app_version_text: str) -> None:
         super().__init__()
         self._app_version_text = str(app_version_text or "")
+        self._probe_process: Optional[subprocess.Popen[str]] = None
+        self.cancel_requested.connect(self.cancel)
 
     def run(self) -> None:
         try:
-            self.finished.emit(build_system_information_text(self._app_version_text))
+            self.finished.emit(
+                build_system_information_text(self._app_version_text, register_probe_process=self._set_probe_process)
+            )
         except Exception as exc:
             self.failed.emit(str(exc))
+
+    def _set_probe_process(self, proc: Optional[subprocess.Popen[str]]) -> None:
+        self._probe_process = proc
+
+    def cancel(self) -> None:
+        proc = self._probe_process
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=1.0)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        self._probe_process = None
 
 
 class SystemInformationDialog(QDialog):
@@ -507,6 +548,15 @@ class SystemInformationDialog(QDialog):
     def _clear_refresh_thread(self) -> None:
         self._refresh_thread = None
         self._refresh_worker = None
+
+    def closeEvent(self, event) -> None:
+        worker = self._refresh_worker
+        if worker is not None:
+            try:
+                worker.cancel_requested.emit()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def _copy_text(self) -> None:
         clipboard = QApplication.clipboard()

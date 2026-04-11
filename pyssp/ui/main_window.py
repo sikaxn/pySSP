@@ -147,6 +147,7 @@ from pyssp.ui.stage_display import (
     normalize_stage_display_gadgets,
 )
 from pyssp.ui.search_window import SearchWindow
+from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 from pyssp.version import get_app_title_base, get_display_version
@@ -2284,6 +2285,7 @@ class MainWindow(QMainWindow):
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
         self._about_window: Optional[AboutWindowDialog] = None
+        self._system_info_window: Optional[SystemInformationDialog] = None
         self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
@@ -3050,6 +3052,9 @@ class MainWindow(QMainWindow):
         about_action = QAction("About", self)
         about_action.triggered.connect(self._open_about_window)
         help_menu.addAction(about_action)
+        system_info_action = QAction("System Information", self)
+        system_info_action.triggered.connect(self._open_system_information_window)
+        help_menu.addAction(system_info_action)
 
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
@@ -4155,6 +4160,19 @@ class MainWindow(QMainWindow):
         self._about_window.raise_()
         self._about_window.activateWindow()
 
+    def _open_system_information_window(self) -> None:
+        if self._is_playback_in_progress():
+            self._show_info_notice_banner(tr("Stop playback before opening System Information."))
+            return
+        if self._system_info_window is None:
+            self._system_info_window = SystemInformationDialog(app_version_text=self.app_version_text, parent=self)
+            self._system_info_window.destroyed.connect(lambda _=None: self._clear_system_info_window_ref())
+        self._system_info_window.set_app_version_text(self.app_version_text)
+        self._system_info_window.refresh()
+        self._system_info_window.show()
+        self._system_info_window.raise_()
+        self._system_info_window.activateWindow()
+
     def _open_help_window(self) -> None:
         help_index = self._help_index_path()
         if not os.path.exists(help_index):
@@ -4257,6 +4275,9 @@ class MainWindow(QMainWindow):
 
     def _clear_about_window_ref(self) -> None:
         self._about_window = None
+
+    def _clear_system_info_window_ref(self) -> None:
+        self._system_info_window = None
 
     def _clear_tips_window_ref(self) -> None:
         self._tips_window = None

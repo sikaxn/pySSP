@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
 from pyssp.ui.main_window import MainWindow
+from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.version import get_display_version
 
 _INSTANCE_LOCK: Optional[QLockFile] = None
@@ -173,17 +174,24 @@ def _confirm_sports_sounds_pro_warning() -> bool:
 
 
 def _prompt_first_run_language() -> str:
-    box = QMessageBox()
-    box.setIcon(QMessageBox.Question)
-    box.setWindowTitle("Select Language / 选择语言")
-    box.setText("Choose your UI language.\n请选择界面语言。")
-    english_button = box.addButton("English", QMessageBox.AcceptRole)
-    chinese_button = box.addButton("简体中文", QMessageBox.AcceptRole)
-    box.setDefaultButton(english_button)
-    box.exec_()
-    if box.clickedButton() is chinese_button:
-        return "zh_cn"
-    return "en"
+    while True:
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Select Language / 选择语言")
+        box.setText("Choose your UI language.\n请选择界面语言。")
+        english_button = box.addButton("English", QMessageBox.AcceptRole)
+        chinese_button = box.addButton("简体中文", QMessageBox.AcceptRole)
+        info_button = box.addButton("System Information", QMessageBox.ActionRole)
+        box.setDefaultButton(english_button)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is info_button:
+            dialog = SystemInformationDialog(app_version_text=get_display_version(), parent=None)
+            dialog.exec_()
+            continue
+        if clicked is chinese_button:
+            return "zh_cn"
+        return "en"
 
 
 def _confirm_cleanstart_warning() -> bool:

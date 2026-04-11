@@ -6,6 +6,7 @@ import importlib.metadata
 import os
 import platform
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -542,10 +543,12 @@ class SystemInformationDialog(QDialog):
         self._refresh_btn = QPushButton("Refresh", self)
         self._copy_btn = QPushButton("Copy", self)
         self._export_btn = QPushButton("Export...", self)
+        self._export_settings_btn = QPushButton("Export settings.ini...", self)
         self._close_btn = QPushButton("Close", self)
         btn_row.addWidget(self._refresh_btn)
         btn_row.addWidget(self._copy_btn)
         btn_row.addWidget(self._export_btn)
+        btn_row.addWidget(self._export_settings_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(self._close_btn)
         root.addLayout(btn_row)
@@ -553,6 +556,7 @@ class SystemInformationDialog(QDialog):
         self._refresh_btn.clicked.connect(self.refresh)
         self._copy_btn.clicked.connect(self._copy_text)
         self._export_btn.clicked.connect(self._export_text)
+        self._export_settings_btn.clicked.connect(self._export_settings_ini)
         self._close_btn.clicked.connect(self.close)
 
         self.refresh()
@@ -586,3 +590,25 @@ class SystemInformationDialog(QDialog):
             QMessageBox.warning(self, "Export Failed", f"Could not export system information:\n{exc}")
             return
         QMessageBox.information(self, "Export Complete", f"Exported system information to:\n{target}")
+
+    def _export_settings_ini(self) -> None:
+        source = get_settings_path()
+        if not source.exists():
+            QMessageBox.warning(self, "Export Failed", f"settings.ini not found:\n{source}")
+            return
+        default_name = f"pySSP_settings_{time.strftime('%Y%m%d_%H%M%S')}.ini"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export settings.ini",
+            os.path.join(os.path.expanduser("~"), default_name),
+            "INI Files (*.ini);;All Files (*.*)",
+        )
+        target = str(file_path or "").strip()
+        if not target:
+            return
+        try:
+            shutil.copyfile(str(source), target)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Failed", f"Could not export settings.ini:\n{exc}")
+            return
+        QMessageBox.information(self, "Export Complete", f"Exported settings.ini to:\n{target}")

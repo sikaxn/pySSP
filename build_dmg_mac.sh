@@ -132,10 +132,12 @@ if [[ -z "${device}" || ! -d "${mount_point}" ]]; then
   exit 1
 fi
 
-osascript >/dev/null 2>&1 <<EOF || true
+echo "[INFO] Applying Finder window layout..."
+osascript <<EOF
 tell application "Finder"
   tell disk "${VOL_NAME}"
     open
+    delay 1
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
@@ -153,10 +155,25 @@ tell application "Finder"
     close
     open
     update without registering applications
-    delay 1
+    delay 3
+    close
   end tell
 end tell
 EOF
+
+ds_store_path="${mount_point}/.DS_Store"
+for _ in {1..15}; do
+  if [[ -s "${ds_store_path}" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ ! -s "${ds_store_path}" ]]; then
+  echo "[ERROR] Finder did not persist DMG layout metadata to ${ds_store_path}."
+  hdiutil detach "${device}" >/dev/null || true
+  exit 1
+fi
 
 echo "[INFO] Finalizing DMG..."
 sync

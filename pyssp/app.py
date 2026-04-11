@@ -135,24 +135,19 @@ def _install_crash_handler(app: QApplication) -> None:
         finally:
             _CRASH_DIALOG_VISIBLE = False
 
-    def _handle_keyboard_interrupt() -> None:
+    def _handle_keyboard_interrupt(exc_type=KeyboardInterrupt, exc_value=None, exc_tb=None) -> None:
         global _KEYBOARD_INTERRUPT_COUNT
         _KEYBOARD_INTERRUPT_COUNT += 1
         if _KEYBOARD_INTERRUPT_COUNT == 1:
-            QTimer.singleShot(
-                0,
-                lambda: QMessageBox.warning(
-                    app.activeWindow(),
-                    tr("Interrupt Received"),
-                    tr("Press Ctrl+C again to quit pySSP."),
-                ),
-            )
+            if exc_value is None:
+                exc_value = KeyboardInterrupt()
+            QTimer.singleShot(0, lambda: _show_crash_dialog(exc_type, exc_value, exc_tb))
             return
         QTimer.singleShot(0, app.quit)
 
     def _handle_exception(exc_type, exc_value, exc_tb) -> None:
         if exc_type is KeyboardInterrupt:
-            _handle_keyboard_interrupt()
+            _handle_keyboard_interrupt(exc_type, exc_value, exc_tb)
             return
         try:
             traceback_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -171,7 +166,7 @@ def _install_crash_handler(app: QApplication) -> None:
         _handle_exception(args.exc_type, args.exc_value, args.exc_traceback)
 
     def _sigint_handler(signum, frame) -> None:
-        _handle_keyboard_interrupt()
+        _handle_keyboard_interrupt(KeyboardInterrupt, KeyboardInterrupt(), None)
 
     sys.excepthook = _handle_exception
     if original_threading_excepthook is not None:

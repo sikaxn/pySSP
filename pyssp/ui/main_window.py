@@ -117,6 +117,7 @@ from pyssp.midi_control import (
     normalize_midi_binding,
     split_midi_binding,
 )
+from pyssp.path_safety import unsafe_path_reason
 from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
 from pyssp.timecode import (
     LtcAudioOutput,
@@ -4874,6 +4875,9 @@ class MainWindow(QMainWindow):
         path = str(file_path or "").strip()
         if not path:
             return "No file path assigned."
+        reason = unsafe_path_reason(path)
+        if reason:
+            return f"Invalid file path: {reason}"
         if not os.path.exists(path):
             base_name = os.path.basename(path)
             if ("?" in base_name) or ("\uFFFD" in base_name):
@@ -6987,6 +6991,14 @@ class MainWindow(QMainWindow):
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
+        file_path_reason = unsafe_path_reason(file_path)
+        if file_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Sound file path rejected.\n\n{file_path_reason}")
+            return
+        lyric_path_reason = unsafe_path_reason(lyric_file) if lyric_file else None
+        if lyric_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Lyric file path rejected.\n\n{lyric_path_reason}")
+            return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
         if conflict is not None:
             QMessageBox.warning(
@@ -7270,6 +7282,28 @@ class MainWindow(QMainWindow):
                 return
         else:
             lyric_links = ["" for _ in file_paths]
+        safe_paths: List[str] = []
+        safe_lyric_links: List[str] = []
+        rejected_paths: List[str] = []
+        for index, candidate in enumerate(file_paths):
+            reason = unsafe_path_reason(candidate)
+            if reason:
+                rejected_paths.append(f"{candidate} ({reason})")
+                continue
+            safe_paths.append(candidate)
+            safe_lyric_links.append(lyric_links[index] if index < len(lyric_links) else "")
+        if rejected_paths:
+            preview = "\n".join(rejected_paths[:4])
+            suffix = "\n..." if len(rejected_paths) > 4 else ""
+            QMessageBox.warning(
+                self,
+                "Invalid File Path",
+                f"Skipped {len(rejected_paths)} file(s) with unsafe path values.\n\n{preview}{suffix}",
+            )
+        if not safe_paths:
+            return
+        file_paths = safe_paths
+        lyric_links = safe_lyric_links
         self.settings.last_sound_dir = os.path.dirname(file_paths[0])
         self._save_settings()
 
@@ -8056,6 +8090,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _try_load_media(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> bool:
+        reason = unsafe_path_reason(slot.file_path)
+        if reason:
+            slot.load_failed = True
+            self._stop_player_internal(player)
+            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {reason}")
+            print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
+            return False
         try:
             if player is self.player:
                 self._main_waveform_request_token += 1

@@ -101,6 +101,33 @@ def test_unpack_target_path_flattens_when_requested(tmp_path):
     assert target_b.endswith(r"audio\crowd_2.wav")
 
 
+def test_unpack_target_path_rejects_parent_traversal(tmp_path):
+    used_targets: set[str] = set()
+    try:
+        build_unpack_target_path(str(tmp_path), "../../Windows/system.ini", True, used_targets)
+        assert False, "Expected ValueError for traversal path"
+    except ValueError:
+        pass
+
+
+def test_unpack_target_path_rejects_absolute_member(tmp_path):
+    used_targets: set[str] = set()
+    try:
+        build_unpack_target_path(str(tmp_path), "/etc/passwd", True, used_targets)
+        assert False, "Expected ValueError for absolute path"
+    except ValueError:
+        pass
+
+
+def test_unpack_target_path_rejects_backslash_traversal(tmp_path):
+    used_targets: set[str] = set()
+    try:
+        build_unpack_target_path(str(tmp_path), r"..\..\outside.txt", True, used_targets)
+        assert False, "Expected ValueError for backslash traversal path"
+    except ValueError:
+        pass
+
+
 def test_default_unpack_directory_uses_pyssp_config_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))

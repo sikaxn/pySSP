@@ -21,6 +21,19 @@ except Exception:  # pragma: no cover
 
 DispatchFn = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
+def _normalize_asset_relpath(raw_path: str) -> str:
+    text = str(raw_path or "").replace("\\", "/").strip()
+    if not text:
+        raise ValueError("Asset path is empty.")
+    if text.startswith("/"):
+        raise ValueError("Asset path must be relative.")
+    parts = [part for part in text.split("/") if part not in {"", "."}]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError("Invalid asset path.")
+    if any("\x00" in part for part in parts):
+        raise ValueError("Invalid asset path.")
+    return "/".join(parts)
+
 
 class QuietRequestHandler(WSGIRequestHandler):
     def log_request(self, _code: int | str = "-", _size: int | str = "-") -> None:
@@ -488,8 +501,9 @@ class WebRemoteServer:
 
         @app.get("/webremote/<path:filename>")
         def webremote_asset(filename: str):
-            clean_name = str(filename or "").replace("\\", "/")
-            if clean_name.startswith("../") or "/../" in clean_name:
+            try:
+                clean_name = _normalize_asset_relpath(filename)
+            except ValueError:
                 return jsonify({"ok": False, "error": {"code": "invalid_path", "message": "Invalid asset path."}}), 400
             asset_path = self._web_remote_assets_root / clean_name
             if not asset_path.exists() or not asset_path.is_file():
@@ -534,8 +548,9 @@ class WebRemoteServer:
         @app.get("/stage/shared/<path:filename>")
         def lyric_shared_asset(filename: str):
             shared_dir = self._lyric_assets_root / "shared"
-            clean_name = str(filename or "").replace("\\", "/")
-            if clean_name.startswith("../") or "/../" in clean_name:
+            try:
+                clean_name = _normalize_asset_relpath(filename)
+            except ValueError:
                 return jsonify({"ok": False, "error": {"code": "invalid_path", "message": "Invalid asset path."}}), 400
             asset_path = shared_dir / clean_name
             if not asset_path.exists() or not asset_path.is_file():
@@ -580,8 +595,9 @@ class WebRemoteServer:
                 stage_dir = self._lyric_stage_dir(view_name)
             except FileNotFoundError:
                 return jsonify({"ok": False, "error": {"code": "not_found", "message": "Unknown stage view."}}), 404
-            clean_name = str(filename or "").replace("\\", "/")
-            if clean_name.startswith("../") or "/../" in clean_name:
+            try:
+                clean_name = _normalize_asset_relpath(filename)
+            except ValueError:
                 return jsonify({"ok": False, "error": {"code": "invalid_path", "message": "Invalid asset path."}}), 400
             asset_path = stage_dir / clean_name
             if not asset_path.exists() or not asset_path.is_file():

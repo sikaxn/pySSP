@@ -461,18 +461,24 @@ def build_unpack_target_path(
     maintain_directory_structure: bool,
     used_targets: set[str],
 ) -> str:
+    normalized_member = _normalize_archive_member(archive_member)
+    destination_abs = os.path.abspath(destination_dir)
     if maintain_directory_structure:
-        target_path = os.path.join(destination_dir, *archive_member.split("/"))
+        target_path = os.path.join(destination_abs, *normalized_member.split("/"))
     else:
-        basename = os.path.basename(archive_member)
+        parts = normalized_member.split("/")
+        basename = parts[-1] if parts else "item"
         root = "audio"
-        if "/" in archive_member:
-            first = archive_member.split("/", 1)[0].strip().lower()
+        if "/" in normalized_member:
+            first = normalized_member.split("/", 1)[0].strip().lower()
             if first:
                 root = _sanitize_segment(first)
-        target_path = os.path.join(destination_dir, root, basename)
+        target_path = os.path.join(destination_abs, root, basename)
     target_path = _unique_target_path(target_path, used_targets)
-    return os.path.abspath(target_path)
+    target_abs = os.path.abspath(target_path)
+    if os.path.commonpath([destination_abs, target_abs]) != destination_abs:
+        raise ValueError(f"Unsafe unpack target path outside destination: {archive_member!r}")
+    return target_abs
 
 
 def rewrite_packed_set_paths(
@@ -579,10 +585,26 @@ def _check_cancelled(is_cancelled) -> None:
 
 
 def _extract_to_file(archive: zipfile.ZipFile, member: str, target_path: str) -> str:
+    _normalize_archive_member(member)
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     with archive.open(member, "r") as source, open(target_path, "wb") as target:
         shutil.copyfileobj(source, target)
     return target_path
+
+
+def _normalize_archive_member(member: str) -> str:
+    raw = str(member or "").strip().replace("\\", "/")
+    if not raw:
+        raise ValueError("Archive member path is empty.")
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        raise ValueError(f"Unsafe archive member path: {member!r}")
+    parts = [segment for segment in raw.split("/") if segment not in {"", "."}]
+    if any(segment == ".." for segment in parts):
+        raise ValueError(f"Unsafe archive member path: {member!r}")
+    normalized = "/".join(parts)
+    if not normalized:
+        raise ValueError(f"Unsafe archive member path: {member!r}")
+    return normalized
 
 
 def _read_text_with_fallback(file_path: str) -> tuple[str, str]:

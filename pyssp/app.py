@@ -15,6 +15,7 @@ from PyQt5.QtCore import QLockFile, QRect, Qt, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
+from pyssp.audio_engine import prepare_waveform_disk_cache
 from pyssp.audio_format_support import ensure_supported_audio_formats_ready
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
@@ -372,6 +373,20 @@ def main() -> int:
     _enable_debug_console(debug_requested)
     _ensure_standard_streams(debug_requested)
     app = QApplication(qt_argv)
+    try:
+        cache_limit_mb = 1024
+        cache_clear_on_launch = True
+        startup_settings = load_settings()
+        cache_limit_mb = max(128, min(16384, int(getattr(startup_settings, "waveform_cache_limit_mb", 1024))))
+        cache_clear_on_launch = bool(getattr(startup_settings, "waveform_cache_clear_on_launch", True))
+        cache_dir = get_settings_path().parent / "temp" / "waveform_cache"
+        prepare_waveform_disk_cache(
+            str(cache_dir),
+            clear_existing=cache_clear_on_launch,
+            limit_mb=cache_limit_mb,
+        )
+    except Exception:
+        pass
     _install_crash_handler(app)
     splash: Optional[_StartupSplash] = None
     splash_path = _asset_path("logo2.png")

@@ -39,6 +39,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from pyssp.audio_engine import clear_waveform_disk_cache, get_waveform_cache_limit_bounds_mb, get_waveform_cache_usage_bytes
 from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_GRID_COLS,
     WINDOW_LAYOUT_FADE_GRID_ROWS,
@@ -762,6 +763,8 @@ class OptionsDialog(QDialog):
         "preload_audio_memory_limit_mb": 512,
         "preload_memory_pressure_enabled": True,
         "preload_pause_on_playback": False,
+        "waveform_cache_limit_mb": 1024,
+        "waveform_cache_clear_on_launch": True,
         "fade_in_sec": 1.0,
         "cross_fade_sec": 1.0,
         "fade_out_sec": 1.0,
@@ -952,6 +955,8 @@ class OptionsDialog(QDialog):
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
+        waveform_cache_limit_mb: int,
+        waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
         preload_ram_cap_mb: int,
         timecode_audio_output_device: str,
@@ -1292,6 +1297,8 @@ class OptionsDialog(QDialog):
                 preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
                 preload_memory_pressure_enabled=preload_memory_pressure_enabled,
                 preload_pause_on_playback=preload_pause_on_playback,
+                waveform_cache_limit_mb=waveform_cache_limit_mb,
+                waveform_cache_clear_on_launch=waveform_cache_clear_on_launch,
                 preload_total_ram_mb=preload_total_ram_mb,
                 preload_ram_cap_mb=preload_ram_cap_mb,
                 supported_audio_format_extensions=self._supported_audio_format_extensions,
@@ -2549,6 +2556,8 @@ class OptionsDialog(QDialog):
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
+        waveform_cache_limit_mb: int,
+        waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
         preload_ram_cap_mb: int,
         supported_audio_format_extensions: List[str],
@@ -2608,6 +2617,57 @@ class OptionsDialog(QDialog):
         self._update_preload_slider_label()
         layout.addWidget(ram_group)
 
+        waveform_group = QGroupBox("Waveform Cache")
+        waveform_layout = QVBoxLayout(waveform_group)
+        self._waveform_cache_slider_step_mb = 128
+        wf_min_mb, wf_max_mb = get_waveform_cache_limit_bounds_mb()
+        self._waveform_cache_min_mb = int(wf_min_mb)
+        self._waveform_cache_max_mb = int(wf_max_mb)
+        wf_selected_mb = max(self._waveform_cache_min_mb, min(int(waveform_cache_limit_mb), self._waveform_cache_max_mb))
+        wf_selected_mb = max(
+            self._waveform_cache_min_mb,
+            (wf_selected_mb // self._waveform_cache_slider_step_mb) * self._waveform_cache_slider_step_mb,
+        )
+        if wf_selected_mb <= 0:
+            wf_selected_mb = self._waveform_cache_min_mb
+        self._waveform_cache_syncing = False
+
+        self.waveform_cache_size_input = QSpinBox()
+        self.waveform_cache_size_input.setRange(self._waveform_cache_min_mb, self._waveform_cache_max_mb)
+        self.waveform_cache_size_input.setSingleStep(self._waveform_cache_slider_step_mb)
+        self.waveform_cache_size_input.setValue(wf_selected_mb)
+        waveform_layout.addWidget(self.waveform_cache_size_input)
+
+        self.waveform_cache_size_slider = QSlider(Qt.Horizontal)
+        self.waveform_cache_size_slider.setRange(
+            self._waveform_cache_min_mb // self._waveform_cache_slider_step_mb,
+            self._waveform_cache_max_mb // self._waveform_cache_slider_step_mb,
+        )
+        self.waveform_cache_size_slider.setSingleStep(1)
+        self.waveform_cache_size_slider.setPageStep(1)
+        self.waveform_cache_size_slider.setValue(wf_selected_mb // self._waveform_cache_slider_step_mb)
+        waveform_layout.addWidget(self.waveform_cache_size_slider)
+
+        self.waveform_cache_size_value_label = QLabel("")
+        waveform_layout.addWidget(self.waveform_cache_size_value_label)
+
+        self.waveform_cache_clear_on_launch_checkbox = QCheckBox("Clear waveform cache on every launch")
+        self.waveform_cache_clear_on_launch_checkbox.setChecked(bool(waveform_cache_clear_on_launch))
+        waveform_layout.addWidget(self.waveform_cache_clear_on_launch_checkbox)
+
+        cache_usage_mb = max(0.0, float(get_waveform_cache_usage_bytes()) / (1024.0 * 1024.0))
+        self.waveform_cache_usage_label = QLabel(f"{tr('Current Cache Usage:')} {cache_usage_mb:.1f} MB")
+        waveform_layout.addWidget(self.waveform_cache_usage_label)
+
+        self.waveform_cache_clear_button = QPushButton("Clear Waveform Cache")
+        self.waveform_cache_clear_button.clicked.connect(self._clear_waveform_cache_now)
+        waveform_layout.addWidget(self.waveform_cache_clear_button, 0, Qt.AlignLeft)
+
+        self.waveform_cache_size_input.valueChanged.connect(self._on_waveform_cache_size_input_changed)
+        self.waveform_cache_size_slider.valueChanged.connect(self._on_waveform_cache_size_slider_changed)
+        self._update_waveform_cache_size_label(wf_selected_mb)
+        layout.addWidget(waveform_group)
+
         detected_group = QGroupBox("Detected Supported Audio Format Extensions")
         detected_layout = QVBoxLayout(detected_group)
         supported = [str(token).strip().lower() for token in supported_audio_format_extensions if str(token).strip()]
@@ -2644,6 +2704,44 @@ class OptionsDialog(QDialog):
         value = int(self.preload_memory_slider.value())
         selected_mb = value * int(self._preload_slider_step_mb)
         self.preload_memory_value_label.setText(f"Selected Cache Limit: {selected_mb} MB")
+
+    def _update_waveform_cache_size_label(self, selected_mb: int) -> None:
+        selected = max(self._waveform_cache_min_mb, min(int(selected_mb), self._waveform_cache_max_mb))
+        self.waveform_cache_size_value_label.setText(f"{tr('Selected Waveform Cache Limit:')} {selected} MB")
+
+    def _on_waveform_cache_size_input_changed(self, value: int) -> None:
+        if self._waveform_cache_syncing:
+            return
+        selected_mb = max(
+            self._waveform_cache_min_mb,
+            min(int(value), self._waveform_cache_max_mb),
+        )
+        selected_mb = (selected_mb // self._waveform_cache_slider_step_mb) * self._waveform_cache_slider_step_mb
+        selected_mb = max(self._waveform_cache_min_mb, selected_mb)
+        self._waveform_cache_syncing = True
+        self.waveform_cache_size_input.setValue(selected_mb)
+        self.waveform_cache_size_slider.setValue(selected_mb // self._waveform_cache_slider_step_mb)
+        self._waveform_cache_syncing = False
+        self._update_waveform_cache_size_label(selected_mb)
+
+    def _on_waveform_cache_size_slider_changed(self, value: int) -> None:
+        if self._waveform_cache_syncing:
+            return
+        selected_mb = int(value) * self._waveform_cache_slider_step_mb
+        selected_mb = max(self._waveform_cache_min_mb, min(selected_mb, self._waveform_cache_max_mb))
+        self._waveform_cache_syncing = True
+        self.waveform_cache_size_input.setValue(selected_mb)
+        self._waveform_cache_syncing = False
+        self._update_waveform_cache_size_label(selected_mb)
+
+    def _clear_waveform_cache_now(self) -> None:
+        ok = bool(clear_waveform_disk_cache())
+        cache_usage_mb = max(0.0, float(get_waveform_cache_usage_bytes()) / (1024.0 * 1024.0))
+        self.waveform_cache_usage_label.setText(f"{tr('Current Cache Usage:')} {cache_usage_mb:.1f} MB")
+        if ok:
+            QMessageBox.information(self, tr("Waveform Cache"), tr("Waveform cache cleared."))
+        else:
+            QMessageBox.warning(self, tr("Waveform Cache"), tr("Failed to clear waveform cache."))
 
     def _build_talk_page(
         self,
@@ -3418,6 +3516,15 @@ class OptionsDialog(QDialog):
 
     def selected_preload_pause_on_playback(self) -> bool:
         return bool(self.preload_pause_on_playback_checkbox.isChecked())
+
+    def selected_waveform_cache_limit_mb(self) -> int:
+        step_mb = int(self._waveform_cache_slider_step_mb)
+        raw = int(self.waveform_cache_size_input.value())
+        selected_mb = (max(step_mb, raw) // step_mb) * step_mb
+        return max(self._waveform_cache_min_mb, min(self._waveform_cache_max_mb, selected_mb))
+
+    def selected_waveform_cache_clear_on_launch(self) -> bool:
+        return bool(self.waveform_cache_clear_on_launch_checkbox.isChecked())
 
     def selected_timecode_midi_output_device(self) -> str:
         return str(self.timecode_midi_output_combo.currentData() or MIDI_OUTPUT_DEVICE_NONE)
@@ -4736,6 +4843,13 @@ class OptionsDialog(QDialog):
         target_mb = max(step_mb, min(int(self._preload_ram_cap_mb), int(d["preload_audio_memory_limit_mb"])))
         self.preload_memory_slider.setValue(max(1, target_mb // step_mb))
         self._update_preload_slider_label()
+        target_wave_mb = max(self._waveform_cache_min_mb, min(self._waveform_cache_max_mb, int(d["waveform_cache_limit_mb"])))
+        target_wave_mb = (target_wave_mb // self._waveform_cache_slider_step_mb) * self._waveform_cache_slider_step_mb
+        target_wave_mb = max(self._waveform_cache_min_mb, target_wave_mb)
+        self.waveform_cache_size_input.setValue(target_wave_mb)
+        self.waveform_cache_size_slider.setValue(target_wave_mb // self._waveform_cache_slider_step_mb)
+        self.waveform_cache_clear_on_launch_checkbox.setChecked(bool(d["waveform_cache_clear_on_launch"]))
+        self._update_waveform_cache_size_label(target_wave_mb)
         self._restore_audio_format_defaults()
 
     def _restore_talk_defaults(self) -> None:

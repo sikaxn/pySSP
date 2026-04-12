@@ -387,6 +387,8 @@ def _get_current_running_config_report() -> List[str]:
         lines.append(f"fade_out_sec: {cfg.fade_out_sec}")
         lines.append(f"preload_audio_enabled: {cfg.preload_audio_enabled}")
         lines.append(f"preload_audio_memory_limit_mb: {cfg.preload_audio_memory_limit_mb}")
+        lines.append(f"waveform_cache_limit_mb: {getattr(cfg, 'waveform_cache_limit_mb', 1024)}")
+        lines.append(f"waveform_cache_clear_on_launch: {getattr(cfg, 'waveform_cache_clear_on_launch', True)}")
         lines.append(f"midi_input_device_ids: {cfg.midi_input_device_ids}")
         lines.append(f"timecode_mode: {cfg.timecode_mode}")
         lines.append(f"timecode_audio_output_device: {cfg.timecode_audio_output_device}")

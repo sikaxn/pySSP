@@ -501,6 +501,8 @@ class AppSettings:
     preload_audio_memory_limit_mb: int = 512
     preload_memory_pressure_enabled: bool = True
     preload_pause_on_playback: bool = False
+    waveform_cache_limit_mb: int = 1024
+    waveform_cache_clear_on_launch: bool = True
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
     playlist_play_mode: str = "unplayed_only"
@@ -810,6 +812,8 @@ def save_settings(settings: AppSettings) -> None:
         "preload_audio_memory_limit_mb": str(settings.preload_audio_memory_limit_mb),
         "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
         "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
+        "waveform_cache_limit_mb": str(settings.waveform_cache_limit_mb),
+        "waveform_cache_clear_on_launch": "1" if settings.waveform_cache_clear_on_launch else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
         "playlist_play_mode": settings.playlist_play_mode,
@@ -1095,6 +1099,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     tips_open_on_startup = _get_bool(section, "tips_open_on_startup", True)
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
+    waveform_cache_limit_mb = _clamp_int(_get_int(section, "waveform_cache_limit_mb", 1024), 128, 16384)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
@@ -1334,6 +1339,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
         preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
         preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", False),
+        waveform_cache_limit_mb=waveform_cache_limit_mb,
+        waveform_cache_clear_on_launch=_get_bool(section, "waveform_cache_clear_on_launch", True),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,
         playlist_play_mode=playlist_play_mode,

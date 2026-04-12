@@ -216,9 +216,4 @@ class WaveformRefreshController(QObject):
         except Exception:
             peaks = []
         self._on_peaks(peaks)
-        player = self._player
-        progressive = bool(getattr(player, "waveformIsProgressive", lambda: False)()) if player is not None else False
-        if progressive and self._pending_token == self._token:
-            self._submit(self._token)
-            return
         self._timer.stop()

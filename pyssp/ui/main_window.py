@@ -65,6 +65,8 @@ from pyssp.audio_engine import (
     ExternalMediaPlayer,
     can_stream_without_preload,
     configure_audio_preload_cache_policy,
+    configure_waveform_disk_cache,
+    clear_waveform_disk_cache,
     enforce_audio_preload_limits,
     get_audio_preload_capacity_bytes,
     get_audio_preload_runtime_status,
@@ -1873,12 +1875,15 @@ class MainWindow(QMainWindow):
             getattr(self.settings, "preload_memory_pressure_enabled", True)
         )
         self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", False))
+        self.waveform_cache_limit_mb = max(128, min(16384, int(getattr(self.settings, "waveform_cache_limit_mb", 1024))))
+        self.waveform_cache_clear_on_launch = bool(getattr(self.settings, "waveform_cache_clear_on_launch", True))
         self._preload_runtime_paused = False
         configure_audio_preload_cache_policy(
             self.preload_audio_enabled,
             self.preload_audio_memory_limit_mb,
             self.preload_memory_pressure_enabled,
         )
+        configure_waveform_disk_cache(self.waveform_cache_limit_mb)
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
         self.playlist_play_mode = (
@@ -3061,6 +3066,10 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(reset_all_pages_action)
 
         tools_menu.addSeparator()
+
+        clear_waveform_cache_action = QAction("Clear Waveform Cache", self)
+        clear_waveform_cache_action.triggered.connect(self._clear_waveform_cache_now)
+        tools_menu.addAction(clear_waveform_cache_action)
 
         page_library_path_action = QAction("Display Page Library Folder Path", self)
         page_library_path_action.triggered.connect(self._show_page_library_folder_path)
@@ -8461,9 +8470,6 @@ class MainWindow(QMainWindow):
         if self.current_duration_ms <= 0:
             self._main_waveform_poll_timer.stop()
             return
-        if bool(getattr(self.player, "waveformIsProgressive", lambda: False)()):
-            self._start_main_waveform_refresh_if_current(self._main_waveform_request_token, expected_key)
-            return
         self._main_waveform_poll_timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
@@ -9066,6 +9072,12 @@ class MainWindow(QMainWindow):
         self._sync_preload_pause_state(self._is_playback_in_progress())
         self._queue_current_page_audio_preload()
 
+    def _clear_waveform_cache_now(self) -> None:
+        if clear_waveform_disk_cache():
+            QMessageBox.information(self, tr("Waveform Cache"), tr("Waveform cache cleared."))
+            return
+        QMessageBox.warning(self, tr("Waveform Cache"), tr("Failed to clear waveform cache."))
+
     def _queue_current_page_audio_preload(self) -> None:
         if not self.preload_audio_enabled or not self.preload_current_page_audio or self._is_button_drag_enabled():
             return
@@ -9601,6 +9613,8 @@ class MainWindow(QMainWindow):
             preload_audio_memory_limit_mb=self.preload_audio_memory_limit_mb,
             preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
             preload_pause_on_playback=self.preload_pause_on_playback,
+            waveform_cache_limit_mb=self.waveform_cache_limit_mb,
+            waveform_cache_clear_on_launch=self.waveform_cache_clear_on_launch,
             preload_total_ram_mb=total_ram_mb,
             preload_ram_cap_mb=preload_cap_mb,
             timecode_audio_output_device=self.timecode_audio_output_device,
@@ -9880,7 +9894,10 @@ class MainWindow(QMainWindow):
         self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()
         self.preload_memory_pressure_enabled = dialog.selected_preload_memory_pressure_enabled()
         self.preload_pause_on_playback = dialog.selected_preload_pause_on_playback()
+        self.waveform_cache_limit_mb = dialog.selected_waveform_cache_limit_mb()
+        self.waveform_cache_clear_on_launch = dialog.selected_waveform_cache_clear_on_launch()
         self._apply_audio_preload_cache_settings()
+        configure_waveform_disk_cache(self.waveform_cache_limit_mb)
         if selected_device != self.audio_output_device:
             if self._switch_audio_device(selected_device):
                 self.audio_output_device = selected_device
@@ -12247,6 +12264,8 @@ class MainWindow(QMainWindow):
         self.settings.preload_audio_memory_limit_mb = int(self.preload_audio_memory_limit_mb)
         self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
         self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
+        self.settings.waveform_cache_limit_mb = int(self.waveform_cache_limit_mb)
+        self.settings.waveform_cache_clear_on_launch = bool(self.waveform_cache_clear_on_launch)
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
         self.settings.playlist_play_mode = self.playlist_play_mode

@@ -1960,7 +1960,7 @@ class OptionsDialog(QDialog):
             row_layout.addWidget(learn_btn)
             row_layout.addWidget(clear_btn)
             self._midi_quick_action_edits.append(edit)
-            form.addRow(f"Button {i + 1}:", row)
+            form.addRow(f"{tr('Button ')}{i + 1}:", row)
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
@@ -2023,7 +2023,7 @@ class OptionsDialog(QDialog):
         row_layout.addWidget(learn2)
         row_layout.addWidget(clear2)
         self._midi_hotkey_edits[key] = (edit1, edit2)
-        form.addRow(f"{label}:", row)
+        form.addRow(f"{tr(label)}:", row)
 
     def _build_system_hotkey_tab(self) -> QWidget:
         page = QWidget()
@@ -2063,7 +2063,7 @@ class OptionsDialog(QDialog):
             row_layout.addWidget(edit)
             row_layout.addWidget(clear_btn)
             self._quick_action_edits.append(edit)
-            form.addRow(f"Button {i + 1}:", row)
+            form.addRow(f"{tr('Button ')}{i + 1}:", row)
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
@@ -2118,7 +2118,7 @@ class OptionsDialog(QDialog):
         row_layout.addWidget(edit2)
         row_layout.addWidget(clear2)
         self._hotkey_edits[key] = (edit1, edit2)
-        form.addRow(f"{label}:", row)
+        form.addRow(f"{tr(label)}:", row)
 
     def _build_color_page(self) -> QWidget:
         page = QWidget()
@@ -3855,7 +3855,7 @@ class OptionsDialog(QDialog):
             "forward": [],
             "backward": [],
         }
-        self._set_midi_info("Rotary learn: turn encoder forward several ticks, then backward several ticks.")
+        self._set_midi_info(tr("Rotary learn: turn encoder forward several ticks, then backward several ticks."))
         target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
 
     def _on_midi_binding_captured(self, token: str, source_selector: str = "") -> None:
@@ -3912,7 +3912,7 @@ class OptionsDialog(QDialog):
                         state["forward"].append(data2)
                         if len(state["forward"]) >= 4:
                             state["phase"] = "backward"
-                            self._set_midi_info("Rotary learn: now turn backward several ticks.")
+                            self._set_midi_info(tr("Rotary learn: now turn backward several ticks."))
                     else:
                         state["backward"].append(data2)
                 self._learning_midi_rotary_state = state
@@ -3927,7 +3927,7 @@ class OptionsDialog(QDialog):
                     self._learning_midi_rotary_target.setStyleSheet("")
                     self._learning_midi_rotary_target = None
                     self._learning_midi_rotary_state = None
-                    self._set_midi_info(f"Rotary learn complete. Relative mode: {mode}.")
+                    self._set_midi_info(tr("Rotary learn complete. Relative mode: {mode}.").format(mode=mode))
                     self._validate_midi_conflicts()
                 return True
             elif high == 0xE0:
@@ -3940,7 +3940,7 @@ class OptionsDialog(QDialog):
                 self._learning_midi_rotary_target.setStyleSheet("")
                 self._learning_midi_rotary_target = None
                 self._learning_midi_rotary_state = None
-                self._set_midi_info("Rotary learn complete.")
+                self._set_midi_info(tr("Rotary learn complete."))
                 self._validate_midi_conflicts()
                 return True
             return False

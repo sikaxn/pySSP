@@ -3034,6 +3034,9 @@ class MainWindow(QMainWindow):
         disable_playlist_all_pages_action = QAction("Disable Play List on All Pages", self)
         disable_playlist_all_pages_action.triggered.connect(self._disable_playlist_on_all_pages)
         tools_menu.addAction(disable_playlist_all_pages_action)
+        reset_all_pages_action = QAction("Reset All Pages", self)
+        reset_all_pages_action.triggered.connect(self._reset_all_pages_state)
+        tools_menu.addAction(reset_all_pages_action)
 
         tools_menu.addSeparator()
 
@@ -5008,6 +5011,27 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
         self._sync_playlist_shuffle_buttons()
         self._show_save_notice_banner("Play List has been disabled on all pages.")
+
+    def _reset_all_pages_state(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            tr("Reset All Pages"),
+            tr("Reset all pages' played state?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._stop_playback()
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot in self.data[group][page_index]:
+                    slot.played = False
+                    if slot.assigned:
+                        slot.activity_code = "8"
+        self.current_playlist_start = None
+        self._set_dirty(True)
+        self._refresh_sound_grid()
 
     def _show_page_library_folder_path(self) -> None:
         path = self._page_library_folder_path()

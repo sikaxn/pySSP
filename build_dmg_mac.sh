@@ -6,6 +6,7 @@ DIST_DIR="${ROOT_DIR}/dist"
 BUILD_DIR="${ROOT_DIR}/build/dmg"
 STAGE_DIR="${BUILD_DIR}/staging"
 TMP_DMG="${BUILD_DIR}/pySSP-temp.dmg"
+LAYOUT_TEMPLATE="${ROOT_DIR}/packaging/macos/dmg-layout.DS_Store"
 APP_VERSION="0.0.0"
 OUT_DMG=""
 VOL_NAME="pySSP Installer"
@@ -86,6 +87,11 @@ else
   cp "${ROOT_DIR}/logo.png" "${STAGE_DIR}/.background/logo.png"
 fi
 
+if [[ -f "${LAYOUT_TEMPLATE}" ]]; then
+  echo "[INFO] Using DMG layout template: ${LAYOUT_TEMPLATE}"
+  cp "${LAYOUT_TEMPLATE}" "${STAGE_DIR}/.DS_Store"
+fi
+
 ln -s /Applications "${STAGE_DIR}/Applications"
 
 cat > "${STAGE_DIR}/INSTALL.txt" <<'EOF'
@@ -132,8 +138,9 @@ if [[ -z "${device}" || ! -d "${mount_point}" ]]; then
   exit 1
 fi
 
-echo "[INFO] Applying Finder window layout..."
-osascript <<EOF
+if [[ ! -s "${mount_point}/.DS_Store" ]]; then
+  echo "[INFO] DMG layout template not present in mounted image; asking Finder to create layout metadata..."
+  osascript <<EOF
 tell application "Finder"
   tell disk "${VOL_NAME}"
     open
@@ -160,6 +167,7 @@ tell application "Finder"
   end tell
 end tell
 EOF
+fi
 
 ds_store_path="${mount_point}/.DS_Store"
 for _ in {1..15}; do

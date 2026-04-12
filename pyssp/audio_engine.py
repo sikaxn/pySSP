@@ -29,9 +29,11 @@ _PRELOAD_LIMIT_BYTES = 256 * 1024 * 1024
 _PRELOAD_PRESSURE_ENABLED = True
 _PRELOAD_PAUSED = False
 _PRELOAD_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDict()
+_FORCED_MEDIA_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDict()
 _PRELOAD_CACHE_BYTES = 0
 _PRELOAD_TASKS: Dict[str, Future] = {}
 _PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-preload")
+_WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-waveform")
 
 
 def _shutdown_preload_executor() -> None:
@@ -41,7 +43,15 @@ def _shutdown_preload_executor() -> None:
         pass
 
 
+def _shutdown_waveform_executor() -> None:
+    try:
+        _WAVEFORM_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+
+
 atexit.register(_shutdown_preload_executor)
+atexit.register(_shutdown_waveform_executor)
 
 
 def shutdown_audio_preload() -> None:
@@ -56,8 +66,10 @@ def shutdown_audio_preload() -> None:
                 pass
         _PRELOAD_TASKS.clear()
         _PRELOAD_CACHE.clear()
+        _FORCED_MEDIA_CACHE.clear()
         _PRELOAD_CACHE_BYTES = 0
     _shutdown_preload_executor()
+    _shutdown_waveform_executor()
 
 
 class _NullOutputStream:
@@ -205,6 +217,7 @@ def configure_audio_preload_cache_policy(enabled: bool, memory_limit_mb: int, pr
                     pass
             _PRELOAD_TASKS.clear()
             _PRELOAD_CACHE.clear()
+            _FORCED_MEDIA_CACHE.clear()
             _PRELOAD_CACHE_BYTES = 0
             return
         _evict_preload_cache_locked()
@@ -254,12 +267,12 @@ def is_audio_preloaded(file_path: str) -> bool:
     if not path:
         return False
     with _PRELOAD_LOCK:
-        return path in _PRELOAD_CACHE
+        return (path in _FORCED_MEDIA_CACHE) or (path in _PRELOAD_CACHE)
 
 
-def request_audio_preload(file_paths: List[str], prioritize: bool = False) -> None:
+def request_audio_preload(file_paths: List[str], prioritize: bool = False, force: bool = False) -> None:
     with _PRELOAD_LOCK:
-        if (not _PRELOAD_ENABLED) or _PRELOAD_PAUSED:
+        if ((not _PRELOAD_ENABLED) and (not force)) or (_PRELOAD_PAUSED and (not force)):
             return
     normalized: List[str] = []
     wanted: set[str] = set()
@@ -292,7 +305,7 @@ def request_audio_preload(file_paths: List[str], prioritize: bool = False) -> No
             future = _PRELOAD_TASKS.get(path)
             if future is not None and not future.done():
                 continue
-            future = _PRELOAD_EXECUTOR.submit(_preload_path_worker, path)
+            future = _PRELOAD_EXECUTOR.submit(_preload_path_worker, path, bool(force))
             _PRELOAD_TASKS[path] = future
 
             def _clear_task(done_future, cache_path=path) -> None:
@@ -304,15 +317,15 @@ def request_audio_preload(file_paths: List[str], prioritize: bool = False) -> No
             future.add_done_callback(_clear_task)
 
 
-def _preload_path_worker(file_path: str) -> None:
+def _preload_path_worker(file_path: str, force: bool = False) -> None:
     with _PRELOAD_LOCK:
-        if (not _PRELOAD_ENABLED) or _PRELOAD_PAUSED:
+        if ((not _PRELOAD_ENABLED) and (not force)) or (_PRELOAD_PAUSED and (not force)):
             return
     try:
         frames, duration_ms = _decode_media_frames(file_path)
     except Exception:
         return
-    _store_preload_entry(file_path, frames, duration_ms)
+    _store_preload_entry(file_path, frames, duration_ms, force=force)
 
 
 def set_audio_preload_paused(paused: bool) -> None:
@@ -327,11 +340,16 @@ def set_audio_preload_paused(paused: bool) -> None:
                     pass
 
 
-def _store_preload_entry(file_path: str, frames: np.ndarray, duration_ms: int) -> None:
+def _store_preload_entry(file_path: str, frames: np.ndarray, duration_ms: int, force: bool = False) -> None:
     global _PRELOAD_CACHE_BYTES
     size_bytes = int(frames.nbytes)
     with _PRELOAD_LOCK:
-        if not _PRELOAD_ENABLED:
+        if force:
+            _FORCED_MEDIA_CACHE[file_path] = (frames, int(duration_ms), size_bytes)
+            _FORCED_MEDIA_CACHE.move_to_end(file_path)
+            while len(_FORCED_MEDIA_CACHE) > 2:
+                _FORCED_MEDIA_CACHE.popitem(last=False)
+        if (not _PRELOAD_ENABLED) and (not force):
             return
         existing = _PRELOAD_CACHE.get(file_path)
         if existing is not None:
@@ -489,14 +507,49 @@ def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
     cache_key = _normalize_cache_key(file_path)
     if cache_key:
         with _PRELOAD_LOCK:
-            if _PRELOAD_ENABLED:
-                cached = _PRELOAD_CACHE.get(cache_key)
-                if cached is not None:
-                    return cached[0], int(cached[1])
+            forced = _FORCED_MEDIA_CACHE.pop(cache_key, None)
+            if forced is not None:
+                return forced[0], int(forced[1])
+            cached = _PRELOAD_CACHE.get(cache_key)
+            if cached is not None:
+                return cached[0], int(cached[1])
     frames, duration_ms = _decode_media_frames(file_path)
     if cache_key:
         _store_preload_entry(cache_key, frames, duration_ms)
     return frames, duration_ms
+
+
+def _compute_waveform_peaks_from_frames(frames: Optional[np.ndarray], sample_count: int = 1024) -> List[float]:
+    points = max(1, int(sample_count))
+    if frames is None or len(frames) <= 0:
+        return []
+
+    if frames.shape[1] > 1:
+        mono = np.max(np.abs(frames), axis=1)
+    else:
+        mono = np.abs(frames[:, 0])
+    frame_count = int(len(mono))
+    if frame_count <= 0:
+        return []
+
+    peaks = np.zeros(points, dtype=np.float32)
+    if frame_count <= points:
+        for i in range(frame_count):
+            peaks[i] = float(mono[i])
+    else:
+        edges = np.linspace(0, frame_count, points + 1, dtype=np.int64)
+        for i in range(points):
+            start = int(edges[i])
+            end = int(edges[i + 1])
+            if end <= start:
+                end = min(frame_count, start + 1)
+            segment = mono[start:end]
+            peaks[i] = float(np.max(segment)) if len(segment) > 0 else 0.0
+
+    peak_max = float(np.max(peaks)) if len(peaks) > 0 else 0.0
+    if peak_max > 0.0:
+        peaks /= peak_max
+    return peaks.tolist()
 
 
 class ExternalMediaPlayer(QObject):
@@ -659,36 +712,13 @@ class ExternalMediaPlayer(QObject):
     def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
         with self._lock:
             frames = self._source_frames
+        return _compute_waveform_peaks_from_frames(frames, sample_count)
+
+    def waveformPeaksAsync(self, sample_count: int = 1024) -> Future:
+        with self._lock:
+            frames = self._source_frames
         points = max(1, int(sample_count))
-        if frames is None or len(frames) <= 0:
-            return []
-
-        if frames.shape[1] > 1:
-            mono = np.max(np.abs(frames), axis=1)
-        else:
-            mono = np.abs(frames[:, 0])
-        frame_count = int(len(mono))
-        if frame_count <= 0:
-            return []
-
-        peaks = np.zeros(points, dtype=np.float32)
-        if frame_count <= points:
-            for i in range(frame_count):
-                peaks[i] = float(mono[i])
-        else:
-            edges = np.linspace(0, frame_count, points + 1, dtype=np.int64)
-            for i in range(points):
-                start = int(edges[i])
-                end = int(edges[i + 1])
-                if end <= start:
-                    end = min(frame_count, start + 1)
-                segment = mono[start:end]
-                peaks[i] = float(np.max(segment)) if len(segment) > 0 else 0.0
-
-        peak_max = float(np.max(peaks)) if len(peaks) > 0 else 0.0
-        if peak_max > 0.0:
-            peaks /= peak_max
-        return peaks.tolist()
+        return _WAVEFORM_EXECUTOR.submit(_compute_waveform_peaks_from_frames, frames, points)
 
     def _create_stream(self):
         device_index = None

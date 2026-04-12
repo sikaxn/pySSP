@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import Future
 from typing import Callable, Optional
 
 import numpy as np
@@ -21,7 +22,6 @@ from PyQt5.QtWidgets import (
 
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
-    get_audio_preload_runtime_status,
     is_audio_preloaded,
     request_audio_preload,
 )
@@ -189,7 +189,9 @@ class CuePointDialog(QDialog):
         self._is_loading_media = False
         self._file_path = file_path
         self._load_wait_started = 0.0
-        self._load_wait_timeout_sec = 20.0
+        self._load_wait_timeout_sec = 120.0
+        self._waveform_token = 0
+        self._waveform_future: Optional[Future] = None
         self._stop_host_playback = stop_host_playback
 
         root = QVBoxLayout(self)
@@ -303,6 +305,9 @@ class CuePointDialog(QDialog):
         self._load_poll_timer = QTimer(self)
         self._load_poll_timer.setInterval(80)
         self._load_poll_timer.timeout.connect(self._poll_media_preload_state)
+        self._waveform_poll_timer = QTimer(self)
+        self._waveform_poll_timer.setInterval(50)
+        self._waveform_poll_timer.timeout.connect(self._poll_waveform_state)
 
         self._normalize_cues()
         self._refresh_timecode_edits()
@@ -316,11 +321,13 @@ class CuePointDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         self._stop_async_load_watch()
+        self._stop_waveform_watch()
         self._stop_preview_player()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
         self._stop_async_load_watch()
+        self._stop_waveform_watch()
         self._stop_preview_player()
         super().done(result)
 
@@ -345,17 +352,12 @@ class CuePointDialog(QDialog):
     def _load_media_preview(self) -> None:
         self._load_error = None
         self.error_label.setText("")
+        self._stop_waveform_watch()
         self.cue_indicator.set_waveform([])
         self._set_loading_state(True)
         self._load_wait_started = time.perf_counter()
-        preload_enabled, _active = get_audio_preload_runtime_status()
-        if not preload_enabled:
-            # Preload may be globally disabled; avoid waiting indefinitely.
-            self.cue_indicator.set_loading(True, "Loading audio waveform...")
-            QTimer.singleShot(0, self._finalize_media_load)
-            return
         try:
-            request_audio_preload([self._file_path], prioritize=True)
+            request_audio_preload([self._file_path], prioritize=True, force=True)
         except Exception:
             pass
         if is_audio_preloaded(self._file_path):
@@ -366,6 +368,48 @@ class CuePointDialog(QDialog):
     def _stop_async_load_watch(self) -> None:
         if self._load_poll_timer.isActive():
             self._load_poll_timer.stop()
+
+    def _stop_waveform_watch(self) -> None:
+        self._waveform_token += 1
+        self._waveform_future = None
+        if self._waveform_poll_timer.isActive():
+            self._waveform_poll_timer.stop()
+
+    def _request_waveform_refresh(self) -> None:
+        self._waveform_token += 1
+        self._waveform_future = None
+        if self._waveform_poll_timer.isActive():
+            self._waveform_poll_timer.stop()
+        if self._duration_ms <= 0:
+            self.cue_indicator.set_waveform([])
+            return
+        token = self._waveform_token
+        try:
+            self._waveform_future = self._player.waveformPeaksAsync(1800)
+        except Exception:
+            self.cue_indicator.set_waveform([])
+            return
+        self._pending_waveform_token = token
+        self._waveform_poll_timer.start()
+
+    def _poll_waveform_state(self) -> None:
+        future = self._waveform_future
+        if future is None:
+            self._waveform_poll_timer.stop()
+            return
+        if not future.done():
+            return
+        self._waveform_poll_timer.stop()
+        self._waveform_future = None
+        if getattr(self, "_pending_waveform_token", -1) != self._waveform_token:
+            return
+        try:
+            peaks = list(future.result())
+        except Exception:
+            peaks = []
+        if self._duration_ms <= 0:
+            return
+        self.cue_indicator.set_waveform(peaks)
 
     def _poll_media_preload_state(self) -> None:
         if not self._is_loading_media:
@@ -388,7 +432,7 @@ class CuePointDialog(QDialog):
             self._player.setMedia(self._file_path)
             self._duration_ms = max(0, int(self._player.duration()))
             self.jog_slider.setRange(0, self._duration_ms)
-            self.cue_indicator.set_waveform(self._player.waveformPeaks(1800))
+            self._request_waveform_refresh()
             self._normalize_cues()
             self._refresh_timecode_edits()
             self._refresh_cue_indicator()
@@ -459,8 +503,7 @@ class CuePointDialog(QDialog):
         self._normalize_cues()
         self._refresh_timecode_edits()
         self._refresh_cue_indicator()
-        if self._duration_ms > 0:
-            self.cue_indicator.set_waveform(self._player.waveformPeaks(1800))
+        self._request_waveform_refresh()
         self._apply_jog_bounds()
         self._refresh_transport_times(self._player.position())
 

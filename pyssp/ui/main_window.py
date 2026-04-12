@@ -16,6 +16,7 @@ import configparser
 import tempfile
 import zipfile
 import math
+from concurrent.futures import Future
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
@@ -425,6 +426,7 @@ class NowPlayingLabel(QWidget):
         super().__init__(parent)
         self._prefix = "NOW PLAYING:"
         self._value = ""
+        self._value_html_override: Optional[str] = None
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -452,18 +454,29 @@ class NowPlayingLabel(QWidget):
     def set_now_playing_text(self, prefix: str, value: str) -> None:
         self._prefix = prefix
         self._value = value
+        self._value_html_override = None
+        self._refresh_text()
+
+    def set_now_playing_html(self, prefix: str, value_html: str) -> None:
+        self._prefix = prefix
+        self._value = ""
+        self._value_html_override = str(value_html or "")
         self._refresh_text()
 
     @staticmethod
     def _to_wrapped_html(value: str) -> str:
         escaped = html.escape(str(value or ""))
+        escaped = escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br/>")
         for token in ["/", "\\", "_", "-", ".", ":"]:
             escaped = escaped.replace(token, f"{token}<wbr/>")
         return escaped
 
     def _refresh_text(self) -> None:
         self._prefix_label.setText(self._prefix)
-        self._value_label.setText(self._to_wrapped_html(self._value))
+        if self._value_html_override is not None:
+            self._value_label.setText(self._value_html_override)
+        else:
+            self._value_label.setText(self._to_wrapped_html(self._value))
 
 
 class GroupButton(QPushButton):
@@ -1787,9 +1800,12 @@ class MainWindow(QMainWindow):
         self._auto_transition_done = False
         self._pending_start_request: Optional[Tuple[str, int, int]] = None
         self._pending_start_token = 0
+        self._pending_deferred_audio_request: Optional[Tuple[str, int, int, str, float]] = None
+        self._pending_deferred_audio_token = 0
         self.current_duration_ms = 0
         self._main_progress_waveform: List[float] = []
         self._main_waveform_request_token = 0
+        self._main_waveform_future: Optional[Future] = None
         self.loop_enabled = False
         self._manual_stop_requested = False
         self.talk_active = False
@@ -2848,6 +2864,9 @@ class MainWindow(QMainWindow):
         self.player_b = ExternalMediaPlayer(self)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
+        self._main_waveform_poll_timer = QTimer(self)
+        self._main_waveform_poll_timer.setInterval(50)
+        self._main_waveform_poll_timer.timeout.connect(self._poll_main_waveform_refresh)
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
@@ -7954,6 +7973,7 @@ class MainWindow(QMainWindow):
         # Invalidate any previously scheduled delayed start to avoid stale restarts.
         self._pending_start_request = None
         self._pending_start_token += 1
+        self._clear_pending_deferred_audio_start()
         old_player, new_player = self._select_transition_players()
         any_playing = old_player is not None
         mode = self._current_fade_mode()
@@ -7993,7 +8013,11 @@ class MainWindow(QMainWindow):
         if cross_mode:
             self._stop_player_internal(new_player)
             load_t = time.perf_counter()
-            if not self._try_load_media(new_player, slot):
+            load_result = self._try_load_media(new_player, slot, playing_key=playing_key, allow_deferred=True)
+            if load_result is None:
+                self._refresh_sound_grid()
+                return True
+            if not load_result:
                 print(
                     f"[TCDBG] {time.perf_counter():.6f} media_load_failed cross "
                     f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
@@ -8034,7 +8058,11 @@ class MainWindow(QMainWindow):
             self._stop_player_internal(self.player_b)
             self._stop_player_internal(self.player)
             load_t = time.perf_counter()
-            if not self._try_load_media(self.player, slot):
+            load_result = self._try_load_media(self.player, slot, playing_key=playing_key, allow_deferred=True)
+            if load_result is None:
+                self._refresh_sound_grid()
+                return True
+            if not load_result:
                 print(
                     f"[TCDBG] {time.perf_counter():.6f} media_load_failed primary "
                     f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
@@ -8102,7 +8130,8 @@ class MainWindow(QMainWindow):
         extra_player.setDSPConfig(self._dsp_config)
         slot_pct = self._slot_volume_pct(slot)
         try:
-            if not self._try_load_media(extra_player, slot):
+            load_result = self._try_load_media(extra_player, slot, playing_key=playing_key, allow_deferred=False)
+            if (load_result is None) or (not load_result):
                 extra_player.deleteLater()
                 return False
             self._set_player_slot_pct(extra_player, slot_pct)
@@ -8134,7 +8163,14 @@ class MainWindow(QMainWindow):
         self._append_play_log(slot.file_path)
         return True
 
-    def _try_load_media(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> bool:
+    def _try_load_media(
+        self,
+        player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        *,
+        playing_key: Optional[Tuple[str, int, int]] = None,
+        allow_deferred: bool = False,
+    ) -> Optional[bool]:
         reason = unsafe_path_reason(slot.file_path)
         if reason:
             slot.load_failed = True
@@ -8143,9 +8179,21 @@ class MainWindow(QMainWindow):
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {reason}")
             print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
             return False
+        normalized_path = str(slot.file_path or "").strip()
+        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)):
+            try:
+                request_audio_preload([normalized_path], prioritize=True, force=True)
+            except Exception:
+                pass
+            if not is_audio_preloaded(normalized_path):
+                slot.load_failed = False
+                self._hide_playback_warning_banner()
+                if playing_key is not None:
+                    self._schedule_deferred_audio_start(playing_key, slot)
+                return None
         try:
             if player is self.player:
-                self._main_waveform_request_token += 1
+                self._cancel_main_waveform_refresh()
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
             player.setMedia(slot.file_path, dsp_config=self._dsp_config)
@@ -8220,6 +8268,79 @@ class MainWindow(QMainWindow):
         self._queue_current_page_audio_preload()
         self._play_slot(slot_index)
 
+    def _clear_pending_deferred_audio_start(self) -> None:
+        had_pending = self._pending_deferred_audio_request is not None
+        self._pending_deferred_audio_token += 1
+        self._pending_deferred_audio_request = None
+        if had_pending:
+            self.statusBar().clearMessage()
+
+    def _schedule_deferred_audio_start(self, playing_key: Tuple[str, int, int], slot: SoundButtonData) -> None:
+        path = str(slot.file_path or "").strip()
+        if not path:
+            return
+        self._pending_deferred_audio_token += 1
+        self._pending_deferred_audio_request = (
+            playing_key[0],
+            int(playing_key[1]),
+            int(playing_key[2]),
+            path,
+            time.monotonic(),
+        )
+        name = slot.title.strip() or os.path.basename(path) or "(unknown)"
+        self.statusBar().showMessage(f"{tr('Reading audio file...')} {name}")
+        self._set_now_playing_loading(name, 0)
+        self._refresh_stage_display()
+
+    def _tick_deferred_audio_start(self) -> None:
+        request = self._pending_deferred_audio_request
+        if request is None:
+            return
+        group_key, page_index, slot_index, path, started_at = request
+        slot = self._slot_for_key((group_key, page_index, slot_index))
+        loading_name = (
+            slot.title.strip()
+            if (slot is not None and str(getattr(slot, "title", "")).strip())
+            else (os.path.basename(path) or "(unknown)")
+        )
+        elapsed = max(0.0, time.monotonic() - started_at)
+        dot_count = int(elapsed * 3.0) % 4
+        self._set_now_playing_loading(loading_name, dot_count)
+        self.statusBar().showMessage(f"{tr('Reading audio file...')} {loading_name}" + ("." * dot_count))
+        if is_audio_preloaded(path):
+            self._pending_deferred_audio_request = None
+            self.statusBar().clearMessage()
+            if group_key == "Q":
+                self.cue_mode = True
+            else:
+                self.cue_mode = False
+                self.current_group = group_key
+            self.current_page = max(0, min(PAGE_COUNT - 1, page_index))
+            self._refresh_group_buttons()
+            self._sync_playlist_shuffle_buttons()
+            self._apply_hotkeys()
+            self._refresh_page_list()
+            self._refresh_sound_grid()
+            self._update_group_status()
+            self._update_page_status()
+            self._queue_current_page_audio_preload()
+            self._play_slot(slot_index)
+            return
+        if elapsed >= 120.0:
+            self._clear_pending_deferred_audio_start()
+            self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} {tr('Reading audio file timed out.')}")
+            self._update_now_playing_label("")
+            self._refresh_sound_grid()
+
+    def _set_now_playing_loading(self, title: str, dot_count: int) -> None:
+        dots = "." * max(0, int(dot_count))
+        base = tr("Reading audio file...")
+        loading_line = f"{base}{dots}"
+        title_html = NowPlayingLabel._to_wrapped_html(str(title or "").strip() or "(unknown)")
+        loading_html = NowPlayingLabel._to_wrapped_html(loading_line)
+        value_html = f"<span style=\"color:#C62828; font-weight:700;\">{loading_html}</span><br/>{title_html}"
+        self.now_playing_label.set_now_playing_html(tr("NOW PLAYING:"), value_html)
+
     def _on_position_changed(self, pos: int) -> None:
         display_pos = self._transport_display_ms_for_absolute(pos)
         if not self._is_scrubbing:
@@ -8242,7 +8363,7 @@ class MainWindow(QMainWindow):
         if duration > 0 and self.main_progress_display_mode == "waveform":
             self._schedule_main_waveform_refresh(120)
         else:
-            self._main_waveform_request_token += 1
+            self._cancel_main_waveform_refresh()
             self._main_progress_waveform = []
             self.progress_label.set_waveform([])
         self._last_ui_position_ms = -1
@@ -8268,9 +8389,15 @@ class MainWindow(QMainWindow):
         token = self._main_waveform_request_token + 1
         self._main_waveform_request_token = token
         expected_key = self.current_playing
-        QTimer.singleShot(max(0, int(delay_ms)), lambda t=token, k=expected_key: self._refresh_main_waveform_if_current(t, k))
+        QTimer.singleShot(max(0, int(delay_ms)), lambda t=token, k=expected_key: self._start_main_waveform_refresh_if_current(t, k))
 
-    def _refresh_main_waveform_if_current(self, token: int, expected_key: Optional[Tuple[str, int, int]]) -> None:
+    def _cancel_main_waveform_refresh(self) -> None:
+        self._main_waveform_request_token += 1
+        self._main_waveform_future = None
+        if self._main_waveform_poll_timer.isActive():
+            self._main_waveform_poll_timer.stop()
+
+    def _start_main_waveform_refresh_if_current(self, token: int, expected_key: Optional[Tuple[str, int, int]]) -> None:
         if token != self._main_waveform_request_token:
             return
         if expected_key is None or self.current_playing != expected_key:
@@ -8278,13 +8405,31 @@ class MainWindow(QMainWindow):
         if self.current_duration_ms <= 0:
             return
         try:
-            peaks = self.player.waveformPeaks(1800)
+            self._main_waveform_future = self.player.waveformPeaksAsync(1800)
+        except Exception:
+            self._main_waveform_future = None
+            self._main_progress_waveform = []
+            self.progress_label.set_waveform([])
+            return
+        self._main_waveform_poll_timer.start()
+
+    def _poll_main_waveform_refresh(self) -> None:
+        future = self._main_waveform_future
+        if future is None:
+            self._main_waveform_poll_timer.stop()
+            return
+        if not future.done():
+            return
+        self._main_waveform_poll_timer.stop()
+        self._main_waveform_future = None
+        if self.current_duration_ms <= 0:
+            return
+        if self.current_playing is None:
+            return
+        try:
+            peaks = list(future.result())
         except Exception:
             peaks = []
-        if token != self._main_waveform_request_token:
-            return
-        if expected_key is None or self.current_playing != expected_key:
-            return
         self._main_progress_waveform = list(peaks)
         self.progress_label.set_waveform(self._main_progress_waveform)
 
@@ -8391,6 +8536,7 @@ class MainWindow(QMainWindow):
         self.preload_status_icon.setToolTip(f"RAM preload active ({active_jobs})")
 
     def _tick_meter(self) -> None:
+        self._tick_deferred_audio_start()
         self._prune_multi_players()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
@@ -10477,6 +10623,20 @@ class MainWindow(QMainWindow):
 
         if cmd == "pause":
             players = self._all_active_players()
+            if (not players) and self._pending_deferred_audio_request is not None:
+                self._clear_pending_deferred_audio_start()
+                self.current_playing = None
+                self.current_duration_ms = 0
+                self._last_ui_position_ms = -1
+                self.total_time.setText("00:00:00")
+                self.elapsed_time.setText("00:00:00")
+                self.remaining_time.setText("00:00:00")
+                self._set_progress_display(0)
+                self.seek_slider.setValue(0)
+                self._update_now_playing_label("")
+                self._refresh_sound_grid()
+                self._update_pause_button_label()
+                return self._api_success({"deferred_load_canceled": True, "state": self._api_state()})
             if not players:
                 return self._api_error("not_playing", "No active playback to pause.", status=409)
             changed = False
@@ -10732,6 +10892,20 @@ class MainWindow(QMainWindow):
         return self._api_error("unknown_command", f"Unknown command '{command}'.", status=404)
 
     def _toggle_pause(self) -> None:
+        if self._pending_deferred_audio_request is not None and (not self._all_active_players()):
+            self._clear_pending_deferred_audio_start()
+            self.current_playing = None
+            self.current_duration_ms = 0
+            self._last_ui_position_ms = -1
+            self.total_time.setText("00:00:00")
+            self.elapsed_time.setText("00:00:00")
+            self.remaining_time.setText("00:00:00")
+            self._set_progress_display(0)
+            self.seek_slider.setValue(0)
+            self._update_now_playing_label("")
+            self._refresh_sound_grid()
+            self._update_pause_button_label()
+            return
         if self._is_multi_play_enabled():
             players = self._all_active_players()
             any_playing = any(p.state() == ExternalMediaPlayer.PlayingState for p in players)
@@ -11150,6 +11324,7 @@ class MainWindow(QMainWindow):
         self._manual_stop_requested = True
         self._pending_start_request = None
         self._pending_start_token += 1
+        self._clear_pending_deferred_audio_start()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False
@@ -11213,6 +11388,7 @@ class MainWindow(QMainWindow):
         self._update_fade_button_flash(False)
         self._pending_start_request = None
         self._pending_start_token += 1
+        self._clear_pending_deferred_audio_start()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False

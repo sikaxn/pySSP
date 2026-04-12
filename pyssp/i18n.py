@@ -273,6 +273,8 @@ _TRANSLATIONS = {
         "Stop playback": "停止播放",
         "Keep playing": "继续播放",
         "Audio Load Failed:": "音频加载失败：",
+        "Reading audio file...": "正在读取音频文件...",
+        "Reading audio file timed out.": "读取音频文件超时。",
         "Talk*": "讲话闪避*",
         "Play Selected / Pause": "播放所选 / 暂停",
         "Play Selected": "播放所选",

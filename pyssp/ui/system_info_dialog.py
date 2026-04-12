@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import importlib
 import importlib.metadata
 import os
 import platform
@@ -48,17 +49,49 @@ def _safe_package_version(name: str) -> str:
         return "not installed"
 
 
+def _safe_runtime_module_version(import_name: str, attributes: List[str], package_name: Optional[str] = None) -> str:
+    if import_name == "pygame":
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    try:
+        module = importlib.import_module(import_name)
+    except Exception:
+        return _safe_package_version(package_name or import_name)
+    for attr in attributes:
+        value = getattr(module, attr, None)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return _safe_package_version(package_name or import_name)
+
+
+def _safe_pyqt_version() -> str:
+    try:
+        from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
+
+        pyqt = str(PYQT_VERSION_STR or "").strip()
+        qt = str(QT_VERSION_STR or "").strip()
+        if pyqt and qt:
+            return f"{pyqt} (Qt {qt})"
+        if pyqt:
+            return pyqt
+    except Exception:
+        pass
+    return _safe_package_version("PyQt5")
+
+
 def _get_library_versions() -> List[str]:
     versions = [
         f"python: {platform.python_version()}",
-        f"PyQt5: {_safe_package_version('PyQt5')}",
-        f"pygame-ce: {_safe_package_version('pygame-ce')}",
-        f"numpy: {_safe_package_version('numpy')}",
-        f"sounddevice: {_safe_package_version('sounddevice')}",
-        f"Flask: {_safe_package_version('Flask')}",
-        f"simple-websocket: {_safe_package_version('simple-websocket')}",
-        f"websockets: {_safe_package_version('websockets')}",
-        f"Werkzeug: {_safe_package_version('Werkzeug')}",
+        f"PyQt5: {_safe_pyqt_version()}",
+        f"pygame-ce: {_safe_runtime_module_version('pygame', ['__version__'], package_name='pygame-ce')}",
+        f"numpy: {_safe_runtime_module_version('numpy', ['__version__'])}",
+        f"sounddevice: {_safe_runtime_module_version('sounddevice', ['__version__'])}",
+        f"Flask: {_safe_runtime_module_version('flask', ['__version__'], package_name='Flask')}",
+        f"simple-websocket: {_safe_runtime_module_version('simple_websocket', ['__version__'], package_name='simple-websocket')}",
+        f"websockets: {_safe_runtime_module_version('websockets', ['__version__'])}",
+        f"Werkzeug: {_safe_runtime_module_version('werkzeug', ['__version__'], package_name='Werkzeug')}",
     ]
     return versions
 

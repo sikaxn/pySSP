@@ -90,6 +90,7 @@ def _get_library_versions() -> List[str]:
         f"sounddevice: {_safe_runtime_module_version('sounddevice', ['__version__'])}",
         f"Flask: {_safe_runtime_module_version('flask', ['__version__'], package_name='Flask')}",
         f"simple-websocket: {_safe_runtime_module_version('simple_websocket', ['__version__'], package_name='simple-websocket')}",
+        f"imageio-ffmpeg: {_safe_runtime_module_version('imageio_ffmpeg', ['__version__'], package_name='imageio-ffmpeg')}",
         f"websockets: {_safe_runtime_module_version('websockets', ['__version__'])}",
         f"Werkzeug: {_safe_runtime_module_version('werkzeug', ['__version__'], package_name='Werkzeug')}",
     ]

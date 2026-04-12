@@ -63,6 +63,7 @@ from PyQt5.QtWidgets import (
 from pyssp.audio_format_support import build_audio_file_dialog_filter, normalize_supported_audio_extensions
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
+    can_stream_without_preload,
     configure_audio_preload_cache_policy,
     enforce_audio_preload_limits,
     get_audio_preload_capacity_bytes,
@@ -1806,6 +1807,8 @@ class MainWindow(QMainWindow):
         self._main_progress_waveform: List[float] = []
         self._main_waveform_request_token = 0
         self._main_waveform_future: Optional[Future] = None
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key: Optional[Tuple[str, int, int]] = None
         self.loop_enabled = False
         self._manual_stop_requested = False
         self.talk_active = False
@@ -8004,6 +8007,9 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
 
         self.current_playing = playing_key
+        self._cancel_main_waveform_refresh()
+        self._main_progress_waveform = []
+        self.progress_label.set_waveform([])
         self._manual_stop_requested = False
         self._cancel_fade_for_player(self.player)
         self._cancel_fade_for_player(self.player_b)
@@ -8180,7 +8186,8 @@ class MainWindow(QMainWindow):
             print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
             return False
         normalized_path = str(slot.file_path or "").strip()
-        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)):
+        can_stream_now = can_stream_without_preload(normalized_path)
+        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)) and (not can_stream_now):
             try:
                 request_audio_preload([normalized_path], prioritize=True, force=True)
             except Exception:
@@ -8394,6 +8401,8 @@ class MainWindow(QMainWindow):
     def _cancel_main_waveform_refresh(self) -> None:
         self._main_waveform_request_token += 1
         self._main_waveform_future = None
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key = None
         if self._main_waveform_poll_timer.isActive():
             self._main_waveform_poll_timer.stop()
 
@@ -8406,8 +8415,12 @@ class MainWindow(QMainWindow):
             return
         try:
             self._main_waveform_future = self.player.waveformPeaksAsync(1800)
+            self._main_waveform_future_token = token
+            self._main_waveform_future_key = expected_key
         except Exception:
             self._main_waveform_future = None
+            self._main_waveform_future_token = 0
+            self._main_waveform_future_key = None
             self._main_progress_waveform = []
             self.progress_label.set_waveform([])
             return
@@ -8420,11 +8433,18 @@ class MainWindow(QMainWindow):
             return
         if not future.done():
             return
-        self._main_waveform_poll_timer.stop()
+        token = int(self._main_waveform_future_token)
+        expected_key = self._main_waveform_future_key
         self._main_waveform_future = None
-        if self.current_duration_ms <= 0:
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key = None
+        if token != self._main_waveform_request_token:
             return
-        if self.current_playing is None:
+        if self.current_duration_ms <= 0:
+            self._main_waveform_poll_timer.stop()
+            return
+        if expected_key is None or self.current_playing != expected_key:
+            self._main_waveform_poll_timer.stop()
             return
         try:
             peaks = list(future.result())
@@ -8432,6 +8452,19 @@ class MainWindow(QMainWindow):
             peaks = []
         self._main_progress_waveform = list(peaks)
         self.progress_label.set_waveform(self._main_progress_waveform)
+        if self.main_progress_display_mode != "waveform":
+            self._main_waveform_poll_timer.stop()
+            return
+        if self.current_playing != expected_key:
+            self._main_waveform_poll_timer.stop()
+            return
+        if self.current_duration_ms <= 0:
+            self._main_waveform_poll_timer.stop()
+            return
+        if bool(getattr(self.player, "waveformIsProgressive", lambda: False)()):
+            self._start_main_waveform_refresh_if_current(self._main_waveform_request_token, expected_key)
+            return
+        self._main_waveform_poll_timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
         print(
@@ -9514,7 +9547,7 @@ class MainWindow(QMainWindow):
         self.player.stateChanged.connect(self._on_state_changed)
 
     def _open_timecode_settings(self) -> None:
-        self._open_options_dialog(initial_page="Audio Device / Timecode")
+        self._open_options_dialog(initial_page="Audio Device & Timecode")
 
     def _open_options_dialog(self, initial_page: Optional[str] = None) -> None:
         available_devices = sorted(list_output_devices(), key=lambda v: v.lower())
@@ -9652,6 +9685,9 @@ class MainWindow(QMainWindow):
             lock_require_password=self.lock_require_password,
             lock_password=self.lock_password,
             lock_restart_state=self.lock_restart_state,
+            is_playback_or_loading_active=lambda: bool(
+                self._is_playback_in_progress() or self._pending_deferred_audio_request is not None
+            ),
             stage_display_gadgets=self.stage_display_gadgets,
             ui_language=self.ui_language,
             initial_page=initial_page,

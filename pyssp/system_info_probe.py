@@ -9,6 +9,13 @@ import aifc
 from ctypes.util import find_library
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+from pyssp.ffmpeg_support import (
+    ffmpeg_available,
+    ffmpeg_source,
+    ffmpeg_supported_audio_extensions,
+    ffmpeg_version_text,
+    get_ffmpeg_executable,
+)
 
 def _dedupe(values: List[str]) -> List[str]:
     out: List[str] = []
@@ -285,8 +292,18 @@ def build_decoder_report() -> List[str]:
             "FLAC": ".flac",
         }
         supported_extensions = [extension_map[name] for name in supported_formats if name in extension_map]
+        if ffmpeg_available():
+            for ext in ffmpeg_supported_audio_extensions():
+                if ext not in supported_extensions:
+                    supported_extensions.append(ext)
         lines.append("pySSP functional playback support (tested): " + (", ".join(supported_formats) if supported_formats else "none"))
         lines.append("pySSP supported audio extensions: " + (", ".join(supported_extensions) if supported_extensions else "none"))
+        lines.append(f"ffmpeg available: {ffmpeg_available()}")
+        lines.append(f"ffmpeg source: {ffmpeg_source()}")
+        ffmpeg_path = get_ffmpeg_executable()
+        lines.append(f"ffmpeg path: {ffmpeg_path or 'not found'}")
+        ffmpeg_ver = ffmpeg_version_text()
+        lines.append(f"ffmpeg version: {ffmpeg_ver or 'unknown'}")
         if unsupported_formats:
             lines.append("pySSP functional playback not supported (tested): " + ", ".join(unsupported_formats))
         for fmt_name in ["WAV", "AIFF", "MP3", "OGG", "FLAC"]:

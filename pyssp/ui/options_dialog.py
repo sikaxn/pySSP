@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
@@ -72,6 +72,7 @@ from pyssp.timecode import (
     TIME_CODE_SAMPLE_RATES,
     list_midi_output_devices,
 )
+from pyssp.ui.system_info_dialog import detect_supported_audio_format_extensions
 from pyssp.ui.stage_display import (
     STAGE_DISPLAY_GADGET_SPECS,
     StageDisplayLayoutEditor,
@@ -1029,6 +1030,7 @@ class OptionsDialog(QDialog):
         lock_require_password: bool,
         lock_password: str,
         lock_restart_state: str,
+        is_playback_or_loading_active: Optional[Callable[[], bool]] = None,
         stage_display_gadgets: Optional[Dict[str, Dict[str, object]]] = None,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -1135,6 +1137,7 @@ class OptionsDialog(QDialog):
         ]
         self._verify_sound_file_on_add = bool(verify_sound_file_on_add)
         self._allow_other_unsupported_audio_files = bool(allow_other_unsupported_audio_files)
+        self._is_playback_or_loading_active = is_playback_or_loading_active
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
@@ -1225,15 +1228,6 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
-            "Audio Format",
-            self._mono_icon("gear"),
-            self._build_audio_format_page(
-                supported_audio_format_extensions=self._supported_audio_format_extensions,
-                verify_sound_file_on_add=self._verify_sound_file_on_add,
-                allow_other_unsupported_audio_files=self._allow_other_unsupported_audio_files,
-            ),
-        )
-        self._add_page(
             "Window Layout",
             self._mono_icon("layout"),
             self._build_window_layout_page(),
@@ -1270,7 +1264,7 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
-            "Audio Device / Timecode",
+            "Audio Device & Timecode",
             self._mono_icon("speaker"),
             self._build_audio_device_page(
                 audio_output_device=audio_output_device,
@@ -1290,7 +1284,7 @@ class OptionsDialog(QDialog):
             ),
         )
         self._add_page(
-            "Audio Preload",
+            "Audio Loading & Format",
             self._mono_icon("ram"),
             self._build_audio_preload_page(
                 preload_audio_enabled=preload_audio_enabled,
@@ -1300,6 +1294,9 @@ class OptionsDialog(QDialog):
                 preload_pause_on_playback=preload_pause_on_playback,
                 preload_total_ram_mb=preload_total_ram_mb,
                 preload_ram_cap_mb=preload_ram_cap_mb,
+                supported_audio_format_extensions=self._supported_audio_format_extensions,
+                verify_sound_file_on_add=self._verify_sound_file_on_add,
+                allow_other_unsupported_audio_files=self._allow_other_unsupported_audio_files,
             ),
         )
         self._add_page(
@@ -1346,6 +1343,10 @@ class OptionsDialog(QDialog):
         needle = str(title or "").strip().lower()
         if needle == "display":
             needle = "stage display"
+        if needle == "audio device / timecode":
+            needle = "audio device & timecode"
+        if needle in {"audio preload", "audio format"}:
+            needle = "audio loading & format"
         if not needle:
             return False
         for index in range(self.page_list.count()):
@@ -1787,7 +1788,7 @@ class OptionsDialog(QDialog):
         mtc_group = QGroupBox("MIDI Timecode (MTC)")
         mtc_group.setEnabled(False)
         mtc_layout = QVBoxLayout(mtc_group)
-        mtc_note = QLabel("Configure MTC output in Audio Device / Timecode.")
+        mtc_note = QLabel("Configure MTC output in Audio Device & Timecode.")
         mtc_note.setWordWrap(True)
         mtc_layout.addWidget(mtc_note)
         layout.addWidget(mtc_group)
@@ -2550,6 +2551,9 @@ class OptionsDialog(QDialog):
         preload_pause_on_playback: bool,
         preload_total_ram_mb: int,
         preload_ram_cap_mb: int,
+        supported_audio_format_extensions: List[str],
+        verify_sound_file_on_add: bool,
+        allow_other_unsupported_audio_files: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -2603,6 +2607,35 @@ class OptionsDialog(QDialog):
         ram_layout.addWidget(self.preload_memory_value_label)
         self._update_preload_slider_label()
         layout.addWidget(ram_group)
+
+        detected_group = QGroupBox("Detected Supported Audio Format Extensions")
+        detected_layout = QVBoxLayout(detected_group)
+        supported = [str(token).strip().lower() for token in supported_audio_format_extensions if str(token).strip()]
+        self.supported_audio_format_extensions_value = QLabel(", ".join(supported) if supported else "(none detected)")
+        self.supported_audio_format_extensions_value.setWordWrap(True)
+        self.supported_audio_format_extensions_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        detected_layout.addWidget(self.supported_audio_format_extensions_value)
+        self.rescan_supported_audio_format_button = QPushButton("Rescan Supported Audio Format")
+        self.rescan_supported_audio_format_button.clicked.connect(self._rescan_supported_audio_formats)
+        detected_layout.addWidget(self.rescan_supported_audio_format_button, 0, Qt.AlignLeft)
+        layout.addWidget(detected_group)
+
+        behavior_group = QGroupBox("Add Sound Button Behavior")
+        behavior_layout = QVBoxLayout(behavior_group)
+        self.verify_sound_file_on_add_checkbox = QCheckBox("Verify sound file upon adding sound button")
+        self.verify_sound_file_on_add_checkbox.setChecked(bool(verify_sound_file_on_add))
+        behavior_layout.addWidget(self.verify_sound_file_on_add_checkbox)
+        self.allow_other_unsupported_audio_files_checkbox = QCheckBox(
+            "Allow other unsupported file"
+        )
+        self.allow_other_unsupported_audio_files_checkbox.setChecked(bool(allow_other_unsupported_audio_files))
+        behavior_layout.addWidget(self.allow_other_unsupported_audio_files_checkbox)
+        note = QLabel(
+            "When disabled, Add Sound Button file selection is limited to the detected supported audio extensions."
+        )
+        note.setWordWrap(True)
+        behavior_layout.addWidget(note)
+        layout.addWidget(behavior_group)
 
         layout.addStretch(1)
         return page
@@ -2769,43 +2802,21 @@ class OptionsDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _build_audio_format_page(
-        self,
-        supported_audio_format_extensions: List[str],
-        verify_sound_file_on_add: bool,
-        allow_other_unsupported_audio_files: bool,
-    ) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        detected_group = QGroupBox("Detected Supported Audio Format Extensions")
-        detected_layout = QVBoxLayout(detected_group)
-        supported = [str(token).strip().lower() for token in supported_audio_format_extensions if str(token).strip()]
-        self.supported_audio_format_extensions_value = QLabel(", ".join(supported) if supported else "(none detected)")
-        self.supported_audio_format_extensions_value.setWordWrap(True)
-        self.supported_audio_format_extensions_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        detected_layout.addWidget(self.supported_audio_format_extensions_value)
-        layout.addWidget(detected_group)
-
-        behavior_group = QGroupBox("Add Sound Button Behavior")
-        behavior_layout = QVBoxLayout(behavior_group)
-        self.verify_sound_file_on_add_checkbox = QCheckBox("Verify sound file upon adding sound button")
-        self.verify_sound_file_on_add_checkbox.setChecked(bool(verify_sound_file_on_add))
-        behavior_layout.addWidget(self.verify_sound_file_on_add_checkbox)
-        self.allow_other_unsupported_audio_files_checkbox = QCheckBox(
-            "Allow other unsupported file"
-        )
-        self.allow_other_unsupported_audio_files_checkbox.setChecked(bool(allow_other_unsupported_audio_files))
-        behavior_layout.addWidget(self.allow_other_unsupported_audio_files_checkbox)
-        note = QLabel(
-            "When disabled, Add Sound Button file selection is limited to the detected supported audio extensions."
-        )
-        note.setWordWrap(True)
-        behavior_layout.addWidget(note)
-        layout.addWidget(behavior_group)
-
-        layout.addStretch(1)
-        return page
+    def _rescan_supported_audio_formats(self) -> None:
+        if callable(self._is_playback_or_loading_active):
+            try:
+                if bool(self._is_playback_or_loading_active()):
+                    QMessageBox.warning(
+                        self,
+                        tr("Audio Format Detection"),
+                        tr("Stop playback before rescanning supported audio formats."),
+                    )
+                    return
+            except Exception:
+                pass
+        detected = detect_supported_audio_format_extensions(timeout_sec=10.0)
+        supported = [str(token).strip().lower() for token in detected if str(token).strip()]
+        self.supported_audio_format_extensions_value.setText(", ".join(supported) if supported else tr("(none detected)"))
 
     @classmethod
     def _normalize_stage_display_layout(cls, values: List[str]) -> List[str]:
@@ -3367,7 +3378,7 @@ class OptionsDialog(QDialog):
 
     def selected_supported_audio_format_extensions(self) -> List[str]:
         text = str(self.supported_audio_format_extensions_value.text() or "").strip()
-        if (not text) or text == "(none detected)":
+        if (not text) or text in {"(none detected)", tr("(none detected)")}:
             return []
         output: List[str] = []
         for token in text.split(","):
@@ -4172,27 +4183,24 @@ class OptionsDialog(QDialog):
             self._restore_lyric_defaults()
             return
         if idx == 8:
-            self._restore_audio_format_defaults()
-            return
-        if idx == 9:
             self._restore_window_layout_defaults()
             return
-        if idx == 10:
+        if idx == 9:
             self._restore_delay_defaults()
             return
-        if idx == 11:
+        if idx == 10:
             self._restore_playback_defaults()
             return
-        if idx == 12:
+        if idx == 11:
             self._restore_audio_device_defaults()
             return
-        if idx == 13:
+        if idx == 12:
             self._restore_preload_defaults()
             return
-        if idx == 14:
+        if idx == 13:
             self._restore_talk_defaults()
             return
-        if idx == 15:
+        if idx == 14:
             self._restore_web_remote_defaults()
             return
 
@@ -4728,6 +4736,7 @@ class OptionsDialog(QDialog):
         target_mb = max(step_mb, min(int(self._preload_ram_cap_mb), int(d["preload_audio_memory_limit_mb"])))
         self.preload_memory_slider.setValue(max(1, target_mb // step_mb))
         self._update_preload_slider_label()
+        self._restore_audio_format_defaults()
 
     def _restore_talk_defaults(self) -> None:
         d = self._DEFAULTS

@@ -54,7 +54,7 @@ def ensure_supported_audio_formats_ready(
         return True
 
     if set_status is not None:
-        set_status("Detecting audio formats...")
+        set_status(tr("Detecting audio formats..."))
 
     detected = normalize_supported_audio_extensions(
         detect_supported_audio_format_extensions(timeout_sec=timeout_sec)

@@ -4769,7 +4769,7 @@ class OptionsDialog(QDialog):
     def _restore_audio_format_defaults(self) -> None:
         d = self._DEFAULTS
         supported = [str(token).strip().lower() for token in d.get("supported_audio_format_extensions", []) if str(token).strip()]
-        self.supported_audio_format_extensions_value.setText(", ".join(supported) if supported else "(none detected)")
+        self.supported_audio_format_extensions_value.setText(", ".join(supported) if supported else tr("(none detected)"))
         self.verify_sound_file_on_add_checkbox.setChecked(bool(d.get("verify_sound_file_on_add", True)))
         self.allow_other_unsupported_audio_files_checkbox.setChecked(
             bool(d.get("allow_other_unsupported_audio_files", False))

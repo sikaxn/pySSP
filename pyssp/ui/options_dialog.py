@@ -1226,7 +1226,7 @@ class OptionsDialog(QDialog):
         )
         self._add_page(
             "Audio Format",
-            self._mono_icon("speaker"),
+            self._mono_icon("gear"),
             self._build_audio_format_page(
                 supported_audio_format_extensions=self._supported_audio_format_extensions,
                 verify_sound_file_on_add=self._verify_sound_file_on_add,
@@ -1408,6 +1408,16 @@ class OptionsDialog(QDialog):
             p.drawPolygon(body)
             p.drawArc(QRectF(12, 7, 5, 8), -40 * 16, 80 * 16)
             p.drawArc(QRectF(12, 5, 8, 12), -40 * 16, 80 * 16)
+        elif kind == "gear":
+            p.drawEllipse(QRectF(7, 7, 8, 8))
+            p.drawLine(11, 3, 11, 6)
+            p.drawLine(11, 16, 11, 19)
+            p.drawLine(3, 11, 6, 11)
+            p.drawLine(16, 11, 19, 11)
+            p.drawLine(QPointF(5.2, 5.2), QPointF(7.3, 7.3))
+            p.drawLine(QPointF(14.7, 14.7), QPointF(16.8, 16.8))
+            p.drawLine(QPointF(5.2, 16.8), QPointF(7.3, 14.7))
+            p.drawLine(QPointF(14.7, 7.3), QPointF(16.8, 5.2))
         elif kind == "mic":
             p.drawRoundedRect(QRectF(8, 4, 6, 10), 3, 3)
             p.drawLine(11, 14, 11, 18)

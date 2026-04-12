@@ -116,6 +116,8 @@ _TRANSLATIONS = {
         "Lyric Editor": "歌词编辑器",
         "Lyric Editor...": "歌词编辑器...",
         "Lyric Navigator": "歌词导航器",
+        "Scan Sound Buttons Lyrics": "扫描声音按钮歌词",
+        "Remove All Linked Lyric File": "移除所有已关联歌词文件",
         "Lyric Output": "歌词输出",
         "Show Lyric": "显示歌词",
         "Blank Lyric": "黑场歌词",
@@ -204,11 +206,13 @@ _TRANSLATIONS = {
         "View Log": "查看日志",
         "About": "关于",
         "Help": "帮助",
+        "System Information": "系统信息",
         "Lock / Unlock": "锁定 / 解锁",
         "Get the Latest Version": "获取最新版本",
         "Website": "网站",
         "Tips": "小贴士",
         "Register": "注册",
+        "Crash for Debug": "调试崩溃",
         "Exit": "退出",
         "Open on startup": "启动时打开",
         "Previous": "上一个",
@@ -779,12 +783,22 @@ def _set_widget_text(widget, source: str, language: str) -> None:
 
 
 def localize_widget_tree(widget: QWidget, language: Optional[str] = None) -> None:
-    lang = normalize_language(language or _current_language)
+    lang = _resolve_widget_language(widget, language or _current_language)
     _localize_widget(widget, lang)
     for child in widget.findChildren(QWidget):
         _localize_widget(child, lang)
     for action in widget.findChildren(QAction):
         _localize_action(action, lang)
+
+
+def _resolve_widget_language(widget: Optional[QWidget], fallback: Optional[str] = None) -> str:
+    current = widget
+    while current is not None:
+        forced = current.property("_i18n_force_language")
+        if isinstance(forced, str) and forced.strip():
+            return normalize_language(forced)
+        current = current.parentWidget()
+    return normalize_language(fallback or _current_language)
 
 
 def _localize_widget(widget: QWidget, language: str) -> None:
@@ -881,7 +895,7 @@ class _AutoLocalizer(QObject):
             return False
         try:
             _auto_localizer_state["busy"] = True
-            localize_widget_tree(obj, _current_language)
+            localize_widget_tree(obj, _resolve_widget_language(obj, _current_language))
         finally:
             _auto_localizer_state["busy"] = False
         return False

@@ -26,7 +26,7 @@ def qapp():
 def test_refresh_runs_async_without_blocking_ui(qapp, monkeypatch):
     observed_versions = []
 
-    def fake_build_system_information_text(version: str) -> str:
+    def fake_build_system_information_text(version: str, register_probe_process=None) -> str:
         observed_versions.append(version)
         time.sleep(0.2)
         return f"system info for {version}"

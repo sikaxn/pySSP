@@ -150,6 +150,7 @@ from pyssp.ui.stage_display import (
 )
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.system_info_dialog import SystemInformationDialog
+from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 from pyssp.version import get_app_title_base, get_display_version
@@ -2944,7 +2945,17 @@ class MainWindow(QMainWindow):
         setup_menu = self.menuBar().addMenu("Setup")
         options_action = QAction("Options", self)
         options_action.triggered.connect(self._open_options_dialog)
+        preferences_action: Optional[QAction] = None
+        if sys.platform == "darwin":
+            preferences_action = QAction("Preferences", self)
+            preferences_action.triggered.connect(self._open_options_dialog)
+            setup_menu.addAction(preferences_action)
         setup_menu.addAction(options_action)
+        configure_preferences_menu_actions(
+            options_action,
+            preferences_action,
+            platform_name=sys.platform,
+        )
         self._menu_actions["options"] = options_action
         open_web_remote_action = QAction("Open Web Remote", self)
         open_web_remote_action.triggered.connect(self._open_web_remote)
@@ -3060,7 +3071,17 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("Help")
         about_action = QAction("About", self)
         about_action.triggered.connect(self._open_about_window)
+        application_about_action: Optional[QAction] = None
+        if sys.platform == "darwin":
+            application_about_action = QAction("About", self)
+            application_about_action.triggered.connect(self._open_about_window)
+            help_menu.addAction(application_about_action)
         help_menu.addAction(about_action)
+        configure_about_menu_actions(
+            about_action,
+            application_about_action,
+            platform_name=sys.platform,
+        )
         system_info_action = QAction("System Information", self)
         system_info_action.triggered.connect(self._open_system_information_window)
         help_menu.addAction(system_info_action)

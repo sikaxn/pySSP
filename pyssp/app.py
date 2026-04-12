@@ -255,6 +255,7 @@ def _prompt_first_run_language() -> str:
         clicked = box.clickedButton()
         if clicked is info_button:
             dialog = SystemInformationDialog(app_version_text=get_display_version(), parent=None)
+            dialog.setProperty("_i18n_force_language", "en")
             dialog.exec_()
             continue
         if clicked is chinese_button:

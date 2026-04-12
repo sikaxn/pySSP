@@ -1,6 +1,6 @@
 import unittest
 
-from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel, QMenu
+from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
 from pyssp.i18n import LANG_EN, LANG_ZH_CN, localize_widget_tree, translate_text
 
@@ -53,6 +53,17 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(group.title(), "常规")
         localize_widget_tree(group, LANG_EN)
         self.assertEqual(group.title(), "General")
+
+    def test_force_language_property_overrides_requested_language(self):
+        root = QWidget()
+        root.setProperty("_i18n_force_language", LANG_EN)
+        layout = QVBoxLayout(root)
+        button = QPushButton("Close")
+        layout.addWidget(button)
+
+        localize_widget_tree(root, LANG_ZH_CN)
+
+        self.assertEqual(button.text(), "Close")
 
 
 if __name__ == "__main__":

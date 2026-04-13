@@ -1818,6 +1818,7 @@ class MainWindow(QMainWindow):
         self._pending_start_token = 0
         self._pending_deferred_audio_request: Optional[Tuple[str, int, int, str, float]] = None
         self._pending_deferred_audio_token = 0
+        self._pending_player_media_loads: Dict[int, dict] = {}
         self.current_duration_ms = 0
         self._main_progress_waveform: List[float] = []
         self._main_waveform_request_token = 0
@@ -2891,8 +2892,11 @@ class MainWindow(QMainWindow):
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
+        self.player.mediaLoadFinished.connect(self._on_player_media_load_finished)
+        self.player_b.mediaLoadFinished.connect(self._on_player_media_load_finished)
 
     def _dispose_audio_players(self) -> None:
+        self._cancel_all_pending_player_media_loads()
         for name in ["player", "player_b"]:
             player = getattr(self, name, None)
             if player is None:
@@ -8153,7 +8157,15 @@ class MainWindow(QMainWindow):
         if cross_mode:
             self._stop_player_internal(new_player)
             load_t = time.perf_counter()
-            load_result = self._try_load_media(new_player, slot, playing_key=playing_key, allow_deferred=True)
+            load_result = self._try_load_media(
+                new_player,
+                slot,
+                playing_key=playing_key,
+                allow_deferred=True,
+                on_success=lambda old=old_player, new=new_player, s=slot, key=playing_key, pct=slot_pct: self._finish_cross_loaded_playback(
+                    old, new, s, key, pct
+                ),
+            )
             if load_result is None:
                 self._refresh_sound_grid()
                 return True
@@ -8198,7 +8210,15 @@ class MainWindow(QMainWindow):
             self._stop_player_internal(self.player_b)
             self._stop_player_internal(self.player)
             load_t = time.perf_counter()
-            load_result = self._try_load_media(self.player, slot, playing_key=playing_key, allow_deferred=True)
+            load_result = self._try_load_media(
+                self.player,
+                slot,
+                playing_key=playing_key,
+                allow_deferred=True,
+                on_success=lambda p=self.player, s=slot, key=playing_key, pct=slot_pct, fade=fade_in_on: self._finish_primary_loaded_playback(
+                    p, s, key, pct, fade
+                ),
+            )
             if load_result is None:
                 self._refresh_sound_grid()
                 return True
@@ -8268,23 +8288,23 @@ class MainWindow(QMainWindow):
         extra_player = ExternalMediaPlayer(self)
         extra_player.setNotifyInterval(90)
         extra_player.setDSPConfig(self._dsp_config)
+        extra_player.mediaLoadFinished.connect(self._on_player_media_load_finished)
         slot_pct = self._slot_volume_pct(slot)
         try:
-            load_result = self._try_load_media(extra_player, slot, playing_key=playing_key, allow_deferred=False)
-            if (load_result is None) or (not load_result):
+            load_result = self._try_load_media(
+                extra_player,
+                slot,
+                playing_key=playing_key,
+                allow_deferred=False,
+                on_success=lambda p=extra_player, s=slot, key=playing_key, pct=slot_pct: self._finish_multi_loaded_playback(
+                    p, s, key, pct
+                ),
+            )
+            if load_result is None:
+                return True
+            if not load_result:
                 extra_player.deleteLater()
                 return False
-            self._set_player_slot_pct(extra_player, slot_pct)
-            target_volume = self._effective_slot_target_volume(slot_pct)
-            self._seek_player_to_slot_start_cue(extra_player, slot)
-            fade_in_on = self._is_fade_in_enabled()
-            if fade_in_on and self.fade_in_sec > 0:
-                extra_player.setVolume(0)
-            else:
-                extra_player.setVolume(target_volume)
-            extra_player.play()
-            if fade_in_on and self.fade_in_sec > 0:
-                self._start_fade(extra_player, target_volume, self.fade_in_sec, stop_on_complete=False)
         except Exception:
             try:
                 extra_player.deleteLater()
@@ -8310,7 +8330,9 @@ class MainWindow(QMainWindow):
         *,
         playing_key: Optional[Tuple[str, int, int]] = None,
         allow_deferred: bool = False,
+        on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
+        self._cancel_pending_player_media_load(player)
         reason = unsafe_path_reason(slot.file_path)
         if reason:
             slot.load_failed = True
@@ -8337,6 +8359,17 @@ class MainWindow(QMainWindow):
                 self._cancel_main_waveform_refresh()
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
+            if sys.platform == "darwin":
+                request_id = player.setMediaAsync(slot.file_path, dsp_config=self._dsp_config)
+                self._pending_player_media_loads[id(player)] = {
+                    "request_id": int(request_id),
+                    "player": player,
+                    "slot": slot,
+                    "playing_key": playing_key,
+                    "on_success": on_success,
+                }
+                self._schedule_player_media_load_status(player, slot)
+                return None
             player.setMedia(slot.file_path, dsp_config=self._dsp_config)
             slot.load_failed = False
             self._hide_playback_warning_banner()
@@ -8348,6 +8381,174 @@ class MainWindow(QMainWindow):
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
             print(f"[pySSP] Audio load failed: {slot.file_path} | {exc}", flush=True)
             return False
+
+    def _schedule_player_media_load_status(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
+        name = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+        self.statusBar().showMessage(f"{tr('Reading audio file...')} {name}")
+        if player is self.player:
+            self._set_now_playing_loading(name, 0)
+            self._refresh_stage_display()
+
+    def _cancel_pending_player_media_load(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        pending = self._pending_player_media_loads.pop(id(player), None)
+        if pending is None:
+            return
+        if player is self.player:
+            self.statusBar().clearMessage()
+
+    def _cancel_all_pending_player_media_loads(self) -> None:
+        pending_players = [item.get("player") for item in self._pending_player_media_loads.values()]
+        self._pending_player_media_loads.clear()
+        self.statusBar().clearMessage()
+        for player in pending_players:
+            if not isinstance(player, ExternalMediaPlayer):
+                continue
+            try:
+                player.stop()
+            except Exception:
+                pass
+            if player not in {self.player, self.player_b}:
+                try:
+                    player.deleteLater()
+                except Exception:
+                    pass
+
+    def _finish_primary_loaded_playback(
+        self,
+        player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+        fade_in_on: bool,
+    ) -> None:
+        self._player_slot_volume_pct = slot_pct
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(player, slot)
+        if fade_in_on:
+            player.setVolume(0)
+            player.play()
+            self._set_player_slot_key(player, playing_key)
+            self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
+        else:
+            player.setVolume(target_volume)
+            player.play()
+            self._set_player_slot_key(player, playing_key)
+        self._timecode_on_playback_start(slot)
+        self._prepare_transport_for_new_playback()
+        self._refresh_sound_grid()
+        self._update_now_playing_label(self._build_now_playing_text(slot))
+        self._append_play_log(slot.file_path)
+        self._mark_player_started(player)
+
+    def _finish_cross_loaded_playback(
+        self,
+        old_player: Optional[ExternalMediaPlayer],
+        new_player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+    ) -> None:
+        if new_player is self.player:
+            self._player_slot_volume_pct = slot_pct
+        else:
+            self._player_b_slot_volume_pct = slot_pct
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(new_player, slot)
+        new_player.setVolume(0)
+        new_player.play()
+        self._set_player_slot_key(new_player, playing_key)
+        fade_seconds = self.cross_fade_sec
+        self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
+        if old_player is not None:
+            self._start_fade(old_player, 0, fade_seconds, stop_on_complete=True)
+        if self.player is not new_player:
+            self._swap_primary_secondary_players()
+        self._timecode_on_playback_start(slot)
+        self._prepare_transport_for_new_playback()
+        self._refresh_sound_grid()
+        self._update_now_playing_label(self._build_now_playing_text(slot))
+        self._append_play_log(slot.file_path)
+        self._mark_player_started(self.player)
+
+    def _finish_multi_loaded_playback(
+        self,
+        player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+    ) -> None:
+        self._set_player_slot_pct(player, slot_pct)
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(player, slot)
+        fade_in_on = self._is_fade_in_enabled()
+        if fade_in_on and self.fade_in_sec > 0:
+            player.setVolume(0)
+        else:
+            player.setVolume(target_volume)
+        player.play()
+        if fade_in_on and self.fade_in_sec > 0:
+            self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
+        if player not in self._multi_players:
+            self._multi_players.append(player)
+        self._set_player_slot_key(player, playing_key)
+        self._mark_player_started(player)
+        slot.played = True
+        slot.activity_code = "2"
+        self._set_dirty(True)
+        self.current_playing = playing_key
+        self._refresh_sound_grid()
+        self._update_now_playing_label(self._build_now_playing_text(slot))
+        self._append_play_log(slot.file_path)
+
+    def _on_player_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
+        player = self.sender()
+        if not isinstance(player, ExternalMediaPlayer):
+            return
+        pending = self._pending_player_media_loads.get(id(player))
+        if pending is None or int(pending.get("request_id", -1)) != int(request_id):
+            return
+        self._pending_player_media_loads.pop(id(player), None)
+        slot = pending.get("slot")
+        if not isinstance(slot, SoundButtonData):
+            return
+        if player is self.player:
+            self.statusBar().clearMessage()
+        if not ok:
+            slot.load_failed = True
+            self._stop_player_internal(player)
+            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {error}")
+            print(f"[pySSP] Audio load failed: {slot.file_path} | {error}", flush=True)
+            if player is self.player:
+                self.current_playing = None
+                self._update_now_playing_label("")
+            elif player is not self.player_b:
+                try:
+                    player.deleteLater()
+                except Exception:
+                    pass
+            self._refresh_sound_grid()
+            return
+        slot.load_failed = False
+        self._hide_playback_warning_banner()
+        on_success = pending.get("on_success")
+        if callable(on_success):
+            try:
+                on_success()
+            except Exception as exc:
+                slot.load_failed = True
+                self._stop_player_internal(player)
+                title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+                self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
+                print(f"[pySSP] Audio start failed after async load: {slot.file_path} | {exc}", flush=True)
+                if player is not self.player and player is not self.player_b:
+                    try:
+                        player.deleteLater()
+                    except Exception:
+                        pass
+                self._refresh_sound_grid()
 
     def _select_transition_players(self) -> Tuple[Optional[ExternalMediaPlayer], ExternalMediaPlayer]:
         def is_active(player: ExternalMediaPlayer) -> bool:
@@ -8672,6 +8873,7 @@ class MainWindow(QMainWindow):
         self._refresh_lyric_display()
 
     def _stop_player_internal(self, player: ExternalMediaPlayer) -> None:
+        self._cancel_pending_player_media_load(player)
         self._ignore_state_changes += 1
         try:
             player.stop()
@@ -11573,6 +11775,7 @@ class MainWindow(QMainWindow):
         self._auto_transition_done = True
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False
+        self._cancel_all_pending_player_media_loads()
         self.player.stop()
         self.player_b.stop()
         self._timecode_on_playback_stop()

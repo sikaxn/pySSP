@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pygame
 import sounddevice as sd
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
 from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, normalize_config
 from pyssp.ffmpeg_support import FFmpegPCMStream, ffmpeg_available, probe_media_duration_ms
@@ -37,6 +37,7 @@ _FORCED_MEDIA_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDi
 _PRELOAD_CACHE_BYTES = 0
 _PRELOAD_TASKS: Dict[str, Future] = {}
 _PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-preload")
+_MEDIA_LOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-load")
 _WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-waveform")
 _WAVEFORM_CACHE_LOCK = threading.RLock()
 _WAVEFORM_CACHE_DIR = ""
@@ -61,7 +62,15 @@ def _shutdown_waveform_executor() -> None:
         pass
 
 
+def _shutdown_media_load_executor() -> None:
+    try:
+        _MEDIA_LOAD_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+
+
 atexit.register(_shutdown_preload_executor)
+atexit.register(_shutdown_media_load_executor)
 atexit.register(_shutdown_waveform_executor)
 
 
@@ -80,6 +89,7 @@ def shutdown_audio_preload() -> None:
         _FORCED_MEDIA_CACHE.clear()
         _PRELOAD_CACHE_BYTES = 0
     _shutdown_preload_executor()
+    _shutdown_media_load_executor()
     _shutdown_waveform_executor()
 
 
@@ -711,6 +721,29 @@ def _decode_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
     return frames, duration_ms
 
 
+def _prepare_media_source(
+    file_path: str,
+    sample_rate: int,
+    channels: int,
+) -> Tuple[Optional[np.ndarray], int, bool, Optional[FFmpegPCMStream]]:
+    frames: Optional[np.ndarray] = None
+    duration_ms = 0
+    use_streaming = False
+    decoder: Optional[FFmpegPCMStream] = None
+
+    cached = _peek_cached_media_frames(file_path)
+    if cached is not None:
+        frames, duration_ms = cached
+    elif ffmpeg_available():
+        decoder = FFmpegPCMStream(file_path, sample_rate=sample_rate, channels=channels)
+        decoder.start(0)
+        duration_ms = max(0, int(probe_media_duration_ms(file_path)))
+        use_streaming = True
+    else:
+        frames, duration_ms = _load_media_frames(file_path)
+    return frames, int(duration_ms), bool(use_streaming), decoder
+
+
 def _load_sound_with_fallback(file_path: str):
     try:
         return pygame.mixer.Sound(file_path)
@@ -847,6 +880,8 @@ class ExternalMediaPlayer(QObject):
     positionChanged = pyqtSignal(int)
     durationChanged = pyqtSignal(int)
     stateChanged = pyqtSignal(int)
+    mediaLoadFinished = pyqtSignal(int, bool, str)
+    _applyPreparedMedia = pyqtSignal(object)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -868,6 +903,7 @@ class ExternalMediaPlayer(QObject):
 
         self._source_frames: Optional[np.ndarray] = None
         self._stream_decoder: Optional[FFmpegPCMStream] = None
+        self._pending_media_request_id = 0
         self._streaming_mode = False
         self._stream_seek_in_progress = False
         self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
@@ -882,6 +918,7 @@ class ExternalMediaPlayer(QObject):
         self._lock = threading.RLock()
         self._stream = self._create_stream()
         self._stream.start()
+        self._applyPreparedMedia.connect(self._on_apply_prepared_media, type=Qt.QueuedConnection)
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(100)
@@ -893,51 +930,47 @@ class ExternalMediaPlayer(QObject):
 
     def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
         self.stop()
-        frames: Optional[np.ndarray] = None
-        duration_ms = 0
-        use_streaming = False
-        new_decoder: Optional[FFmpegPCMStream] = None
+        frames, duration_ms, use_streaming, new_decoder = _prepare_media_source(
+            file_path,
+            self._sample_rate,
+            self._channels,
+        )
+        self._install_prepared_media(file_path, frames, duration_ms, use_streaming, new_decoder, dsp_config)
 
-        cached = _peek_cached_media_frames(file_path)
-        if cached is not None:
-            frames, duration_ms = cached
-        elif ffmpeg_available():
-            new_decoder = FFmpegPCMStream(file_path, sample_rate=self._sample_rate, channels=self._channels)
-            new_decoder.start(0)
-            duration_ms = max(0, int(probe_media_duration_ms(file_path)))
-            use_streaming = True
-        else:
-            frames, duration_ms = _load_media_frames(file_path)
-
+    def setMediaAsync(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> int:
+        self.stop()
         with self._lock:
-            old_decoder = self._stream_decoder
-            self._stream_decoder = None
-            self._streaming_mode = False
-            self._stream_seek_in_progress = False
-            self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
-            self._media_path = file_path
-            self._source_frames = frames
-            if use_streaming and new_decoder is not None:
-                self._stream_decoder = new_decoder
-                self._streaming_mode = True
-            self._source_pos = 0.0
-            self._source_pos_anchor = 0.0
-            self._source_pos_anchor_t = time.perf_counter()
-            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
-            self._duration_ms = int(duration_ms)
-            self._position_ms = 0
-            self._ended = False
-            if dsp_config is not None:
-                self._dsp_config = normalize_config(dsp_config)
-                self._dsp_processor.set_config(self._dsp_config)
-        if old_decoder is not None:
-            try:
-                old_decoder.close()
-            except Exception:
-                pass
+            self._pending_media_request_id += 1
+            request_id = int(self._pending_media_request_id)
 
-        self.durationChanged.emit(self._duration_ms)
-        self.positionChanged.emit(0)
+        def _worker() -> None:
+            try:
+                frames, duration_ms, use_streaming, decoder = _prepare_media_source(
+                    file_path,
+                    self._sample_rate,
+                    self._channels,
+                )
+                payload = {
+                    "request_id": request_id,
+                    "ok": True,
+                    "file_path": file_path,
+                    "frames": frames,
+                    "duration_ms": duration_ms,
+                    "use_streaming": use_streaming,
+                    "decoder": decoder,
+                    "dsp_config": dsp_config,
+                }
+            except Exception as exc:
+                payload = {
+                    "request_id": request_id,
+                    "ok": False,
+                    "file_path": file_path,
+                    "error": str(exc),
+                }
+            self._applyPreparedMedia.emit(payload)
+
+        _MEDIA_LOAD_EXECUTOR.submit(_worker)
+        return request_id
 
     def setDSPConfig(self, dsp_config: DSPConfig) -> None:
         cfg = normalize_config(dsp_config)
@@ -973,6 +1006,7 @@ class ExternalMediaPlayer(QObject):
     def stop(self) -> None:
         decoder_to_seek: Optional[FFmpegPCMStream] = None
         with self._lock:
+            self._pending_media_request_id += 1
             decoder_to_seek = self._stream_decoder if self._streaming_mode else None
             self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._source_pos = 0.0
@@ -1117,6 +1151,73 @@ class ExternalMediaPlayer(QObject):
             )
         except Exception:
             return _NullOutputStream()
+
+    @pyqtSlot(object)
+    def _on_apply_prepared_media(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        request_id = int(payload.get("request_id", 0))
+        ok = bool(payload.get("ok", False))
+        with self._lock:
+            current_request_id = int(self._pending_media_request_id)
+        if request_id != current_request_id:
+            decoder = payload.get("decoder")
+            if decoder is not None:
+                try:
+                    decoder.close()
+                except Exception:
+                    pass
+            return
+        if not ok:
+            self.mediaLoadFinished.emit(request_id, False, str(payload.get("error", "Unknown audio load failure")))
+            return
+        self._install_prepared_media(
+            str(payload.get("file_path", "")),
+            payload.get("frames"),
+            int(payload.get("duration_ms", 0)),
+            bool(payload.get("use_streaming", False)),
+            payload.get("decoder"),
+            payload.get("dsp_config"),
+        )
+        self.mediaLoadFinished.emit(request_id, True, "")
+
+    def _install_prepared_media(
+        self,
+        file_path: str,
+        frames: Optional[np.ndarray],
+        duration_ms: int,
+        use_streaming: bool,
+        new_decoder: Optional[FFmpegPCMStream],
+        dsp_config: Optional[DSPConfig],
+    ) -> None:
+        with self._lock:
+            old_decoder = self._stream_decoder
+            self._stream_decoder = None
+            self._streaming_mode = False
+            self._stream_seek_in_progress = False
+            self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
+            self._media_path = file_path
+            self._source_frames = frames
+            if use_streaming and new_decoder is not None:
+                self._stream_decoder = new_decoder
+                self._streaming_mode = True
+            self._source_pos = 0.0
+            self._source_pos_anchor = 0.0
+            self._source_pos_anchor_t = time.perf_counter()
+            self._source_pos_anchor_tempo = self._tempo_ratio_locked()
+            self._duration_ms = int(duration_ms)
+            self._position_ms = 0
+            self._ended = False
+            if dsp_config is not None:
+                self._dsp_config = normalize_config(dsp_config)
+                self._dsp_processor.set_config(self._dsp_config)
+        if old_decoder is not None:
+            try:
+                old_decoder.close()
+            except Exception:
+                pass
+        self.durationChanged.emit(self._duration_ms)
+        self.positionChanged.emit(0)
 
     def _audio_callback(self, outdata, frames, _time_info, status) -> None:
         if status:

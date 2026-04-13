@@ -2035,6 +2035,7 @@ class MainWindow(QMainWindow):
         self.allow_other_unsupported_audio_files = bool(
             getattr(self.settings, "allow_other_unsupported_audio_files", False)
         )
+        self.disable_path_safety = bool(getattr(self.settings, "disable_path_safety", False))
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
@@ -4969,7 +4970,7 @@ class MainWindow(QMainWindow):
         path = str(file_path or "").strip()
         if not path:
             return "No file path assigned."
-        reason = unsafe_path_reason(path)
+        reason = self._path_safety_reason(path)
         if reason:
             return f"Invalid file path: {reason}"
         if not os.path.exists(path):
@@ -4987,6 +4988,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             return self._classify_audio_decode_issue(path, exc)
+
+    def _path_safety_reason(self, file_path: str) -> Optional[str]:
+        if self.disable_path_safety:
+            return None
+        return unsafe_path_reason(file_path)
 
     def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
         ext = os.path.splitext(file_path)[1].lower()
@@ -7208,11 +7214,11 @@ class MainWindow(QMainWindow):
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
-        file_path_reason = unsafe_path_reason(file_path)
+        file_path_reason = self._path_safety_reason(file_path)
         if file_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Sound file path rejected.\n\n{file_path_reason}")
             return
-        lyric_path_reason = unsafe_path_reason(lyric_file) if lyric_file else None
+        lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Lyric file path rejected.\n\n{lyric_path_reason}")
             return
@@ -7546,7 +7552,7 @@ class MainWindow(QMainWindow):
         safe_paths: List[str] = []
         rejected_paths: List[str] = []
         for candidate in file_paths:
-            reason = unsafe_path_reason(candidate)
+            reason = self._path_safety_reason(candidate)
             if reason:
                 rejected_paths.append(f"{candidate} ({reason})")
                 continue
@@ -8438,7 +8444,7 @@ class MainWindow(QMainWindow):
         on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
         self._cancel_pending_player_media_load(player)
-        reason = unsafe_path_reason(slot.file_path)
+        reason = self._path_safety_reason(slot.file_path)
         if reason:
             slot.load_failed = True
             self._stop_player_internal(player)
@@ -10013,6 +10019,7 @@ class MainWindow(QMainWindow):
             supported_audio_format_extensions=self.supported_audio_format_extensions,
             verify_sound_file_on_add=self.verify_sound_file_on_add,
             allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
+            disable_path_safety=self.disable_path_safety,
             lock_allow_quit=self.lock_allow_quit,
             lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
@@ -10191,6 +10198,7 @@ class MainWindow(QMainWindow):
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
+        self.disable_path_safety = dialog.selected_disable_path_safety()
         self._refresh_lyric_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
@@ -12934,6 +12942,7 @@ class MainWindow(QMainWindow):
         self.settings.supported_audio_format_extensions = list(self.supported_audio_format_extensions)
         self.settings.verify_sound_file_on_add = bool(self.verify_sound_file_on_add)
         self.settings.allow_other_unsupported_audio_files = bool(self.allow_other_unsupported_audio_files)
+        self.settings.disable_path_safety = bool(self.disable_path_safety)
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 

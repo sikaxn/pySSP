@@ -86,6 +86,7 @@ def test_audio_filter_changes_with_setting_combinations(supported_exts, allow_ot
     (
         "new_lyric_file_format",
         "allow_other_unsupported_audio_files",
+        "disable_path_safety",
         "verify_sound_file_on_add",
         "candidate_error_action",
         "main_transport_timeline_mode",
@@ -96,14 +97,15 @@ def test_audio_filter_changes_with_setting_combinations(supported_exts, allow_ot
         "expected_timecode_timeline",
     ),
     [
-        ("lrc", False, True, "keep_playing", "audio_file", "cue_region", "lrc", "keep_playing", "audio_file", "cue_region"),
-        ("srt", True, False, "stop_playback", "cue_region", "audio_file", "srt", "stop_playback", "cue_region", "audio_file"),
-        ("bogus", True, True, "invalid", "weird", "unknown", "srt", "stop_playback", "cue_region", "cue_region"),
+        ("lrc", False, False, True, "keep_playing", "audio_file", "cue_region", "lrc", "keep_playing", "audio_file", "cue_region"),
+        ("srt", True, True, False, "stop_playback", "cue_region", "audio_file", "srt", "stop_playback", "cue_region", "audio_file"),
+        ("bogus", True, True, True, "invalid", "weird", "unknown", "srt", "stop_playback", "cue_region", "cue_region"),
     ],
 )
 def test_settings_combo_round_trip_with_media_related_flags(
     tmp_path,
     monkeypatch,
+    disable_path_safety,
     new_lyric_file_format,
     allow_other_unsupported_audio_files,
     verify_sound_file_on_add,
@@ -121,6 +123,7 @@ def test_settings_combo_round_trip_with_media_related_flags(
     settings = AppSettings()
     settings.new_lyric_file_format = new_lyric_file_format
     settings.allow_other_unsupported_audio_files = allow_other_unsupported_audio_files
+    settings.disable_path_safety = disable_path_safety
     settings.verify_sound_file_on_add = verify_sound_file_on_add
     settings.search_lyric_on_add_sound_button = True
     settings.supported_audio_format_extensions = [".wav", "mp3", ".WAV"]
@@ -133,6 +136,7 @@ def test_settings_combo_round_trip_with_media_related_flags(
 
     assert loaded.new_lyric_file_format == expected_format
     assert loaded.allow_other_unsupported_audio_files is allow_other_unsupported_audio_files
+    assert loaded.disable_path_safety is disable_path_safety
     assert loaded.verify_sound_file_on_add is verify_sound_file_on_add
     assert loaded.search_lyric_on_add_sound_button is True
     assert loaded.supported_audio_format_extensions == [".wav", ".mp3"]

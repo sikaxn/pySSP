@@ -8704,7 +8704,10 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
+            had_player_b_key = id(self.player_b) in self._player_slot_key_map
             self._clear_player_slot_key(self.player_b)
+            if had_player_b_key:
+                self._refresh_sound_grid()
         self._try_auto_fade_transition()
         self._update_next_button_enabled()
         if self._flash_slot_key and time.monotonic() >= self._flash_slot_until:

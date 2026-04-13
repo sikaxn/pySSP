@@ -494,6 +494,8 @@ class AppSettings:
     search_double_click_action: str = "find_highlight"
     set_file_encoding: str = "utf8"
     ui_language: str = "en"
+    app_version: str = ""
+    app_build_id: str = ""
     tips_open_on_startup: bool = True
     audio_output_device: str = ""
     preload_audio_enabled: bool = False
@@ -501,6 +503,8 @@ class AppSettings:
     preload_audio_memory_limit_mb: int = 512
     preload_memory_pressure_enabled: bool = True
     preload_pause_on_playback: bool = False
+    waveform_cache_limit_mb: int = 1024
+    waveform_cache_clear_on_launch: bool = True
     max_multi_play_songs: int = 5
     multi_play_limit_action: str = "stop_oldest"
     playlist_play_mode: str = "unplayed_only"
@@ -803,6 +807,8 @@ def save_settings(settings: AppSettings) -> None:
         "search_double_click_action": settings.search_double_click_action,
         "set_file_encoding": settings.set_file_encoding,
         "ui_language": settings.ui_language,
+        "app_version": settings.app_version,
+        "app_build_id": settings.app_build_id,
         "tips_open_on_startup": "1" if settings.tips_open_on_startup else "0",
         "audio_output_device": settings.audio_output_device,
         "preload_audio_enabled": "1" if settings.preload_audio_enabled else "0",
@@ -810,6 +816,8 @@ def save_settings(settings: AppSettings) -> None:
         "preload_audio_memory_limit_mb": str(settings.preload_audio_memory_limit_mb),
         "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
         "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
+        "waveform_cache_limit_mb": str(settings.waveform_cache_limit_mb),
+        "waveform_cache_clear_on_launch": "1" if settings.waveform_cache_clear_on_launch else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
         "multi_play_limit_action": settings.multi_play_limit_action,
         "playlist_play_mode": settings.playlist_play_mode,
@@ -1095,6 +1103,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     tips_open_on_startup = _get_bool(section, "tips_open_on_startup", True)
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
+    waveform_cache_limit_mb = _clamp_int(_get_int(section, "waveform_cache_limit_mb", 1024), 128, 16384)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
@@ -1327,6 +1336,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         search_double_click_action=search_double_click_action,
         set_file_encoding=set_file_encoding,
         ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
+        app_version=str(section.get("app_version", "")).strip(),
+        app_build_id=str(section.get("app_build_id", "")).strip(),
         tips_open_on_startup=tips_open_on_startup,
         audio_output_device=str(section.get("audio_output_device", "")),
         preload_audio_enabled=_get_bool(section, "preload_audio_enabled", False),
@@ -1334,6 +1345,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
         preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
         preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", False),
+        waveform_cache_limit_mb=waveform_cache_limit_mb,
+        waveform_cache_clear_on_launch=_get_bool(section, "waveform_cache_clear_on_launch", True),
         max_multi_play_songs=max_multi_play_songs,
         multi_play_limit_action=multi_play_limit_action,
         playlist_play_mode=playlist_play_mode,

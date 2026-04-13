@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import time
-from concurrent.futures import Future
 from typing import Callable, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt, QTimer
@@ -32,7 +31,7 @@ from pyssp.audio_engine import (
 )
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.lyrics import parse_lyric_file
-from pyssp.ui.cue_point_dialog import CueRangeIndicator
+from pyssp.ui.waveform_view import CueRangeIndicator, WaveformRefreshController
 
 
 class LyricEditorDialog(QDialog):
@@ -60,8 +59,7 @@ class LyricEditorDialog(QDialog):
         self._is_loading_media = False
         self._load_wait_started = 0.0
         self._load_wait_timeout_sec = 120.0
-        self._waveform_token = 0
-        self._waveform_future: Optional[Future] = None
+        self._waveform_refresh: Optional[WaveformRefreshController] = None
         self._cue_start_ms = None if cue_start_ms is None else max(0, int(cue_start_ms))
         self._cue_end_ms = None if cue_end_ms is None else max(0, int(cue_end_ms))
         self._stop_host_playback = stop_host_playback
@@ -117,6 +115,12 @@ class LyricEditorDialog(QDialog):
 
         self._cue_indicator = CueRangeIndicator()
         root.addWidget(self._cue_indicator)
+        self._waveform_refresh = WaveformRefreshController(
+            on_peaks=self._cue_indicator.set_waveform,
+            is_valid=lambda: self._duration_ms > 0,
+            sample_count=1800,
+            parent=self,
+        )
 
         top_form = QFormLayout()
         mode_row = QHBoxLayout()
@@ -186,11 +190,8 @@ class LyricEditorDialog(QDialog):
         root.addLayout(bottom)
 
         self._load_poll_timer = QTimer(self)
-        self._load_poll_timer.setInterval(80)
+        self._load_poll_timer.setInterval(30)
         self._load_poll_timer.timeout.connect(self._poll_media_preload_state)
-        self._waveform_poll_timer = QTimer(self)
-        self._waveform_poll_timer.setInterval(50)
-        self._waveform_poll_timer.timeout.connect(self._poll_waveform_state)
 
         self._play_btn.clicked.connect(self._play)
         self._stop_btn.clicked.connect(self._stop)
@@ -221,54 +222,23 @@ class LyricEditorDialog(QDialog):
     def closeEvent(self, event) -> None:
         if self._load_poll_timer.isActive():
             self._load_poll_timer.stop()
-        if self._waveform_poll_timer.isActive():
-            self._waveform_poll_timer.stop()
+        if self._waveform_refresh is not None:
+            self._waveform_refresh.stop()
         self._stop_preview_player()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
         if self._load_poll_timer.isActive():
             self._load_poll_timer.stop()
-        if self._waveform_poll_timer.isActive():
-            self._waveform_poll_timer.stop()
+        if self._waveform_refresh is not None:
+            self._waveform_refresh.stop()
         self._stop_preview_player()
         super().done(result)
 
     def _request_waveform_refresh(self) -> None:
-        self._waveform_token += 1
-        self._waveform_future = None
-        if self._waveform_poll_timer.isActive():
-            self._waveform_poll_timer.stop()
-        if self._duration_ms <= 0:
-            self._cue_indicator.set_waveform([])
+        if self._waveform_refresh is None:
             return
-        token = self._waveform_token
-        try:
-            self._waveform_future = self._player.waveformPeaksAsync(1800)
-        except Exception:
-            self._cue_indicator.set_waveform([])
-            return
-        self._waveform_poll_timer.start()
-        self._pending_waveform_token = token
-
-    def _poll_waveform_state(self) -> None:
-        future = self._waveform_future
-        if future is None:
-            self._waveform_poll_timer.stop()
-            return
-        if not future.done():
-            return
-        self._waveform_poll_timer.stop()
-        self._waveform_future = None
-        if getattr(self, "_pending_waveform_token", -1) != self._waveform_token:
-            return
-        try:
-            peaks = list(future.result())
-        except Exception:
-            peaks = []
-        if self._duration_ms <= 0:
-            return
-        self._cue_indicator.set_waveform(peaks)
+        self._waveform_refresh.request(player=self._player, duration_ms=self._duration_ms)
 
     def _stop_preview_player(self) -> None:
         try:
@@ -290,10 +260,8 @@ class LyricEditorDialog(QDialog):
     def _load_preview_media(self) -> None:
         if not self._audio_path or not os.path.exists(self._audio_path):
             return
-        self._waveform_token += 1
-        self._waveform_future = None
-        if self._waveform_poll_timer.isActive():
-            self._waveform_poll_timer.stop()
+        if self._waveform_refresh is not None:
+            self._waveform_refresh.stop()
         self._cue_indicator.set_waveform([])
         self._set_loading_state(True)
         self._load_wait_started = time.perf_counter()

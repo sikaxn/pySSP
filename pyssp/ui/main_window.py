@@ -63,7 +63,11 @@ from PyQt5.QtWidgets import (
 from pyssp.audio_format_support import build_audio_file_dialog_filter, normalize_supported_audio_extensions
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
+    can_decode_with_ffmpeg,
+    can_stream_without_preload,
     configure_audio_preload_cache_policy,
+    configure_waveform_disk_cache,
+    clear_waveform_disk_cache,
     enforce_audio_preload_limits,
     get_audio_preload_capacity_bytes,
     get_audio_preload_runtime_status,
@@ -154,7 +158,7 @@ from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
-from pyssp.version import get_app_title_base, get_display_version
+from pyssp.version import get_app_title_base, get_display_build_id, get_display_version
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -700,6 +704,10 @@ class AboutWindowDialog(QDialog):
         self.version_label.setAlignment(Qt.AlignCenter)
         self.version_label.setWordWrap(True)
         root.addWidget(self.version_label)
+        self.build_label = QLabel("", self)
+        self.build_label.setAlignment(Qt.AlignCenter)
+        self.build_label.setWordWrap(True)
+        root.addWidget(self.build_label)
         self.website_label = QLabel("", self)
         self.website_label.setAlignment(Qt.AlignCenter)
         self.website_label.setWordWrap(True)
@@ -754,7 +762,7 @@ class AboutWindowDialog(QDialog):
         self.credits_viewer.setPlainText(credits_text)
         self.license_viewer.setPlainText(license_text)
 
-    def set_version_and_website(self, version_text: str, website_url: str) -> None:
+    def set_version_and_website(self, version_text: str, website_url: str, build_text: str = "") -> None:
         version_value = str(version_text or "").strip()
         if version_value:
             self.version_label.setText(f"{tr('Version:')} {version_value}")
@@ -762,6 +770,13 @@ class AboutWindowDialog(QDialog):
         else:
             self.version_label.setText("")
             self.version_label.setVisible(False)
+        build_value = str(build_text or "").strip()
+        if build_value:
+            self.build_label.setText(f"{tr('Build:')} {build_value}")
+            self.build_label.setVisible(True)
+        else:
+            self.build_label.setText("")
+            self.build_label.setVisible(False)
         site = str(website_url or "").strip()
         if site:
             safe_site = html.escape(site, quote=True)
@@ -1785,6 +1800,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._suspend_settings_save = True
         self.app_version_text = get_display_version()
+        self.app_build_text = get_display_build_id()
         self.app_title_base = get_app_title_base()
         self.setWindowTitle(self.app_title_base)
         self.resize(1360, 900)
@@ -1806,6 +1822,8 @@ class MainWindow(QMainWindow):
         self._main_progress_waveform: List[float] = []
         self._main_waveform_request_token = 0
         self._main_waveform_future: Optional[Future] = None
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key: Optional[Tuple[str, int, int]] = None
         self.loop_enabled = False
         self._manual_stop_requested = False
         self.talk_active = False
@@ -1870,12 +1888,15 @@ class MainWindow(QMainWindow):
             getattr(self.settings, "preload_memory_pressure_enabled", True)
         )
         self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", False))
+        self.waveform_cache_limit_mb = max(128, min(16384, int(getattr(self.settings, "waveform_cache_limit_mb", 1024))))
+        self.waveform_cache_clear_on_launch = bool(getattr(self.settings, "waveform_cache_clear_on_launch", True))
         self._preload_runtime_paused = False
         configure_audio_preload_cache_policy(
             self.preload_audio_enabled,
             self.preload_audio_memory_limit_mb,
             self.preload_memory_pressure_enabled,
         )
+        configure_waveform_disk_cache(self.waveform_cache_limit_mb)
         self.max_multi_play_songs = self.settings.max_multi_play_songs
         self.multi_play_limit_action = self.settings.multi_play_limit_action
         self.playlist_play_mode = (
@@ -3059,9 +3080,13 @@ class MainWindow(QMainWindow):
 
         tools_menu.addSeparator()
 
-        page_library_path_action = QAction("Display Page Library Folder Path", self)
-        page_library_path_action.triggered.connect(self._show_page_library_folder_path)
-        tools_menu.addAction(page_library_path_action)
+        clear_waveform_cache_action = QAction("Clear Waveform Cache", self)
+        clear_waveform_cache_action.triggered.connect(self._clear_waveform_cache_now)
+        tools_menu.addAction(clear_waveform_cache_action)
+
+        open_settings_folder_action = QAction("Open Settings Folder", self)
+        open_settings_folder_action.triggered.connect(self._open_settings_folder)
+        tools_menu.addAction(open_settings_folder_action)
 
         set_file_path_action = QAction("Display .set File and Path", self)
         set_file_path_action.triggered.connect(self._show_set_file_and_path)
@@ -4211,7 +4236,11 @@ class MainWindow(QMainWindow):
         about_text = self._load_asset_text_file("about", "about.md").replace("{{VERSION}}", self.app_version_text)
         credits_text = self._load_asset_text_file("about", "credits.md")
         license_text = self._load_asset_text_file("about", "license.md")
-        self._about_window.set_version_and_website(self.app_version_text, self._website_url())
+        self._about_window.set_version_and_website(
+            self.app_version_text,
+            self._website_url(),
+            self.app_build_text,
+        )
         self._about_window.set_content(about_text=about_text, credits_text=credits_text, license_text=license_text)
         self._about_window.show()
         self._about_window.raise_()
@@ -4222,9 +4251,14 @@ class MainWindow(QMainWindow):
             self._show_info_notice_banner(tr("Stop playback before opening System Information."))
             return
         if self._system_info_window is None:
-            self._system_info_window = SystemInformationDialog(app_version_text=self.app_version_text, parent=self)
+            self._system_info_window = SystemInformationDialog(
+                app_version_text=self.app_version_text,
+                app_build_text=self.app_build_text,
+                parent=self,
+            )
             self._system_info_window.destroyed.connect(lambda _=None: self._clear_system_info_window_ref())
         self._system_info_window.set_app_version_text(self.app_version_text)
+        self._system_info_window.set_app_build_text(self.app_build_text)
         self._system_info_window.refresh()
         self._system_info_window.show()
         self._system_info_window.raise_()
@@ -4930,6 +4964,11 @@ class MainWindow(QMainWindow):
             get_media_ssp_units(path)
             return None
         except Exception as exc:
+            try:
+                if can_decode_with_ffmpeg(path):
+                    return None
+            except Exception:
+                pass
             return self._classify_audio_decode_issue(path, exc)
 
     def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
@@ -5342,14 +5381,76 @@ class MainWindow(QMainWindow):
         self._export_dir_edit = None
         self._export_format_combo = None
 
+    def _open_local_path(self, path: str, title: str, error_prefix: str) -> bool:
+        target = str(path or "").strip()
+        if not target:
+            return False
+        normalized = os.path.abspath(target)
+        try:
+            if QDesktopServices.openUrl(QUrl.fromLocalFile(normalized)):
+                return True
+        except Exception:
+            pass
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["open", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            if os.name == "nt":
+                os.startfile(normalized)  # type: ignore[attr-defined]
+                return True
+            subprocess.Popen(
+                ["xdg-open", normalized],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, title, f"{error_prefix}\n{exc}")
+            return False
+
     def _open_directory(self, path: str) -> None:
         if not path:
             return
         os.makedirs(path, exist_ok=True)
+        self._open_local_path(path, "Open Folder", "Could not open folder:")
+
+    def _open_settings_folder(self) -> None:
+        self._open_directory(str(get_settings_path().parent))
+
+    def _reveal_sound_file_in_browser(self, file_path: str) -> None:
+        path = str(file_path or "").strip()
+        if not path:
+            return
+        normalized = os.path.abspath(path)
+        if not os.path.exists(normalized):
+            QMessageBox.warning(
+                self,
+                tr("Reveal Sound File"),
+                tr("Sound file does not exist:\n{path}").format(path=normalized),
+            )
+            return
         try:
-            os.startfile(path)  # type: ignore[attr-defined]
-        except Exception as exc:
-            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
+            if os.name == "nt":
+                subprocess.Popen(
+                    ["explorer", "/select,", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["open", "-R", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+        except Exception:
+            pass
+        self._open_directory(os.path.dirname(normalized) or ".")
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -6443,10 +6544,7 @@ class MainWindow(QMainWindow):
         if not os.path.exists(path):
             QMessageBox.information(self, "View Log", f"No log file yet.\n{path}")
             return
-        try:
-            os.startfile(path)  # type: ignore[attr-defined]
-        except Exception as exc:
-            QMessageBox.warning(self, "View Log", f"Could not open log file:\n{exc}")
+        self._open_local_path(path, "View Log", "Could not open log file:")
 
     def _reset_all_played_state(self) -> None:
         for group in GROUPS:
@@ -6577,6 +6675,18 @@ class MainWindow(QMainWindow):
         cue_points_action.setEnabled(slot.assigned)
         lyric_editor_action = menu.addAction(tr("Lyric Editor..."))
         lyric_editor_action.setEnabled(slot.assigned)
+        reveal_sound_file_action = None
+        reveal_lyric_file_action = None
+        lyric_linked = bool(str(slot.lyric_file or "").strip())
+        if lyric_linked:
+            reveal_menu = menu.addMenu(tr("Reveal File in File Browser"))
+            reveal_sound_file_action = reveal_menu.addAction(tr("Sound"))
+            reveal_lyric_file_action = reveal_menu.addAction(tr("Lyric"))
+            reveal_sound_file_action.setEnabled(bool(str(slot.file_path or "").strip()))
+            reveal_lyric_file_action.setEnabled(bool(str(slot.lyric_file or "").strip()))
+        else:
+            reveal_sound_file_action = menu.addAction(tr("Reveal Sound File in File Browser"))
+            reveal_sound_file_action.setEnabled(bool(str(slot.file_path or "").strip()))
         timecode_setup_action = menu.addAction(tr("Timecode Setup..."))
         timecode_setup_action.setEnabled(slot.assigned)
         copy_action = menu.addAction(tr("Copy Sound Button"))
@@ -6605,6 +6715,10 @@ class MainWindow(QMainWindow):
             self._edit_slot_cue_points(slot_index)
         elif selected == lyric_editor_action:
             self._edit_slot_lyric(slot_index)
+        elif selected == reveal_sound_file_action:
+            self._reveal_sound_file_in_browser(slot.file_path)
+        elif selected == reveal_lyric_file_action:
+            self._reveal_sound_file_in_browser(slot.lyric_file)
         elif selected == timecode_setup_action:
             self._edit_slot_timecode_setup(slot_index)
         elif selected == copy_action:
@@ -7207,11 +7321,34 @@ class MainWindow(QMainWindow):
             return
 
         lyric_path = str(slot.lyric_file or "").strip()
+        skipped_linking_found_lyric = False
         if not lyric_path:
+            found_candidate = bool(str(self._find_matching_lyric_file(slot.file_path) or "").strip())
+            linked = self._prompt_lyric_link_selection([slot.file_path])
+            if linked is None:
+                linked_path = ""
+                skipped_linking_found_lyric = found_candidate
+            else:
+                linked_path = str(linked[0] if linked else "").strip()
+            if linked_path:
+                slot.lyric_file = linked_path
+                lyric_path = linked_path
+                self._set_dirty(True)
+                self._refresh_sound_grid()
+                self._refresh_lyric_display(force=True)
+            else:
+                lyric_path = ""
+                skipped_linking_found_lyric = found_candidate
+        if not lyric_path:
+            question_text = (
+                tr("You did not link a lyric. Create a lyric file now?")
+                if skipped_linking_found_lyric
+                else tr("This sound has no lyric linked. Create a lyric file now?")
+            )
             answer = QMessageBox.question(
                 self,
-                "Lyric Editor",
-                "This sound has no lyric linked. Create a lyric file now?",
+                tr("Lyric Editor"),
+                question_text,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -7227,7 +7364,7 @@ class MainWindow(QMainWindow):
                 lyric_filter = "SRT Files (*.srt);;LRC Files (*.lrc);;All Files (*.*)"
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Create Lyric File",
+                tr("Create Lyric File"),
                 suggestion,
                 lyric_filter,
             )
@@ -7243,7 +7380,7 @@ class MainWindow(QMainWindow):
                     with open(save_path, "w", encoding="utf-8-sig", newline="") as fh:
                         fh.write("")
             except OSError as exc:
-                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                QMessageBox.warning(self, tr("Lyric Editor"), f"{tr('Failed to create lyric file:')}\n{exc}")
                 return
             slot.lyric_file = save_path
             lyric_path = save_path
@@ -7252,8 +7389,8 @@ class MainWindow(QMainWindow):
         elif not os.path.exists(lyric_path):
             answer = QMessageBox.question(
                 self,
-                "Lyric Editor",
-                f"Linked lyric file does not exist:\n{lyric_path}\n\nCreate this file now?",
+                tr("Lyric Editor"),
+                tr("Linked lyric file does not exist:\n{path}\n\nCreate this file now?").format(path=lyric_path),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -7264,7 +7401,7 @@ class MainWindow(QMainWindow):
                 with open(lyric_path, "w", encoding="utf-8-sig", newline="") as fh:
                     fh.write("")
             except OSError as exc:
-                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                QMessageBox.warning(self, tr("Lyric Editor"), f"{tr('Failed to create lyric file:')}\n{exc}")
                 return
 
         preferred_mode = "lrc" if os.path.splitext(lyric_path)[1].lower() == ".lrc" else "srt"
@@ -8004,6 +8141,9 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
 
         self.current_playing = playing_key
+        self._cancel_main_waveform_refresh()
+        self._main_progress_waveform = []
+        self.progress_label.set_waveform([])
         self._manual_stop_requested = False
         self._cancel_fade_for_player(self.player)
         self._cancel_fade_for_player(self.player_b)
@@ -8180,7 +8320,8 @@ class MainWindow(QMainWindow):
             print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
             return False
         normalized_path = str(slot.file_path or "").strip()
-        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)):
+        can_stream_now = can_stream_without_preload(normalized_path)
+        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)) and (not can_stream_now):
             try:
                 request_audio_preload([normalized_path], prioritize=True, force=True)
             except Exception:
@@ -8394,6 +8535,8 @@ class MainWindow(QMainWindow):
     def _cancel_main_waveform_refresh(self) -> None:
         self._main_waveform_request_token += 1
         self._main_waveform_future = None
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key = None
         if self._main_waveform_poll_timer.isActive():
             self._main_waveform_poll_timer.stop()
 
@@ -8406,8 +8549,12 @@ class MainWindow(QMainWindow):
             return
         try:
             self._main_waveform_future = self.player.waveformPeaksAsync(1800)
+            self._main_waveform_future_token = token
+            self._main_waveform_future_key = expected_key
         except Exception:
             self._main_waveform_future = None
+            self._main_waveform_future_token = 0
+            self._main_waveform_future_key = None
             self._main_progress_waveform = []
             self.progress_label.set_waveform([])
             return
@@ -8420,11 +8567,18 @@ class MainWindow(QMainWindow):
             return
         if not future.done():
             return
-        self._main_waveform_poll_timer.stop()
+        token = int(self._main_waveform_future_token)
+        expected_key = self._main_waveform_future_key
         self._main_waveform_future = None
-        if self.current_duration_ms <= 0:
+        self._main_waveform_future_token = 0
+        self._main_waveform_future_key = None
+        if token != self._main_waveform_request_token:
             return
-        if self.current_playing is None:
+        if self.current_duration_ms <= 0:
+            self._main_waveform_poll_timer.stop()
+            return
+        if expected_key is None or self.current_playing != expected_key:
+            self._main_waveform_poll_timer.stop()
             return
         try:
             peaks = list(future.result())
@@ -8432,6 +8586,16 @@ class MainWindow(QMainWindow):
             peaks = []
         self._main_progress_waveform = list(peaks)
         self.progress_label.set_waveform(self._main_progress_waveform)
+        if self.main_progress_display_mode != "waveform":
+            self._main_waveform_poll_timer.stop()
+            return
+        if self.current_playing != expected_key:
+            self._main_waveform_poll_timer.stop()
+            return
+        if self.current_duration_ms <= 0:
+            self._main_waveform_poll_timer.stop()
+            return
+        self._main_waveform_poll_timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
         print(
@@ -8540,7 +8704,10 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
+            had_player_b_key = id(self.player_b) in self._player_slot_key_map
             self._clear_player_slot_key(self.player_b)
+            if had_player_b_key:
+                self._refresh_sound_grid()
         self._try_auto_fade_transition()
         self._update_next_button_enabled()
         if self._flash_slot_key and time.monotonic() >= self._flash_slot_until:
@@ -9033,6 +9200,12 @@ class MainWindow(QMainWindow):
         self._sync_preload_pause_state(self._is_playback_in_progress())
         self._queue_current_page_audio_preload()
 
+    def _clear_waveform_cache_now(self) -> None:
+        if clear_waveform_disk_cache():
+            QMessageBox.information(self, tr("Waveform Cache"), tr("Waveform cache cleared."))
+            return
+        QMessageBox.warning(self, tr("Waveform Cache"), tr("Failed to clear waveform cache."))
+
     def _queue_current_page_audio_preload(self) -> None:
         if not self.preload_audio_enabled or not self.preload_current_page_audio or self._is_button_drag_enabled():
             return
@@ -9514,7 +9687,7 @@ class MainWindow(QMainWindow):
         self.player.stateChanged.connect(self._on_state_changed)
 
     def _open_timecode_settings(self) -> None:
-        self._open_options_dialog(initial_page="Audio Device / Timecode")
+        self._open_options_dialog(initial_page="Audio Device & Timecode")
 
     def _open_options_dialog(self, initial_page: Optional[str] = None) -> None:
         available_devices = sorted(list_output_devices(), key=lambda v: v.lower())
@@ -9568,6 +9741,8 @@ class MainWindow(QMainWindow):
             preload_audio_memory_limit_mb=self.preload_audio_memory_limit_mb,
             preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
             preload_pause_on_playback=self.preload_pause_on_playback,
+            waveform_cache_limit_mb=self.waveform_cache_limit_mb,
+            waveform_cache_clear_on_launch=self.waveform_cache_clear_on_launch,
             preload_total_ram_mb=total_ram_mb,
             preload_ram_cap_mb=preload_cap_mb,
             timecode_audio_output_device=self.timecode_audio_output_device,
@@ -9652,6 +9827,9 @@ class MainWindow(QMainWindow):
             lock_require_password=self.lock_require_password,
             lock_password=self.lock_password,
             lock_restart_state=self.lock_restart_state,
+            is_playback_or_loading_active=lambda: bool(
+                self._is_playback_in_progress() or self._pending_deferred_audio_request is not None
+            ),
             stage_display_gadgets=self.stage_display_gadgets,
             ui_language=self.ui_language,
             initial_page=initial_page,
@@ -9844,7 +10022,10 @@ class MainWindow(QMainWindow):
         self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()
         self.preload_memory_pressure_enabled = dialog.selected_preload_memory_pressure_enabled()
         self.preload_pause_on_playback = dialog.selected_preload_pause_on_playback()
+        self.waveform_cache_limit_mb = dialog.selected_waveform_cache_limit_mb()
+        self.waveform_cache_clear_on_launch = dialog.selected_waveform_cache_clear_on_launch()
         self._apply_audio_preload_cache_settings()
+        configure_waveform_disk_cache(self.waveform_cache_limit_mb)
         if selected_device != self.audio_output_device:
             if self._switch_audio_device(selected_device):
                 self.audio_output_device = selected_device
@@ -12204,6 +12385,8 @@ class MainWindow(QMainWindow):
         self.settings.search_double_click_action = self.search_double_click_action
         self.settings.set_file_encoding = self.set_file_encoding
         self.settings.ui_language = self.ui_language
+        self.settings.app_version = str(self.app_version_text or "")
+        self.settings.app_build_id = str(self.app_build_text or "")
         self.settings.tips_open_on_startup = bool(self.tips_open_on_startup)
         self.settings.audio_output_device = self.audio_output_device
         self.settings.preload_audio_enabled = bool(self.preload_audio_enabled)
@@ -12211,6 +12394,8 @@ class MainWindow(QMainWindow):
         self.settings.preload_audio_memory_limit_mb = int(self.preload_audio_memory_limit_mb)
         self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
         self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
+        self.settings.waveform_cache_limit_mb = int(self.waveform_cache_limit_mb)
+        self.settings.waveform_cache_clear_on_launch = bool(self.waveform_cache_clear_on_launch)
         self.settings.max_multi_play_songs = self.max_multi_play_songs
         self.settings.multi_play_limit_action = self.multi_play_limit_action
         self.settings.playlist_play_mode = self.playlist_play_mode

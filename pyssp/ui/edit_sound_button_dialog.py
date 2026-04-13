@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from pyssp.i18n import localize_widget_tree
+from pyssp.i18n import localize_widget_tree, tr
 from pyssp.midi_control import (
     midi_binding_to_display,
     midi_input_name_selector,
@@ -31,7 +31,7 @@ from pyssp.midi_control import (
 class SoundHotkeyEdit(QLineEdit):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setPlaceholderText("Optional: A-O, Q-Z, 0-9, F1-F12 (except F10)")
+        self.setPlaceholderText(tr("Optional: A-O, Q-Z, 0-9, F1-F12 (except F10)"))
         self.setReadOnly(True)
 
     def setHotkey(self, value: str) -> None:
@@ -85,7 +85,7 @@ class EditSoundButtonDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Edit Sound Button")
+        self.setWindowTitle(tr("Edit Sound Button"))
         self.resize(760, 320)
         self._start_dir = start_dir
 
@@ -96,41 +96,41 @@ class EditSoundButtonDialog(QDialog):
         file_layout = QHBoxLayout(file_row)
         file_layout.setContentsMargins(0, 0, 0, 0)
         self.file_edit = QLineEdit(file_path)
-        self.browse_btn = QPushButton("Browse")
+        self.browse_btn = QPushButton(tr("Browse"))
         self.browse_btn.clicked.connect(self._browse_file)
         file_layout.addWidget(self.file_edit, 1)
         file_layout.addWidget(self.browse_btn)
-        form.addRow("File", file_row)
+        form.addRow(tr("File"), file_row)
 
         self.caption_edit = QLineEdit(caption)
-        form.addRow("Caption", self.caption_edit)
+        form.addRow(tr("Caption"), self.caption_edit)
 
         self.notes_edit = QLineEdit(notes)
-        form.addRow("Notes", self.notes_edit)
+        form.addRow(tr("Notes"), self.notes_edit)
 
         lyric_row = QWidget()
         lyric_layout = QHBoxLayout(lyric_row)
         lyric_layout.setContentsMargins(0, 0, 0, 0)
         self.lyric_file_edit = QLineEdit(lyric_file)
-        self.lyric_browse_btn = QPushButton("Browse")
+        self.lyric_browse_btn = QPushButton(tr("Browse"))
         self.lyric_browse_btn.clicked.connect(self._browse_lyric_file)
-        self.lyric_clear_btn = QPushButton("Clear")
+        self.lyric_clear_btn = QPushButton(tr("Clear"))
         self.lyric_clear_btn.clicked.connect(lambda _=False: self.lyric_file_edit.setText(""))
         lyric_layout.addWidget(self.lyric_file_edit, 1)
         lyric_layout.addWidget(self.lyric_browse_btn)
         lyric_layout.addWidget(self.lyric_clear_btn)
-        form.addRow("Lyric File", lyric_row)
+        form.addRow(tr("Lyric File"), lyric_row)
 
         hk_row = QWidget()
         hk_layout = QHBoxLayout(hk_row)
         hk_layout.setContentsMargins(0, 0, 0, 0)
         self.sound_hotkey_edit = SoundHotkeyEdit()
         self.sound_hotkey_edit.setHotkey(sound_hotkey)
-        clear_hk_btn = QPushButton("Clear")
+        clear_hk_btn = QPushButton(tr("Clear"))
         clear_hk_btn.clicked.connect(lambda _=False: self.sound_hotkey_edit.setHotkey(""))
         hk_layout.addWidget(self.sound_hotkey_edit, 1)
         hk_layout.addWidget(clear_hk_btn)
-        form.addRow("Sound Button Hot Key", hk_row)
+        form.addRow(tr("Sound Button Hot Key"), hk_row)
 
         midi_hk_row = QWidget()
         midi_hk_layout = QHBoxLayout(midi_hk_row)
@@ -138,14 +138,14 @@ class EditSoundButtonDialog(QDialog):
         self.sound_midi_hotkey_edit = QLineEdit()
         self.sound_midi_hotkey_edit.setReadOnly(True)
         self._set_midi_binding(sound_midi_hotkey)
-        learn_midi_btn = QPushButton("Learn")
-        clear_midi_btn = QPushButton("Clear")
+        learn_midi_btn = QPushButton(tr("Learn"))
+        clear_midi_btn = QPushButton(tr("Clear"))
         learn_midi_btn.clicked.connect(self._start_midi_learn)
         clear_midi_btn.clicked.connect(lambda _=False: self._set_midi_binding(""))
         midi_hk_layout.addWidget(self.sound_midi_hotkey_edit, 1)
         midi_hk_layout.addWidget(learn_midi_btn)
         midi_hk_layout.addWidget(clear_midi_btn)
-        form.addRow("Sound Button MIDI Hot Key", midi_hk_row)
+        form.addRow(tr("Sound Button MIDI Hot Key"), midi_hk_row)
 
         self._midi_binding = normalize_midi_binding(sound_midi_hotkey)
         self._midi_learning = False
@@ -163,7 +163,7 @@ class EditSoundButtonDialog(QDialog):
         vol_layout = QVBoxLayout(vol_row)
         vol_layout.setContentsMargins(0, 0, 0, 0)
         vol_layout.setSpacing(4)
-        self.custom_volume_checkbox = QCheckBox("Use custom playback volume")
+        self.custom_volume_checkbox = QCheckBox(tr("Use custom playback volume"))
         self.custom_volume_checkbox.setChecked(volume_override_pct is not None)
         vol_layout.addWidget(self.custom_volume_checkbox)
         self.volume_label = QLabel("")
@@ -173,7 +173,7 @@ class EditSoundButtonDialog(QDialog):
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(75 if volume_override_pct is None else max(0, min(100, int(volume_override_pct))))
         vol_layout.addWidget(self.volume_slider)
-        form.addRow("Playback Volume", vol_row)
+        form.addRow(tr("Playback Volume"), vol_row)
 
         def _sync_volume_label(value: int) -> None:
             self.volume_label.setText(f"{value}%")
@@ -201,9 +201,9 @@ class EditSoundButtonDialog(QDialog):
             start_dir = os.path.dirname(current) or start_dir
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Sound File",
+            tr("Select Sound File"),
             start_dir,
-            "Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)",
+            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
         )
         if file_path:
             self.file_edit.setText(file_path)
@@ -230,9 +230,9 @@ class EditSoundButtonDialog(QDialog):
             start_dir = os.path.dirname(current) or start_dir
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Lyric File",
+            tr("Select Lyric File"),
             start_dir,
-            "Lyric Files (*.lrc *.srt);;All Files (*.*)",
+            tr("Lyric Files (*.lrc *.srt);;All Files (*.*)"),
         )
         if file_path:
             self.lyric_file_edit.setText(file_path)

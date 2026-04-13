@@ -15,23 +15,24 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyssp.i18n import localize_widget_tree, tr
 
 
 class LinkLyricDialog(QDialog):
     def __init__(self, rows: List[Tuple[str, str]], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Lyric File Found")
+        self.setWindowTitle(tr("Lyric File Found"))
         self.setModal(True)
         self.resize(920, 460)
         self._row_count = len(rows)
 
         root = QVBoxLayout(self)
-        note = QLabel("Matching lyric files were found. Check whether to link each lyric file.", self)
+        note = QLabel(tr("Matching lyric files were found. Check whether to link each lyric file."), self)
         note.setWordWrap(True)
         root.addWidget(note)
 
         self.table = QTableWidget(self._row_count, 3, self)
-        self.table.setHorizontalHeaderLabels(["Audio File", "Lyric File Found", "Link"])
+        self.table.setHorizontalHeaderLabels([tr("Audio File"), tr("Lyric File Found"), tr("Link")])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.NoSelection)
@@ -46,7 +47,7 @@ class LinkLyricDialog(QDialog):
             audio_item.setToolTip(audio_path)
             self.table.setItem(row_index, 0, audio_item)
 
-            lyric_text = os.path.basename(lyric_path) if lyric_path else "(not found)"
+            lyric_text = os.path.basename(lyric_path) if lyric_path else tr("(not found)")
             lyric_item = QTableWidgetItem(lyric_text)
             lyric_item.setToolTip(lyric_path or "")
             self.table.setItem(row_index, 1, lyric_item)
@@ -63,8 +64,8 @@ class LinkLyricDialog(QDialog):
         root.addWidget(self.table, 1)
 
         action_row = QHBoxLayout()
-        link_all_btn = QPushButton("Link All Found", self)
-        unlink_all_btn = QPushButton("Unlink All", self)
+        link_all_btn = QPushButton(tr("Link All Found"), self)
+        unlink_all_btn = QPushButton(tr("Unlink All"), self)
         link_all_btn.clicked.connect(self._link_all_found)
         unlink_all_btn.clicked.connect(self._unlink_all)
         action_row.addWidget(link_all_btn)
@@ -76,6 +77,7 @@ class LinkLyricDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        localize_widget_tree(self)
 
     def link_flags(self) -> List[bool]:
         flags: List[bool] = []

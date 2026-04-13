@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import ctypes
 import atexit
+import hashlib
 import io
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -17,6 +20,7 @@ import sounddevice as sd
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, normalize_config
+from pyssp.ffmpeg_support import FFmpegPCMStream, ffmpeg_available, probe_media_duration_ms
 
 _DECODER_READY = False
 _NEXT_STREAM_ID = 0
@@ -34,6 +38,13 @@ _PRELOAD_CACHE_BYTES = 0
 _PRELOAD_TASKS: Dict[str, Future] = {}
 _PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-preload")
 _WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-waveform")
+_WAVEFORM_CACHE_LOCK = threading.RLock()
+_WAVEFORM_CACHE_DIR = ""
+_WAVEFORM_CACHE_VERSION = "v1"
+_WAVEFORM_PRELOAD_SAMPLE_COUNTS: Tuple[int, ...] = (1800, 1024)
+_WAVEFORM_CACHE_LIMIT_MB_MIN = 128
+_WAVEFORM_CACHE_LIMIT_MB_MAX = 16 * 1024
+_WAVEFORM_CACHE_LIMIT_BYTES = 1024 * 1024 * 1024
 
 
 def _shutdown_preload_executor() -> None:
@@ -70,6 +81,209 @@ def shutdown_audio_preload() -> None:
         _PRELOAD_CACHE_BYTES = 0
     _shutdown_preload_executor()
     _shutdown_waveform_executor()
+
+
+def _default_waveform_cache_dir() -> str:
+    local_appdata = os.getenv("LOCALAPPDATA")
+    appdata = os.getenv("APPDATA")
+    if local_appdata:
+        base = local_appdata
+    elif appdata:
+        base = appdata
+    else:
+        base = tempfile.gettempdir()
+    return os.path.join(base, "pySSP", "temp", "waveform_cache")
+
+
+def _normalize_waveform_cache_limit_mb(limit_mb: int) -> int:
+    raw = int(limit_mb)
+    return max(_WAVEFORM_CACHE_LIMIT_MB_MIN, min(_WAVEFORM_CACHE_LIMIT_MB_MAX, raw))
+
+
+def get_waveform_cache_limit_bounds_mb() -> Tuple[int, int]:
+    return _WAVEFORM_CACHE_LIMIT_MB_MIN, _WAVEFORM_CACHE_LIMIT_MB_MAX
+
+
+def get_waveform_cache_limit_mb() -> int:
+    with _WAVEFORM_CACHE_LOCK:
+        return max(1, int(_WAVEFORM_CACHE_LIMIT_BYTES // (1024 * 1024)))
+
+
+def get_waveform_cache_dir() -> str:
+    with _WAVEFORM_CACHE_LOCK:
+        return str(_WAVEFORM_CACHE_DIR or "")
+
+
+def prepare_waveform_disk_cache(cache_dir: str = "", clear_existing: bool = False, limit_mb: Optional[int] = None) -> str:
+    global _WAVEFORM_CACHE_DIR, _WAVEFORM_CACHE_LIMIT_BYTES
+    with _WAVEFORM_CACHE_LOCK:
+        requested = str(cache_dir or "").strip()
+        target = requested or str(_WAVEFORM_CACHE_DIR or "").strip() or _default_waveform_cache_dir()
+        target = os.path.abspath(target)
+        if limit_mb is not None:
+            _WAVEFORM_CACHE_LIMIT_BYTES = _normalize_waveform_cache_limit_mb(int(limit_mb)) * 1024 * 1024
+        if clear_existing and os.path.isdir(target):
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            os.makedirs(target, exist_ok=True)
+        except Exception:
+            target = ""
+        _WAVEFORM_CACHE_DIR = target
+        _enforce_waveform_cache_limit_locked()
+    return target
+
+
+def configure_waveform_disk_cache(limit_mb: int, cache_dir: str = "") -> str:
+    return prepare_waveform_disk_cache(cache_dir=cache_dir, clear_existing=False, limit_mb=limit_mb)
+
+
+def clear_waveform_disk_cache() -> bool:
+    with _WAVEFORM_CACHE_LOCK:
+        target = str(_WAVEFORM_CACHE_DIR or "").strip()
+        if not target:
+            return False
+        if os.path.isdir(target):
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+            except Exception:
+                return False
+        try:
+            os.makedirs(target, exist_ok=True)
+        except Exception:
+            return False
+    return True
+
+
+def get_waveform_cache_usage_bytes() -> int:
+    with _WAVEFORM_CACHE_LOCK:
+        return _waveform_cache_usage_bytes_locked()
+
+
+def _waveform_cache_usage_bytes_locked() -> int:
+    target = str(_WAVEFORM_CACHE_DIR or "").strip()
+    if not target or (not os.path.isdir(target)):
+        return 0
+    total = 0
+    try:
+        for name in os.listdir(target):
+            if not name.lower().endswith(".wpk"):
+                continue
+            path = os.path.join(target, name)
+            if not os.path.isfile(path):
+                continue
+            total += int(os.path.getsize(path))
+    except Exception:
+        return total
+    return total
+
+
+def _enforce_waveform_cache_limit_locked() -> None:
+    target = str(_WAVEFORM_CACHE_DIR or "").strip()
+    if not target or (not os.path.isdir(target)):
+        return
+    limit = max(1, int(_WAVEFORM_CACHE_LIMIT_BYTES))
+    entries: List[Tuple[float, str, int]] = []
+    total = 0
+    try:
+        for name in os.listdir(target):
+            if not name.lower().endswith(".wpk"):
+                continue
+            path = os.path.join(target, name)
+            if not os.path.isfile(path):
+                continue
+            size = int(os.path.getsize(path))
+            mtime = float(os.path.getmtime(path))
+            entries.append((mtime, path, size))
+            total += size
+    except Exception:
+        return
+    if total <= limit:
+        return
+    entries.sort(key=lambda item: item[0])
+    for _mtime, path, size in entries:
+        if total <= limit:
+            break
+        try:
+            os.remove(path)
+            total = max(0, total - int(size))
+        except Exception:
+            continue
+
+
+def _waveform_cache_path(file_path: str, sample_count: int) -> str:
+    if not _WAVEFORM_CACHE_DIR:
+        return ""
+    path = str(file_path or "").strip()
+    if not path:
+        return ""
+    try:
+        stat = os.stat(path)
+    except Exception:
+        return ""
+    norm = _normalize_cache_key(path)
+    digest_source = (
+        f"{_WAVEFORM_CACHE_VERSION}|{norm}|{int(stat.st_size)}|{int(getattr(stat, 'st_mtime_ns', int(stat.st_mtime * 1e9)))}"
+        f"|{max(1, int(sample_count))}"
+    )
+    digest = hashlib.sha1(digest_source.encode("utf-8", errors="ignore")).hexdigest()
+    return os.path.join(_WAVEFORM_CACHE_DIR, f"{digest}.wpk")
+
+
+def _load_waveform_peaks_from_disk(file_path: str, sample_count: int) -> Optional[List[float]]:
+    with _WAVEFORM_CACHE_LOCK:
+        cache_file = _waveform_cache_path(file_path, sample_count)
+    if not cache_file or not os.path.exists(cache_file):
+        return None
+    try:
+        payload = np.fromfile(cache_file, dtype=np.uint8)
+    except Exception:
+        return None
+    expected = max(1, int(sample_count))
+    if len(payload) != expected:
+        return None
+    return (payload.astype(np.float32) / 255.0).tolist()
+
+
+def _save_waveform_peaks_to_disk(file_path: str, sample_count: int, peaks: List[float]) -> None:
+    if not peaks:
+        return
+    with _WAVEFORM_CACHE_LOCK:
+        cache_file = _waveform_cache_path(file_path, sample_count)
+    if not cache_file:
+        return
+    try:
+        arr = np.asarray(peaks, dtype=np.float32)
+        arr = np.clip(arr, 0.0, 1.0)
+        quantized = (arr * 255.0).astype(np.uint8)
+        expected = max(1, int(sample_count))
+        if len(quantized) != expected:
+            return
+        tmp_file = f"{cache_file}.tmp-{os.getpid()}-{threading.get_ident()}"
+        quantized.tofile(tmp_file)
+        os.replace(tmp_file, cache_file)
+        with _WAVEFORM_CACHE_LOCK:
+            _enforce_waveform_cache_limit_locked()
+    except Exception:
+        try:
+            if "tmp_file" in locals() and tmp_file and os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except Exception:
+            pass
+
+
+def _prime_waveform_disk_cache_from_frames(file_path: str, frames: np.ndarray) -> None:
+    path = str(file_path or "").strip()
+    if not path or frames is None or len(frames) <= 0:
+        return
+    for raw_points in _WAVEFORM_PRELOAD_SAMPLE_COUNTS:
+        points = max(1, int(raw_points))
+        if _load_waveform_peaks_from_disk(path, points) is not None:
+            continue
+        peaks = _compute_waveform_peaks_from_frames(frames, points)
+        _save_waveform_peaks_to_disk(path, points, peaks)
 
 
 class _NullOutputStream:
@@ -270,6 +484,42 @@ def is_audio_preloaded(file_path: str) -> bool:
         return (path in _FORCED_MEDIA_CACHE) or (path in _PRELOAD_CACHE)
 
 
+def can_stream_without_preload(file_path: str) -> bool:
+    path = str(file_path or "").strip()
+    return bool(path) and os.path.exists(path) and ffmpeg_available()
+
+
+def can_decode_with_ffmpeg(file_path: str, timeout_ms: int = 180) -> bool:
+    path = str(file_path or "").strip()
+    if not can_stream_without_preload(path):
+        return False
+    mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+    sample_rate = int(mixer_info[0])
+    channels = int(mixer_info[2])
+    decoder: Optional[FFmpegPCMStream] = None
+    deadline = time.perf_counter() + (max(40, int(timeout_ms)) / 1000.0)
+    try:
+        decoder = FFmpegPCMStream(path, sample_rate=sample_rate, channels=channels)
+        decoder.start(0)
+        while time.perf_counter() < deadline:
+            _block, wrote, eof = decoder.read_frames(1024)
+            if wrote > 0:
+                return True
+            if eof:
+                return False
+    except Exception:
+        return False
+    finally:
+        if decoder is not None:
+            try:
+                decoder.close()
+            except Exception:
+                pass
+    # Decoder started but did not emit frames in the short probe window.
+    # Treat known-duration files as playable to avoid false negatives.
+    return probe_media_duration_ms(path) > 0
+
+
 def request_audio_preload(file_paths: List[str], prioritize: bool = False, force: bool = False) -> None:
     with _PRELOAD_LOCK:
         if ((not _PRELOAD_ENABLED) and (not force)) or (_PRELOAD_PAUSED and (not force)):
@@ -325,6 +575,7 @@ def _preload_path_worker(file_path: str, force: bool = False) -> None:
         frames, duration_ms = _decode_media_frames(file_path)
     except Exception:
         return
+    _prime_waveform_disk_cache_from_frames(file_path, frames)
     _store_preload_entry(file_path, frames, duration_ms, force=force)
 
 
@@ -503,6 +754,20 @@ def _find_mp3_frame_sync_offset(raw: bytes) -> int:
     return -1
 
 
+def _peek_cached_media_frames(file_path: str) -> Optional[Tuple[np.ndarray, int]]:
+    cache_key = _normalize_cache_key(file_path)
+    if not cache_key:
+        return None
+    with _PRELOAD_LOCK:
+        forced = _FORCED_MEDIA_CACHE.get(cache_key)
+        if forced is not None:
+            return forced[0], int(forced[1])
+        cached = _PRELOAD_CACHE.get(cache_key)
+        if cached is not None:
+            return cached[0], int(cached[1])
+    return None
+
+
 def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
     cache_key = _normalize_cache_key(file_path)
     if cache_key:
@@ -552,6 +817,28 @@ def _compute_waveform_peaks_from_frames(frames: Optional[np.ndarray], sample_cou
     return peaks.tolist()
 
 
+def _compute_waveform_peaks_from_path(file_path: str, sample_count: int = 1024) -> List[float]:
+    path = str(file_path or "").strip()
+    if not path:
+        return []
+    points = max(1, int(sample_count))
+    cached_peaks = _load_waveform_peaks_from_disk(path, points)
+    if cached_peaks is not None:
+        return cached_peaks
+    frames: Optional[np.ndarray]
+    cached = _peek_cached_media_frames(path)
+    if cached is not None:
+        frames = cached[0]
+    else:
+        try:
+            frames, _duration_ms = _decode_media_frames(path)
+        except Exception:
+            return []
+    peaks = _compute_waveform_peaks_from_frames(frames, points)
+    _save_waveform_peaks_to_disk(path, points, peaks)
+    return peaks
+
+
 class ExternalMediaPlayer(QObject):
     StoppedState = 0
     PlayingState = 1
@@ -580,6 +867,9 @@ class ExternalMediaPlayer(QObject):
         self._channels = int(mixer_info[2])
 
         self._source_frames: Optional[np.ndarray] = None
+        self._stream_decoder: Optional[FFmpegPCMStream] = None
+        self._streaming_mode = False
+        self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
         self._source_pos = 0.0
         self._source_pos_anchor = 0.0
         self._source_pos_anchor_t = time.perf_counter()
@@ -602,11 +892,32 @@ class ExternalMediaPlayer(QObject):
 
     def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
         self.stop()
-        frames, duration_ms = _load_media_frames(file_path)
+        frames: Optional[np.ndarray] = None
+        duration_ms = 0
+        use_streaming = False
+        new_decoder: Optional[FFmpegPCMStream] = None
+
+        cached = _peek_cached_media_frames(file_path)
+        if cached is not None:
+            frames, duration_ms = cached
+        elif ffmpeg_available():
+            new_decoder = FFmpegPCMStream(file_path, sample_rate=self._sample_rate, channels=self._channels)
+            new_decoder.start(0)
+            duration_ms = max(0, int(probe_media_duration_ms(file_path)))
+            use_streaming = True
+        else:
+            frames, duration_ms = _load_media_frames(file_path)
 
         with self._lock:
+            old_decoder = self._stream_decoder
+            self._stream_decoder = None
+            self._streaming_mode = False
+            self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._media_path = file_path
             self._source_frames = frames
+            if use_streaming and new_decoder is not None:
+                self._stream_decoder = new_decoder
+                self._streaming_mode = True
             self._source_pos = 0.0
             self._source_pos_anchor = 0.0
             self._source_pos_anchor_t = time.perf_counter()
@@ -617,6 +928,11 @@ class ExternalMediaPlayer(QObject):
             if dsp_config is not None:
                 self._dsp_config = normalize_config(dsp_config)
                 self._dsp_processor.set_config(self._dsp_config)
+        if old_decoder is not None:
+            try:
+                old_decoder.close()
+            except Exception:
+                pass
 
         self.durationChanged.emit(self._duration_ms)
         self.positionChanged.emit(0)
@@ -629,7 +945,7 @@ class ExternalMediaPlayer(QObject):
 
     def play(self) -> None:
         with self._lock:
-            if self._source_frames is None:
+            if (self._source_frames is None) and (not self._streaming_mode):
                 return
             if self._state == self.PlayingState:
                 return
@@ -643,14 +959,20 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             if self._state != self.PlayingState:
                 return
-            self._position_ms = self._position_from_source_pos_locked()
+            if self._streaming_mode:
+                self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+            else:
+                self._position_ms = self._position_from_source_pos_locked()
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._set_state_locked(self.PausedState)
 
     def stop(self) -> None:
+        decoder_to_seek: Optional[FFmpegPCMStream] = None
         with self._lock:
+            decoder_to_seek = self._stream_decoder if self._streaming_mode else None
+            self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._source_pos = 0.0
             self._source_pos_anchor = 0.0
             self._source_pos_anchor_t = time.perf_counter()
@@ -658,6 +980,11 @@ class ExternalMediaPlayer(QObject):
             self._position_ms = 0
             self._ended = False
             self._set_state_locked(self.StoppedState)
+        if decoder_to_seek is not None:
+            try:
+                decoder_to_seek.seek(0)
+            except Exception:
+                pass
         self.positionChanged.emit(0)
 
     def state(self) -> int:
@@ -665,6 +992,8 @@ class ExternalMediaPlayer(QObject):
             return self._state
 
     def setPosition(self, position_ms: int) -> None:
+        decoder_to_seek: Optional[FFmpegPCMStream] = None
+        target = 0
         with self._lock:
             target = max(0, min(int(position_ms), self._duration_ms))
             self._position_ms = target
@@ -675,6 +1004,20 @@ class ExternalMediaPlayer(QObject):
                 self._source_pos_anchor_t = time.perf_counter()
                 self._source_pos_anchor_tempo = self._tempo_ratio_locked()
                 self._ended = False
+            elif self._streaming_mode and self._stream_decoder is not None:
+                decoder_to_seek = self._stream_decoder
+                self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
+                self._source_pos = (target / 1000.0) * self._sample_rate
+                self._source_pos_anchor = self._source_pos
+                self._source_pos_anchor_t = time.perf_counter()
+                self._source_pos_anchor_tempo = 1.0
+                self._ended = False
+        if decoder_to_seek is not None:
+            try:
+                decoder_to_seek.seek(target)
+            except Exception:
+                with self._lock:
+                    self._ended = True
         self.positionChanged.emit(target)
 
     def position(self) -> int:
@@ -684,6 +1027,8 @@ class ExternalMediaPlayer(QObject):
     def enginePositionMs(self) -> int:
         with self._lock:
             if self._duration_ms <= 0:
+                if self._streaming_mode:
+                    return max(0, int((self._source_pos / float(self._sample_rate)) * 1000.0))
                 return 0
             pos_samples = self._source_pos
             if self._state == self.PlayingState and self._source_frames is not None:
@@ -712,13 +1057,40 @@ class ExternalMediaPlayer(QObject):
     def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
         with self._lock:
             frames = self._source_frames
-        return _compute_waveform_peaks_from_frames(frames, sample_count)
+            media_path = str(self._media_path or "").strip()
+        points = max(1, int(sample_count))
+        if frames is not None:
+            if media_path:
+                cached_peaks = _load_waveform_peaks_from_disk(media_path, points)
+                if cached_peaks is not None:
+                    return cached_peaks
+            peaks = _compute_waveform_peaks_from_frames(frames, points)
+            if media_path:
+                _save_waveform_peaks_to_disk(media_path, points, peaks)
+            return peaks
+        return _compute_waveform_peaks_from_path(media_path, points)
 
     def waveformPeaksAsync(self, sample_count: int = 1024) -> Future:
         with self._lock:
             frames = self._source_frames
+            media_path = str(self._media_path or "").strip()
         points = max(1, int(sample_count))
-        return _WAVEFORM_EXECUTOR.submit(_compute_waveform_peaks_from_frames, frames, points)
+        if frames is not None:
+            return _WAVEFORM_EXECUTOR.submit(self._waveform_from_frames_with_cache, media_path, frames, points)
+        return _WAVEFORM_EXECUTOR.submit(_compute_waveform_peaks_from_path, media_path, points)
+
+    @staticmethod
+    def _waveform_from_frames_with_cache(file_path: str, frames: np.ndarray, sample_count: int) -> List[float]:
+        path = str(file_path or "").strip()
+        points = max(1, int(sample_count))
+        if path:
+            cached_peaks = _load_waveform_peaks_from_disk(path, points)
+            if cached_peaks is not None:
+                return cached_peaks
+        peaks = _compute_waveform_peaks_from_frames(frames, points)
+        if path:
+            _save_waveform_peaks_to_disk(path, points, peaks)
+        return peaks
 
     def _create_stream(self):
         device_index = None
@@ -748,19 +1120,35 @@ class ExternalMediaPlayer(QObject):
             if self._state != self.PlayingState:
                 self._meter_levels = (0.0, 0.0)
                 return
-            if self._source_frames is None:
+            if (self._source_frames is None) and (not self._streaming_mode):
                 self._meter_levels = (0.0, 0.0)
                 return
 
-            block = self._read_source_block_locked(frames)
+            if self._streaming_mode:
+                block, consumed_frames, stream_eof = self._read_stream_block_locked(frames)
+                if consumed_frames <= 0 and stream_eof:
+                    self._ended = True
+                    if self._duration_ms > 0:
+                        self._position_ms = self._duration_ms
+                    else:
+                        self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+                    return
+                tempo_ratio = 1.0
+                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+                effective_pitch_ratio = user_pitch_ratio
+            else:
+                block = self._read_source_block_locked(frames)
+                consumed_frames = len(block) if block is not None else 0
+                stream_eof = False
+                tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+                effective_pitch_ratio = user_pitch_ratio / tempo_ratio
+
             if block is None:
                 self._ended = True
                 self._position_ms = self._duration_ms
                 return
 
-            tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
-            user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
-            effective_pitch_ratio = user_pitch_ratio / tempo_ratio
             if abs(effective_pitch_ratio - 1.0) > 1e-4:
                 block = self._apply_pitch_ratio_block(block, effective_pitch_ratio)
 
@@ -780,10 +1168,19 @@ class ExternalMediaPlayer(QObject):
                 self._meter_levels = (0.0, 0.0)
             if n < frames:
                 outdata[n:, :] = 0.0
-                self._ended = True
-                self._source_pos = float(len(self._source_frames))
+                if self._streaming_mode:
+                    self._ended = bool(stream_eof)
+                else:
+                    self._ended = True
+                    self._source_pos = float(len(self._source_frames)) if self._source_frames is not None else 0.0
 
-            self._position_ms = self._position_from_source_pos_locked()
+            if self._streaming_mode:
+                self._source_pos += float(consumed_frames)
+                self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+                if self._duration_ms > 0:
+                    self._position_ms = max(0, min(self._position_ms, self._duration_ms))
+            else:
+                self._position_ms = self._position_from_source_pos_locked()
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = tempo_ratio
@@ -818,6 +1215,15 @@ class ExternalMediaPlayer(QObject):
             self._source_pos = float(n_src)
         return block.astype(np.float32, copy=False)
 
+    def _read_stream_block_locked(self, frames: int) -> Tuple[Optional[np.ndarray], int, bool]:
+        decoder = self._stream_decoder
+        if decoder is None:
+            return None, 0, True
+        block, consumed, eof = decoder.read_frames(frames)
+        if consumed <= 0 and eof:
+            return None, 0, True
+        return block, int(consumed), bool(eof)
+
     def _tempo_ratio_locked(self) -> float:
         return max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
 
@@ -847,7 +1253,10 @@ class ExternalMediaPlayer(QObject):
             if self._state == self.PlayingState:
                 if self._ended:
                     self._ended = False
-                    self._position_ms = self._duration_ms
+                    if self._duration_ms > 0:
+                        self._position_ms = self._duration_ms
+                    else:
+                        self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
                     emit_pos = self._position_ms
                     self._set_state_locked(self.StoppedState)
                 else:
@@ -861,6 +1270,11 @@ class ExternalMediaPlayer(QObject):
             self.stateChanged.emit(new_state)
 
     def __del__(self) -> None:
+        try:
+            if hasattr(self, "_stream_decoder") and self._stream_decoder is not None:
+                self._stream_decoder.close()
+        except Exception:
+            pass
         try:
             if hasattr(self, "_stream") and self._stream is not None:
                 self._stream.stop()

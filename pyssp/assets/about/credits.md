@@ -12,6 +12,9 @@ Python dependencies:
 - Flask
 - Werkzeug
 - simple-websocket
+- websockets
+- imageio-ffmpeg
+- FFmpeg (via imageio-ffmpeg binaries)
 - PyInstaller
 - pytest
 - sphinx

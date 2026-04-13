@@ -288,7 +288,11 @@ class PackReportDialog(QDialog):
 
 def default_unpack_directory(package_path: str) -> str:
     appdata = os.getenv("APPDATA")
-    base = (Path(appdata) / "pyssp") if appdata else (Path.home() / ".config" / "pyssp")
+    if appdata:
+        base = Path(appdata) / "pyssp"
+    else:
+        home = os.getenv("HOME")
+        base = (Path(home).expanduser() if home else Path.home()) / ".config" / "pyssp"
     stem = Path(package_path).stem or "package"
     return str((base / "unpack" / stem).resolve())
 
@@ -548,8 +552,14 @@ def _flattened_archive_member(source_path: str, index: int, root_prefix: str = "
 
 
 def _structured_archive_member(source_path: str, root_prefix: str = "audio") -> str:
-    path = os.path.abspath(source_path)
-    drive, tail = os.path.splitdrive(path)
+    raw_path = str(source_path or "").strip()
+    drive_match = re.match(r"^([A-Za-z]):[\\/]*(.*)$", raw_path)
+    if drive_match:
+        drive = drive_match.group(1)
+        tail = drive_match.group(2)
+    else:
+        path = os.path.abspath(raw_path)
+        drive, tail = os.path.splitdrive(path)
     segments = [segment for segment in re.split(r"[\\/]+", tail.strip("\\/")) if segment]
     safe_segments = [_sanitize_segment(segment) for segment in segments]
     if drive:

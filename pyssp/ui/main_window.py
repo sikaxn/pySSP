@@ -2035,6 +2035,7 @@ class MainWindow(QMainWindow):
         self.allow_other_unsupported_audio_files = bool(
             getattr(self.settings, "allow_other_unsupported_audio_files", False)
         )
+        self.disable_path_safety = bool(getattr(self.settings, "disable_path_safety", False))
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
         self.state_colors = {
             "empty": self.settings.color_empty,
@@ -4841,11 +4842,15 @@ class MainWindow(QMainWindow):
             self._show_info_notice_banner("No sound buttons assigned.")
             return
 
-        progress = QProgressDialog("Scanning lyric files...", "Cancel", 0, max(1, total), self)
+        progress = QProgressDialog("Scanning lyric files...", "Skip", 0, max(1, total), self)
         progress.setWindowTitle("Scan Sound Buttons Lyrics")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
 
         processed = 0
         cancelled = False
@@ -4870,7 +4875,9 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
         progress.close()
 
-        if cancelled:
+        if cancelled and rows:
+            self._show_info_notice_banner(f"Lyric scan skipped ({processed}/{total}). Showing partial scan results.")
+        elif cancelled:
             self._show_info_notice_banner(f"Lyric scan cancelled ({processed}/{total}).")
             return
         if not rows:
@@ -4963,7 +4970,7 @@ class MainWindow(QMainWindow):
         path = str(file_path or "").strip()
         if not path:
             return "No file path assigned."
-        reason = unsafe_path_reason(path)
+        reason = self._path_safety_reason(path)
         if reason:
             return f"Invalid file path: {reason}"
         if not os.path.exists(path):
@@ -4981,6 +4988,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             return self._classify_audio_decode_issue(path, exc)
+
+    def _path_safety_reason(self, file_path: str) -> Optional[str]:
+        if self.disable_path_safety:
+            return None
+        return unsafe_path_reason(file_path)
 
     def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
         ext = os.path.splitext(file_path)[1].lower()
@@ -7202,11 +7214,11 @@ class MainWindow(QMainWindow):
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
-        file_path_reason = unsafe_path_reason(file_path)
+        file_path_reason = self._path_safety_reason(file_path)
         if file_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Sound file path rejected.\n\n{file_path_reason}")
             return
-        lyric_path_reason = unsafe_path_reason(lyric_file) if lyric_file else None
+        lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Lyric file path rejected.\n\n{lyric_path_reason}")
             return
@@ -7356,8 +7368,16 @@ class MainWindow(QMainWindow):
         lyric_path = str(slot.lyric_file or "").strip()
         skipped_linking_found_lyric = False
         if not lyric_path:
-            found_candidate = bool(str(self._find_matching_lyric_file(slot.file_path) or "").strip())
-            linked = self._prompt_lyric_link_selection([slot.file_path])
+            candidates, cancelled = self._scan_lyric_candidates_with_progress(
+                [slot.file_path],
+                title="Lyric Link Scan",
+                label_prefix="Scanning",
+            )
+            found_candidate = bool(candidates and str(candidates[0] or "").strip())
+            if cancelled:
+                linked = None
+            else:
+                linked = self._prompt_lyric_link_selection([slot.file_path], precomputed_candidates=candidates)
             if linked is None:
                 linked_path = ""
                 skipped_linking_found_lyric = found_candidate
@@ -7487,6 +7507,19 @@ class MainWindow(QMainWindow):
         page = self.data[group][page_index]
         return any(slot.assigned or slot.title for slot in page)
 
+    @staticmethod
+    def _slot_is_available_for_add(slot: SoundButtonData) -> bool:
+        return (
+            (not slot.assigned)
+            and (not slot.marker)
+            and (not slot.locked)
+            and (not slot.title.strip())
+            and (not slot.notes.strip())
+        )
+
+    def _available_add_slot_indices(self, page: List[SoundButtonData], start_index: int) -> List[int]:
+        return [index for index in range(start_index, SLOTS_PER_PAGE) if self._slot_is_available_for_add(page[index])]
+
     def _pick_sound(self, slot_index: int) -> None:
         if not self.cue_mode and not self._is_page_created(self.current_group, self.current_page):
             self._show_info_notice_banner("Create the page first before adding sound buttons.")
@@ -7506,26 +7539,24 @@ class MainWindow(QMainWindow):
         )
         if not file_paths:
             return
-        if self.verify_sound_file_on_add:
-            matches = self._verify_audio_files_before_add(file_paths)
-            if matches:
-                self._show_audio_add_verification_results(matches)
-        if self.search_lyric_on_add_sound_button:
-            lyric_links = self._prompt_lyric_link_selection(file_paths)
-            if lyric_links is None:
-                return
-        else:
-            lyric_links = ["" for _ in file_paths]
+        available_slots = self._available_add_slot_indices(page, slot_index)
+        available_count = len(available_slots)
+        if available_count <= 0:
+            self._show_info_notice_banner("No available sound button slots from this position.")
+            return
+        if len(file_paths) > available_count:
+            file_paths = file_paths[:available_count]
+            self._show_info_notice_banner(
+                f"Only {available_count} available sound button slot(s). Extra selected files were skipped."
+            )
         safe_paths: List[str] = []
-        safe_lyric_links: List[str] = []
         rejected_paths: List[str] = []
-        for index, candidate in enumerate(file_paths):
-            reason = unsafe_path_reason(candidate)
+        for candidate in file_paths:
+            reason = self._path_safety_reason(candidate)
             if reason:
                 rejected_paths.append(f"{candidate} ({reason})")
                 continue
             safe_paths.append(candidate)
-            safe_lyric_links.append(lyric_links[index] if index < len(lyric_links) else "")
         if rejected_paths:
             preview = "\n".join(rejected_paths[:4])
             suffix = "\n..." if len(rejected_paths) > 4 else ""
@@ -7537,22 +7568,26 @@ class MainWindow(QMainWindow):
         if not safe_paths:
             return
         file_paths = safe_paths
-        lyric_links = safe_lyric_links
+        if self.verify_sound_file_on_add:
+            matches = self._verify_audio_files_before_add(file_paths)
+            if matches:
+                self._show_audio_add_verification_results(matches)
+        if self.search_lyric_on_add_sound_button:
+            lyric_links = self._prompt_lyric_link_selection(file_paths)
+            if lyric_links is None:
+                return
+        else:
+            lyric_links = ["" for _ in file_paths]
+        lyric_links = [lyric_links[index] if index < len(lyric_links) else "" for index in range(len(file_paths))]
         self.settings.last_sound_dir = os.path.dirname(file_paths[0])
         self._save_settings()
 
         changed = False
-        next_file_idx = 0
-        for target_index in range(slot_index, SLOTS_PER_PAGE):
-            if next_file_idx >= len(file_paths):
+        for file_idx, target_index in enumerate(available_slots):
+            if file_idx >= len(file_paths):
                 break
             target = page[target_index]
-            is_unused = (not target.assigned) and (not target.marker) and (not target.title.strip()) and (not target.notes.strip())
-            if not is_unused:
-                continue
-            file_idx = next_file_idx
             file_path = file_paths[file_idx]
-            next_file_idx += 1
             target.file_path = file_path
             target.title = os.path.splitext(os.path.basename(file_path))[0]
             target.notes = ""
@@ -7572,8 +7607,55 @@ class MainWindow(QMainWindow):
             self._refresh_page_list()
             self._refresh_sound_grid()
 
-    def _prompt_lyric_link_selection(self, audio_files: List[str]) -> Optional[List[str]]:
-        candidates = [self._find_matching_lyric_file(path) for path in audio_files]
+    def _scan_lyric_candidates_with_progress(
+        self,
+        audio_files: List[str],
+        *,
+        title: str,
+        label_prefix: str,
+    ) -> Tuple[List[str], bool]:
+        if not audio_files:
+            return [], False
+        progress = QProgressDialog("Scanning lyric files...", "Skip", 0, max(1, len(audio_files)), self)
+        progress.setWindowTitle(title)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+
+        candidates: List[str] = []
+        cancelled = False
+        for index, path in enumerate(audio_files):
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(f"{label_prefix} {os.path.basename(path)}...")
+            candidates.append(self._find_matching_lyric_file(path))
+            progress.setValue(index + 1)
+            QApplication.processEvents()
+        progress.close()
+        return candidates, cancelled
+
+    def _prompt_lyric_link_selection(
+        self,
+        audio_files: List[str],
+        *,
+        precomputed_candidates: Optional[List[str]] = None,
+    ) -> Optional[List[str]]:
+        if precomputed_candidates is None:
+            candidates, cancelled = self._scan_lyric_candidates_with_progress(
+                audio_files,
+                title="Lyric Link Scan",
+                label_prefix="Scanning",
+            )
+            if cancelled:
+                candidates = [candidates[idx] if idx < len(candidates) else "" for idx in range(len(audio_files))]
+                self._show_info_notice_banner("Lyric scan skipped. Showing partial scan results.")
+        else:
+            candidates = [precomputed_candidates[idx] if idx < len(precomputed_candidates) else "" for idx in range(len(audio_files))]
         if not any(candidates):
             return ["" for _ in audio_files]
         rows = list(zip(audio_files, candidates))
@@ -8362,7 +8444,7 @@ class MainWindow(QMainWindow):
         on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
         self._cancel_pending_player_media_load(player)
-        reason = unsafe_path_reason(slot.file_path)
+        reason = self._path_safety_reason(slot.file_path)
         if reason:
             slot.load_failed = True
             self._stop_player_internal(player)
@@ -9451,6 +9533,8 @@ class MainWindow(QMainWindow):
             path = str(slot.file_path or "").strip()
             if not path or not os.path.exists(path):
                 continue
+            if self._path_safety_reason(path):
+                continue
             if is_audio_preloaded(path):
                 continue
             duration_ms = max(0, int(slot.duration_ms))
@@ -9937,6 +10021,7 @@ class MainWindow(QMainWindow):
             supported_audio_format_extensions=self.supported_audio_format_extensions,
             verify_sound_file_on_add=self.verify_sound_file_on_add,
             allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
+            disable_path_safety=self.disable_path_safety,
             lock_allow_quit=self.lock_allow_quit,
             lock_allow_system_hotkeys=self.lock_allow_system_hotkeys,
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
@@ -10115,6 +10200,7 @@ class MainWindow(QMainWindow):
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
+        self.disable_path_safety = dialog.selected_disable_path_safety()
         self._refresh_lyric_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
@@ -12858,6 +12944,7 @@ class MainWindow(QMainWindow):
         self.settings.supported_audio_format_extensions = list(self.supported_audio_format_extensions)
         self.settings.verify_sound_file_on_add = bool(self.verify_sound_file_on_add)
         self.settings.allow_other_unsupported_audio_files = bool(self.allow_other_unsupported_audio_files)
+        self.settings.disable_path_safety = bool(self.disable_path_safety)
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
 

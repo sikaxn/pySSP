@@ -39,6 +39,7 @@ def _build_dialog(**overrides):
         supported_audio_format_extensions=overrides.get("supported_audio_format_extensions", []),
         verify_sound_file_on_add=bool(overrides.get("verify_sound_file_on_add", True)),
         allow_other_unsupported_audio_files=bool(overrides.get("allow_other_unsupported_audio_files", False)),
+        disable_path_safety=bool(overrides.get("disable_path_safety", False)),
         fade_in_sec=defaults["fade_in_sec"],
         cross_fade_sec=defaults["cross_fade_sec"],
         fade_out_sec=defaults["fade_out_sec"],
@@ -448,3 +449,12 @@ def test_window_layout_swap_between_grids_replaces_both_sides(qapp):
     fade_buttons = [item.get("button") for item in selected["fade"]]
     assert "X" in main_buttons
     assert "Cue" in fade_buttons
+
+
+def test_disable_path_safety_warning_visibility(qapp):
+    dialog = _build_dialog(disable_path_safety=False, initial_page="Audio Loading & Format")
+    assert dialog.selected_disable_path_safety() is False
+    assert dialog.disable_path_safety_warning_label.isHidden() is True
+    dialog.disable_path_safety_checkbox.setChecked(True)
+    assert dialog.selected_disable_path_safety() is True
+    assert dialog.disable_path_safety_warning_label.isHidden() is False

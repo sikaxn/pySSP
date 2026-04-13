@@ -642,6 +642,8 @@ _TRANSLATIONS = {
         "Add Sound Button Behavior": "添加声音按钮行为",
         "Verify sound file upon adding sound button": "添加声音按钮时验证声音文件",
         "Allow other unsupported file": "允许其他不受支持文件",
+        "Disable path safety": "禁用路径安全检查",
+        "Warning: Disabling path safety can allow malformed file paths and is not recommended.": "警告：禁用路径安全检查可能允许格式异常的文件路径，不建议启用。",
         "When disabled, Add Sound Button file selection is limited to the detected supported audio extensions.": "禁用后，“添加声音按钮”的文件选择将仅限于已检测到的受支持音频扩展名。",
         "Detecting audio formats...": "正在检测音频格式...",
         "Audio Format Detection": "音频格式检测",

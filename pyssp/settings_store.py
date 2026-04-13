@@ -456,6 +456,7 @@ class AppSettings:
     supported_audio_format_extensions: list[str] = field(default_factory=default_supported_audio_format_extensions)
     verify_sound_file_on_add: bool = True
     allow_other_unsupported_audio_files: bool = False
+    disable_path_safety: bool = False
     lock_allow_quit: bool = True
     lock_allow_system_hotkeys: bool = False
     lock_allow_quick_action_hotkeys: bool = False
@@ -770,6 +771,7 @@ def save_settings(settings: AppSettings) -> None:
         ),
         "verify_sound_file_on_add": "1" if settings.verify_sound_file_on_add else "0",
         "allow_other_unsupported_audio_files": "1" if settings.allow_other_unsupported_audio_files else "0",
+        "disable_path_safety": "1" if settings.disable_path_safety else "0",
         "lock_allow_quit": "1" if settings.lock_allow_quit else "0",
         "lock_allow_system_hotkeys": "1" if settings.lock_allow_system_hotkeys else "0",
         "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
@@ -1096,6 +1098,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     )
     verify_sound_file_on_add = _get_bool(section, "verify_sound_file_on_add", True)
     allow_other_unsupported_audio_files = _get_bool(section, "allow_other_unsupported_audio_files", False)
+    disable_path_safety = _get_bool(section, "disable_path_safety", False)
     set_file_encoding = str(section.get("set_file_encoding", "utf8")).strip().lower()
     if set_file_encoding not in {"utf8", "gbk"}:
         set_file_encoding = "utf8"
@@ -1300,6 +1303,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         supported_audio_format_extensions=supported_audio_format_extensions,
         verify_sound_file_on_add=verify_sound_file_on_add,
         allow_other_unsupported_audio_files=allow_other_unsupported_audio_files,
+        disable_path_safety=disable_path_safety,
         lock_allow_quit=_get_bool(section, "lock_allow_quit", True),
         lock_allow_system_hotkeys=_get_bool(section, "lock_allow_system_hotkeys", False),
         lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),

@@ -59,7 +59,8 @@ def _parse_lrc(text: str) -> List[LyricLine]:
         lyric_text = _clean_text(raw_line[matches[-1].end() :])
         for match in matches:
             start_ms = _lrc_timestamp_to_ms(match.group(1), match.group(2), match.group(3))
-            start_ms = max(0, start_ms + offset_ms)
+            # LRC offset semantics in pySSP tests: positive offset advances lyric display.
+            start_ms = max(0, start_ms - offset_ms)
             events.append((start_ms, lyric_text))
     events.sort(key=lambda item: item[0])
     if not events:

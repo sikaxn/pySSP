@@ -739,6 +739,7 @@ class OptionsDialog(QDialog):
         "supported_audio_format_extensions": [],
         "verify_sound_file_on_add": True,
         "allow_other_unsupported_audio_files": False,
+        "disable_path_safety": False,
         "log_file_enabled": False,
         "reset_all_on_startup": False,
         "click_playing_action": "play_it_again",
@@ -927,6 +928,7 @@ class OptionsDialog(QDialog):
         supported_audio_format_extensions: List[str],
         verify_sound_file_on_add: bool,
         allow_other_unsupported_audio_files: bool,
+        disable_path_safety: bool,
         fade_in_sec: float,
         cross_fade_sec: float,
         fade_out_sec: float,
@@ -956,9 +958,6 @@ class OptionsDialog(QDialog):
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
-        preload_use_ffmpeg: bool,
-        waveform_cache_limit_mb: int,
-        waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
         preload_ram_cap_mb: int,
         timecode_audio_output_device: str,
@@ -1037,6 +1036,9 @@ class OptionsDialog(QDialog):
         lock_require_password: bool,
         lock_password: str,
         lock_restart_state: str,
+        preload_use_ffmpeg: bool = True,
+        waveform_cache_limit_mb: int = 1024,
+        waveform_cache_clear_on_launch: bool = True,
         is_playback_or_loading_active: Optional[Callable[[], bool]] = None,
         stage_display_gadgets: Optional[Dict[str, Dict[str, object]]] = None,
         initial_page: Optional[str] = None,
@@ -1144,6 +1146,7 @@ class OptionsDialog(QDialog):
         ]
         self._verify_sound_file_on_add = bool(verify_sound_file_on_add)
         self._allow_other_unsupported_audio_files = bool(allow_other_unsupported_audio_files)
+        self._disable_path_safety = bool(disable_path_safety)
         self._is_playback_or_loading_active = is_playback_or_loading_active
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
@@ -1307,6 +1310,7 @@ class OptionsDialog(QDialog):
                 supported_audio_format_extensions=self._supported_audio_format_extensions,
                 verify_sound_file_on_add=self._verify_sound_file_on_add,
                 allow_other_unsupported_audio_files=self._allow_other_unsupported_audio_files,
+                disable_path_safety=self._disable_path_safety,
             ),
         )
         self._add_page(
@@ -2567,6 +2571,7 @@ class OptionsDialog(QDialog):
         supported_audio_format_extensions: List[str],
         verify_sound_file_on_add: bool,
         allow_other_unsupported_audio_files: bool,
+        disable_path_safety: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -2700,6 +2705,17 @@ class OptionsDialog(QDialog):
         )
         self.allow_other_unsupported_audio_files_checkbox.setChecked(bool(allow_other_unsupported_audio_files))
         behavior_layout.addWidget(self.allow_other_unsupported_audio_files_checkbox)
+        self.disable_path_safety_checkbox = QCheckBox("Disable path safety")
+        self.disable_path_safety_checkbox.setChecked(bool(disable_path_safety))
+        self.disable_path_safety_checkbox.toggled.connect(self._update_disable_path_safety_warning)
+        behavior_layout.addWidget(self.disable_path_safety_checkbox)
+        self.disable_path_safety_warning_label = QLabel(
+            "Warning: Disabling path safety can allow malformed file paths and is not recommended."
+        )
+        self.disable_path_safety_warning_label.setStyleSheet("color:#C62828; font-weight:600;")
+        self.disable_path_safety_warning_label.setWordWrap(True)
+        behavior_layout.addWidget(self.disable_path_safety_warning_label)
+        self._update_disable_path_safety_warning()
         note = QLabel(
             "When disabled, Add Sound Button file selection is limited to the detected supported audio extensions."
         )
@@ -2709,6 +2725,12 @@ class OptionsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _update_disable_path_safety_warning(self) -> None:
+        if not hasattr(self, "disable_path_safety_warning_label"):
+            return
+        enabled = bool(self.disable_path_safety_checkbox.isChecked())
+        self.disable_path_safety_warning_label.setVisible(enabled)
 
     def _update_preload_slider_label(self) -> None:
         value = int(self.preload_memory_slider.value())
@@ -3500,6 +3522,9 @@ class OptionsDialog(QDialog):
 
     def selected_allow_other_unsupported_audio_files(self) -> bool:
         return bool(self.allow_other_unsupported_audio_files_checkbox.isChecked())
+
+    def selected_disable_path_safety(self) -> bool:
+        return bool(self.disable_path_safety_checkbox.isChecked())
 
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
@@ -4911,3 +4936,5 @@ class OptionsDialog(QDialog):
         self.allow_other_unsupported_audio_files_checkbox.setChecked(
             bool(d.get("allow_other_unsupported_audio_files", False))
         )
+        self.disable_path_safety_checkbox.setChecked(bool(d.get("disable_path_safety", False)))
+        self._update_disable_path_safety_warning()

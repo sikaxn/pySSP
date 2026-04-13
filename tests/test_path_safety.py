@@ -19,3 +19,8 @@ def test_newline_path_is_rejected():
     reason = unsafe_path_reason("song.wav\nnext.wav")
     assert reason == "Path contains a newline character."
 
+
+def test_null_byte_path_is_rejected():
+    reason = unsafe_path_reason("song.wav\x00")
+    assert reason == "Path contains a null byte."
+

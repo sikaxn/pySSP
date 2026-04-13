@@ -14,12 +14,15 @@ Python dependencies:
 - simple-websocket
 - websockets
 - imageio-ffmpeg
-- FFmpeg (via imageio-ffmpeg binaries)
+- FFmpeg (bundled with pySSP release builds)
 - PyInstaller
 - pytest
 - sphinx
 - myst-parser
 - sphinx-rtd-theme
+
+FFmpeg notice:
+This software uses code of [FFmpeg](http://ffmpeg.org) licensed under the [LGPLv2.1](http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) and its source can be downloaded from the release page linked on the pySSP download page.
 
 Bundled third-party assets:
 - jQuery 1.12.4 (MIT License)

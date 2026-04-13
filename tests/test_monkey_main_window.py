@@ -128,7 +128,6 @@ def test_monkey_main_window_pairwise_settings_combo(qapp, monkeypatch, tmp_path)
     monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
     monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
-    monkeypatch.setattr(mw.MainWindow, "_queue_current_page_audio_preload", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
@@ -331,7 +330,6 @@ def test_pick_sound_limits_verify_and_lyric_scan_to_available_slots(qapp, monkey
     monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
     monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
-    monkeypatch.setattr(mw.MainWindow, "_queue_current_page_audio_preload", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
@@ -471,7 +469,6 @@ def test_pick_sound_skip_lyric_scan_keeps_add_and_uses_partial_results(qapp, mon
     monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
     monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
-    monkeypatch.setattr(mw.MainWindow, "_queue_current_page_audio_preload", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
     monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
@@ -532,6 +529,124 @@ def test_pick_sound_skip_lyric_scan_keeps_add_and_uses_partial_results(qapp, mon
         assert first.lyric_file == str(lyric_a)
         assert second.lyric_file == ""
         assert any("partial scan results" in msg.lower() for msg in notices)
+    finally:
+        for timer_name in [
+            "meter_timer",
+            "timecode_mtc_timer",
+            "fade_timer",
+            "_preload_trim_timer",
+            "_preload_status_timer",
+            "talk_blink_timer",
+            "_midi_poll_timer",
+        ]:
+            timer = getattr(window, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        window.hide()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.monkey
+def test_preload_queue_respects_path_safety_toggle(qapp, monkeypatch, tmp_path):
+    safe_audio = tmp_path / "safe.wav"
+    unsafe_audio = tmp_path / "unsafe;name.wav"
+    _write_dummy_wav(safe_audio)
+    _write_dummy_wav(unsafe_audio)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw, "is_audio_preloaded", lambda _path: False)
+    monkeypatch.setattr(mw, "get_audio_preload_capacity_bytes", lambda: (10**9, 10**9, 0))
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(mw, "request_audio_preload", lambda paths, prioritize=True: captured.append(list(paths)))
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        window.current_group = "A"
+        window.current_page = 0
+        window.page_names["A"][0] = "Preload Path Safety"
+        window.preload_audio_enabled = True
+        window.preload_current_page_audio = True
+
+        s0 = window.data["A"][0][0]
+        s0.file_path = str(safe_audio)
+        s0.title = "Safe"
+        s1 = window.data["A"][0][1]
+        s1.file_path = str(unsafe_audio)
+        s1.title = "Unsafe"
+
+        window.disable_path_safety = False
+        window._queue_current_page_audio_preload()
+        assert captured
+        assert str(safe_audio) in captured[-1]
+        assert str(unsafe_audio) not in captured[-1]
+
+        window.disable_path_safety = True
+        window._queue_current_page_audio_preload()
+        assert str(unsafe_audio) in captured[-1]
     finally:
         for timer_name in [
             "meter_timer",

@@ -9533,6 +9533,8 @@ class MainWindow(QMainWindow):
             path = str(slot.file_path or "").strip()
             if not path or not os.path.exists(path):
                 continue
+            if self._path_safety_reason(path):
+                continue
             if is_audio_preloaded(path):
                 continue
             duration_ms = max(0, int(slot.duration_ms))

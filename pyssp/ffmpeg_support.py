@@ -16,6 +16,20 @@ _FFPROBE_PATH_CACHE: Optional[str] = None
 _PATH_LOCK = threading.RLock()
 _FFMPEG_SOURCE_CACHE = "none"
 
+
+def _subprocess_platform_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+    kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    try:
+        startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+        startup.wShowWindow = 0
+        kwargs["startupinfo"] = startup
+    except Exception:
+        pass
+    return kwargs
+
 # Conservative list of container extensions typically decodable by ffmpeg.
 FFMPEG_AUDIO_EXTENSIONS: List[str] = [
     ".aac",
@@ -194,6 +208,7 @@ def ffmpeg_version_text() -> str:
             capture_output=True,
             timeout=4,
             check=False,
+            **_subprocess_platform_kwargs(),
         )
     except Exception:
         return ""
@@ -234,6 +249,7 @@ def probe_media_duration_ms(file_path: str) -> int:
                 capture_output=True,
                 timeout=6,
                 check=False,
+                **_subprocess_platform_kwargs(),
             )
             value = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
             if value:
@@ -249,6 +265,7 @@ def probe_media_duration_ms(file_path: str) -> int:
                 capture_output=True,
                 timeout=6,
                 check=False,
+                **_subprocess_platform_kwargs(),
             )
             stdout_text = (proc.stdout or b"").decode("utf-8", errors="replace")
             stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")
@@ -314,8 +331,9 @@ class FFmpegPCMStream:
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             bufsize=0,
+            **_subprocess_platform_kwargs(),
         )
         self._running = True
         self._eof = False

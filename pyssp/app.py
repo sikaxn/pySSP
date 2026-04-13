@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,7 @@ def _install_crash_handler(app: QApplication) -> None:
 
 
 def _apply_cleanstart() -> bool:
+    _clear_waveform_cache_for_cleanstart()
     settings_path = get_settings_path()
     if not settings_path.exists():
         return True
@@ -191,6 +193,28 @@ def _apply_cleanstart() -> bool:
             f"{exc}",
         )
         return False
+
+
+def _clear_waveform_cache_for_cleanstart() -> None:
+    targets: list[Path] = []
+    try:
+        targets.append(get_settings_path().parent / "temp" / "waveform_cache")
+    except Exception:
+        pass
+    local_appdata = str(os.getenv("LOCALAPPDATA") or "").strip()
+    if local_appdata:
+        targets.append(Path(local_appdata) / "pySSP" / "temp" / "waveform_cache")
+    seen: set[str] = set()
+    for target in targets:
+        path = str(target.resolve())
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            if target.exists():
+                shutil.rmtree(str(target), ignore_errors=True)
+        except Exception:
+            continue
 
 
 def _acquire_single_instance_lock() -> bool:

@@ -3071,9 +3071,9 @@ class MainWindow(QMainWindow):
         clear_waveform_cache_action.triggered.connect(self._clear_waveform_cache_now)
         tools_menu.addAction(clear_waveform_cache_action)
 
-        page_library_path_action = QAction("Display Page Library Folder Path", self)
-        page_library_path_action.triggered.connect(self._show_page_library_folder_path)
-        tools_menu.addAction(page_library_path_action)
+        open_settings_folder_action = QAction("Open Settings Folder", self)
+        open_settings_folder_action.triggered.connect(self._open_settings_folder)
+        tools_menu.addAction(open_settings_folder_action)
 
         set_file_path_action = QAction("Display .set File and Path", self)
         set_file_path_action.triggered.connect(self._show_set_file_and_path)
@@ -5354,14 +5354,76 @@ class MainWindow(QMainWindow):
         self._export_dir_edit = None
         self._export_format_combo = None
 
+    def _open_local_path(self, path: str, title: str, error_prefix: str) -> bool:
+        target = str(path or "").strip()
+        if not target:
+            return False
+        normalized = os.path.abspath(target)
+        try:
+            if QDesktopServices.openUrl(QUrl.fromLocalFile(normalized)):
+                return True
+        except Exception:
+            pass
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["open", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            if os.name == "nt":
+                os.startfile(normalized)  # type: ignore[attr-defined]
+                return True
+            subprocess.Popen(
+                ["xdg-open", normalized],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, title, f"{error_prefix}\n{exc}")
+            return False
+
     def _open_directory(self, path: str) -> None:
         if not path:
             return
         os.makedirs(path, exist_ok=True)
+        self._open_local_path(path, "Open Folder", "Could not open folder:")
+
+    def _open_settings_folder(self) -> None:
+        self._open_directory(str(get_settings_path().parent))
+
+    def _reveal_sound_file_in_browser(self, file_path: str) -> None:
+        path = str(file_path or "").strip()
+        if not path:
+            return
+        normalized = os.path.abspath(path)
+        if not os.path.exists(normalized):
+            QMessageBox.warning(
+                self,
+                tr("Reveal Sound File"),
+                tr("Sound file does not exist:\n{path}").format(path=normalized),
+            )
+            return
         try:
-            os.startfile(path)  # type: ignore[attr-defined]
-        except Exception as exc:
-            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
+            if os.name == "nt":
+                subprocess.Popen(
+                    ["explorer", "/select,", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["open", "-R", normalized],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+        except Exception:
+            pass
+        self._open_directory(os.path.dirname(normalized) or ".")
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -6455,10 +6517,7 @@ class MainWindow(QMainWindow):
         if not os.path.exists(path):
             QMessageBox.information(self, "View Log", f"No log file yet.\n{path}")
             return
-        try:
-            os.startfile(path)  # type: ignore[attr-defined]
-        except Exception as exc:
-            QMessageBox.warning(self, "View Log", f"Could not open log file:\n{exc}")
+        self._open_local_path(path, "View Log", "Could not open log file:")
 
     def _reset_all_played_state(self) -> None:
         for group in GROUPS:
@@ -6589,6 +6648,18 @@ class MainWindow(QMainWindow):
         cue_points_action.setEnabled(slot.assigned)
         lyric_editor_action = menu.addAction(tr("Lyric Editor..."))
         lyric_editor_action.setEnabled(slot.assigned)
+        reveal_sound_file_action = None
+        reveal_lyric_file_action = None
+        lyric_linked = bool(str(slot.lyric_file or "").strip())
+        if lyric_linked:
+            reveal_menu = menu.addMenu(tr("Reveal File in File Browser"))
+            reveal_sound_file_action = reveal_menu.addAction(tr("Sound"))
+            reveal_lyric_file_action = reveal_menu.addAction(tr("Lyric"))
+            reveal_sound_file_action.setEnabled(bool(str(slot.file_path or "").strip()))
+            reveal_lyric_file_action.setEnabled(bool(str(slot.lyric_file or "").strip()))
+        else:
+            reveal_sound_file_action = menu.addAction(tr("Reveal Sound File in File Browser"))
+            reveal_sound_file_action.setEnabled(bool(str(slot.file_path or "").strip()))
         timecode_setup_action = menu.addAction(tr("Timecode Setup..."))
         timecode_setup_action.setEnabled(slot.assigned)
         copy_action = menu.addAction(tr("Copy Sound Button"))
@@ -6617,6 +6688,10 @@ class MainWindow(QMainWindow):
             self._edit_slot_cue_points(slot_index)
         elif selected == lyric_editor_action:
             self._edit_slot_lyric(slot_index)
+        elif selected == reveal_sound_file_action:
+            self._reveal_sound_file_in_browser(slot.file_path)
+        elif selected == reveal_lyric_file_action:
+            self._reveal_sound_file_in_browser(slot.lyric_file)
         elif selected == timecode_setup_action:
             self._edit_slot_timecode_setup(slot_index)
         elif selected == copy_action:
@@ -7219,11 +7294,34 @@ class MainWindow(QMainWindow):
             return
 
         lyric_path = str(slot.lyric_file or "").strip()
+        skipped_linking_found_lyric = False
         if not lyric_path:
+            found_candidate = bool(str(self._find_matching_lyric_file(slot.file_path) or "").strip())
+            linked = self._prompt_lyric_link_selection([slot.file_path])
+            if linked is None:
+                linked_path = ""
+                skipped_linking_found_lyric = found_candidate
+            else:
+                linked_path = str(linked[0] if linked else "").strip()
+            if linked_path:
+                slot.lyric_file = linked_path
+                lyric_path = linked_path
+                self._set_dirty(True)
+                self._refresh_sound_grid()
+                self._refresh_lyric_display(force=True)
+            else:
+                lyric_path = ""
+                skipped_linking_found_lyric = found_candidate
+        if not lyric_path:
+            question_text = (
+                tr("You did not link a lyric. Create a lyric file now?")
+                if skipped_linking_found_lyric
+                else tr("This sound has no lyric linked. Create a lyric file now?")
+            )
             answer = QMessageBox.question(
                 self,
-                "Lyric Editor",
-                "This sound has no lyric linked. Create a lyric file now?",
+                tr("Lyric Editor"),
+                question_text,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -7239,7 +7337,7 @@ class MainWindow(QMainWindow):
                 lyric_filter = "SRT Files (*.srt);;LRC Files (*.lrc);;All Files (*.*)"
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Create Lyric File",
+                tr("Create Lyric File"),
                 suggestion,
                 lyric_filter,
             )
@@ -7255,7 +7353,7 @@ class MainWindow(QMainWindow):
                     with open(save_path, "w", encoding="utf-8-sig", newline="") as fh:
                         fh.write("")
             except OSError as exc:
-                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                QMessageBox.warning(self, tr("Lyric Editor"), f"{tr('Failed to create lyric file:')}\n{exc}")
                 return
             slot.lyric_file = save_path
             lyric_path = save_path
@@ -7264,8 +7362,8 @@ class MainWindow(QMainWindow):
         elif not os.path.exists(lyric_path):
             answer = QMessageBox.question(
                 self,
-                "Lyric Editor",
-                f"Linked lyric file does not exist:\n{lyric_path}\n\nCreate this file now?",
+                tr("Lyric Editor"),
+                tr("Linked lyric file does not exist:\n{path}\n\nCreate this file now?").format(path=lyric_path),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -7276,7 +7374,7 @@ class MainWindow(QMainWindow):
                 with open(lyric_path, "w", encoding="utf-8-sig", newline="") as fh:
                     fh.write("")
             except OSError as exc:
-                QMessageBox.warning(self, "Lyric Editor", f"Failed to create lyric file:\n{exc}")
+                QMessageBox.warning(self, tr("Lyric Editor"), f"{tr('Failed to create lyric file:')}\n{exc}")
                 return
 
         preferred_mode = "lrc" if os.path.splitext(lyric_path)[1].lower() == ".lrc" else "srt"

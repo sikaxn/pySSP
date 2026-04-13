@@ -47,6 +47,7 @@ def build_audio_file_dialog_filter(
 def ensure_supported_audio_formats_ready(
     *,
     timeout_sec: float = 10.0,
+    force_rescan: bool = False,
     set_status: Optional[Callable[[str], None]] = None,
     before_prompt: Optional[Callable[[], None]] = None,
     after_prompt: Optional[Callable[[], None]] = None,
@@ -55,7 +56,7 @@ def ensure_supported_audio_formats_ready(
     configured = normalize_supported_audio_extensions(
         list(getattr(settings, "supported_audio_format_extensions", []))
     )
-    if configured:
+    if configured and (not force_rescan):
         return True
 
     if set_status is not None:
@@ -67,6 +68,10 @@ def ensure_supported_audio_formats_ready(
     if detected:
         settings.supported_audio_format_extensions = list(detected)
         save_settings(settings)
+        return True
+
+    if configured and force_rescan:
+        # Keep previous known-good list if forced rescan produced no result.
         return True
 
     if before_prompt is not None:

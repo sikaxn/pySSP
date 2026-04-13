@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="${ROOT_DIR}/version.json"
+GENERATED_VERSION_DIR="${ROOT_DIR}/.build_meta"
+GENERATED_VERSION_FILE="${GENERATED_VERSION_DIR}/version.json"
 APP_VERSION="0.0.0"
+APP_BUILD_ID=""
 export PIPENV_IGNORE_VIRTUALENVS=1
 export PIPENV_VENV_IN_PROJECT=1
 cd "${ROOT_DIR}"
@@ -47,9 +50,23 @@ if ! run_pipenv install --dev; then
 fi
 
 if [[ -f "${VERSION_FILE}" ]]; then
-  APP_VERSION="$(run_pipenv run python -c 'import json; print(json.load(open("version.json","r",encoding="utf-8")).get("version","0.0.0"))')"
+  mkdir -p "${GENERATED_VERSION_DIR}"
+  while IFS='=' read -r key value; do
+    if [[ "${key}" == "version" ]]; then
+      APP_VERSION="${value}"
+    elif [[ "${key}" == "build_id" ]]; then
+      APP_BUILD_ID="${value}"
+    fi
+  done < <(run_pipenv run python scripts/generate_build_version.py --source "${VERSION_FILE}" --output "${GENERATED_VERSION_FILE}")
+  if [[ ! -f "${GENERATED_VERSION_FILE}" ]]; then
+    echo "[ERROR] Failed to generate build metadata version file."
+    exit 1
+  fi
 fi
 echo "[INFO] Build version: ${APP_VERSION}"
+if [[ -n "${APP_BUILD_ID}" ]]; then
+  echo "[INFO] Build id: ${APP_BUILD_ID}"
+fi
 
 echo "[INFO] Cleaning previous PyInstaller output..."
 rm -rf build
@@ -102,7 +119,7 @@ if ! run_pipenv run pyinstaller \
   --collect-data "imageio_ffmpeg" \
   --add-data "pyssp/assets:pyssp/assets" \
   --add-data "docs/build/html:docs/build/html" \
-  --add-data "version.json:." \
+  --add-data ".build_meta/version.json:." \
   main.py; then
   echo "[ERROR] PyInstaller GUI build failed."
   exit 1

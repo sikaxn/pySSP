@@ -379,6 +379,8 @@ def _get_current_running_config_report() -> List[str]:
         cfg = load_settings()
         lines.append("normalized_runtime_snapshot_begin")
         lines.append(f"ui_language: {cfg.ui_language}")
+        lines.append(f"app_version: {getattr(cfg, 'app_version', '')}")
+        lines.append(f"app_build_id: {getattr(cfg, 'app_build_id', '')}")
         lines.append(f"audio_output_device: {cfg.audio_output_device or '(default)'}")
         lines.append(f"volume: {cfg.volume}")
         lines.append(f"talk_volume_level: {cfg.talk_volume_level}")
@@ -406,6 +408,7 @@ def _get_current_running_config_report() -> List[str]:
 
 def build_system_information_text(
     app_version_text: str,
+    app_build_text: str = "",
     register_probe_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None,
 ) -> str:
     now_local = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -417,6 +420,8 @@ def build_system_information_text(
     lines.append(f"Collected at: {now_local}")
     lines.append(f"System name: {system_name}")
     lines.append(f"Software version: {app_version_text}")
+    if str(app_build_text or "").strip():
+        lines.append(f"Software build: {str(app_build_text).strip()}")
     lines.append(f"Running path: {os.path.abspath(sys.executable)}")
     lines.append(f"Current working directory: {os.path.abspath(os.getcwd())}")
     lines.append(f"Frozen build: {bool(getattr(sys, 'frozen', False))}")
@@ -491,16 +496,21 @@ class _SystemInfoWorker(QObject):
     failed = pyqtSignal(str)
     cancel_requested = pyqtSignal()
 
-    def __init__(self, app_version_text: str) -> None:
+    def __init__(self, app_version_text: str, app_build_text: str = "") -> None:
         super().__init__()
         self._app_version_text = str(app_version_text or "")
+        self._app_build_text = str(app_build_text or "")
         self._probe_process: Optional[subprocess.Popen[str]] = None
         self.cancel_requested.connect(self.cancel)
 
     def run(self) -> None:
         try:
             self.finished.emit(
-                build_system_information_text(self._app_version_text, register_probe_process=self._set_probe_process)
+                build_system_information_text(
+                    self._app_version_text,
+                    self._app_build_text,
+                    register_probe_process=self._set_probe_process,
+                )
             )
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -527,9 +537,10 @@ class _SystemInfoWorker(QObject):
 
 
 class SystemInformationDialog(QDialog):
-    def __init__(self, app_version_text: str, parent=None) -> None:
+    def __init__(self, app_version_text: str, app_build_text: str = "", parent=None) -> None:
         super().__init__(parent)
         self._app_version_text = str(app_version_text or "")
+        self._app_build_text = str(app_build_text or "")
         self._refresh_thread: Optional[QThread] = None
         self._refresh_worker: Optional[_SystemInfoWorker] = None
         self.setWindowTitle("System Information")
@@ -575,13 +586,16 @@ class SystemInformationDialog(QDialog):
     def set_app_version_text(self, value: str) -> None:
         self._app_version_text = str(value or "")
 
+    def set_app_build_text(self, value: str) -> None:
+        self._app_build_text = str(value or "")
+
     def refresh(self) -> None:
         if self._refresh_thread is not None:
             return
         self._set_refresh_in_progress(True)
         self._text_box.setPlainText("Refreshing system information...")
         thread = QThread(self)
-        worker = _SystemInfoWorker(self._app_version_text)
+        worker = _SystemInfoWorker(self._app_version_text, self._app_build_text)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._handle_refresh_finished)

@@ -489,6 +489,37 @@ def can_stream_without_preload(file_path: str) -> bool:
     return bool(path) and os.path.exists(path) and ffmpeg_available()
 
 
+def can_decode_with_ffmpeg(file_path: str, timeout_ms: int = 180) -> bool:
+    path = str(file_path or "").strip()
+    if not can_stream_without_preload(path):
+        return False
+    mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+    sample_rate = int(mixer_info[0])
+    channels = int(mixer_info[2])
+    decoder: Optional[FFmpegPCMStream] = None
+    deadline = time.perf_counter() + (max(40, int(timeout_ms)) / 1000.0)
+    try:
+        decoder = FFmpegPCMStream(path, sample_rate=sample_rate, channels=channels)
+        decoder.start(0)
+        while time.perf_counter() < deadline:
+            _block, wrote, eof = decoder.read_frames(1024)
+            if wrote > 0:
+                return True
+            if eof:
+                return False
+    except Exception:
+        return False
+    finally:
+        if decoder is not None:
+            try:
+                decoder.close()
+            except Exception:
+                pass
+    # Decoder started but did not emit frames in the short probe window.
+    # Treat known-duration files as playable to avoid false negatives.
+    return probe_media_duration_ms(path) > 0
+
+
 def request_audio_preload(file_paths: List[str], prioritize: bool = False, force: bool = False) -> None:
     with _PRELOAD_LOCK:
         if ((not _PRELOAD_ENABLED) and (not force)) or (_PRELOAD_PAUSED and (not force)):

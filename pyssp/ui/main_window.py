@@ -63,6 +63,7 @@ from PyQt5.QtWidgets import (
 from pyssp.audio_format_support import build_audio_file_dialog_filter, normalize_supported_audio_extensions
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
+    can_decode_with_ffmpeg,
     can_stream_without_preload,
     configure_audio_preload_cache_policy,
     configure_waveform_disk_cache,
@@ -157,7 +158,7 @@ from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
-from pyssp.version import get_app_title_base, get_display_version
+from pyssp.version import get_app_title_base, get_display_build_id, get_display_version
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -703,6 +704,10 @@ class AboutWindowDialog(QDialog):
         self.version_label.setAlignment(Qt.AlignCenter)
         self.version_label.setWordWrap(True)
         root.addWidget(self.version_label)
+        self.build_label = QLabel("", self)
+        self.build_label.setAlignment(Qt.AlignCenter)
+        self.build_label.setWordWrap(True)
+        root.addWidget(self.build_label)
         self.website_label = QLabel("", self)
         self.website_label.setAlignment(Qt.AlignCenter)
         self.website_label.setWordWrap(True)
@@ -757,7 +762,7 @@ class AboutWindowDialog(QDialog):
         self.credits_viewer.setPlainText(credits_text)
         self.license_viewer.setPlainText(license_text)
 
-    def set_version_and_website(self, version_text: str, website_url: str) -> None:
+    def set_version_and_website(self, version_text: str, website_url: str, build_text: str = "") -> None:
         version_value = str(version_text or "").strip()
         if version_value:
             self.version_label.setText(f"{tr('Version:')} {version_value}")
@@ -765,6 +770,13 @@ class AboutWindowDialog(QDialog):
         else:
             self.version_label.setText("")
             self.version_label.setVisible(False)
+        build_value = str(build_text or "").strip()
+        if build_value:
+            self.build_label.setText(f"{tr('Build:')} {build_value}")
+            self.build_label.setVisible(True)
+        else:
+            self.build_label.setText("")
+            self.build_label.setVisible(False)
         site = str(website_url or "").strip()
         if site:
             safe_site = html.escape(site, quote=True)
@@ -1788,6 +1800,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._suspend_settings_save = True
         self.app_version_text = get_display_version()
+        self.app_build_text = get_display_build_id()
         self.app_title_base = get_app_title_base()
         self.setWindowTitle(self.app_title_base)
         self.resize(1360, 900)
@@ -4223,7 +4236,11 @@ class MainWindow(QMainWindow):
         about_text = self._load_asset_text_file("about", "about.md").replace("{{VERSION}}", self.app_version_text)
         credits_text = self._load_asset_text_file("about", "credits.md")
         license_text = self._load_asset_text_file("about", "license.md")
-        self._about_window.set_version_and_website(self.app_version_text, self._website_url())
+        self._about_window.set_version_and_website(
+            self.app_version_text,
+            self._website_url(),
+            self.app_build_text,
+        )
         self._about_window.set_content(about_text=about_text, credits_text=credits_text, license_text=license_text)
         self._about_window.show()
         self._about_window.raise_()
@@ -4234,9 +4251,14 @@ class MainWindow(QMainWindow):
             self._show_info_notice_banner(tr("Stop playback before opening System Information."))
             return
         if self._system_info_window is None:
-            self._system_info_window = SystemInformationDialog(app_version_text=self.app_version_text, parent=self)
+            self._system_info_window = SystemInformationDialog(
+                app_version_text=self.app_version_text,
+                app_build_text=self.app_build_text,
+                parent=self,
+            )
             self._system_info_window.destroyed.connect(lambda _=None: self._clear_system_info_window_ref())
         self._system_info_window.set_app_version_text(self.app_version_text)
+        self._system_info_window.set_app_build_text(self.app_build_text)
         self._system_info_window.refresh()
         self._system_info_window.show()
         self._system_info_window.raise_()
@@ -4942,6 +4964,11 @@ class MainWindow(QMainWindow):
             get_media_ssp_units(path)
             return None
         except Exception as exc:
+            try:
+                if can_decode_with_ffmpeg(path):
+                    return None
+            except Exception:
+                pass
             return self._classify_audio_decode_issue(path, exc)
 
     def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
@@ -12355,6 +12382,8 @@ class MainWindow(QMainWindow):
         self.settings.search_double_click_action = self.search_double_click_action
         self.settings.set_file_encoding = self.set_file_encoding
         self.settings.ui_language = self.ui_language
+        self.settings.app_version = str(self.app_version_text or "")
+        self.settings.app_build_id = str(self.app_build_text or "")
         self.settings.tips_open_on_startup = bool(self.tips_open_on_startup)
         self.settings.audio_output_device = self.audio_output_device
         self.settings.preload_audio_enabled = bool(self.preload_audio_enabled)

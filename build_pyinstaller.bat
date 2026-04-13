@@ -3,7 +3,10 @@ setlocal
 
 set "ROOT_DIR=%~dp0"
 set "VERSION_FILE=%ROOT_DIR%version.json"
+set "GENERATED_VERSION_DIR=%ROOT_DIR%.build_meta"
+set "GENERATED_VERSION_FILE=%GENERATED_VERSION_DIR%\version.json"
 set "APP_VERSION=0.0.0"
+set "APP_BUILD_ID="
 set "APP_BASENAME=pySSP-%APP_VERSION%"
 set "APP_EXE_NAME=pySSP"
 set "PIPENV_IGNORE_VIRTUALENVS=1"
@@ -51,10 +54,20 @@ if errorlevel 1 (
 )
 
 if exist "%VERSION_FILE%" (
-    for /f %%i in ('pipenv run python -c "import json; print(json.load(open('version.json','r',encoding='utf-8')).get('version','0.0.0'))"') do set "APP_VERSION=%%i"
+    if not exist "%GENERATED_VERSION_DIR%" mkdir "%GENERATED_VERSION_DIR%"
+    for /f "usebackq tokens=1,2 delims==" %%A in (`pipenv run python scripts\generate_build_version.py --source "%VERSION_FILE%" --output "%GENERATED_VERSION_FILE%"`) do (
+        if /I "%%A"=="version" set "APP_VERSION=%%B"
+        if /I "%%A"=="build_id" set "APP_BUILD_ID=%%B"
+    )
+    if not exist "%GENERATED_VERSION_FILE%" (
+        echo [ERROR] Failed to generate build metadata version file.
+        popd
+        exit /b 1
+    )
 )
 set "APP_BASENAME=pySSP-%APP_VERSION%"
 echo [INFO] Build version: %APP_VERSION%
+if defined APP_BUILD_ID echo [INFO] Build id: %APP_BUILD_ID%
 
 echo [INFO] Cleaning previous PyInstaller output...
 if exist build rmdir /s /q build
@@ -88,7 +101,7 @@ pipenv run pyinstaller ^
   --collect-data "imageio_ffmpeg" ^
   --add-data "pyssp\assets;pyssp\assets" ^
   --add-data "docs\build\html;docs\build\html" ^
-  --add-data "version.json;." ^
+  --add-data ".build_meta\version.json;." ^
   main.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller GUI build failed.

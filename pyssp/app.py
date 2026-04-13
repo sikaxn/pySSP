@@ -24,7 +24,7 @@ from pyssp.system_info_probe import main as system_info_probe_main
 from pyssp.ui.crash_report_dialog import CrashReportDialog
 from pyssp.ui.main_window import MainWindow
 from pyssp.ui.system_info_dialog import SystemInformationDialog
-from pyssp.version import get_display_version
+from pyssp.version import get_display_build_id, get_display_version, is_beta_version
 
 _INSTANCE_LOCK: Optional[QLockFile] = None
 _STDOUT_FALLBACK = None
@@ -279,7 +279,11 @@ def _prompt_first_run_language() -> str:
         box.exec_()
         clicked = box.clickedButton()
         if clicked is info_button:
-            dialog = SystemInformationDialog(app_version_text=get_display_version(), parent=None)
+            dialog = SystemInformationDialog(
+                app_version_text=get_display_version(),
+                app_build_text=get_display_build_id(),
+                parent=None,
+            )
             dialog.setProperty("_i18n_force_language", "en")
             dialog.exec_()
             continue
@@ -329,9 +333,11 @@ def _asset_path(*parts: str) -> Path:
 class _StartupSplash(QSplashScreen):
     _BOTTOM_TEXT_MARGIN_PX = 18
 
-    def __init__(self, pixmap: QPixmap, version_text: str) -> None:
+    def __init__(self, pixmap: QPixmap, version_text: str, build_text: str = "") -> None:
         super().__init__(pixmap)
         self._version_text = str(version_text or "").strip()
+        self._build_text = str(build_text or "").strip()
+        self._is_beta = is_beta_version(self._version_text)
         self._status_text = "Loading..."
         splash_font = self.font()
         splash_font.setPointSize(max(16, splash_font.pointSize() + 5))
@@ -352,6 +358,8 @@ class _StartupSplash(QSplashScreen):
         version_font.setBold(True)
         painter.setFont(version_font)
         painter.drawText(12, 24, f"v{self._version_text}")
+        if self._build_text:
+            painter.drawText(12, 42, f"{tr('Build:')} {self._build_text}")
 
         # Lower-center app/loading text as one aligned block.
         title_font = self.font()
@@ -375,7 +383,16 @@ class _StartupSplash(QSplashScreen):
         status_w = fm_status.horizontalAdvance(status_text)
         status_h = fm_status.height()
 
-        block_h = title_h + line_gap + status_h
+        beta_h = 0
+        if self._is_beta:
+            beta_font = self.font()
+            beta_font.setBold(True)
+            beta_font.setPointSize(max(12, self.font().pointSize() - 5))
+            painter.setFont(beta_font)
+            fm_beta = painter.fontMetrics()
+            beta_h = fm_beta.height() + 4
+
+        block_h = title_h + line_gap + status_h + beta_h
         bottom_margin = max(8, int(self._BOTTOM_TEXT_MARGIN_PX))
         block_top = max(12, self.height() - bottom_margin - block_h)
 
@@ -388,6 +405,19 @@ class _StartupSplash(QSplashScreen):
         painter.setFont(status_font)
         status_rect = QRect(text_rect.left(), text_rect.top() + title_h + line_gap, text_rect.width(), status_h)
         painter.drawText(status_rect, int(Qt.AlignHCenter | Qt.AlignVCenter), status_text)
+        if self._is_beta:
+            beta_font = self.font()
+            beta_font.setBold(True)
+            beta_font.setPointSize(max(12, self.font().pointSize() - 5))
+            painter.setFont(beta_font)
+            painter.setPen(QColor("#B40000"))
+            beta_rect = QRect(
+                text_rect.left(),
+                text_rect.top() + title_h + line_gap + status_h + 4,
+                text_rect.width(),
+                max(1, beta_h - 4),
+            )
+            painter.drawText(beta_rect, int(Qt.AlignHCenter | Qt.AlignVCenter), tr("Beta build - use with caution"))
 
 
 def main() -> int:
@@ -396,21 +426,16 @@ def main() -> int:
         return system_info_probe_main(qt_argv)
     _enable_debug_console(debug_requested)
     _ensure_standard_streams(debug_requested)
+    settings_path = get_settings_path()
+    settings_existed_at_launch = settings_path.exists()
+    cleanstart_applied = False
+    if settings_existed_at_launch and (not cleanstart_requested):
+        try:
+            pre_settings = load_settings()
+            set_current_language(normalize_language(getattr(pre_settings, "ui_language", "en")))
+        except Exception:
+            set_current_language("en")
     app = QApplication(qt_argv)
-    try:
-        cache_limit_mb = 1024
-        cache_clear_on_launch = True
-        startup_settings = load_settings()
-        cache_limit_mb = max(128, min(16384, int(getattr(startup_settings, "waveform_cache_limit_mb", 1024))))
-        cache_clear_on_launch = bool(getattr(startup_settings, "waveform_cache_clear_on_launch", True))
-        cache_dir = get_settings_path().parent / "temp" / "waveform_cache"
-        prepare_waveform_disk_cache(
-            str(cache_dir),
-            clear_existing=cache_clear_on_launch,
-            limit_mb=cache_limit_mb,
-        )
-    except Exception:
-        pass
     _install_crash_handler(app)
     splash: Optional[_StartupSplash] = None
     splash_path = _asset_path("logo2.png")
@@ -426,14 +451,14 @@ def main() -> int:
                 max_h = max(260, min(max_h, int(available.height() * 0.6)))
             if pixmap.width() > max_w or pixmap.height() > max_h:
                 pixmap = pixmap.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            splash = _StartupSplash(pixmap, get_display_version())
+            splash = _StartupSplash(pixmap, get_display_version(), get_display_build_id())
             splash.show()
-            splash.set_status("Loading...")
+            splash.set_status(tr("Loading..."))
             app.processEvents()
     _force_light_qt_theme(app)
     install_auto_localization(app)
     if splash is not None:
-        splash.set_status("Loading settings...")
+        splash.set_status(tr("Loading settings..."))
         app.processEvents()
     preferred_language: Optional[str] = None
     if cleanstart_requested:
@@ -444,12 +469,39 @@ def main() -> int:
             return 0
         if not _apply_cleanstart():
             return 1
+        cleanstart_applied = True
     try:
         startup_language = _resolve_startup_language(preferred_if_missing=preferred_language)
     except Exception:
         startup_language = "en"
     set_current_language(startup_language)
     apply_application_font(app, startup_language)
+    startup_settings = load_settings()
+    current_version = str(get_display_version() or "").strip()
+    current_build_id = str(get_display_build_id() or "").strip()
+    stored_version = str(getattr(startup_settings, "app_version", "") or "").strip()
+    stored_build_id = str(getattr(startup_settings, "app_build_id", "") or "").strip()
+    update_done = False
+    if (not settings_existed_at_launch) or cleanstart_applied:
+        update_done = False
+    else:
+        build_changed = bool(current_build_id) and ((not stored_build_id) or (stored_build_id != current_build_id))
+        update_done = (
+            (not stored_version)
+            or (stored_version != current_version)
+            or build_changed
+        )
+    try:
+        cache_limit_mb = max(128, min(16384, int(getattr(startup_settings, "waveform_cache_limit_mb", 1024))))
+        cache_clear_on_launch = bool(getattr(startup_settings, "waveform_cache_clear_on_launch", True))
+        cache_dir = settings_path.parent / "temp" / "waveform_cache"
+        prepare_waveform_disk_cache(
+            str(cache_dir),
+            clear_existing=bool(update_done or cache_clear_on_launch),
+            limit_mb=cache_limit_mb,
+        )
+    except Exception:
+        pass
     splash_status_cb = None
     splash_hide_cb = None
     splash_show_cb = None
@@ -471,13 +523,25 @@ def main() -> int:
         splash_show_cb = _show_splash
     if not ensure_supported_audio_formats_ready(
         timeout_sec=10.0,
+        force_rescan=bool(update_done),
         set_status=splash_status_cb,
         before_prompt=splash_hide_cb,
         after_prompt=splash_show_cb,
     ):
         return 1
+    try:
+        startup_settings = load_settings()
+        if (
+            str(getattr(startup_settings, "app_version", "") or "").strip() != current_version
+            or str(getattr(startup_settings, "app_build_id", "") or "").strip() != current_build_id
+        ):
+            startup_settings.app_version = current_version
+            startup_settings.app_build_id = current_build_id
+            save_settings(startup_settings)
+    except Exception:
+        pass
     if splash is not None:
-        splash.set_status("Loading main window...")
+        splash.set_status(tr("Loading main window..."))
         app.processEvents()
     if not _acquire_single_instance_lock():
         return 1

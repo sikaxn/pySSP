@@ -494,6 +494,8 @@ class AppSettings:
     search_double_click_action: str = "find_highlight"
     set_file_encoding: str = "utf8"
     ui_language: str = "en"
+    app_version: str = ""
+    app_build_id: str = ""
     tips_open_on_startup: bool = True
     audio_output_device: str = ""
     preload_audio_enabled: bool = False
@@ -805,6 +807,8 @@ def save_settings(settings: AppSettings) -> None:
         "search_double_click_action": settings.search_double_click_action,
         "set_file_encoding": settings.set_file_encoding,
         "ui_language": settings.ui_language,
+        "app_version": settings.app_version,
+        "app_build_id": settings.app_build_id,
         "tips_open_on_startup": "1" if settings.tips_open_on_startup else "0",
         "audio_output_device": settings.audio_output_device,
         "preload_audio_enabled": "1" if settings.preload_audio_enabled else "0",
@@ -1332,6 +1336,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         search_double_click_action=search_double_click_action,
         set_file_encoding=set_file_encoding,
         ui_language="zh_cn" if ui_language in {"zh", "zh_cn", "zh-cn"} else "en",
+        app_version=str(section.get("app_version", "")).strip(),
+        app_build_id=str(section.get("app_build_id", "")).strip(),
         tips_open_on_startup=tips_open_on_startup,
         audio_output_device=str(section.get("audio_output_device", "")),
         preload_audio_enabled=_get_bool(section, "preload_audio_enabled", False),

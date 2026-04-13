@@ -147,8 +147,10 @@ Build outputs:
 ## FFmpeg / LGPL Compliance
 
 - `pySSP` uses FFmpeg for media decode support.
-- Release builds bundle FFmpeg binaries from `third_party/ffmpeg/bin`.
-- Build scripts enforce an LGPL guard check and fail when FFmpeg config includes disallowed GPL/nonfree items (for example `--enable-gpl`, `--enable-nonfree`, `libx264`).
+- Current release build scripts collect `imageio_ffmpeg` data (`--collect-data "imageio_ffmpeg"`), which bundles the FFmpeg binary provided by that package.
+- This repository does not include FFmpeg source code.
+- Release artifacts may include unmodified FFmpeg binaries provided by `imageio-ffmpeg`.
+- Current build scripts do not enforce an automatic LGPL/GPL flag guard; verify the bundled FFmpeg build configuration during release preparation.
 - Follow `docs/source/ffmpeg_lgpl_compliance.md` for release requirements.
 
 Download-page notice text (for any page that links to your app download):

@@ -11,9 +11,11 @@ Use this checklist when distributing a `pySSP` build that includes FFmpeg binari
 ## 2) Linking/distribution model
 
 - Prefer dynamic linking if you distribute FFmpeg libraries (`.dll`, `.so`, `.dylib`).
-- `pySSP` release builds bundle FFmpeg binaries from `third_party/ffmpeg/bin`.
-- Build scripts reject bundled FFmpeg binaries whose `configuration:` line includes `--enable-gpl`, `--enable-nonfree`, or `libx264`.
-- If you change the bundled FFmpeg binaries in downstream distribution, you are responsible for LGPL compliance artifacts below.
+- Current `pySSP` release build scripts collect FFmpeg from the `imageio-ffmpeg` package (`--collect-data "imageio_ffmpeg"`).
+- The `pySSP` source repository does not include FFmpeg source code.
+- Release artifacts may include unmodified FFmpeg binaries from `imageio-ffmpeg`.
+- Current build scripts do not automatically reject GPL/nonfree FFmpeg binaries. Release maintainers must verify the bundled FFmpeg `-version` configuration before shipping.
+- If you change or replace bundled FFmpeg binaries in downstream distribution, you are responsible for LGPL compliance artifacts below.
 
 ## 3) Source publication requirements
 

@@ -23,6 +23,7 @@ Python dependencies:
 
 FFmpeg notice:
 This software uses code of [FFmpeg](http://ffmpeg.org) licensed under the [LGPLv2.1](http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) and its source can be downloaded from the release page linked on the pySSP download page.
+The pySSP source repository does not include FFmpeg source code. Release builds may bundle unmodified FFmpeg binaries provided by imageio-ffmpeg.
 
 Bundled third-party assets:
 - jQuery 1.12.4 (MIT License)

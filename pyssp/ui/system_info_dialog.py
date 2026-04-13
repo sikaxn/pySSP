@@ -505,13 +505,18 @@ class _SystemInfoWorker(QObject):
 
     def run(self) -> None:
         try:
-            self.finished.emit(
-                build_system_information_text(
+            if self._app_build_text.strip():
+                text = build_system_information_text(
                     self._app_version_text,
                     self._app_build_text,
                     register_probe_process=self._set_probe_process,
                 )
-            )
+            else:
+                text = build_system_information_text(
+                    self._app_version_text,
+                    register_probe_process=self._set_probe_process,
+                )
+            self.finished.emit(text)
         except Exception as exc:
             self.failed.emit(str(exc))
 

@@ -102,7 +102,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
-            lyric_file = section.get(f"pyssplyric{i}", "").strip()
+            lyric_file = _normalize_set_path_string(section.get(f"pyssplyric{i}", "").strip())
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -167,6 +167,15 @@ def _read_text_with_fallback(file_path: str) -> tuple[str, str]:
         except UnicodeDecodeError:
             continue
     return raw.decode("latin1", errors="replace"), "latin1-replace"
+
+
+def _normalize_set_path_string(value: str) -> str:
+    text = str(value or "").strip()
+    if re.match(r"^[A-Za-z]:\\\\", text):
+        return text.replace("\\\\", "\\")
+    if text.startswith("\\\\\\\\"):
+        return text.replace("\\\\", "\\")
+    return text
 
 
 def _parse_page_section(name: str) -> Optional[tuple[str, int]]:

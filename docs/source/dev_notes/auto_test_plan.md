@@ -108,3 +108,14 @@ This keeps CI useful immediately while we burn down existing red tests.
 - Added `pytest.ini` at repo root.
 - Added `.github/workflows/tests.yml` with required core and advisory full suite.
 - Added this plan file as the central engineering note for test expansion.
+- Added seeded UI monkey testing (`pytest -m monkey`) for `OptionsDialog`.
+- Added dummy media + lyric integration tests and settings-combination matrix tests
+  (`tests/test_media_and_settings_combinations.py`) to validate behavior changes under option combinations.
+- Added media-format matrix tests (`tests/test_media_format_matrix.py`) covering repo sample
+  `.wav/.mp3/.ogg/.flac`, generated extra audio formats, and video-with-audio vs video-without-audio detection.
+- Fixed `media_has_audio_stream()` fallback parsing so ffmpeg output is interpreted correctly when ffprobe is unavailable.
+- Expanded monkey testing to include pairwise settings-combination coverage across major
+  options dimensions (`tests/test_monkey_options_dialog.py`) in addition to seeded random user-flow actions.
+- Added full-application monkey coverage (`tests/test_monkey_main_window.py`) that exercises
+  `MainWindow` user flows (add sound, group/page navigation, playback-control toggles, rapid-fire behavior)
+  under pairwise settings combinations with dummy media/lyric files.

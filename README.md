@@ -114,6 +114,8 @@ Run unit tests with:
 python -m pytest
 ```
 
+Monkey tests are included in the default `pytest` run.
+
 Auto-test implementation notes and roadmap:
 
 - `docs/source/dev_notes/auto_test_plan.md`

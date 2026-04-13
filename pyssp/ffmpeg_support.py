@@ -307,11 +307,17 @@ def media_has_audio_stream(file_path: str) -> Optional[bool]:
                 check=False,
                 **_subprocess_platform_kwargs(),
             )
-            values = (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
-            for token in values:
-                if str(token or "").strip().lower() == "audio":
-                    return True
-            return False
+            values = [
+                str(token or "").strip().lower()
+                for token in (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+                if str(token or "").strip()
+            ]
+            if "audio" in values:
+                return True
+            # Only conclude "no audio" on a successful ffprobe query.
+            # If ffprobe produced empty/failed output, fall back to ffmpeg parsing.
+            if proc.returncode == 0 and values:
+                return False
         except Exception:
             pass
     ffmpeg = get_ffmpeg_executable()
@@ -330,7 +336,7 @@ def media_has_audio_stream(file_path: str) -> Optional[bool]:
                     (proc.stderr or b"").decode("utf-8", errors="replace"),
                 ]
             )
-            return bool(re.search(r"Stream #\d+:\d+.*\bAudio:\b", blob, flags=re.IGNORECASE))
+            return bool(re.search(r"Stream #\d+:\d+.*Audio:", blob, flags=re.IGNORECASE))
         except Exception:
             pass
     return None

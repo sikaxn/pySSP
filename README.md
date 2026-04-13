@@ -144,6 +144,17 @@ Build outputs:
 - Windows: `dist\pySSP\pySSP.exe`, `dist\pySSP\pySSP_cleanstart.bat`, `dist\pySSP\pySSP_debug.bat`
 - macOS: `dist/pySSP.app`, `dist/pySSP_cleanstart.app`, `dist/pySSP_debug.app`
 
+## FFmpeg / LGPL Compliance
+
+- `pySSP` uses FFmpeg for media decode support.
+- Release builds bundle FFmpeg binaries from `third_party/ffmpeg/bin`.
+- Build scripts enforce an LGPL guard check and fail when FFmpeg config includes disallowed GPL/nonfree items (for example `--enable-gpl`, `--enable-nonfree`, `libx264`).
+- Follow `docs/source/ffmpeg_lgpl_compliance.md` for release requirements.
+
+Download-page notice text (for any page that links to your app download):
+
+`This software uses code of <a href=http://ffmpeg.org>FFmpeg</a> licensed under the <a href=http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>LGPLv2.1</a> and its source can be downloaded <a href=link_to_your_sources>here</a>`
+
 ## Build DMG (macOS)
 
 Use:

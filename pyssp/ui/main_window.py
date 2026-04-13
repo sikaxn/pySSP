@@ -2738,6 +2738,10 @@ class MainWindow(QMainWindow):
             )
         if self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
             return max(0, int(self._timecode_follow_frozen_ms))
+        # In follow mode, once playback is fully stopped/ended, reset timecode to zero
+        # instead of re-deriving from residual player position without slot offset context.
+        if not self._is_playback_in_progress():
+            return 0
         return self._timecode_current_follow_ms()
 
     def _timecode_device_text(self) -> str:

@@ -282,6 +282,60 @@ def probe_media_duration_ms(file_path: str) -> int:
     return 0
 
 
+def media_has_audio_stream(file_path: str) -> Optional[bool]:
+    path = str(file_path or "").strip()
+    if not path or (not os.path.exists(path)):
+        return None
+    ffprobe = get_ffprobe_executable()
+    if ffprobe:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                capture_output=True,
+                timeout=6,
+                check=False,
+                **_subprocess_platform_kwargs(),
+            )
+            values = (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+            for token in values:
+                if str(token or "").strip().lower() == "audio":
+                    return True
+            return False
+        except Exception:
+            pass
+    ffmpeg = get_ffmpeg_executable()
+    if ffmpeg:
+        try:
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", path],
+                capture_output=True,
+                timeout=6,
+                check=False,
+                **_subprocess_platform_kwargs(),
+            )
+            blob = "\n".join(
+                [
+                    (proc.stdout or b"").decode("utf-8", errors="replace"),
+                    (proc.stderr or b"").decode("utf-8", errors="replace"),
+                ]
+            )
+            return bool(re.search(r"Stream #\d+:\d+.*\bAudio:\b", blob, flags=re.IGNORECASE))
+        except Exception:
+            pass
+    return None
+
+
 class FFmpegPCMStream:
     def __init__(self, file_path: str, sample_rate: int = 44100, channels: int = 2) -> None:
         self.file_path = str(file_path or "").strip()

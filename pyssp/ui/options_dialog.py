@@ -762,7 +762,8 @@ class OptionsDialog(QDialog):
         "preload_current_page_audio": True,
         "preload_audio_memory_limit_mb": 512,
         "preload_memory_pressure_enabled": True,
-        "preload_pause_on_playback": False,
+        "preload_pause_on_playback": True,
+        "preload_use_ffmpeg": True,
         "waveform_cache_limit_mb": 1024,
         "waveform_cache_clear_on_launch": True,
         "fade_in_sec": 1.0,
@@ -955,6 +956,7 @@ class OptionsDialog(QDialog):
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
+        preload_use_ffmpeg: bool,
         waveform_cache_limit_mb: int,
         waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
@@ -1297,6 +1299,7 @@ class OptionsDialog(QDialog):
                 preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
                 preload_memory_pressure_enabled=preload_memory_pressure_enabled,
                 preload_pause_on_playback=preload_pause_on_playback,
+                preload_use_ffmpeg=preload_use_ffmpeg,
                 waveform_cache_limit_mb=waveform_cache_limit_mb,
                 waveform_cache_clear_on_launch=waveform_cache_clear_on_launch,
                 preload_total_ram_mb=preload_total_ram_mb,
@@ -2556,6 +2559,7 @@ class OptionsDialog(QDialog):
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
+        preload_use_ffmpeg: bool,
         waveform_cache_limit_mb: int,
         waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
@@ -2594,6 +2598,12 @@ class OptionsDialog(QDialog):
         self.preload_pause_on_playback_checkbox = QCheckBox("Pause audio preload during playback")
         self.preload_pause_on_playback_checkbox.setChecked(bool(preload_pause_on_playback))
         options_form.addRow(self.preload_pause_on_playback_checkbox)
+        self.preload_use_ffmpeg_checkbox = QCheckBox("Use FFmpeg for RAM preload decoding")
+        self.preload_use_ffmpeg_checkbox.setChecked(bool(preload_use_ffmpeg))
+        options_form.addRow(self.preload_use_ffmpeg_checkbox)
+        ffmpeg_note = QLabel("Warning: Enabling this may increase CPU usage during preload.")
+        ffmpeg_note.setWordWrap(True)
+        options_form.addRow(ffmpeg_note)
         layout.addWidget(options_group)
 
         ram_group = QGroupBox("RAM Limit")
@@ -3516,6 +3526,9 @@ class OptionsDialog(QDialog):
 
     def selected_preload_pause_on_playback(self) -> bool:
         return bool(self.preload_pause_on_playback_checkbox.isChecked())
+
+    def selected_preload_use_ffmpeg(self) -> bool:
+        return bool(self.preload_use_ffmpeg_checkbox.isChecked())
 
     def selected_waveform_cache_limit_mb(self) -> int:
         step_mb = int(self._waveform_cache_slider_step_mb)
@@ -4839,6 +4852,7 @@ class OptionsDialog(QDialog):
         self.preload_current_page_checkbox.setChecked(bool(d["preload_current_page_audio"]))
         self.preload_memory_pressure_checkbox.setChecked(bool(d["preload_memory_pressure_enabled"]))
         self.preload_pause_on_playback_checkbox.setChecked(bool(d["preload_pause_on_playback"]))
+        self.preload_use_ffmpeg_checkbox.setChecked(bool(d["preload_use_ffmpeg"]))
         step_mb = int(self._preload_slider_step_mb)
         target_mb = max(step_mb, min(int(self._preload_ram_cap_mb), int(d["preload_audio_memory_limit_mb"])))
         self.preload_memory_slider.setValue(max(1, target_mb // step_mb))

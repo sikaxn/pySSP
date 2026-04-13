@@ -502,7 +502,8 @@ class AppSettings:
     preload_current_page_audio: bool = True
     preload_audio_memory_limit_mb: int = 512
     preload_memory_pressure_enabled: bool = True
-    preload_pause_on_playback: bool = False
+    preload_pause_on_playback: bool = True
+    preload_use_ffmpeg: bool = True
     waveform_cache_limit_mb: int = 1024
     waveform_cache_clear_on_launch: bool = True
     max_multi_play_songs: int = 5
@@ -816,6 +817,7 @@ def save_settings(settings: AppSettings) -> None:
         "preload_audio_memory_limit_mb": str(settings.preload_audio_memory_limit_mb),
         "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
         "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
+        "preload_use_ffmpeg": "1" if settings.preload_use_ffmpeg else "0",
         "waveform_cache_limit_mb": str(settings.waveform_cache_limit_mb),
         "waveform_cache_clear_on_launch": "1" if settings.waveform_cache_clear_on_launch else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
@@ -1344,7 +1346,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         preload_current_page_audio=_get_bool(section, "preload_current_page_audio", True),
         preload_audio_memory_limit_mb=preload_audio_memory_limit_mb,
         preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
-        preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", False),
+        preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", True),
+        preload_use_ffmpeg=_get_bool(section, "preload_use_ffmpeg", True),
         waveform_cache_limit_mb=waveform_cache_limit_mb,
         waveform_cache_clear_on_launch=_get_bool(section, "waveform_cache_clear_on_launch", True),
         max_multi_play_songs=max_multi_play_songs,

@@ -80,6 +80,7 @@ from pyssp.audio_engine import (
     set_output_device,
     shutdown_audio_preload,
 )
+from pyssp.ffmpeg_support import media_has_audio_stream
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import (
     format_timecode_offset_hhmmss,
@@ -1888,7 +1889,8 @@ class MainWindow(QMainWindow):
         self.preload_memory_pressure_enabled = bool(
             getattr(self.settings, "preload_memory_pressure_enabled", True)
         )
-        self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", False))
+        self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", True))
+        self.preload_use_ffmpeg = bool(getattr(self.settings, "preload_use_ffmpeg", True))
         self.waveform_cache_limit_mb = max(128, min(16384, int(getattr(self.settings, "waveform_cache_limit_mb", 1024))))
         self.waveform_cache_clear_on_launch = bool(getattr(self.settings, "waveform_cache_clear_on_launch", True))
         self._preload_runtime_paused = False
@@ -1896,6 +1898,7 @@ class MainWindow(QMainWindow):
             self.preload_audio_enabled,
             self.preload_audio_memory_limit_mb,
             self.preload_memory_pressure_enabled,
+            self.preload_use_ffmpeg,
         )
         configure_waveform_disk_cache(self.waveform_cache_limit_mb)
         self.max_multi_play_songs = self.settings.max_multi_play_songs
@@ -4978,6 +4981,28 @@ class MainWindow(QMainWindow):
     def _classify_audio_decode_issue(self, file_path: str, exc: Exception) -> str:
         ext = os.path.splitext(file_path)[1].lower()
         reason = str(exc).strip() or exc.__class__.__name__
+        video_extensions = {
+            ".mp4",
+            ".m4v",
+            ".mov",
+            ".mkv",
+            ".avi",
+            ".wmv",
+            ".webm",
+            ".flv",
+            ".mpg",
+            ".mpeg",
+            ".ts",
+            ".m2ts",
+            ".3gp",
+            ".ogv",
+        }
+        if ext in video_extensions:
+            has_audio = media_has_audio_stream(file_path)
+            if has_audio is False:
+                return "Audio decode failed: video file has no audio stream."
+            if has_audio is True:
+                return "Audio decode failed: video audio stream is unsupported or corrupted."
         try:
             with open(file_path, "rb") as fh:
                 head = fh.read(64)
@@ -9398,6 +9423,7 @@ class MainWindow(QMainWindow):
             self.preload_audio_enabled,
             self.preload_audio_memory_limit_mb,
             self.preload_memory_pressure_enabled,
+            self.preload_use_ffmpeg,
         )
         self._sync_preload_pause_state(self._is_playback_in_progress())
         self._queue_current_page_audio_preload()
@@ -9943,6 +9969,7 @@ class MainWindow(QMainWindow):
             preload_audio_memory_limit_mb=self.preload_audio_memory_limit_mb,
             preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
             preload_pause_on_playback=self.preload_pause_on_playback,
+            preload_use_ffmpeg=self.preload_use_ffmpeg,
             waveform_cache_limit_mb=self.waveform_cache_limit_mb,
             waveform_cache_clear_on_launch=self.waveform_cache_clear_on_launch,
             preload_total_ram_mb=total_ram_mb,
@@ -10224,6 +10251,7 @@ class MainWindow(QMainWindow):
         self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()
         self.preload_memory_pressure_enabled = dialog.selected_preload_memory_pressure_enabled()
         self.preload_pause_on_playback = dialog.selected_preload_pause_on_playback()
+        self.preload_use_ffmpeg = dialog.selected_preload_use_ffmpeg()
         self.waveform_cache_limit_mb = dialog.selected_waveform_cache_limit_mb()
         self.waveform_cache_clear_on_launch = dialog.selected_waveform_cache_clear_on_launch()
         self._apply_audio_preload_cache_settings()
@@ -12597,6 +12625,7 @@ class MainWindow(QMainWindow):
         self.settings.preload_audio_memory_limit_mb = int(self.preload_audio_memory_limit_mb)
         self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
         self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
+        self.settings.preload_use_ffmpeg = bool(self.preload_use_ffmpeg)
         self.settings.waveform_cache_limit_mb = int(self.waveform_cache_limit_mb)
         self.settings.waveform_cache_clear_on_launch = bool(self.waveform_cache_clear_on_launch)
         self.settings.max_multi_play_songs = self.max_multi_play_songs

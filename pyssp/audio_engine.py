@@ -32,6 +32,7 @@ _PRELOAD_ENABLED = False
 _PRELOAD_LIMIT_BYTES = 256 * 1024 * 1024
 _PRELOAD_PRESSURE_ENABLED = True
 _PRELOAD_PAUSED = False
+_PRELOAD_USE_FFMPEG = True
 _PRELOAD_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDict()
 _FORCED_MEDIA_CACHE: "OrderedDict[str, Tuple[np.ndarray, int, int]]" = OrderedDict()
 _PRELOAD_CACHE_BYTES = 0
@@ -420,17 +421,28 @@ def get_media_ssp_units(file_path: str) -> Tuple[int, int]:
 
 
 def configure_audio_preload_cache(enabled: bool, memory_limit_mb: int) -> None:
-    configure_audio_preload_cache_policy(enabled=enabled, memory_limit_mb=memory_limit_mb, pressure_enabled=True)
+    configure_audio_preload_cache_policy(
+        enabled=enabled,
+        memory_limit_mb=memory_limit_mb,
+        pressure_enabled=True,
+        preload_use_ffmpeg=True,
+    )
 
 
-def configure_audio_preload_cache_policy(enabled: bool, memory_limit_mb: int, pressure_enabled: bool) -> None:
-    global _PRELOAD_ENABLED, _PRELOAD_LIMIT_BYTES, _PRELOAD_CACHE_BYTES, _PRELOAD_PRESSURE_ENABLED, _PRELOAD_PAUSED
+def configure_audio_preload_cache_policy(
+    enabled: bool,
+    memory_limit_mb: int,
+    pressure_enabled: bool,
+    preload_use_ffmpeg: bool = True,
+) -> None:
+    global _PRELOAD_ENABLED, _PRELOAD_LIMIT_BYTES, _PRELOAD_CACHE_BYTES, _PRELOAD_PRESSURE_ENABLED, _PRELOAD_PAUSED, _PRELOAD_USE_FFMPEG
     _total_mb, _reserve_mb, max_limit_mb = get_preload_memory_limits_mb()
     limit_mb = max(64, min(int(max_limit_mb), int(memory_limit_mb)))
     with _PRELOAD_LOCK:
         _PRELOAD_ENABLED = bool(enabled)
         _PRELOAD_LIMIT_BYTES = limit_mb * 1024 * 1024
         _PRELOAD_PRESSURE_ENABLED = bool(pressure_enabled)
+        _PRELOAD_USE_FFMPEG = bool(preload_use_ffmpeg)
         if not _PRELOAD_ENABLED:
             _PRELOAD_PAUSED = False
         if not _PRELOAD_ENABLED:
@@ -581,8 +593,9 @@ def _preload_path_worker(file_path: str, force: bool = False) -> None:
     with _PRELOAD_LOCK:
         if ((not _PRELOAD_ENABLED) and (not force)) or (_PRELOAD_PAUSED and (not force)):
             return
+        prefer_ffmpeg = bool(_PRELOAD_USE_FFMPEG)
     try:
-        frames, duration_ms = _decode_media_frames(file_path)
+        frames, duration_ms = _decode_media_frames(file_path, prefer_ffmpeg=prefer_ffmpeg)
     except Exception:
         return
     _prime_waveform_disk_cache_from_frames(file_path, frames)
@@ -706,18 +719,51 @@ def _bytes_to_frames(raw: bytes, sample_size: int, channels: int) -> Optional[np
     return src.reshape((frame_count, channels))
 
 
-def _decode_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
+def _decode_media_frames(file_path: str, prefer_ffmpeg: bool = False) -> Tuple[np.ndarray, int]:
     _ensure_decoder()
-    sound = _load_sound_with_fallback(file_path)
-    raw = sound.get_raw()
     mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
     sample_rate = int(mixer_info[0])
-    sample_size = int(mixer_info[1])
     channels = int(mixer_info[2])
+    if prefer_ffmpeg and ffmpeg_available():
+        try:
+            return _decode_media_frames_with_ffmpeg(file_path, sample_rate=sample_rate, channels=channels)
+        except Exception:
+            pass
+    sound = _load_sound_with_fallback(file_path)
+    raw = sound.get_raw()
+    sample_size = int(mixer_info[1])
     frames = _bytes_to_frames(raw, sample_size, channels)
     if frames is None:
         raise ValueError("Unsupported mixer sample format for streaming DSP")
     duration_ms = int((len(frames) / float(sample_rate)) * 1000.0)
+    return frames, duration_ms
+
+
+def _decode_media_frames_with_ffmpeg(file_path: str, sample_rate: int, channels: int) -> Tuple[np.ndarray, int]:
+    decoder = FFmpegPCMStream(file_path, sample_rate=sample_rate, channels=channels)
+    chunks: List[np.ndarray] = []
+    try:
+        decoder.start(0)
+        while True:
+            block, wrote, eof = decoder.read_frames(4096)
+            if wrote > 0:
+                chunks.append(block[:wrote, :].copy())
+            if eof:
+                break
+    finally:
+        try:
+            decoder.close()
+        except Exception:
+            pass
+    if not chunks:
+        raise RuntimeError("FFmpeg preload decode produced no audio frames")
+    if len(chunks) == 1:
+        frames = chunks[0]
+    else:
+        frames = np.concatenate(chunks, axis=0)
+    duration_ms = int((len(frames) / float(sample_rate)) * 1000.0)
+    if duration_ms <= 0:
+        duration_ms = max(0, int(probe_media_duration_ms(file_path)))
     return frames, duration_ms
 
 

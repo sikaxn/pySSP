@@ -652,6 +652,8 @@ _TRANSLATIONS = {
         "Preload current page first": "优先预加载当前页面",
         "Auto-free cache when other apps use RAM (FIFO)": "当其他应用占用内存时自动释放缓存（FIFO）",
         "Pause audio preload during playback": "播放期间暂停音频预加载",
+        "Use FFmpeg for RAM preload decoding": "使用 FFmpeg 进行 RAM 预加载解码",
+        "Warning: Enabling this may increase CPU usage during preload.": "警告：启用后可能会提高预加载时的 CPU 占用。",
         "RAM Limit": "内存上限",
         "Waveform Cache": "波形缓存",
         "Selected Waveform Cache Limit:": "所选波形缓存上限:",

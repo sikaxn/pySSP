@@ -634,10 +634,20 @@ class SystemInformationDialog(QDialog):
         self._refresh_worker = None
 
     def closeEvent(self, event) -> None:
+        thread = self._refresh_thread
         worker = self._refresh_worker
         if worker is not None:
             try:
                 worker.cancel_requested.emit()
+            except Exception:
+                pass
+        if thread is not None:
+            try:
+                thread.quit()
+            except Exception:
+                pass
+            try:
+                thread.wait(1000)
             except Exception:
                 pass
         super().closeEvent(event)

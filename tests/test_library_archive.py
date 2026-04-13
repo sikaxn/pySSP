@@ -97,8 +97,8 @@ def test_unpack_target_path_flattens_when_requested(tmp_path):
     target_a = build_unpack_target_path(str(tmp_path), "audio/C/Show/FX/crowd.wav", False, used_targets)
     target_b = build_unpack_target_path(str(tmp_path), "audio/D/Alt/crowd.wav", False, used_targets)
 
-    assert target_a.endswith(r"audio\crowd.wav")
-    assert target_b.endswith(r"audio\crowd_2.wav")
+    assert Path(target_a).parts[-2:] == ("audio", "crowd.wav")
+    assert Path(target_b).parts[-2:] == ("audio", "crowd_2.wav")
 
 
 def test_unpack_target_path_rejects_parent_traversal(tmp_path):

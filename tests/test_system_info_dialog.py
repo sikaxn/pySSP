@@ -52,3 +52,7 @@ def test_refresh_runs_async_without_blocking_ui(qapp, monkeypatch):
     assert observed_versions == ["v1.2.3"]
     assert dialog._refresh_btn.isEnabled() is True
     assert dialog._text_box.toPlainText() == "system info for v1.2.3"
+    dialog.close()
+    refresh_thread = dialog._refresh_thread
+    if refresh_thread is not None:
+        assert refresh_thread.wait(1000)

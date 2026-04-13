@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import os
 import wave
 from pathlib import Path
 
@@ -21,8 +22,10 @@ def _write_dummy_wav(path: Path, duration_sec: float = 0.25, sample_rate: int = 
         wav.writeframes(b"\x00\x00" * frame_count)
 
 
-def _windows_set_path(path: Path) -> str:
-    return str(path).replace("/", "\\").replace("\\", "\\\\")
+def _set_file_path(path: Path) -> str:
+    if os.name == "nt":
+        return str(path).replace("\\", "\\\\")
+    return str(path)
 
 
 def test_dummy_audio_and_lyric_files_flow_through_set_loader_and_lyric_parser(tmp_path):
@@ -46,8 +49,8 @@ def test_dummy_audio_and_lyric_files_flow_through_set_loader_and_lyric_parser(tm
                 "PagePlay=F",
                 "PageShuffle=F",
                 "c1=Theme Song",
-                f"s1={_windows_set_path(audio_path)}",
-                f"pyssplyric1={_windows_set_path(lyric_path)}",
+                f"s1={_set_file_path(audio_path)}",
+                f"pyssplyric1={_set_file_path(lyric_path)}",
                 "pyssptimecodedisplaytimeline1=audio_file",
                 "",
             ]

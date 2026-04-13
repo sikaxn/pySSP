@@ -552,8 +552,14 @@ def _flattened_archive_member(source_path: str, index: int, root_prefix: str = "
 
 
 def _structured_archive_member(source_path: str, root_prefix: str = "audio") -> str:
-    path = os.path.abspath(source_path)
-    drive, tail = os.path.splitdrive(path)
+    raw_path = str(source_path or "").strip()
+    drive_match = re.match(r"^([A-Za-z]):[\\/]*(.*)$", raw_path)
+    if drive_match:
+        drive = drive_match.group(1)
+        tail = drive_match.group(2)
+    else:
+        path = os.path.abspath(raw_path)
+        drive, tail = os.path.splitdrive(path)
     segments = [segment for segment in re.split(r"[\\/]+", tail.strip("\\/")) if segment]
     safe_segments = [_sanitize_segment(segment) for segment in segments]
     if drive:

@@ -869,6 +869,7 @@ class ExternalMediaPlayer(QObject):
         self._source_frames: Optional[np.ndarray] = None
         self._stream_decoder: Optional[FFmpegPCMStream] = None
         self._streaming_mode = False
+        self._stream_seek_in_progress = False
         self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
         self._source_pos = 0.0
         self._source_pos_anchor = 0.0
@@ -912,6 +913,7 @@ class ExternalMediaPlayer(QObject):
             old_decoder = self._stream_decoder
             self._stream_decoder = None
             self._streaming_mode = False
+            self._stream_seek_in_progress = False
             self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._media_path = file_path
             self._source_frames = frames
@@ -1006,6 +1008,7 @@ class ExternalMediaPlayer(QObject):
                 self._ended = False
             elif self._streaming_mode and self._stream_decoder is not None:
                 decoder_to_seek = self._stream_decoder
+                self._stream_seek_in_progress = True
                 self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
                 self._source_pos = (target / 1000.0) * self._sample_rate
                 self._source_pos_anchor = self._source_pos
@@ -1018,6 +1021,9 @@ class ExternalMediaPlayer(QObject):
             except Exception:
                 with self._lock:
                     self._ended = True
+            finally:
+                with self._lock:
+                    self._stream_seek_in_progress = False
         self.positionChanged.emit(target)
 
     def position(self) -> int:
@@ -1216,6 +1222,10 @@ class ExternalMediaPlayer(QObject):
         return block.astype(np.float32, copy=False)
 
     def _read_stream_block_locked(self, frames: int) -> Tuple[Optional[np.ndarray], int, bool]:
+        if self._stream_seek_in_progress:
+            # Seeking restarts the ffmpeg decoder on another thread. While that is
+            # in flight, treat the stream as temporarily unavailable instead of EOF.
+            return np.zeros((max(1, int(frames)), self._channels), dtype=np.float32), 0, False
         decoder = self._stream_decoder
         if decoder is None:
             return None, 0, True

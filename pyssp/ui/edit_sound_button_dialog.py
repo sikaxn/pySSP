@@ -69,12 +69,15 @@ class SoundHotkeyEdit(QLineEdit):
 
 
 class EditSoundButtonDialog(QDialog):
+    REGENERATE_RESULT = 1001
+
     def __init__(
         self,
         file_path: str,
         caption: str,
         notes: str,
         lyric_file: str = "",
+        vocal_removed_file: str = "",
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         sound_midi_hotkey: str = "",
@@ -107,6 +110,22 @@ class EditSoundButtonDialog(QDialog):
 
         self.notes_edit = QLineEdit(notes)
         form.addRow(tr("Notes"), self.notes_edit)
+
+        vocal_row = QWidget()
+        vocal_layout = QHBoxLayout(vocal_row)
+        vocal_layout.setContentsMargins(0, 0, 0, 0)
+        self.vocal_removed_file_edit = QLineEdit(vocal_removed_file)
+        self.vocal_removed_browse_btn = QPushButton(tr("Browse"))
+        self.vocal_removed_browse_btn.clicked.connect(self._browse_vocal_removed_file)
+        self.vocal_removed_regen_btn = QPushButton(tr("Regenerate"))
+        self.vocal_removed_regen_btn.clicked.connect(self._request_regenerate_vocal_removed)
+        self.vocal_removed_clear_btn = QPushButton(tr("Clear"))
+        self.vocal_removed_clear_btn.clicked.connect(lambda _=False: self.vocal_removed_file_edit.setText(""))
+        vocal_layout.addWidget(self.vocal_removed_file_edit, 1)
+        vocal_layout.addWidget(self.vocal_removed_browse_btn)
+        vocal_layout.addWidget(self.vocal_removed_regen_btn)
+        vocal_layout.addWidget(self.vocal_removed_clear_btn)
+        form.addRow(tr("Vocal Removed File"), vocal_row)
 
         lyric_row = QWidget()
         lyric_layout = QHBoxLayout(lyric_row)
@@ -209,7 +228,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, str, str, Optional[int], str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -217,6 +236,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.text().strip(),
             self.caption_edit.text().strip(),
             self.notes_edit.text().strip(),
+            self.vocal_removed_file_edit.text().strip(),
             self.lyric_file_edit.text().strip(),
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
@@ -237,6 +257,24 @@ class EditSoundButtonDialog(QDialog):
         if file_path:
             self.lyric_file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
+
+    def _browse_vocal_removed_file(self) -> None:
+        start_dir = self._start_dir
+        current = self.vocal_removed_file_edit.text().strip()
+        if current:
+            start_dir = os.path.dirname(current) or start_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Select Vocal Removed File"),
+            start_dir,
+            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
+        )
+        if file_path:
+            self.vocal_removed_file_edit.setText(file_path)
+            self._start_dir = os.path.dirname(file_path)
+
+    def _request_regenerate_vocal_removed(self) -> None:
+        self.done(self.REGENERATE_RESULT)
 
     def _set_midi_binding(self, token: str) -> None:
         normalized = normalize_midi_binding(token)

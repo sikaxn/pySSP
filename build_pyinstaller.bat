@@ -48,9 +48,13 @@ if /I not "%PY_OK%"=="ok" (
 echo [INFO] Installing dependencies from Pipfile.lock/Pipfile...
 pipenv install --dev
 if errorlevel 1 (
-    echo [ERROR] pipenv install failed.
-    popd
-    exit /b 1
+    echo [WARN] Locked dependency install failed. Retrying without lock...
+    pipenv install --dev --skip-lock
+    if errorlevel 1 (
+        echo [ERROR] pipenv install failed.
+        popd
+        exit /b 1
+    )
 )
 
 if exist "%VERSION_FILE%" (
@@ -91,6 +95,23 @@ if not exist docs\build\html\index.html (
     exit /b 1
 )
 
+set "HAS_SPLEETER="
+for /f %%i in ('pipenv run python -c "import importlib.util; print('yes' if importlib.util.find_spec('spleeter') else 'no')"') do set "HAS_SPLEETER=%%i"
+set "SPLEETER_PYI_ARGS="
+if /I "%HAS_SPLEETER%"=="yes" (
+    echo [INFO] Preparing bundled Spleeter 2stems model...
+    pipenv run python scripts\prepare_spleeter_model.py --output "pyssp\assets\spleeter_models"
+    if errorlevel 1 (
+        echo [WARN] Failed to prepare Spleeter model assets. Continuing without bundled Spleeter.
+        set "HAS_SPLEETER=no"
+    )
+)
+if /I "%HAS_SPLEETER%"=="yes" (
+    set "SPLEETER_PYI_ARGS=--collect-all spleeter --hidden-import spleeter.separator --hidden-import spleeter.model.provider"
+) else (
+    echo [WARN] Spleeter not installed for this Python environment. Vocal removal will be unavailable in this build.
+)
+
 echo [INFO] Building app (no terminal) with PyInstaller...
 pipenv run pyinstaller ^
   --noconfirm ^
@@ -99,7 +120,9 @@ pipenv run pyinstaller ^
   --name %APP_EXE_NAME% ^
   --icon "pyssp\assets\app_icon.ico" ^
   --collect-data "imageio_ffmpeg" ^
+  %SPLEETER_PYI_ARGS% ^
   --add-data "pyssp\assets;pyssp\assets" ^
+  --add-data "pyssp\bin;pyssp\bin" ^
   --add-data "docs\build\html;docs\build\html" ^
   --add-data ".build_meta\version.json;." ^
   main.py
@@ -138,18 +161,18 @@ if errorlevel 1 (
 )
 
 if exist "%ROOT_DIR%dist\%APP_BASENAME%" rmdir /s /q "%ROOT_DIR%dist\%APP_BASENAME%"
+set "FINAL_DIST=%ROOT_DIR%dist\%APP_BASENAME%"
 move "%ROOT_DIR%dist\pySSP" "%ROOT_DIR%dist\%APP_BASENAME%" >nul
 if errorlevel 1 (
-    echo [ERROR] Failed to rename dist folder to versioned name.
-    popd
-    exit /b 1
+    echo [WARN] Could not rename dist folder to versioned name. Using dist\pySSP output folder.
+    set "FINAL_DIST=%ROOT_DIR%dist\pySSP"
 )
 
 echo.
 echo [SUCCESS] Build complete:
-echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP.exe
-echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_cleanstart.bat
-echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_debug.bat
+echo   %FINAL_DIST%\pySSP.exe
+echo   %FINAL_DIST%\pySSP_cleanstart.bat
+echo   %FINAL_DIST%\pySSP_debug.bat
 
 popd
 exit /b 0

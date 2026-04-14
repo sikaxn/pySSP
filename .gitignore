@@ -187,3 +187,6 @@ Pipfile.lock
 .DS_Store
 /companion-modules/pyssp
 .build_meta/
+/.venv-spleeter
+/pretrained_models/2stems
+/pyssp/assets/spleeter_models/2stems

@@ -108,6 +108,7 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
     "Talk",
     "Play List",
     "Search",
+    "Vocal Removed",
 ]
 WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
 WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]

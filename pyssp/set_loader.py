@@ -19,6 +19,8 @@ CUE_SECTION_RE = re.compile(r"^PageQ(\d+)$", re.IGNORECASE)
 @dataclass
 class SetSlotData:
     file_path: str = ""
+    vocal_removed_file: str = ""
+    use_vocal_removed_track: bool = False
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
@@ -103,6 +105,8 @@ def load_set_file(file_path: str) -> SetLoadResult:
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
             lyric_file = _normalize_set_path_string(section.get(f"pyssplyric{i}", "").strip())
+            vocal_removed_file = _normalize_set_path_string(section.get(f"pysspvocalremoval{i}", "").strip())
+            use_vocal_removed_track = bool(vocal_removed_file)
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -127,6 +131,8 @@ def load_set_file(file_path: str) -> SetLoadResult:
 
             pages[group][page_index][i - 1] = SetSlotData(
                 file_path=path,
+                vocal_removed_file=vocal_removed_file,
+                use_vocal_removed_track=use_vocal_removed_track,
                 title=title,
                 notes=notes,
                 lyric_file=lyric_file,

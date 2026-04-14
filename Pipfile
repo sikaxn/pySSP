@@ -13,6 +13,7 @@ werkzeug = ">=3.0"
 simple-websocket = ">=1.1"
 websockets = ">=12.0"
 imageio-ffmpeg = ">=0.6"
+spleeter = {version = "==2.1.0", markers = "python_version < '3.11'"}
 
 [dev-packages]
 pytest = ">=8.0"

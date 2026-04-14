@@ -87,6 +87,19 @@ if [[ ! -f "docs/build/html/index.html" ]]; then
   exit 1
 fi
 
+HAS_SPLEETER="$(run_pipenv run python -c 'import importlib.util; print("yes" if importlib.util.find_spec("spleeter") else "no")' || echo "no")"
+SPLEETER_ARGS=()
+if [[ "${HAS_SPLEETER}" == "yes" ]]; then
+  echo "[INFO] Preparing bundled Spleeter 2stems model..."
+  if run_pipenv run python scripts/prepare_spleeter_model.py --output "pyssp/assets/spleeter_models"; then
+    SPLEETER_ARGS=(--collect-all "spleeter" --hidden-import "spleeter.separator" --hidden-import "spleeter.model.provider")
+  else
+    echo "[WARN] Failed to prepare Spleeter model assets. Continuing without bundled Spleeter."
+  fi
+else
+  echo "[WARN] Spleeter not installed for this Python environment. Vocal removal will be unavailable in this build."
+fi
+
 ICON_ARG=()
 if [[ -f "pyssp/assets/app_icon.png" ]] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
   TMP_ICONSET="$(mktemp -d)/pyssp.iconset"
@@ -117,7 +130,9 @@ if ! run_pipenv run pyinstaller \
   --name pySSP \
   "${ICON_ARG[@]}" \
   --collect-data "imageio_ffmpeg" \
+  "${SPLEETER_ARGS[@]}" \
   --add-data "pyssp/assets:pyssp/assets" \
+  --add-data "pyssp/bin:pyssp/bin" \
   --add-data "docs/build/html:docs/build/html" \
   --add-data ".build_meta/version.json:." \
   main.py; then

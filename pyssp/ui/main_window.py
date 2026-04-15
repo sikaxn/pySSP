@@ -80,6 +80,7 @@ from pyssp.audio_engine import (
     set_output_device,
     shutdown_audio_preload,
 )
+from pyssp.audio_runtime import PlaybackRuntimeTracker
 from pyssp.ffmpeg_support import media_has_audio_stream
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import (
@@ -155,6 +156,7 @@ from pyssp.ui.stage_display import (
     normalize_stage_display_gadgets,
 )
 from pyssp.ui.search_window import SearchWindow
+from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
@@ -2298,6 +2300,7 @@ class MainWindow(QMainWindow):
         self._player_slot_pct_map: Dict[int, int] = {}
         self._player_started_map: Dict[int, float] = {}
         self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
+        self._playback_runtime = PlaybackRuntimeTracker()
         self._player_end_override_ms: Dict[int, int] = {}
         self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
@@ -2337,6 +2340,7 @@ class MainWindow(QMainWindow):
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
         self._about_window: Optional[AboutWindowDialog] = None
+        self._audio_engine_insight_window: Optional[AudioEngineInsightDialog] = None
         self._system_info_window: Optional[SystemInformationDialog] = None
         self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
@@ -2667,23 +2671,24 @@ class MainWindow(QMainWindow):
         self.info_notice_banner.setVisible(False)
 
     def _timecode_current_follow_ms(self) -> int:
-        if self.player is None:
+        reference_player, reference_key = self._timecode_reference_context()
+        if reference_player is None:
             self._timecode_follow_anchor_ms = 0.0
             self._timecode_follow_anchor_t = time.perf_counter()
             self._timecode_follow_playing = False
             self._timecode_follow_intent_pending = False
             return 0
-        is_playing = self.player.state() == ExternalMediaPlayer.PlayingState
+        is_playing = reference_player.state() == ExternalMediaPlayer.PlayingState
         now = time.perf_counter()
         predicted_ms = self._timecode_follow_anchor_ms + max(0.0, (now - self._timecode_follow_anchor_t) * 1000.0)
         try:
-            absolute_ms = max(0, int(self.player.enginePositionMs()))
+            absolute_ms = max(0, int(reference_player.enginePositionMs()))
         except Exception:
             try:
-                absolute_ms = max(0, int(self.player.position()))
+                absolute_ms = max(0, int(reference_player.position()))
             except Exception:
                 absolute_ms = 0
-        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms))
+        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms, slot_key=reference_key))
         if not is_playing:
             if self._timecode_follow_intent_pending and self._timecode_follow_playing:
                 self._timecode_follow_anchor_ms = predicted_ms
@@ -2702,11 +2707,24 @@ class MainWindow(QMainWindow):
         self._timecode_last_media_t = now
         return int(max(0.0, self._timecode_follow_anchor_ms))
 
-    def _timecode_display_ms_from_absolute(self, absolute_ms: int) -> int:
+    def _timecode_reference_context(self) -> Tuple[Optional[ExternalMediaPlayer], Optional[Tuple[str, int, int]]]:
+        active_players = self._all_active_players()
+        reference_player = self._playback_runtime.timecode_player(active_players, self._is_multi_play_enabled())
+        if reference_player is None:
+            return None, None
+        reference_key = self._player_slot_key_map.get(id(reference_player))
+        return reference_player, reference_key
+
+    def _timecode_display_ms_from_absolute(
+        self,
+        absolute_ms: int,
+        slot_key: Optional[Tuple[str, int, int]] = None,
+    ) -> int:
         absolute = max(0, int(absolute_ms))
         slot: Optional[SoundButtonData] = None
-        if self.current_playing is not None:
-            slot = self._slot_for_key(self.current_playing)
+        effective_slot_key = slot_key if slot_key is not None else self.current_playing
+        if effective_slot_key is not None:
+            slot = self._slot_for_key(effective_slot_key)
         timeline_mode = self.timecode_timeline_mode
         if slot is not None:
             timeline_mode = self._effective_slot_timecode_timeline_mode(slot)
@@ -3144,6 +3162,9 @@ class MainWindow(QMainWindow):
         system_info_action = QAction("System Information", self)
         system_info_action.triggered.connect(self._open_system_information_window)
         help_menu.addAction(system_info_action)
+        audio_engine_insight_action = QAction("Audio Engine Insight", self)
+        audio_engine_insight_action.triggered.connect(self._open_audio_engine_insight_window)
+        help_menu.addAction(audio_engine_insight_action)
 
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
@@ -4276,6 +4297,120 @@ class MainWindow(QMainWindow):
         self._system_info_window.raise_()
         self._system_info_window.activateWindow()
 
+    def _open_audio_engine_insight_window(self) -> None:
+        if self._audio_engine_insight_window is None:
+            self._audio_engine_insight_window = AudioEngineInsightDialog(
+                snapshot_provider=self._audio_engine_insight_snapshot,
+                parent=self,
+            )
+            self._audio_engine_insight_window.destroyed.connect(
+                lambda _=None: self._clear_audio_engine_insight_window_ref()
+            )
+        self._audio_engine_insight_window.refresh()
+        self._audio_engine_insight_window.show()
+        self._audio_engine_insight_window.raise_()
+        self._audio_engine_insight_window.activateWindow()
+
+    def _audio_engine_insight_snapshot(self) -> str:
+        lines: List[str] = []
+        lines.append("Audio Engine Insight")
+        lines.append("====================")
+        lines.append(f"audio_output_device: {self.audio_output_device or 'default'}")
+        lines.append(f"timecode_audio_output_device: {self.timecode_audio_output_device or 'none'}")
+        lines.append(f"timecode_mode: {self.timecode_mode}")
+        lines.append(f"multi_play_enabled: {self._is_multi_play_enabled()}")
+        lines.append(f"active_playing_keys: {len(self._active_playing_keys)}")
+        lines.append(f"current_playing: {self.current_playing}")
+        lines.append(f"fade_jobs: {len(self._fade_jobs)}")
+        lines.append(f"global_volume: {self.volume_slider.value() if self.volume_slider is not None else 100}")
+        lines.append(f"dsp_config: {self._describe_dsp_config(self._dsp_config)}")
+        lines.append("")
+        ref_player, ref_key = self._timecode_reference_context()
+        lines.append(
+            "timecode_reference: "
+            + ("none" if ref_player is None else f"{self._audio_player_label(ref_player)} slot={ref_key}")
+        )
+        lines.append("")
+        players = [self.player, self.player_b, *self._multi_players]
+        for index, player in enumerate(players):
+            lines.extend(self._format_audio_player_insight(player, index))
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    def _audio_player_label(self, player: object) -> str:
+        if player is self.player:
+            return "primary"
+        if player is self.player_b:
+            return "secondary"
+        if player in self._multi_players:
+            try:
+                return f"multi[{self._multi_players.index(player)}]"
+            except Exception:
+                return "multi"
+        return "player"
+
+    def _describe_dsp_config(self, config: Optional[DSPConfig]) -> str:
+        cfg = normalize_config(config)
+        return (
+            f"eq_enabled={cfg.eq_enabled}, "
+            f"eq_bands={cfg.eq_bands}, "
+            f"reverb_sec={cfg.reverb_sec}, "
+            f"tempo_pct={cfg.tempo_pct}, "
+            f"pitch_pct={cfg.pitch_pct}, "
+            f"plugin_paths={cfg.plugin_paths}"
+        )
+
+    def _format_audio_player_insight(self, player: object, index: int) -> List[str]:
+        label = self._audio_player_label(player)
+        pid = id(player)
+        slot_key = self._player_slot_key_map.get(pid)
+        slot = self._slot_for_key(slot_key) if slot_key is not None else None
+        runtime_id = self._playback_runtime.runtime_id_for(player)
+        meter = getattr(player, "meterLevels", lambda: (0.0, 0.0))()
+        try:
+            state_name = self._api_player_state_name(player)  # type: ignore[arg-type]
+        except Exception:
+            state_name = "unknown"
+        try:
+            engine_pos = int(getattr(player, "enginePositionMs", lambda: 0)())
+        except Exception:
+            engine_pos = 0
+        try:
+            position_ms = int(getattr(player, "position", lambda: 0)())
+        except Exception:
+            position_ms = 0
+        try:
+            duration_ms = int(getattr(player, "duration", lambda: 0)())
+        except Exception:
+            duration_ms = 0
+        try:
+            volume = int(getattr(player, "volume", lambda: 0)())
+        except Exception:
+            volume = 0
+        lines = [
+            f"[{index}] {label}",
+            f"  object_id: {pid}",
+            f"  runtime_id: {runtime_id if runtime_id is not None else 'inactive'}",
+            f"  state: {state_name}",
+            f"  slot_key: {slot_key}",
+            f"  title: {'' if slot is None else self._build_now_playing_text(slot)}",
+            f"  file_path: {'' if slot is None else slot.file_path}",
+            f"  volume: {volume}",
+            f"  slot_volume_pct: {self._slot_pct_for_player(player)}",
+            f"  duration_ms: {duration_ms}",
+            f"  position_ms: {position_ms}",
+            f"  engine_position_ms: {engine_pos}",
+            f"  remaining_ms: {max(0, duration_ms - position_ms)}",
+            f"  streaming_mode: {bool(getattr(player, '_streaming_mode', False))}",
+            f"  media_path: {getattr(player, '_media_path', '')}",
+            f"  cue_end_override_ms: {self._player_end_override_ms.get(pid)}",
+            f"  ignore_cue_end: {pid in self._player_ignore_cue_end}",
+            f"  started_at_monotonic: {self._player_started_map.get(pid)}",
+            f"  meter_levels: {meter}",
+            f"  dsp_config: {self._describe_dsp_config(getattr(player, '_dsp_config', None))}",
+        ]
+        return lines
+
     def _open_help_window(self) -> None:
         help_index = self._help_index_path()
         if not os.path.exists(help_index):
@@ -4382,6 +4517,9 @@ class MainWindow(QMainWindow):
 
     def _clear_about_window_ref(self) -> None:
         self._about_window = None
+
+    def _clear_audio_engine_insight_window_ref(self) -> None:
+        self._audio_engine_insight_window = None
 
     def _clear_system_info_window_ref(self) -> None:
         self._system_info_window = None
@@ -8309,6 +8447,7 @@ class MainWindow(QMainWindow):
             new_player.play()
             started_playback = True
             self._set_player_slot_key(new_player, playing_key)
+            self._mark_player_started(new_player)
             fade_seconds = self.cross_fade_sec
             self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
             if old_player is not None:
@@ -8360,6 +8499,7 @@ class MainWindow(QMainWindow):
                 self.player.play()
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
+                self._mark_player_started(self.player)
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
                 self.player.setVolume(target_volume)
@@ -8367,6 +8507,7 @@ class MainWindow(QMainWindow):
                 self.player.play()
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
+                self._mark_player_started(self.player)
 
         if started_playback:
             self._timecode_on_playback_start(slot)
@@ -8375,7 +8516,6 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(self.player)
         return True
 
     def _prepare_transport_for_new_playback(self) -> None:
@@ -8541,17 +8681,18 @@ class MainWindow(QMainWindow):
             player.setVolume(0)
             player.play()
             self._set_player_slot_key(player, playing_key)
+            self._mark_player_started(player)
             self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
         else:
             player.setVolume(target_volume)
             player.play()
             self._set_player_slot_key(player, playing_key)
+            self._mark_player_started(player)
         self._timecode_on_playback_start(slot)
         self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(player)
 
     def _finish_cross_loaded_playback(
         self,
@@ -8570,6 +8711,7 @@ class MainWindow(QMainWindow):
         new_player.setVolume(0)
         new_player.play()
         self._set_player_slot_key(new_player, playing_key)
+        self._mark_player_started(new_player)
         fade_seconds = self.cross_fade_sec
         self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
         if old_player is not None:
@@ -8581,7 +8723,6 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(self.player)
 
     def _finish_multi_loaded_playback(
         self,
@@ -9751,7 +9892,10 @@ class MainWindow(QMainWindow):
         self._player_slot_pct_map[id(player)] = slot_pct
 
     def _mark_player_started(self, player: ExternalMediaPlayer) -> None:
+        slot_key = self._player_slot_key_map.get(id(player))
         self._player_started_map[id(player)] = time.monotonic()
+        if slot_key is not None:
+            self._playback_runtime.mark_started(player, slot_key)
 
     def _set_player_slot_key(self, player: ExternalMediaPlayer, slot_key: Tuple[str, int, int]) -> None:
         pid = id(player)
@@ -9766,6 +9910,7 @@ class MainWindow(QMainWindow):
     def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
         pid = id(player)
         key = self._player_slot_key_map.pop(pid, None)
+        self._playback_runtime.clear(player)
         if key is not None:
             self._active_playing_keys.discard(key)
         self._clear_player_cue_behavior_override(player)
@@ -9773,6 +9918,7 @@ class MainWindow(QMainWindow):
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
+        self._playback_runtime.clear_all()
         self._active_playing_keys.clear()
         self._player_end_override_ms.clear()
         self._player_ignore_cue_end.clear()
@@ -9812,7 +9958,9 @@ class MainWindow(QMainWindow):
         if self.multi_play_limit_action == "disallow_more_play":
             self._show_info_notice_banner(f"Maximum Multi-Play songs reached ({max_allowed}).")
             return False
-        oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
+        oldest = self._playback_runtime.oldest_active_player(active_players)
+        if oldest is None:
+            oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
         self._stop_single_player(oldest)
         self._prune_multi_players()
         return True

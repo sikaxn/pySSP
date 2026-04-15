@@ -13,6 +13,7 @@ class DSPConfig:
     reverb_sec: float = 0.0
     tempo_pct: float = 0.0
     pitch_pct: float = 0.0
+    plugin_paths: List[str] = field(default_factory=list)
 
 
 def normalize_config(config: Optional[DSPConfig]) -> DSPConfig:
@@ -29,6 +30,7 @@ def normalize_config(config: Optional[DSPConfig]) -> DSPConfig:
         reverb_sec=float(max(0.0, min(20.0, config.reverb_sec))),
         tempo_pct=float(max(-30.0, min(30.0, config.tempo_pct))),
         pitch_pct=float(max(-30.0, min(30.0, config.pitch_pct))),
+        plugin_paths=[str(path).strip() for path in list(getattr(config, "plugin_paths", []) or []) if str(path).strip()],
     )
 
 
@@ -45,6 +47,10 @@ class RealTimeDSPProcessor:
         self.sample_rate = int(sample_rate)
         self.channels = int(max(1, channels))
         self.config = DSPConfig()
+        self._pedalboard_available = False
+        self._pedalboard_factory = None
+        self._pedalboard_loader = None
+        self._plugin_rack = None
 
         self._eq_curve_cache: dict[Tuple[int, Tuple[int, ...], bool], np.ndarray] = {}
         self._reverb_buffer = np.zeros((1, self.channels), dtype=np.float32)
@@ -54,6 +60,7 @@ class RealTimeDSPProcessor:
     def set_config(self, config: DSPConfig) -> None:
         self.config = normalize_config(config)
         self._set_reverb_buffer_size(self.config.reverb_sec)
+        self._rebuild_plugin_rack()
 
     def process_block(self, block: np.ndarray) -> np.ndarray:
         if block.size == 0:
@@ -64,11 +71,55 @@ class RealTimeDSPProcessor:
             out = self._apply_eq(out)
         if self.config.reverb_sec > 1e-9:
             out = self._apply_reverb(out)
+        if self._plugin_rack is not None:
+            out = self._apply_plugin_rack(out)
 
         peak = float(np.max(np.abs(out)))
         if peak > 1.0:
             out = out / peak
         return out
+
+    def _rebuild_plugin_rack(self) -> None:
+        self._plugin_rack = None
+        plugin_paths = list(self.config.plugin_paths or [])
+        if not plugin_paths:
+            return
+        backend = _load_pedalboard_backend()
+        if backend is None:
+            self._pedalboard_available = False
+            self._pedalboard_factory = None
+            self._pedalboard_loader = None
+            return
+        pedalboard_factory, loader = backend
+        self._pedalboard_available = True
+        self._pedalboard_factory = pedalboard_factory
+        self._pedalboard_loader = loader
+        plugins = []
+        for path in plugin_paths:
+            try:
+                plugins.append(loader(path))
+            except Exception:
+                continue
+        if plugins:
+            self._plugin_rack = pedalboard_factory(plugins)
+
+    def _apply_plugin_rack(self, block: np.ndarray) -> np.ndarray:
+        rack = self._plugin_rack
+        if rack is None or block.size == 0:
+            return block
+        try:
+            plugin_input = np.ascontiguousarray(block.T, dtype=np.float32)
+            processed = rack(plugin_input, self.sample_rate, reset=False)
+            processed_arr = np.asarray(processed, dtype=np.float32)
+            if processed_arr.ndim == 1:
+                processed_arr = processed_arr[np.newaxis, :]
+            if processed_arr.shape[0] == self.channels:
+                return processed_arr.T.astype(np.float32, copy=False)
+            if processed_arr.shape[-1] == self.channels:
+                return processed_arr.astype(np.float32, copy=False)
+        except Exception:
+            return block
+        return block
 
     def _apply_eq(self, block: np.ndarray) -> np.ndarray:
         n = int(len(block))
@@ -136,3 +187,12 @@ class RealTimeDSPProcessor:
         self._reverb_buffer[write_idx] = np.tanh(feedback_in * 0.9).astype(np.float32)
         self._reverb_write_index = int((self._reverb_write_index + n) % buf_len)
         return out
+
+
+def _load_pedalboard_backend():
+    try:
+        from pedalboard import Pedalboard, load_plugin
+
+        return Pedalboard, load_plugin
+    except Exception:
+        return None

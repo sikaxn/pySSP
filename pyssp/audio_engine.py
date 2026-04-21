@@ -41,8 +41,11 @@ _PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-
 _MEDIA_LOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-load")
 _WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-waveform")
 _WAVEFORM_CACHE_LOCK = threading.RLock()
+_OUTPUT_METER_LOCK = threading.RLock()
+_OUTPUT_METER_ACTIVE_WINDOW_SEC = 0.25
+_OUTPUT_METER_SOURCES: Dict[int, Tuple[float, float, float]] = {}
 _WAVEFORM_CACHE_DIR = ""
-_WAVEFORM_CACHE_VERSION = "v1"
+_WAVEFORM_CACHE_VERSION = "v2"
 _WAVEFORM_PRELOAD_SAMPLE_COUNTS: Tuple[int, ...] = (1800, 1024)
 _WAVEFORM_CACHE_LIMIT_MB_MIN = 128
 _WAVEFORM_CACHE_LIMIT_MB_MAX = 16 * 1024
@@ -92,6 +95,33 @@ def shutdown_audio_preload() -> None:
     _shutdown_preload_executor()
     _shutdown_media_load_executor()
     _shutdown_waveform_executor()
+
+
+def get_engine_output_meter_levels() -> Tuple[float, float]:
+    now = time.perf_counter()
+    left = 0.0
+    right = 0.0
+    stale_ids: List[int] = []
+    with _OUTPUT_METER_LOCK:
+        for stream_id, (updated_at, src_left, src_right) in _OUTPUT_METER_SOURCES.items():
+            if (now - float(updated_at)) > _OUTPUT_METER_ACTIVE_WINDOW_SEC:
+                stale_ids.append(int(stream_id))
+                continue
+            left += max(0.0, float(src_left))
+            right += max(0.0, float(src_right))
+        for stream_id in stale_ids:
+            _OUTPUT_METER_SOURCES.pop(stream_id, None)
+    return min(1.0, left), min(1.0, right)
+
+
+def _update_engine_output_meter(stream_id: int, left: float, right: float) -> None:
+    with _OUTPUT_METER_LOCK:
+        _OUTPUT_METER_SOURCES[int(stream_id)] = (time.perf_counter(), max(0.0, float(left)), max(0.0, float(right)))
+
+
+def _clear_engine_output_meter(stream_id: int) -> None:
+    with _OUTPUT_METER_LOCK:
+        _OUTPUT_METER_SOURCES.pop(int(stream_id), None)
 
 
 def _default_waveform_cache_dir() -> str:
@@ -254,6 +284,8 @@ def _load_waveform_peaks_from_disk(file_path: str, sample_count: int) -> Optiona
         return None
     expected = max(1, int(sample_count))
     if len(payload) != expected:
+        return None
+    if int(np.max(payload)) <= 0:
         return None
     return (payload.astype(np.float32) / 255.0).tolist()
 
@@ -771,22 +803,25 @@ def _prepare_media_source(
     file_path: str,
     sample_rate: int,
     channels: int,
+    dsp_config: Optional[DSPConfig] = None,
 ) -> Tuple[Optional[np.ndarray], int, bool, Optional[FFmpegPCMStream]]:
     frames: Optional[np.ndarray] = None
     duration_ms = 0
     use_streaming = False
     decoder: Optional[FFmpegPCMStream] = None
+    cfg = normalize_config(dsp_config)
+    force_frame_decode = abs(float(cfg.tempo_pct)) > 1e-9 or abs(float(cfg.pitch_pct)) > 1e-9
 
     cached = _peek_cached_media_frames(file_path)
     if cached is not None:
         frames, duration_ms = cached
-    elif ffmpeg_available():
+    elif (not force_frame_decode) and ffmpeg_available():
         decoder = FFmpegPCMStream(file_path, sample_rate=sample_rate, channels=channels)
         decoder.start(0)
         duration_ms = max(0, int(probe_media_duration_ms(file_path)))
         use_streaming = True
     else:
-        frames, duration_ms = _load_media_frames(file_path)
+        frames, duration_ms = _load_media_frames(file_path, prefer_ffmpeg=True)
     return frames, int(duration_ms), bool(use_streaming), decoder
 
 
@@ -847,7 +882,7 @@ def _peek_cached_media_frames(file_path: str) -> Optional[Tuple[np.ndarray, int]
     return None
 
 
-def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
+def _load_media_frames(file_path: str, prefer_ffmpeg: bool = False) -> Tuple[np.ndarray, int]:
     cache_key = _normalize_cache_key(file_path)
     if cache_key:
         with _PRELOAD_LOCK:
@@ -857,7 +892,7 @@ def _load_media_frames(file_path: str) -> Tuple[np.ndarray, int]:
             cached = _PRELOAD_CACHE.get(cache_key)
             if cached is not None:
                 return cached[0], int(cached[1])
-    frames, duration_ms = _decode_media_frames(file_path)
+    frames, duration_ms = _decode_media_frames(file_path, prefer_ffmpeg=prefer_ffmpeg)
     if cache_key:
         _store_preload_entry(cache_key, frames, duration_ms)
     return frames, duration_ms
@@ -910,7 +945,7 @@ def _compute_waveform_peaks_from_path(file_path: str, sample_count: int = 1024) 
         frames = cached[0]
     else:
         try:
-            frames, _duration_ms = _decode_media_frames(path)
+            frames, _duration_ms = _decode_media_frames(path, prefer_ffmpeg=True)
         except Exception:
             return []
     peaks = _compute_waveform_peaks_from_frames(frames, points)
@@ -980,6 +1015,7 @@ class ExternalMediaPlayer(QObject):
             file_path,
             self._sample_rate,
             self._channels,
+            dsp_config=dsp_config,
         )
         self._install_prepared_media(file_path, frames, duration_ms, use_streaming, new_decoder, dsp_config)
 
@@ -995,6 +1031,7 @@ class ExternalMediaPlayer(QObject):
                     file_path,
                     self._sample_rate,
                     self._channels,
+                    dsp_config=dsp_config,
                 )
                 payload = {
                     "request_id": request_id,
@@ -1061,7 +1098,10 @@ class ExternalMediaPlayer(QObject):
             self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._position_ms = 0
             self._ended = False
+            self._meter_levels = (0.0, 0.0)
+            self._dsp_processor.reset()
             self._set_state_locked(self.StoppedState)
+        _clear_engine_output_meter(self._stream_id)
         if decoder_to_seek is not None:
             try:
                 decoder_to_seek.seek(0)
@@ -1254,6 +1294,7 @@ class ExternalMediaPlayer(QObject):
             self._duration_ms = int(duration_ms)
             self._position_ms = 0
             self._ended = False
+            self._dsp_processor.reset()
             if dsp_config is not None:
                 self._dsp_config = normalize_config(dsp_config)
                 self._dsp_processor.set_config(self._dsp_config)
@@ -1272,9 +1313,11 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             if self._state != self.PlayingState:
                 self._meter_levels = (0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
             if (self._source_frames is None) and (not self._streaming_mode):
                 self._meter_levels = (0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
 
             if self._streaming_mode:
@@ -1285,6 +1328,8 @@ class ExternalMediaPlayer(QObject):
                         self._position_ms = self._duration_ms
                     else:
                         self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+                    self._meter_levels = (0.0, 0.0)
+                    _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                     return
                 tempo_ratio = 1.0
                 user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
@@ -1300,6 +1345,8 @@ class ExternalMediaPlayer(QObject):
             if block is None:
                 self._ended = True
                 self._position_ms = self._duration_ms
+                self._meter_levels = (0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
 
             if abs(effective_pitch_ratio - 1.0) > 1e-4:
@@ -1317,8 +1364,10 @@ class ExternalMediaPlayer(QObject):
                 elif len(peaks) == 1:
                     mono = float(peaks[0])
                     self._meter_levels = (mono, mono)
+                _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1])
             else:
                 self._meter_levels = (0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
             if n < frames:
                 outdata[n:, :] = 0.0
                 if self._streaming_mode:

@@ -84,8 +84,9 @@ def test_set_media_async_applies_result_on_qt_thread(monkeypatch):
 
     ready = threading.Event()
 
-    def _prepare(_file_path, _sample_rate, _channels):
+    def _prepare(_file_path, _sample_rate, _channels, dsp_config=None):
         assert ready.wait(1.0)
+        _ = dsp_config
         frames = np.zeros((4410, 2), dtype=np.float32)
         return frames, 100, False, None
 
@@ -115,8 +116,9 @@ def test_set_media_async_ignores_stale_result_after_stop(monkeypatch):
 
     ready = threading.Event()
 
-    def _prepare(_file_path, _sample_rate, _channels):
+    def _prepare(_file_path, _sample_rate, _channels, dsp_config=None):
         assert ready.wait(1.0)
+        _ = dsp_config
         frames = np.zeros((4410, 2), dtype=np.float32)
         return frames, 100, False, None
 

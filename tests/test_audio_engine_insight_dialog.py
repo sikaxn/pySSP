@@ -84,10 +84,11 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         window.player.play()
         window._set_player_slot_key(window.player, ("A", 0, 0))
         window._mark_player_started(window.player)
-        snapshot = window._audio_engine_insight_snapshot()
-        assert "Audio Engine Insight" in snapshot
-        assert "[0] primary" in snapshot
-        assert "runtime_id: 0" in snapshot
-        assert "state: playing" in snapshot
+        snapshot = window._audio_engine_insight_snapshot_data()
+        assert snapshot["summary"]
+        assert snapshot["players"]
+        assert snapshot["players"][0]["label"] == "primary"
+        assert snapshot["players"][0]["runtime_id"] == 0
+        assert snapshot["players"][0]["state"] == "playing"
     finally:
         window.close()

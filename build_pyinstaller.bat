@@ -9,6 +9,9 @@ set "APP_VERSION=0.0.0"
 set "APP_BUILD_ID="
 set "APP_BASENAME=pySSP-%APP_VERSION%"
 set "APP_EXE_NAME=pySSP"
+set "SPLEETER_CLI_DIR=%ROOT_DIR%dist\spleeter-cli"
+set "SPLEETER_CLI_EXE=%SPLEETER_CLI_DIR%\spleeter-cli.exe"
+set "SPLEETER_CLI_STASH=%ROOT_DIR%.build_meta\spleeter-cli-stash"
 set "PIPENV_IGNORE_VIRTUALENVS=1"
 set "PIPENV_VENV_IN_PROJECT=1"
 pushd "%ROOT_DIR%"
@@ -71,7 +74,16 @@ if defined APP_BUILD_ID echo [INFO] Build id: %APP_BUILD_ID%
 
 echo [INFO] Cleaning previous PyInstaller output...
 if exist build rmdir /s /q build
+if exist "%SPLEETER_CLI_STASH%" rmdir /s /q "%SPLEETER_CLI_STASH%"
+if exist "%SPLEETER_CLI_DIR%" (
+    echo [INFO] Preserving prebuilt spleeter-cli payload...
+    move "%SPLEETER_CLI_DIR%" "%SPLEETER_CLI_STASH%" >nul
+)
 if exist dist rmdir /s /q dist
+if exist "%SPLEETER_CLI_STASH%" (
+    if not exist "%ROOT_DIR%dist" mkdir "%ROOT_DIR%dist"
+    move "%SPLEETER_CLI_STASH%" "%SPLEETER_CLI_DIR%" >nul
+)
 
 echo [INFO] Building documentation HTML...
 if not exist docs\source\conf.py (
@@ -135,6 +147,21 @@ if errorlevel 1 (
     echo [ERROR] Failed to create debug launcher.
     popd
     exit /b 1
+)
+
+if exist "%SPLEETER_CLI_EXE%" (
+    echo [INFO] Bundling prebuilt spleeter-cli payload...
+    if not exist "%ROOT_DIR%dist\pySSP\tools" mkdir "%ROOT_DIR%dist\pySSP\tools"
+    xcopy "%SPLEETER_CLI_DIR%" "%ROOT_DIR%dist\pySSP\tools\spleeter-cli\" /E /I /Y >nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to copy spleeter-cli payload into app bundle.
+        popd
+        exit /b 1
+    )
+) else (
+    echo [WARN] Prebuilt spleeter-cli not found at:
+    echo [WARN]   %SPLEETER_CLI_EXE%
+    echo [WARN] Build it first with spleeter-cli\build_pyinstaller.bat
 )
 
 if exist "%ROOT_DIR%dist\%APP_BASENAME%" rmdir /s /q "%ROOT_DIR%dist\%APP_BASENAME%"

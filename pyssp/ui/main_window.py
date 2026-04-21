@@ -82,7 +82,7 @@ from pyssp.audio_engine import (
     shutdown_audio_preload,
 )
 from pyssp.audio_runtime import PlaybackRuntimeTracker
-from pyssp.ffmpeg_support import media_has_audio_stream
+from pyssp.ffmpeg_support import get_ffmpeg_executable, media_has_audio_stream
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import (
     format_timecode_offset_hhmmss,
@@ -125,6 +125,7 @@ from pyssp.midi_control import (
     normalize_midi_binding,
     split_midi_binding,
 )
+from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.path_safety import unsafe_path_reason
 from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
 from pyssp.timecode import (
@@ -163,6 +164,16 @@ from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferen
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 from pyssp.version import get_app_title_base, get_display_build_id, get_display_version
+
+LOSSY_AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".wma"}
+FFMPEG_AUDIO_CODEC_FLAGS = {
+    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+    ".m4a": ["-c:a", "aac", "-b:a", "256k"],
+    ".aac": ["-c:a", "aac", "-b:a", "256k"],
+    ".ogg": ["-c:a", "libvorbis", "-q:a", "5"],
+    ".flac": ["-c:a", "flac"],
+    ".wav": ["-c:a", "pcm_s16le"],
+}
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -288,6 +299,7 @@ def build_lock_icon(size: int = 18, color: str = "#202020") -> QPixmap:
 @dataclass
 class SoundButtonData:
     file_path: str = ""
+    vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
@@ -314,7 +326,7 @@ class SoundButtonData:
 
     @property
     def missing(self) -> bool:
-        return self.assigned and not os.path.exists(self.file_path)
+        return self.assigned and not os.path.exists(str(self.file_path or "").strip())
 
     def display_text(self) -> str:
         if self.marker:
@@ -324,6 +336,8 @@ class SoundButtonData:
         parts: List[str] = []
         if self.volume_override_pct is not None:
             parts.append("V")
+        if str(self.vocal_removed_file or "").strip():
+            parts.append("VR")
         has_cue = (self.cue_end_ms is not None) or ((self.cue_start_ms is not None) and int(self.cue_start_ms) > 0)
         if has_cue:
             parts.append("C")
@@ -1838,6 +1852,7 @@ class MainWindow(QMainWindow):
         self._main_waveform_future_token = 0
         self._main_waveform_future_key: Optional[Tuple[str, int, int]] = None
         self.loop_enabled = False
+        self.play_vocal_removed_tracks = False
         self._manual_stop_requested = False
         self.talk_active = False
         self._fade_jobs: List[dict] = []
@@ -5801,7 +5816,11 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(self._open_dsp_window)
             elif text == "Go To Playing":
                 btn.clicked.connect(self._go_to_current_playing_page)
-            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag"}:
+            elif text == "Vocal Removed":
+                btn.setCheckable(True)
+                btn.setToolTip("Play vocal removed files when available")
+                btn.clicked.connect(self._toggle_global_vocal_removed_mode)
+            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed"}:
                 self.control_buttons[text] = btn
             self._main_control_buttons_ui[text] = btn
             btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
@@ -6328,6 +6347,7 @@ class MainWindow(QMainWindow):
             "slots": [
                 SoundButtonData(
                     file_path=slot.file_path,
+                    vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
@@ -6362,6 +6382,7 @@ class MainWindow(QMainWindow):
         self.data[self.current_group][page_index] = [
             SoundButtonData(
                 file_path=slot.file_path,
+                vocal_removed_file=slot.vocal_removed_file,
                 title=slot.title,
                 notes=slot.notes,
                 lyric_file=slot.lyric_file,
@@ -6487,6 +6508,9 @@ class MainWindow(QMainWindow):
             notes = clean_set_value(slot.notes or title)
             lines.append(f"c{slot_index}={notes}")
             lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
+            vocal_removed_file = clean_set_value(slot.vocal_removed_file)
+            if vocal_removed_file:
+                lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
             lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
             lines.append(f"n{slot_index}={title}")
             if slot.volume_override_pct is not None:
@@ -6588,8 +6612,10 @@ class MainWindow(QMainWindow):
                 )
             played = activity_code == "2"
             copied = section.get(f"ci{i}", "").strip().upper() == "Y"
+            vocal_removed_file = section.get(f"pysspvocalremoval{i}", "").strip()
             slots[i - 1] = SoundButtonData(
                 file_path=path,
+                vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,
                 lyric_file=section.get(f"pyssplyric{i}", "").strip(),
@@ -6634,11 +6660,13 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
-                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(slot.file_path))
+                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(self._effective_slot_file_path(slot)))
                 has_cue = self._slot_has_custom_cue(slot)
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:
                     parts.append("V")
+                if str(slot.vocal_removed_file or "").strip():
+                    parts.append("VR")
                 if has_cue:
                     parts.append("C")
                 if self._slot_has_custom_timecode(slot):
@@ -7334,6 +7362,7 @@ class MainWindow(QMainWindow):
     def _clone_slot(self, slot: SoundButtonData) -> SoundButtonData:
         return SoundButtonData(
             file_path=slot.file_path,
+            vocal_removed_file=slot.vocal_removed_file,
             title=slot.title,
             notes=slot.notes,
             lyric_file=slot.lyric_file,
@@ -7361,29 +7390,55 @@ class MainWindow(QMainWindow):
         if slot.locked:
             self._show_info_notice_banner("This sound button is locked.")
             return
+        slot_key = (self._view_group_key(), self.current_page, slot_index)
         start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
-        dialog = EditSoundButtonDialog(
-            file_path=slot.file_path,
-            caption=slot.title,
-            notes=slot.notes,
-            lyric_file=slot.lyric_file,
-            volume_override_pct=slot.volume_override_pct,
-            sound_hotkey=slot.sound_hotkey,
-            sound_midi_hotkey=slot.sound_midi_hotkey,
-            available_midi_input_devices=list_midi_input_devices(),
-            selected_midi_input_device_ids=self.midi_input_device_ids,
-            start_dir=start_dir,
-            language=self.ui_language,
-            parent=self,
-        )
-        self._midi_context_handler = dialog
-        self._midi_context_block_actions = True
-        accepted = dialog.exec_() == QDialog.Accepted
-        self._midi_context_handler = None
-        self._midi_context_block_actions = False
-        if not accepted:
-            return
-        file_path, caption, notes, lyric_file, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
+        file_path = slot.file_path
+        caption = slot.title
+        notes = slot.notes
+        vocal_removed_file = slot.vocal_removed_file
+        lyric_file = slot.lyric_file
+        volume_override_pct = slot.volume_override_pct
+        sound_hotkey = slot.sound_hotkey
+        sound_midi_hotkey = slot.sound_midi_hotkey
+        while True:
+            dialog = EditSoundButtonDialog(
+                file_path=file_path,
+                caption=caption,
+                notes=notes,
+                vocal_removed_file=vocal_removed_file,
+                lyric_file=lyric_file,
+                volume_override_pct=volume_override_pct,
+                sound_hotkey=sound_hotkey,
+                sound_midi_hotkey=sound_midi_hotkey,
+                available_midi_input_devices=list_midi_input_devices(),
+                selected_midi_input_device_ids=self.midi_input_device_ids,
+                start_dir=start_dir,
+                language=self.ui_language,
+                parent=self,
+            )
+            self._midi_context_handler = dialog
+            self._midi_context_block_actions = True
+            result_code = dialog.exec_()
+            self._midi_context_handler = None
+            self._midi_context_block_actions = False
+            (
+                file_path,
+                caption,
+                notes,
+                vocal_removed_file,
+                lyric_file,
+                volume_override_pct,
+                sound_hotkey,
+                sound_midi_hotkey,
+            ) = dialog.values()
+            if result_code == EditSoundButtonDialog.REGENERATE_RESULT:
+                generated_path = self._generate_vocal_removed_file_for_slot(file_path, vocal_removed_file)
+                if generated_path:
+                    vocal_removed_file = generated_path
+                continue
+            if result_code != QDialog.Accepted:
+                return
+            break
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
@@ -7394,6 +7449,10 @@ class MainWindow(QMainWindow):
         lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Lyric file path rejected.\n\n{lyric_path_reason}")
+            return
+        vocal_removed_path_reason = self._path_safety_reason(vocal_removed_file) if vocal_removed_file else None
+        if vocal_removed_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Vocal removed file path rejected.\n\n{vocal_removed_path_reason}")
             return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
         if conflict is not None:
@@ -7420,6 +7479,7 @@ class MainWindow(QMainWindow):
         slot.file_path = file_path
         slot.title = caption or os.path.splitext(os.path.basename(file_path))[0]
         slot.notes = notes
+        slot.vocal_removed_file = vocal_removed_file
         slot.lyric_file = lyric_file
         slot.marker = False
         slot.played = False
@@ -7437,6 +7497,227 @@ class MainWindow(QMainWindow):
         self._refresh_page_list()
         self._refresh_sound_grid()
         self._apply_hotkeys()
+        self._refresh_playing_slot_after_audio_path_change(slot_key)
+
+    def _generate_vocal_removed_file_for_slot(self, file_path: str, current_output_path: str = "") -> str:
+        source_path = str(file_path or "").strip()
+        if not source_path:
+            QMessageBox.warning(self, tr("Vocal Removal"), tr("Select a source audio file first."))
+            return ""
+        source_reason = self._path_safety_reason(source_path)
+        if source_reason:
+            QMessageBox.warning(self, tr("Invalid File Path"), f"Sound file path rejected.\n\n{source_reason}")
+            return ""
+        if not os.path.exists(source_path):
+            QMessageBox.warning(self, tr("Missing File"), f"{tr('File not found:')}\n{source_path}")
+            return ""
+        cli_executable = str(find_bundled_spleeter_cli_executable() or "").strip()
+        if not cli_executable or not os.path.exists(cli_executable):
+            QMessageBox.warning(
+                self,
+                tr("Vocal Removal"),
+                tr("spleeter-cli was not found. Build it first before generating a vocal removed track."),
+            )
+            return ""
+        suggested_output = str(current_output_path or "").strip() or suggested_vocal_removed_output_path(source_path)
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Save Vocal Removed File"),
+            suggested_output,
+            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
+        )
+        output_path = str(output_path or "").strip()
+        if not output_path:
+            return ""
+        output_reason = self._path_safety_reason(output_path)
+        if output_reason:
+            QMessageBox.warning(self, tr("Invalid File Path"), f"Vocal removed file path rejected.\n\n{output_reason}")
+            return ""
+        if os.path.exists(output_path):
+            overwrite = QMessageBox.question(
+                self,
+                tr("Overwrite File"),
+                f"{tr('Overwrite existing file?')}\n{output_path}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if overwrite != QMessageBox.Yes:
+                return ""
+        try:
+            generated_path = self._run_vocal_removed_cli(source_path, output_path, cli_executable)
+        except Exception as exc:
+            QMessageBox.warning(self, tr("Vocal Removal"), f"{tr('Could not generate vocal removal track.')}\n\n{exc}")
+            return ""
+        self.settings.last_sound_dir = os.path.dirname(source_path) or self.settings.last_sound_dir
+        self._save_settings()
+        if os.path.normcase(os.path.abspath(generated_path)) != os.path.normcase(os.path.abspath(output_path)):
+            self._show_info_notice_banner(f"{tr('Vocal removed track generated:')} {generated_path}")
+        else:
+            self._show_info_notice_banner(tr("Vocal removed track generated."))
+        return generated_path
+
+    def _run_vocal_removed_cli(self, source_path: str, output_path: str, cli_executable: str) -> str:
+        source_ext = os.path.splitext(source_path)[1].lower()
+        output_ext = os.path.splitext(output_path)[1].lower()
+        progress = QProgressDialog(tr("Generating vocal removed track..."), tr("Cancel"), 0, 0, self)
+        progress.setWindowTitle(tr("Vocal Removal"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+        process: Optional[subprocess.Popen[str]] = None
+        stdout_text = ""
+        stderr_text = ""
+        try:
+            with tempfile.TemporaryDirectory(prefix="pyssp_vocal_removal_") as temp_dir:
+                temp_input_wav = source_path if source_ext == ".wav" else os.path.join(temp_dir, "input.wav")
+                temp_output_wav = output_path if output_ext == ".wav" else os.path.join(temp_dir, "output.wav")
+                if source_ext != ".wav":
+                    self._ffmpeg_transcode_to_wav(source_path, temp_input_wav)
+                command = [
+                    cli_executable,
+                    "--input",
+                    temp_input_wav,
+                    "--output",
+                    temp_output_wav,
+                ]
+                popen_kwargs: dict = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "stdin": subprocess.DEVNULL,
+                    "text": True,
+                }
+                if os.name == "nt":
+                    popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    try:
+                        startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+                        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+                        startup.wShowWindow = 0
+                        popen_kwargs["startupinfo"] = startup
+                    except Exception:
+                        pass
+                process = subprocess.Popen(command, **popen_kwargs)
+                while process.poll() is None:
+                    QApplication.processEvents()
+                    if progress.wasCanceled():
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except Exception:
+                            process.kill()
+                        raise RuntimeError("Cancelled.")
+                    time.sleep(0.05)
+                stdout_text, stderr_text = process.communicate()
+                if process.returncode != 0:
+                    detail = (stderr_text or stdout_text or f"spleeter-cli exited with code {process.returncode}").strip()
+                    raise RuntimeError(detail)
+                if not os.path.exists(temp_output_wav):
+                    raise RuntimeError("spleeter-cli completed but no output file was produced.")
+                if output_ext == ".wav":
+                    if os.path.normcase(os.path.abspath(temp_output_wav)) != os.path.normcase(os.path.abspath(output_path)):
+                        shutil.copyfile(temp_output_wav, output_path)
+                    return output_path
+                self._ffmpeg_transcode_from_wav(temp_output_wav, output_path)
+                if not os.path.exists(output_path):
+                    raise RuntimeError("ffmpeg completed but the requested output file was not produced.")
+                return output_path
+        finally:
+            progress.close()
+        if process is None:
+            raise RuntimeError("Failed to start spleeter-cli.")
+        detail = (stderr_text or stdout_text or "spleeter-cli did not complete successfully.").strip()
+        raise RuntimeError(detail)
+
+    def _ffmpeg_transcode_to_wav(self, source_path: str, output_wav_path: str) -> None:
+        ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg is required to decode this source file to WAV.")
+        self._run_ffmpeg_audio_command(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                source_path,
+                "-vn",
+                "-sn",
+                "-dn",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                "-c:a",
+                "pcm_s16le",
+                output_wav_path,
+            ]
+        )
+
+    def _ffmpeg_transcode_from_wav(self, source_wav_path: str, output_path: str) -> None:
+        ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg is required to encode the generated WAV to the requested output format.")
+        ext = os.path.splitext(output_path)[1].lower()
+        codec_flags = list(FFMPEG_AUDIO_CODEC_FLAGS.get(ext, []))
+        if ext in LOSSY_AUDIO_EXTENSIONS and not codec_flags:
+            codec_flags = ["-c:a", "libmp3lame", "-q:a", "2"]
+        if not codec_flags:
+            raise RuntimeError(f"Unsupported vocal removed output format: {ext or '(no extension)'}")
+        self._run_ffmpeg_audio_command(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                source_wav_path,
+                *codec_flags,
+                output_path,
+            ]
+        )
+
+    def _run_ffmpeg_audio_command(self, command: List[str]) -> None:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode == 0:
+            return
+        detail = (completed.stderr or completed.stdout or "ffmpeg command failed").strip()
+        raise RuntimeError(detail)
+
+    def _refresh_playing_slot_after_audio_path_change(self, slot_key: Tuple[str, int, int]) -> None:
+        player = self._player_for_slot_key(slot_key)
+        if player is None:
+            return
+        slot = self._slot_for_key(slot_key)
+        if slot is None:
+            return
+        target_path = str(self._effective_slot_file_path(slot) or "").strip()
+        current_path = str(getattr(player, "_media_path", "") or "").strip()
+        if not target_path or os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(current_path)):
+            return
+        state = player.state()
+        position_ms = max(0, int(player.position()))
+        load_result = self._try_load_media(player, slot)
+        if load_result is None:
+            return
+        if not load_result:
+            return
+        player.setPosition(position_ms)
+        if state == ExternalMediaPlayer.PlayingState:
+            player.play()
+        elif state == ExternalMediaPlayer.PausedState:
+            player.play()
+            player.pause()
 
     def _find_sound_hotkey_conflict(
         self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
@@ -8615,15 +8896,16 @@ class MainWindow(QMainWindow):
         on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
         self._cancel_pending_player_media_load(player)
-        reason = self._path_safety_reason(slot.file_path)
+        target_file_path = self._effective_slot_file_path(slot)
+        reason = self._path_safety_reason(target_file_path)
         if reason:
             slot.load_failed = True
             self._stop_player_internal(player)
-            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            title = slot.title.strip() or os.path.basename(target_file_path) or "(unknown)"
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {reason}")
-            print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
+            print(f"[pySSP] Unsafe audio path rejected: {target_file_path} | {reason}", flush=True)
             return False
-        normalized_path = str(slot.file_path or "").strip()
+        normalized_path = str(target_file_path or "").strip()
         can_stream_now = can_stream_without_preload(normalized_path)
         if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)) and (not can_stream_now):
             try:
@@ -8642,7 +8924,7 @@ class MainWindow(QMainWindow):
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
             if sys.platform == "darwin":
-                request_id = player.setMediaAsync(slot.file_path, dsp_config=self._dsp_config)
+                request_id = player.setMediaAsync(target_file_path, dsp_config=self._dsp_config)
                 self._pending_player_media_loads[id(player)] = {
                     "request_id": int(request_id),
                     "player": player,
@@ -8652,20 +8934,21 @@ class MainWindow(QMainWindow):
                 }
                 self._schedule_player_media_load_status(player, slot)
                 return None
-            player.setMedia(slot.file_path, dsp_config=self._dsp_config)
+            player.setMedia(target_file_path, dsp_config=self._dsp_config)
             slot.load_failed = False
             self._hide_playback_warning_banner()
             return True
         except Exception as exc:
             slot.load_failed = True
             self._stop_player_internal(player)
-            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            title = slot.title.strip() or os.path.basename(target_file_path) or "(unknown)"
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
-            print(f"[pySSP] Audio load failed: {slot.file_path} | {exc}", flush=True)
+            print(f"[pySSP] Audio load failed: {target_file_path} | {exc}", flush=True)
             return False
 
     def _schedule_player_media_load_status(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
-        name = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+        path = self._effective_slot_file_path(slot)
+        name = slot.title.strip() or os.path.basename(path) or "(unknown)"
         self.statusBar().showMessage(f"{tr('Reading audio file...')} {name}")
         if player is self.player:
             self._set_now_playing_loading(name, 0)
@@ -9672,6 +9955,15 @@ class MainWindow(QMainWindow):
             return self.cue_page
         return self.data[self.current_group][self.current_page]
 
+    def _effective_slot_file_path(self, slot: SoundButtonData) -> str:
+        primary = str(slot.file_path or "").strip()
+        if not self.play_vocal_removed_tracks:
+            return primary
+        vocal_removed = str(slot.vocal_removed_file or "").strip()
+        if vocal_removed and os.path.exists(vocal_removed):
+            return vocal_removed
+        return primary
+
     def _apply_audio_preload_cache_settings(self) -> None:
         configure_audio_preload_cache_policy(
             self.preload_audio_enabled,
@@ -9825,6 +10117,7 @@ class MainWindow(QMainWindow):
             if not cue_slot.assigned:
                 self.cue_page[i] = SoundButtonData(
                     file_path=slot.file_path,
+                    vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
@@ -11769,6 +12062,13 @@ class MainWindow(QMainWindow):
         self._select_group(group_key)
         self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
 
+    def _toggle_global_vocal_removed_mode(self, checked: bool) -> None:
+        self.play_vocal_removed_tracks = bool(checked)
+        btn = self.control_buttons.get("Vocal Removed")
+        if btn is not None and btn.isChecked() != bool(checked):
+            btn.setChecked(bool(checked))
+        self._refresh_sound_grid()
+
     def _find_sound_matches(self, query: str) -> List[dict]:
         terms = [part.casefold() for part in query.split() if part.strip()]
         if not terms:
@@ -12693,6 +12993,9 @@ class MainWindow(QMainWindow):
                         notes = clean_set_value(slot.notes or title)
                         lines.append(f"c{slot_index}={notes}")
                         lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
+                        vocal_removed_file = clean_set_value(slot.vocal_removed_file)
+                        if vocal_removed_file:
+                            lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
                         lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
                         lines.append(f"n{slot_index}={title}")
                         if slot.volume_override_pct is not None:
@@ -12770,6 +13073,7 @@ class MainWindow(QMainWindow):
                     src = result.pages[group][page_index][slot_index]
                     self.data[group][page_index][slot_index] = SoundButtonData(
                         file_path=src.file_path,
+                        vocal_removed_file=src.vocal_removed_file,
                         title=src.title,
                         notes=src.notes,
                         lyric_file=src.lyric_file,

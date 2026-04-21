@@ -4304,8 +4304,15 @@ class MainWindow(QMainWindow):
 
     def _open_system_information_window(self) -> None:
         if self._is_playback_in_progress():
-            self._show_info_notice_banner(tr("Stop playback before opening System Information."))
-            return
+            answer = QMessageBox.question(
+                self,
+                tr("System Information"),
+                tr("Opening System Information during playback may interrupt playback. Do you want to continue?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
         if self._system_info_window is None:
             self._system_info_window = SystemInformationDialog(
                 app_version_text=self.app_version_text,

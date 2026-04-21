@@ -42,6 +42,20 @@ class NetworkInterfaceInfo:
     ipv6: List[str]
 
 
+def _subprocess_platform_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+    kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    try:
+        startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+        startup.wShowWindow = 0
+        kwargs["startupinfo"] = startup
+    except Exception:
+        pass
+    return kwargs
+
+
 def _safe_package_version(name: str) -> str:
     try:
         return importlib.metadata.version(name)
@@ -99,7 +113,14 @@ def _get_library_versions() -> List[str]:
 
 def _run_command(args: List[str]) -> str:
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=4, check=False)
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+            **_subprocess_platform_kwargs(),
+        )
         text = (proc.stdout or "").strip()
         if text:
             return text
@@ -279,7 +300,6 @@ def _get_pygame_decoder_report(
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("SDL_AUDIODRIVER", "dummy")
     env.setdefault("SDL_VIDEODRIVER", "dummy")
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     if getattr(sys, "frozen", False):
         cmd = [sys.executable, "--system-info-probe"]
     else:
@@ -292,7 +312,7 @@ def _get_pygame_decoder_report(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
-            creationflags=creationflags,
+            **_subprocess_platform_kwargs(),
         )
         if register_process is not None:
             register_process(proc)

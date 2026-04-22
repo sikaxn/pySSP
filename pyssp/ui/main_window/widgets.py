@@ -61,8 +61,6 @@ class SoundButtonData:
         parts: List[str] = []
         if self.volume_override_pct is not None:
             parts.append("V")
-        if str(self.vocal_removed_file or "").strip():
-            parts.append("VR")
         has_cue = (self.cue_end_ms is not None) or ((self.cue_start_ms is not None) and int(self.cue_start_ms) > 0)
         if has_cue:
             parts.append("C")
@@ -71,8 +69,8 @@ class SoundButtonData:
         )
         if has_timecode:
             parts.append("T")
-        suffix = f" {' '.join(parts)}" if parts else ""
-        return f"{elide_text(self.title, 26)}\n{format_time(self.duration_ms)}{suffix}"
+        suffix = " ".join(parts)
+        return format_sound_button_label(self.title, self.duration_ms, suffix, 26)
 
 
 class SoundButton(QPushButton):
@@ -82,6 +80,8 @@ class SoundButton(QPushButton):
         self.slot_index = slot_index
         self._drag_start_pos = None
         self._ram_loaded = False
+        self._top_indicator_color: Optional[str] = None
+        self._bottom_indicator_colors: List[str] = []
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMinimumSize(0, 0)
         self.setStyleSheet("font-size: 10pt; font-weight: bold;")
@@ -153,8 +153,42 @@ class SoundButton(QPushButton):
         self._ram_loaded = loaded_flag
         self.update()
 
+    def set_indicator_colors(self, top_color: Optional[str], bottom_colors: List[str]) -> None:
+        normalized_top = str(top_color).strip() if top_color else None
+        normalized_bottom = [str(color).strip() for color in bottom_colors if str(color).strip()]
+        if normalized_top == self._top_indicator_color and normalized_bottom == self._bottom_indicator_colors:
+            return
+        self._top_indicator_color = normalized_top
+        self._bottom_indicator_colors = normalized_bottom
+        self.update()
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
+        stripe_painter = QPainter(self)
+        stripe_painter.setRenderHint(QPainter.Antialiasing, False)
+        stripe_painter.setPen(Qt.NoPen)
+        top_margin = 1
+        side_margin = 1
+        top_height = max(3, min(8, int(round(self.height() * 0.11))))
+        bottom_height = max(4, min(10, int(round(self.height() * 0.12))))
+        if self._top_indicator_color:
+            stripe_painter.setBrush(QColor(self._top_indicator_color))
+            stripe_painter.drawRect(
+                side_margin,
+                top_margin,
+                max(1, self.width() - (side_margin * 2)),
+                top_height,
+            )
+        if self._bottom_indicator_colors:
+            stripe_area_width = max(1, self.width() - (side_margin * 2))
+            stripe_y = max(top_margin, self.height() - bottom_height - top_margin)
+            count = len(self._bottom_indicator_colors)
+            for idx, color in enumerate(self._bottom_indicator_colors):
+                start_x = side_margin + int(round((stripe_area_width * idx) / count))
+                end_x = side_margin + int(round((stripe_area_width * (idx + 1)) / count))
+                stripe_painter.setBrush(QColor(color))
+                stripe_painter.drawRect(start_x, stripe_y, max(1, end_x - start_x), bottom_height)
+        stripe_painter.end()
         if not self._ram_loaded:
             return
         p = QPainter(self)

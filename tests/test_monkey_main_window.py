@@ -7,7 +7,7 @@ from itertools import combinations
 from pathlib import Path
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QLabel
 
 from pyssp.settings_store import AppSettings
 from pyssp.ui import main_window as mw
@@ -395,6 +395,327 @@ def test_pick_sound_limits_verify_and_lyric_scan_to_available_slots(qapp, monkey
         assert calls["lyric_paths"] == 1
         assert window.data["A"][0][0].assigned is True
         assert window.data["A"][0][0].file_path == str(audio_paths[0])
+    finally:
+        for timer_name in [
+            "meter_timer",
+            "timecode_mtc_timer",
+            "fade_timer",
+            "_preload_trim_timer",
+            "_preload_status_timer",
+            "talk_blink_timer",
+            "_midi_poll_timer",
+        ]:
+            timer = getattr(window, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        window.hide()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.monkey
+def test_vocal_removed_indicator_uses_stripe_and_missing_track_warning(qapp, monkeypatch, tmp_path):
+    audio_with_backtrack = tmp_path / "with_backtrack.wav"
+    audio_without_backtrack = tmp_path / "without_backtrack.wav"
+    backtrack_path = tmp_path / "with_backtrack_no_vocals.wav"
+    _write_dummy_wav(audio_with_backtrack)
+    _write_dummy_wav(audio_without_backtrack)
+    _write_dummy_wav(backtrack_path)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot0 = window.data["A"][0][0]
+        slot0.file_path = str(audio_with_backtrack)
+        slot0.vocal_removed_file = str(backtrack_path)
+        slot0.title = "Track With Backtrack"
+        slot0.duration_ms = 2500
+
+        slot1 = window.data["A"][0][1]
+        slot1.file_path = str(audio_without_backtrack)
+        slot1.title = "Track Without Backtrack"
+        slot1.duration_ms = 1800
+
+        window._refresh_sound_grid()
+
+        assert "VR" not in window.sound_buttons[0].text()
+        assert window.sound_buttons[0]._bottom_indicator_colors == [window.state_colors["vocal_removed_indicator"]]
+        assert window.sound_buttons[1]._bottom_indicator_colors == []
+        assert window.vocal_removed_warning_banner.isVisible() is False
+
+        window._toggle_global_vocal_removed_mode(True)
+
+        assert window.vocal_removed_warning_banner.isVisible() is True
+        assert "no vocal removed track" in window.vocal_removed_warning_banner.text().lower()
+        assert "1 sound button" in window.vocal_removed_warning_banner.text().lower()
+    finally:
+        for timer_name in [
+            "meter_timer",
+            "timecode_mtc_timer",
+            "fade_timer",
+            "_preload_trim_timer",
+            "_preload_status_timer",
+            "talk_blink_timer",
+            "_midi_poll_timer",
+        ]:
+            timer = getattr(window, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        window.hide()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.monkey
+def test_sound_button_text_wrap_and_status_legend(qapp, monkeypatch, tmp_path):
+    audio_path = tmp_path / "very_long_demo_filename_for_wrapped_button_text.wav"
+    _write_dummy_wav(audio_path)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        window.title_char_limit = 12
+        slot = window.data["A"][0][0]
+        slot.file_path = str(audio_path)
+        slot.title = "very_long_demo_filename_for_wrapped_button_text"
+        slot.duration_ms = 4321
+
+        window._refresh_sound_grid()
+
+        rendered = window.sound_buttons[0].text().splitlines()
+        assert len(rendered) == 3
+        assert rendered[-1].startswith("00:04")
+        assert window.button_legend_label.isVisible() is True
+        legend_labels = [
+            child.text()
+            for child in window.button_legend_label.findChildren(QLabel)
+            if child.text()
+        ]
+        assert "Button Legend:" in legend_labels
+        assert "Vocal Removed Stripe" in legend_labels
+    finally:
+        for timer_name in [
+            "meter_timer",
+            "timecode_mtc_timer",
+            "fade_timer",
+            "_preload_trim_timer",
+            "_preload_status_timer",
+            "talk_blink_timer",
+            "_midi_poll_timer",
+        ]:
+            timer = getattr(window, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        window.hide()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.monkey
+def test_colour_legend_toggle_action_updates_visibility_and_setting(qapp, monkeypatch):
+    import pyssp.ui.main_window as mw
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    settings.show_colour_legend = True
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        action = window._menu_actions["show_colour_legend"]
+        assert action.isChecked() is True
+        assert window.button_legend_label.isVisible() is True
+
+        action.trigger()
+        qapp.processEvents()
+
+        assert window.show_colour_legend is False
+        assert action.isChecked() is False
+        assert window.button_legend_label.isVisible() is False
+        assert window.settings.show_colour_legend is False
+
+        action.trigger()
+        qapp.processEvents()
+
+        assert window.show_colour_legend is True
+        assert action.isChecked() is True
+        assert window.button_legend_label.isVisible() is True
+        assert window.settings.show_colour_legend is True
     finally:
         for timer_name in [
             "meter_timer",

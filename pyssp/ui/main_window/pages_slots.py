@@ -554,8 +554,10 @@ class PagesSlotsMixin:
         for i, button in enumerate(self.sound_buttons):
             slot = page[i]
             button.set_ram_loaded(False)
+            button.set_indicator_colors(None, [])
             if slot.marker:
-                button.setText(elide_text(slot.title, self.title_char_limit))
+                marker_lines = wrap_text_lines(slot.title, self.title_char_limit, 3)
+                button.setText("\n".join(line for line in marker_lines if line))
                 button.setToolTip("")
             elif not slot.assigned:
                 button.setText("")
@@ -566,21 +568,20 @@ class PagesSlotsMixin:
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:
                     parts.append("V")
-                if str(slot.vocal_removed_file or "").strip():
-                    parts.append("VR")
                 if has_cue:
                     parts.append("C")
                 if self._slot_has_custom_timecode(slot):
                     parts.append("T")
                 for badge in self._active_button_trigger_badges(i, slot, sound_bindings, blocked_sound_tokens):
                     parts.append(badge)
-                suffix = f" {' '.join(parts)}" if parts else ""
-                button.setText(f"{elide_text(slot.title, self.title_char_limit)}\n{format_time(slot.duration_ms)}{suffix}")
+                suffix = " ".join(parts)
+                button.setText(format_sound_button_label(slot.title, slot.duration_ms, suffix, self.title_char_limit))
                 button.setToolTip(slot.notes.strip())
             color = self._slot_color(slot, i)
             text_color = self.sound_button_text_color
             has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
             has_cue = self._slot_has_custom_cue(slot) and slot.assigned and (not slot.marker)
+            has_vocal_removed_track = bool(str(slot.vocal_removed_file or "").strip()) and slot.assigned and (not slot.marker)
             has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
             has_custom_timecode = self._slot_has_custom_timecode(slot) and slot.assigned and (not slot.marker)
             has_linked_lyric = bool(str(slot.lyric_file or "").strip()) and slot.assigned and (not slot.marker)
@@ -589,11 +590,16 @@ class PagesSlotsMixin:
                 indicator_colors.append(self.state_colors["cue_indicator"])
             if has_volume_override:
                 indicator_colors.append(self.state_colors["volume_indicator"])
+            if has_vocal_removed_track:
+                indicator_colors.append(self.state_colors["vocal_removed_indicator"])
             if has_linked_lyric:
                 indicator_colors.append(self.state_colors["lyric_indicator"])
             if has_custom_timecode:
                 indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
-            background = self._build_slot_background_gradient(color, has_midi_hotkey, indicator_colors)
+            button.set_indicator_colors(
+                self.state_colors["midi_indicator"] if has_midi_hotkey else None,
+                indicator_colors,
+            )
             slot_key = (self.current_group, self.current_page, i)
             if self._drag_target_slot_key == slot_key:
                 border = "3px solid #2FCBFF"
@@ -603,13 +609,31 @@ class PagesSlotsMixin:
                 border = "1px solid #94B8BA"
             button.setStyleSheet(
                 "QPushButton{"
-                f"background:{background};"
+                f"background:{color};"
                 f"color:{text_color};"
                 f"font-size:10pt;font-weight:bold;border:{border};"
                 "padding:4px;"
                 "}"
             )
+        self._refresh_vocal_removed_warning_banner()
         self._update_status_totals()
+
+    def _refresh_vocal_removed_warning_banner(self) -> None:
+        message = ""
+        if self.play_vocal_removed_tracks:
+            missing_count = sum(
+                1
+                for slot in self._current_page_slots()
+                if slot.assigned and (not slot.marker) and (not str(slot.vocal_removed_file or "").strip())
+            )
+            if missing_count > 0:
+                plural = "button has" if missing_count == 1 else "buttons have"
+                message = (
+                    f"{tr('VOCAL REMOVED ENABLED:')} "
+                    f"{missing_count} sound {plural} no vocal removed track on this page."
+                )
+        self.vocal_removed_warning_banner.setText(message)
+        self.vocal_removed_warning_banner.setVisible(bool(message))
 
     def _set_dirty(self, dirty: bool = True) -> None:
         if self._dirty == dirty:

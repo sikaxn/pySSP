@@ -530,6 +530,7 @@ class AppSettings:
     timecode_sample_rate: int = 48000
     timecode_bit_depth: int = 16
     show_timecode_panel: bool = False
+    show_colour_legend: bool = True
     timecode_timeline_mode: str = "cue_region"
     soundbutton_timecode_offset_enabled: bool = True
     respect_soundbutton_timecode_timeline_setting: bool = True
@@ -548,6 +549,7 @@ class AppSettings:
     color_copied_to_cue: str = "#2E65FF"
     color_cue_indicator: str = "#61D6FF"
     color_volume_indicator: str = "#FFD45A"
+    color_vocal_removed_indicator: str = "#8E7CFF"
     color_midi_indicator: str = "#FF9E4A"
     color_lyric_indicator: str = "#57C3A4"
     sound_button_text_color: str = "#000000"
@@ -848,6 +850,7 @@ def save_settings(settings: AppSettings) -> None:
         "timecode_sample_rate": str(settings.timecode_sample_rate),
         "timecode_bit_depth": str(settings.timecode_bit_depth),
         "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
+        "show_colour_legend": "1" if settings.show_colour_legend else "0",
         "timecode_timeline_mode": settings.timecode_timeline_mode,
         "soundbutton_timecode_offset_enabled": "1" if settings.soundbutton_timecode_offset_enabled else "0",
         "respect_soundbutton_timecode_timeline_setting": (
@@ -868,6 +871,7 @@ def save_settings(settings: AppSettings) -> None:
         "color_copied_to_cue": settings.color_copied_to_cue,
         "color_cue_indicator": settings.color_cue_indicator,
         "color_volume_indicator": settings.color_volume_indicator,
+        "color_vocal_removed_indicator": settings.color_vocal_removed_indicator,
         "color_midi_indicator": settings.color_midi_indicator,
         "color_lyric_indicator": settings.color_lyric_indicator,
         "sound_button_text_color": settings.sound_button_text_color,
@@ -1401,6 +1405,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         timecode_sample_rate=timecode_sample_rate,
         timecode_bit_depth=timecode_bit_depth,
         show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
+        show_colour_legend=_get_bool(section, "show_colour_legend", True),
         timecode_timeline_mode=timecode_timeline_mode_raw,
         soundbutton_timecode_offset_enabled=soundbutton_timecode_offset_enabled,
         respect_soundbutton_timecode_timeline_setting=respect_soundbutton_timecode_timeline_setting,
@@ -1419,6 +1424,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         color_copied_to_cue=_coerce_hex(str(section.get("color_copied_to_cue", "#2E65FF")), "#2E65FF"),
         color_cue_indicator=_coerce_hex(str(section.get("color_cue_indicator", "#61D6FF")), "#61D6FF"),
         color_volume_indicator=_coerce_hex(str(section.get("color_volume_indicator", "#FFD45A")), "#FFD45A"),
+        color_vocal_removed_indicator=_coerce_hex(
+            str(section.get("color_vocal_removed_indicator", "#8E7CFF")),
+            "#8E7CFF",
+        ),
         color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
         color_lyric_indicator=_coerce_hex(str(section.get("color_lyric_indicator", "#57C3A4")), "#57C3A4"),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),

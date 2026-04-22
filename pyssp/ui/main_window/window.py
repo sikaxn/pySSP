@@ -210,6 +210,7 @@ class MainWindow(
         if self.timecode_bit_depth not in {8, 16, 32}:
             self.timecode_bit_depth = 16
         self.show_timecode_panel = bool(self.settings.show_timecode_panel)
+        self.show_colour_legend = bool(getattr(self.settings, "show_colour_legend", True))
         self.timecode_timeline_mode = (
             self.settings.timecode_timeline_mode
             if self.settings.timecode_timeline_mode in {"cue_region", "audio_file"}
@@ -303,6 +304,7 @@ class MainWindow(
             "copied": self.settings.color_copied_to_cue,
             "cue_indicator": self.settings.color_cue_indicator,
             "volume_indicator": self.settings.color_volume_indicator,
+            "vocal_removed_indicator": getattr(self.settings, "color_vocal_removed_indicator", "#8E7CFF"),
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
         }
@@ -521,6 +523,7 @@ class MainWindow(
         self.timecode_multiplay_banner = QLabel("")
         self.web_remote_warning_banner = QLabel("")
         self.midi_connection_warning_banner = QLabel("")
+        self.vocal_removed_warning_banner = QLabel("")
         self.playback_warning_banner = QLabel("")
         self.save_notice_banner = QLabel("")
         self.info_notice_banner = QLabel("")

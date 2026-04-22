@@ -1128,6 +1128,7 @@ class SettingsArchiveMixin:
         self.settings.timecode_sample_rate = self.timecode_sample_rate
         self.settings.timecode_bit_depth = self.timecode_bit_depth
         self.settings.show_timecode_panel = bool(self.show_timecode_panel)
+        self.settings.show_colour_legend = bool(self.show_colour_legend)
         self.settings.timecode_timeline_mode = self.timecode_timeline_mode
         self.settings.soundbutton_timecode_offset_enabled = bool(self.soundbutton_timecode_offset_enabled)
         self.settings.respect_soundbutton_timecode_timeline_setting = bool(
@@ -1148,6 +1149,7 @@ class SettingsArchiveMixin:
         self.settings.color_copied_to_cue = self.state_colors["copied"]
         self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
         self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
+        self.settings.color_vocal_removed_indicator = self.state_colors["vocal_removed_indicator"]
         self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
         self.settings.color_lyric_indicator = self.state_colors["lyric_indicator"]
         self.settings.sound_button_text_color = self.sound_button_text_color

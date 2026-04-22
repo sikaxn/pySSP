@@ -8,6 +8,8 @@ __all__ = [
     "format_time",
     "format_clock_time",
     "format_set_time",
+    "format_sound_button_label",
+    "wrap_text_lines",
     "clean_set_value",
     "to_set_color_value",
     "elide_text",
@@ -72,6 +74,71 @@ def format_set_time(ms: int) -> str:
     if hours > 0:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _tokenize_wrapped_text(value: str) -> List[str]:
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    raw = re.sub(r"([/\\\\_.:\\-])", r" \1 ", raw)
+    tokens = [token for token in raw.split() if token]
+    if not tokens:
+        return []
+    return tokens
+
+
+def wrap_text_lines(value: str, max_chars: int, max_lines: int) -> List[str]:
+    max_chars = max(4, int(max_chars))
+    max_lines = max(1, int(max_lines))
+    tokens = _tokenize_wrapped_text(value)
+    if not tokens:
+        return [""]
+    lines: List[str] = []
+    current = ""
+
+    for token in tokens:
+        candidate = token if not current else f"{current} {token}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+            if len(lines) >= max_lines:
+                break
+        while len(token) > max_chars and len(lines) < max_lines:
+            lines.append(token[:max_chars])
+            token = token[max_chars:]
+            if len(lines) >= max_lines:
+                break
+        if len(lines) >= max_lines:
+            break
+        current = token
+
+    if len(lines) < max_lines and current:
+        lines.append(current)
+
+    remainder = ""
+    if len(lines) > max_lines:
+        remainder = " ".join(lines[max_lines - 1 :])
+        lines = lines[: max_lines - 1]
+    elif current and len(lines) >= max_lines:
+        remainder = current
+
+    if remainder:
+        lines.append(elide_text(remainder, max_chars))
+    elif len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    if len(lines) > max_lines:
+        lines = lines[: max_lines - 1] + [elide_text(lines[max_lines - 1], max_chars)]
+    return lines[:max_lines] or [""]
+
+
+def format_sound_button_label(title: str, duration_ms: int, suffix: str, max_chars: int) -> str:
+    title_lines = wrap_text_lines(title, max_chars, 2)
+    footer = format_time(duration_ms)
+    if suffix:
+        footer = f"{footer} {suffix.strip()}"
+    return "\n".join([*title_lines, footer])
 
 
 def clean_set_value(value: str) -> str:

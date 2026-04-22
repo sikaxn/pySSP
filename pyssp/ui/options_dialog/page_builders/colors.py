@@ -26,6 +26,7 @@ class ColorsPageMixin:
         indicator_form = QFormLayout(indicator_group)
         self._add_state_color_row(indicator_form, "cue_indicator", "Cue Indicator")
         self._add_state_color_row(indicator_form, "volume_indicator", "Volume Indicator")
+        self._add_state_color_row(indicator_form, "vocal_removed_indicator", "Vocal Removed Indicator")
         self._add_state_color_row(indicator_form, "midi_indicator", "MIDI Indicator")
         self._add_state_color_row(indicator_form, "lyric_indicator", "Lyric Indicator")
         self.sound_text_color_btn = QPushButton()

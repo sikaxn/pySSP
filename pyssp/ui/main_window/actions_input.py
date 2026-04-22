@@ -7,6 +7,16 @@ from .widgets import *
 
 
 class ActionsInputMixin:
+    def _toggle_colour_legend(self, checked: bool) -> None:
+        self.show_colour_legend = bool(checked)
+        if getattr(self, "button_legend_label", None) is not None:
+            self.button_legend_label.setVisible(self.show_colour_legend)
+        action = self._menu_actions.get("show_colour_legend")
+        if action is not None and action.isChecked() != self.show_colour_legend:
+            action.setChecked(self.show_colour_legend)
+        if not self._suspend_settings_save:
+            self._save_settings()
+
     def _next_slot_for_next_action(self, blocked: Optional[set[int]] = None) -> Optional[int]:
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         blocked = blocked or set()
@@ -1414,6 +1424,7 @@ class ActionsInputMixin:
                 "copied_to_cue": self.state_colors["copied"],
                 "cue_indicator": self.state_colors["cue_indicator"],
                 "volume_indicator": self.state_colors["volume_indicator"],
+                "vocal_removed_indicator": self.state_colors["vocal_removed_indicator"],
                 "midi_indicator": self.state_colors["midi_indicator"],
                 "lyric_indicator": self.state_colors["lyric_indicator"],
             },
@@ -1575,6 +1586,10 @@ class ActionsInputMixin:
         self.state_colors["volume_indicator"] = selected_colors.get(
             "volume_indicator",
             self.state_colors["volume_indicator"],
+        )
+        self.state_colors["vocal_removed_indicator"] = selected_colors.get(
+            "vocal_removed_indicator",
+            self.state_colors["vocal_removed_indicator"],
         )
         self.state_colors["midi_indicator"] = selected_colors.get("midi_indicator", self.state_colors["midi_indicator"])
         self.state_colors["lyric_indicator"] = selected_colors.get(

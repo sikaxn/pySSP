@@ -44,6 +44,13 @@ class UiBuildMixin:
             "padding:6px; font-weight:bold;}"
         )
         root_layout.addWidget(self.midi_connection_warning_banner)
+        self.vocal_removed_warning_banner.setVisible(False)
+        self.vocal_removed_warning_banner.setWordWrap(True)
+        self.vocal_removed_warning_banner.setStyleSheet(
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
+            "padding:6px; font-weight:bold;}"
+        )
+        root_layout.addWidget(self.vocal_removed_warning_banner)
         self.playback_warning_banner.setVisible(False)
         self.playback_warning_banner.setWordWrap(True)
         self.playback_warning_banner.setStyleSheet(
@@ -77,6 +84,16 @@ class UiBuildMixin:
         body_layout.addWidget(left_panel, 1)
         body_layout.addWidget(right_panel, 5)
 
+        self.button_legend_label = QWidget()
+        self.button_legend_label.setContentsMargins(0, 0, 0, 0)
+        self.button_legend_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._button_legend_layout = QHBoxLayout(self.button_legend_label)
+        self._button_legend_layout.setContentsMargins(2, 0, 2, 0)
+        self._button_legend_layout.setSpacing(12)
+        self._refresh_button_legend_label()
+        self.button_legend_label.setVisible(bool(self.show_colour_legend))
+        root_layout.addWidget(self.button_legend_label)
+
         self._build_timecode_dock()
 
     def _apply_language(self) -> None:
@@ -95,6 +112,53 @@ class UiBuildMixin:
             self._tips_window.set_language(self.ui_language)
         if self._stage_display_window is not None:
             self._stage_display_window.retranslate_ui()
+        self._refresh_button_legend_label()
+
+    def _refresh_button_legend_label(self) -> None:
+        while self._button_legend_layout.count():
+            item = self._button_legend_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        title = QLabel(tr("Button Legend:"))
+        title.setStyleSheet("color:#666666; font-size:9pt; font-weight:600;")
+        self._button_legend_layout.addWidget(title)
+
+        items = [
+            (self.state_colors["playing"], tr("Now Playing")),
+            (self.state_colors["played"], tr("Played")),
+            (self.state_colors["assigned"], tr("Unplayed")),
+            (self.state_colors["cue_indicator"], tr("Cue Stripe")),
+            (self.state_colors["volume_indicator"], tr("Volume Stripe")),
+            (self.state_colors["vocal_removed_indicator"], tr("Vocal Removed Stripe")),
+            (self.state_colors["lyric_indicator"], tr("Lyric Stripe")),
+            (TIMECODE_SLOT_INDICATOR_COLOR, tr("Timecode Stripe")),
+            (self.state_colors["midi_indicator"], tr("MIDI Top Stripe")),
+        ]
+        for color, label_text in items:
+            item_widget = QWidget()
+            item_layout = QHBoxLayout(item_widget)
+            item_layout.setContentsMargins(0, 0, 0, 0)
+            item_layout.setSpacing(4)
+
+            dot = QLabel("")
+            dot.setFixedSize(10, 10)
+            dot.setStyleSheet(
+                "QLabel{"
+                f"background:{str(color or '#000000')};"
+                "border:1px solid #666666;"
+                "border-radius:5px;"
+                "}"
+            )
+            text = QLabel(label_text)
+            text.setStyleSheet("color:#666666; font-size:9pt;")
+
+            item_layout.addWidget(dot)
+            item_layout.addWidget(text)
+            self._button_legend_layout.addWidget(item_widget)
+
+        self._button_legend_layout.addStretch(1)
 
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -233,6 +297,15 @@ class UiBuildMixin:
         self._menu_actions["timecode_panel"] = timecode_panel_action
 
         tools_menu = self.menuBar().addMenu("Tools")
+        show_colour_legend_action = QAction("Show Colour Legend", self)
+        show_colour_legend_action.setCheckable(True)
+        show_colour_legend_action.setChecked(bool(self.show_colour_legend))
+        show_colour_legend_action.triggered.connect(self._toggle_colour_legend)
+        tools_menu.addAction(show_colour_legend_action)
+        self._menu_actions["show_colour_legend"] = show_colour_legend_action
+
+        tools_menu.addSeparator()
+
         duplicate_check_action = QAction("Duplicate Check", self)
         duplicate_check_action.triggered.connect(self._run_duplicate_check)
         tools_menu.addAction(duplicate_check_action)

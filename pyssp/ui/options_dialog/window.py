@@ -144,6 +144,7 @@ class OptionsDialog(
             "copied_to_cue": "#2E65FF",
             "cue_indicator": "#61D6FF",
             "volume_indicator": "#FFD45A",
+            "vocal_removed_indicator": "#8E7CFF",
             "midi_indicator": "#FF9E4A",
             "lyric_indicator": "#57C3A4",
         },

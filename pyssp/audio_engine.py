@@ -19,7 +19,7 @@ import pygame
 import sounddevice as sd
 from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
-from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, normalize_config
+from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, has_active_processing, normalize_config
 from pyssp.ffmpeg_support import FFmpegPCMStream, ffmpeg_available, probe_media_duration_ms
 
 _DECODER_READY = False
@@ -44,6 +44,9 @@ _WAVEFORM_CACHE_LOCK = threading.RLock()
 _OUTPUT_METER_LOCK = threading.RLock()
 _OUTPUT_METER_ACTIVE_WINDOW_SEC = 0.25
 _OUTPUT_METER_SOURCES: Dict[int, Tuple[float, float, float]] = {}
+_COREAUDIO_KEEPALIVE_LOCK = threading.RLock()
+_COREAUDIO_KEEPALIVE_STREAM = None
+_COREAUDIO_KEEPALIVE_REFS = 0
 _WAVEFORM_CACHE_DIR = ""
 _WAVEFORM_CACHE_VERSION = "v2"
 _WAVEFORM_PRELOAD_SAMPLE_COUNTS: Tuple[int, ...] = (1800, 1024)
@@ -73,9 +76,28 @@ def _shutdown_media_load_executor() -> None:
         pass
 
 
+def _shutdown_coreaudio_keepalive() -> None:
+    global _COREAUDIO_KEEPALIVE_STREAM, _COREAUDIO_KEEPALIVE_REFS
+    with _COREAUDIO_KEEPALIVE_LOCK:
+        stream = _COREAUDIO_KEEPALIVE_STREAM
+        _COREAUDIO_KEEPALIVE_STREAM = None
+        _COREAUDIO_KEEPALIVE_REFS = 0
+    if stream is None:
+        return
+    try:
+        stream.stop()
+    except Exception:
+        pass
+    try:
+        stream.close()
+    except Exception:
+        pass
+
+
 atexit.register(_shutdown_preload_executor)
 atexit.register(_shutdown_media_load_executor)
 atexit.register(_shutdown_waveform_executor)
+atexit.register(_shutdown_coreaudio_keepalive)
 
 
 def shutdown_audio_preload() -> None:
@@ -122,6 +144,66 @@ def _update_engine_output_meter(stream_id: int, left: float, right: float) -> No
 def _clear_engine_output_meter(stream_id: int) -> None:
     with _OUTPUT_METER_LOCK:
         _OUTPUT_METER_SOURCES.pop(int(stream_id), None)
+
+
+def _coreaudio_keepalive_callback(outdata, frames, _time_info, _status) -> None:
+    outdata[: int(frames), :].fill(0.0)
+
+
+def _coreaudio_keepalive_stream_kwargs(sample_rate: int, channels: int) -> dict:
+    device_index = None
+    if _REQUESTED_DEVICE:
+        try:
+            device_index = _find_output_device_index(_REQUESTED_DEVICE)
+        except Exception:
+            device_index = None
+    kwargs = {
+        "samplerate": int(sample_rate),
+        "channels": int(channels),
+        "dtype": "float32",
+        "callback": _coreaudio_keepalive_callback,
+        "device": device_index,
+        "blocksize": 2048,
+        "latency": "high",
+    }
+    return kwargs
+
+
+def _retain_coreaudio_keepalive(sample_rate: int, channels: int) -> None:
+    global _COREAUDIO_KEEPALIVE_STREAM, _COREAUDIO_KEEPALIVE_REFS
+    if sys.platform != "darwin":
+        return
+    with _COREAUDIO_KEEPALIVE_LOCK:
+        if _COREAUDIO_KEEPALIVE_STREAM is None:
+            try:
+                stream = sd.OutputStream(**_coreaudio_keepalive_stream_kwargs(sample_rate, channels))
+                stream.start()
+                _COREAUDIO_KEEPALIVE_STREAM = stream
+            except Exception:
+                _COREAUDIO_KEEPALIVE_STREAM = None
+        _COREAUDIO_KEEPALIVE_REFS += 1
+
+
+def _release_coreaudio_keepalive() -> None:
+    global _COREAUDIO_KEEPALIVE_STREAM, _COREAUDIO_KEEPALIVE_REFS
+    if sys.platform != "darwin":
+        return
+    stream = None
+    with _COREAUDIO_KEEPALIVE_LOCK:
+        _COREAUDIO_KEEPALIVE_REFS = max(0, int(_COREAUDIO_KEEPALIVE_REFS) - 1)
+        if _COREAUDIO_KEEPALIVE_REFS == 0:
+            stream = _COREAUDIO_KEEPALIVE_STREAM
+            _COREAUDIO_KEEPALIVE_STREAM = None
+    if stream is None:
+        return
+    try:
+        stream.stop()
+    except Exception:
+        pass
+    try:
+        stream.close()
+    except Exception:
+        pass
 
 
 def _default_waveform_cache_dir() -> str:
@@ -988,15 +1070,27 @@ class ExternalMediaPlayer(QObject):
         self._streaming_mode = False
         self._stream_seek_in_progress = False
         self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
+        self._declick_enabled = (sys.platform == "darwin")
+        self._declick_frames = max(32, int(self._sample_rate * 0.006)) if self._declick_enabled else 0
+        self._startup_fade_frames = max(self._declick_frames, int(self._sample_rate * 0.03)) if self._declick_enabled else 0
+        self._fresh_media_fade_frames = self._startup_fade_frames
+        self._declick_tail = np.zeros((0, self._channels), dtype=np.float32)
+        self._declick_fade_in_remaining = 0
+        self._fresh_media_start_pending = False
+        self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
         self._source_pos = 0.0
         self._source_pos_anchor = 0.0
         self._source_pos_anchor_t = time.perf_counter()
         self._source_pos_anchor_tempo = 1.0
         self._ended = False
         self._dsp_config = DSPConfig()
+        self._pending_dsp_config: Optional[DSPConfig] = None
+        self._dsp_active = False
         self._dsp_processor = RealTimeDSPProcessor(self._sample_rate, self._channels)
 
         self._lock = threading.RLock()
+        _retain_coreaudio_keepalive(self._sample_rate, self._channels)
         self._stream = self._create_stream()
         self._stream.start()
         self._applyPreparedMedia.connect(self._on_apply_prepared_media, type=Qt.QueuedConnection)
@@ -1011,6 +1105,8 @@ class ExternalMediaPlayer(QObject):
 
     def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
         self.stop()
+        with self._lock:
+            self._discard_declick_history_locked()
         frames, duration_ms, use_streaming, new_decoder = _prepare_media_source(
             file_path,
             self._sample_rate,
@@ -1022,6 +1118,7 @@ class ExternalMediaPlayer(QObject):
     def setMediaAsync(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> int:
         self.stop()
         with self._lock:
+            self._discard_declick_history_locked()
             self._pending_media_request_id += 1
             request_id = int(self._pending_media_request_id)
 
@@ -1057,9 +1154,7 @@ class ExternalMediaPlayer(QObject):
 
     def setDSPConfig(self, dsp_config: DSPConfig) -> None:
         cfg = normalize_config(dsp_config)
-        with self._lock:
-            self._dsp_config = cfg
-            self._dsp_processor.set_config(cfg)
+        self._pending_dsp_config = cfg
 
     def play(self) -> None:
         with self._lock:
@@ -1067,6 +1162,11 @@ class ExternalMediaPlayer(QObject):
                 return
             if self._state == self.PlayingState:
                 return
+            if self._fresh_media_start_pending:
+                self._arm_declick_fade_in_locked(self._fresh_media_fade_frames)
+                self._fresh_media_start_pending = False
+            else:
+                self._arm_declick_fade_in_locked(self._declick_frames)
             self._started_at = time.monotonic() - (self._position_ms / 1000.0)
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
@@ -1077,6 +1177,7 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             if self._state != self.PlayingState:
                 return
+            self._queue_declick_tail_locked()
             if self._streaming_mode:
                 self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
             else:
@@ -1088,8 +1189,11 @@ class ExternalMediaPlayer(QObject):
 
     def stop(self) -> None:
         decoder_to_seek: Optional[FFmpegPCMStream] = None
+        clear_meter_now = True
         with self._lock:
             self._pending_media_request_id += 1
+            self._queue_declick_tail_locked()
+            clear_meter_now = len(self._declick_tail) <= 0
             decoder_to_seek = self._stream_decoder if self._streaming_mode else None
             self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._source_pos = 0.0
@@ -1101,7 +1205,8 @@ class ExternalMediaPlayer(QObject):
             self._meter_levels = (0.0, 0.0)
             self._dsp_processor.reset()
             self._set_state_locked(self.StoppedState)
-        _clear_engine_output_meter(self._stream_id)
+        if clear_meter_now:
+            _clear_engine_output_meter(self._stream_id)
         if decoder_to_seek is not None:
             try:
                 decoder_to_seek.seek(0)
@@ -1118,6 +1223,10 @@ class ExternalMediaPlayer(QObject):
         target = 0
         with self._lock:
             target = max(0, min(int(position_ms), self._duration_ms))
+            if self._state == self.PlayingState:
+                self._queue_declick_tail_locked()
+                self._arm_declick_fade_in_locked(self._declick_frames)
+            self._fresh_media_start_pending = False
             self._position_ms = target
             if self._source_frames is not None:
                 self._source_pos = (target / 1000.0) * self._sample_rate
@@ -1220,23 +1329,138 @@ class ExternalMediaPlayer(QObject):
 
     def _create_stream(self):
         device_index = None
+        stream_kwargs = {
+            "samplerate": self._sample_rate,
+            "channels": self._channels,
+            "dtype": "float32",
+            "callback": self._audio_callback,
+            "device": device_index,
+            "blocksize": 1024,
+            "latency": "low",
+        }
         if _REQUESTED_DEVICE:
             try:
                 device_index = _find_output_device_index(_REQUESTED_DEVICE)
             except Exception:
                 device_index = None
+        stream_kwargs["device"] = device_index
+        if sys.platform == "darwin":
+            # CoreAudio is more stable with a less aggressive callback cadence here.
+            stream_kwargs["blocksize"] = 2048
+            stream_kwargs["latency"] = "high"
         try:
-            return sd.OutputStream(
-                samplerate=self._sample_rate,
-                channels=self._channels,
-                dtype="float32",
-                callback=self._audio_callback,
-                device=device_index,
-                blocksize=1024,
-                latency="low",
-            )
+            return sd.OutputStream(**stream_kwargs)
         except Exception:
             return _NullOutputStream()
+
+    def _queue_declick_tail_locked(self) -> None:
+        if (not self._declick_enabled) or self._declick_frames <= 0:
+            return
+        tail_source = np.asarray(self._recent_output_frames, dtype=np.float32)
+        if tail_source.ndim != 2 or tail_source.shape[1] != self._channels or len(tail_source) <= 0:
+            last = np.asarray(self._last_output_frame, dtype=np.float32).reshape(-1)
+            if len(last) != self._channels or not np.any(np.abs(last) > 1e-6):
+                self._declick_tail = np.zeros((0, self._channels), dtype=np.float32)
+                return
+            tail_source = last.reshape(1, self._channels)
+        if not np.any(np.abs(tail_source) > 1e-6):
+            self._declick_tail = np.zeros((0, self._channels), dtype=np.float32)
+            return
+        if len(tail_source) > int(self._declick_frames):
+            tail_source = tail_source[-int(self._declick_frames) :, :]
+        gains = np.linspace(1.0, 0.0, num=len(tail_source) + 1, dtype=np.float32)[:-1]
+        self._declick_tail = (tail_source * gains[:, None]).astype(np.float32, copy=False)
+        self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+
+    def _discard_declick_history_locked(self) -> None:
+        self._declick_tail = np.zeros((0, self._channels), dtype=np.float32)
+        self._declick_fade_in_remaining = 0
+        self._fresh_media_start_pending = False
+        self._fresh_media_fade_frames = self._startup_fade_frames
+        self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+
+    def _arm_declick_fade_in_locked(self, frame_count: Optional[int] = None) -> None:
+        count = int(self._declick_frames if frame_count is None else frame_count)
+        if (not self._declick_enabled) or count <= 0:
+            return
+        self._declick_fade_in_remaining = count
+
+    def _apply_declick_fade_in_locked(self, block: np.ndarray) -> np.ndarray:
+        if (not self._declick_enabled) or self._declick_fade_in_remaining <= 0 or len(block) <= 0:
+            return block
+        fade_count = min(len(block), int(self._declick_fade_in_remaining))
+        start = max(0, int(self._declick_frames) - int(self._declick_fade_in_remaining))
+        gains = (
+            (np.arange(start, start + fade_count, dtype=np.float32) + 1.0)
+            / float(max(1, int(self._declick_frames)))
+        )
+        block = np.asarray(block, dtype=np.float32).copy()
+        block[:fade_count, :] *= gains[:, None]
+        self._declick_fade_in_remaining = max(0, int(self._declick_fade_in_remaining) - fade_count)
+        return block
+
+    def _emit_declick_tail_locked(self, outdata: np.ndarray, frames: int) -> bool:
+        if len(self._declick_tail) <= 0:
+            return False
+        take = min(int(frames), int(len(self._declick_tail)))
+        outdata[:take, :] = self._declick_tail[:take, :]
+        if take < frames:
+            outdata[take:, :] = 0.0
+        self._declick_tail = self._declick_tail[take:, :]
+        if take > 0:
+            tail_sample = outdata[take - 1, :]
+            self._last_output_frame = np.asarray(tail_sample, dtype=np.float32).copy()
+            self._append_recent_output_locked(outdata[:take, :])
+            peaks = np.max(np.abs(outdata[:take, :]), axis=0)
+            if len(peaks) >= 2:
+                self._meter_levels = (float(peaks[0]), float(peaks[1]))
+            elif len(peaks) == 1:
+                mono = float(peaks[0])
+                self._meter_levels = (mono, mono)
+            else:
+                self._meter_levels = (0.0, 0.0)
+            _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1])
+        else:
+            self._meter_levels = (0.0, 0.0)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+        if len(self._declick_tail) <= 0 and self._state != self.PlayingState:
+            _clear_engine_output_meter(self._stream_id)
+        return True
+
+    def _apply_pending_dsp_config_locked(self) -> None:
+        pending = self._pending_dsp_config
+        if pending is None:
+            return
+        self._pending_dsp_config = None
+        self._dsp_config = pending
+        self._dsp_active = bool(has_active_processing(pending))
+        self._dsp_processor.set_config(pending)
+
+    def _append_recent_output_locked(self, frames_block: np.ndarray) -> None:
+        if (not self._declick_enabled) or self._declick_frames <= 0:
+            return
+        block = np.asarray(frames_block, dtype=np.float32)
+        if block.ndim != 2 or block.shape[1] != self._channels or len(block) <= 0:
+            return
+        if len(block) > int(self._declick_frames):
+            block = block[-int(self._declick_frames) :, :]
+        if len(self._recent_output_frames) <= 0:
+            self._recent_output_frames = block.copy()
+            return
+        merged = np.vstack((self._recent_output_frames, block))
+        if len(merged) > int(self._declick_frames):
+            merged = merged[-int(self._declick_frames) :, :]
+        self._recent_output_frames = merged.astype(np.float32, copy=False)
+
+    def _fresh_start_fade_frames_for_media_locked(self, file_path: str) -> int:
+        frames = int(self._startup_fade_frames)
+        path = str(file_path or "").strip().lower()
+        if path.endswith(".mp3"):
+            frames = max(frames, int(self._sample_rate * 0.08))
+        return max(0, frames)
 
     @pyqtSlot(object)
     def _on_apply_prepared_media(self, payload: object) -> None:
@@ -1278,6 +1502,7 @@ class ExternalMediaPlayer(QObject):
     ) -> None:
         with self._lock:
             old_decoder = self._stream_decoder
+            self._discard_declick_history_locked()
             self._stream_decoder = None
             self._streaming_mode = False
             self._stream_seek_in_progress = False
@@ -1294,10 +1519,16 @@ class ExternalMediaPlayer(QObject):
             self._duration_ms = int(duration_ms)
             self._position_ms = 0
             self._ended = False
+            self._fresh_media_start_pending = True
+            self._fresh_media_fade_frames = self._fresh_start_fade_frames_for_media_locked(file_path)
             self._dsp_processor.reset()
             if dsp_config is not None:
                 self._dsp_config = normalize_config(dsp_config)
+                self._dsp_active = bool(has_active_processing(self._dsp_config))
                 self._dsp_processor.set_config(self._dsp_config)
+            else:
+                self._dsp_config = DSPConfig()
+                self._dsp_active = False
         if old_decoder is not None:
             try:
                 old_decoder.close()
@@ -1310,13 +1541,25 @@ class ExternalMediaPlayer(QObject):
         if status:
             pass
         outdata.fill(0.0)
-        with self._lock:
+        if not self._lock.acquire(blocking=False):
+            self._meter_levels = (0.0, 0.0)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+            return
+        try:
+            self._apply_pending_dsp_config_locked()
+            if self._emit_declick_tail_locked(outdata, frames):
+                return
             if self._state != self.PlayingState:
                 self._meter_levels = (0.0, 0.0)
+                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                 _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
             if (self._source_frames is None) and (not self._streaming_mode):
                 self._meter_levels = (0.0, 0.0)
+                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                 _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
 
@@ -1329,6 +1572,8 @@ class ExternalMediaPlayer(QObject):
                     else:
                         self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
                     self._meter_levels = (0.0, 0.0)
+                    self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                    self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                     _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                     return
                 tempo_ratio = 1.0
@@ -1346,18 +1591,25 @@ class ExternalMediaPlayer(QObject):
                 self._ended = True
                 self._position_ms = self._duration_ms
                 self._meter_levels = (0.0, 0.0)
+                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                 _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
 
             if abs(effective_pitch_ratio - 1.0) > 1e-4:
                 block = self._apply_pitch_ratio_block(block, effective_pitch_ratio)
 
-            block = self._dsp_processor.process_block(block)
-            block *= (self._volume / 100.0)
+            if self._dsp_active:
+                block = self._dsp_processor.process_block(block)
+            if self._volume != 100:
+                block = block * (self._volume / 100.0)
+            block = self._apply_declick_fade_in_locked(block)
 
             n = min(len(block), frames)
             outdata[:n, :] = block[:n, :]
             if n > 0:
+                self._last_output_frame = np.asarray(outdata[n - 1, :], dtype=np.float32).copy()
+                self._append_recent_output_locked(outdata[:n, :])
                 peaks = np.max(np.abs(outdata[:n, :]), axis=0)
                 if len(peaks) >= 2:
                     self._meter_levels = (float(peaks[0]), float(peaks[1]))
@@ -1367,6 +1619,8 @@ class ExternalMediaPlayer(QObject):
                 _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1])
             else:
                 self._meter_levels = (0.0, 0.0)
+                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                 _update_engine_output_meter(self._stream_id, 0.0, 0.0)
             if n < frames:
                 outdata[n:, :] = 0.0
@@ -1386,6 +1640,8 @@ class ExternalMediaPlayer(QObject):
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = tempo_ratio
+        finally:
+            self._lock.release()
 
     def _read_source_block_locked(self, frames: int) -> Optional[np.ndarray]:
         assert self._source_frames is not None
@@ -1395,6 +1651,21 @@ class ExternalMediaPlayer(QObject):
             return None
 
         tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+        if abs(tempo_ratio - 1.0) <= 1e-6:
+            start = max(0, int(self._source_pos))
+            if start >= n_src:
+                return None
+            end = min(n_src, start + int(frames))
+            block = src[start:end]
+            self._source_pos = float(end)
+            if len(block) <= 0:
+                return None
+            if len(block) < frames:
+                padded = np.zeros((frames, self._channels), dtype=np.float32)
+                padded[: len(block), :] = block
+                return padded
+            return np.asarray(block, dtype=np.float32, copy=False)
+
         idx = self._source_pos + (np.arange(frames, dtype=np.float32) * tempo_ratio)
         valid = idx < (n_src - 1)
         if not np.any(valid):
@@ -1485,5 +1756,9 @@ class ExternalMediaPlayer(QObject):
             if hasattr(self, "_stream") and self._stream is not None:
                 self._stream.stop()
                 self._stream.close()
+        except Exception:
+            pass
+        try:
+            _release_coreaudio_keepalive()
         except Exception:
             pass

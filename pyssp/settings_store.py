@@ -108,6 +108,7 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
     "Talk",
     "Play List",
     "Search",
+    "Vocal Removed",
 ]
 WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
 WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]
@@ -482,6 +483,9 @@ class AppSettings:
     fade_on_stop: bool = True
     fade_out_when_done_playing: bool = False
     fade_out_end_lead_sec: float = 2.0
+    vocal_removed_toggle_fade_mode: str = "follow_cross_fade"
+    vocal_removed_toggle_custom_sec: float = 1.0
+    vocal_removed_toggle_always_sec: float = 1.0
     talk_volume_level: int = 30
     talk_fade_sec: float = 0.5
     talk_volume_mode: str = "percent_of_master"
@@ -797,6 +801,9 @@ def save_settings(settings: AppSettings) -> None:
         "fade_on_stop": "1" if settings.fade_on_stop else "0",
         "fade_out_when_done_playing": "1" if settings.fade_out_when_done_playing else "0",
         "fade_out_end_lead_sec": str(settings.fade_out_end_lead_sec),
+        "vocal_removed_toggle_fade_mode": settings.vocal_removed_toggle_fade_mode,
+        "vocal_removed_toggle_custom_sec": str(settings.vocal_removed_toggle_custom_sec),
+        "vocal_removed_toggle_always_sec": str(settings.vocal_removed_toggle_always_sec),
         "talk_volume_level": str(settings.talk_volume_level),
         "talk_fade_sec": str(settings.talk_fade_sec),
         "talk_volume_mode": settings.talk_volume_mode,
@@ -1069,6 +1076,24 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     fade_on_stop = _get_bool(section, "fade_on_stop", True)
     fade_out_when_done_playing = _get_bool(section, "fade_out_when_done_playing", False)
     fade_out_end_lead_sec = _clamp_float(_get_float(section, "fade_out_end_lead_sec", 2.0), 0.0, 30.0)
+    vocal_removed_toggle_fade_mode = str(section.get("vocal_removed_toggle_fade_mode", "follow_cross_fade")).strip().lower()
+    if vocal_removed_toggle_fade_mode not in {
+        "follow_cross_fade",
+        "follow_cross_fade_custom",
+        "never",
+        "always",
+    }:
+        vocal_removed_toggle_fade_mode = "follow_cross_fade"
+    vocal_removed_toggle_custom_sec = _clamp_float(
+        _get_float(section, "vocal_removed_toggle_custom_sec", 1.0),
+        0.0,
+        20.0,
+    )
+    vocal_removed_toggle_always_sec = _clamp_float(
+        _get_float(section, "vocal_removed_toggle_always_sec", 1.0),
+        0.0,
+        20.0,
+    )
     talk_fade_sec = _clamp_float(_get_float(section, "talk_fade_sec", 0.5), 0.0, 20.0)
     talk_volume_level = _clamp_int(_get_int(section, "talk_volume_level", 30), 0, 100)
     talk_volume_mode = str(section.get("talk_volume_mode", "percent_of_master")).strip().lower()
@@ -1329,6 +1354,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         fade_on_stop=fade_on_stop,
         fade_out_when_done_playing=fade_out_when_done_playing,
         fade_out_end_lead_sec=fade_out_end_lead_sec,
+        vocal_removed_toggle_fade_mode=vocal_removed_toggle_fade_mode,
+        vocal_removed_toggle_custom_sec=vocal_removed_toggle_custom_sec,
+        vocal_removed_toggle_always_sec=vocal_removed_toggle_always_sec,
         talk_volume_level=talk_volume_level,
         talk_fade_sec=talk_fade_sec,
         talk_volume_mode=talk_volume_mode,

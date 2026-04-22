@@ -19,6 +19,7 @@ CUE_SECTION_RE = re.compile(r"^PageQ(\d+)$", re.IGNORECASE)
 @dataclass
 class SetSlotData:
     file_path: str = ""
+    vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
@@ -98,6 +99,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             activity_code = section.get(f"activity{i}", "").strip()
             played = _is_played_activity(activity_code)
             volume_override_pct = _parse_volume_pct(section.get(f"v{i}", "").strip())
+            vocal_removed_file = _normalize_set_path_string(section.get(f"pysspvocalremoval{i}", "").strip())
             cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(section, i, duration)
             migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
@@ -127,6 +129,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
 
             pages[group][page_index][i - 1] = SetSlotData(
                 file_path=path,
+                vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,
                 lyric_file=lyric_file,

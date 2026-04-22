@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="${ROOT_DIR}/version.json"
 GENERATED_VERSION_DIR="${ROOT_DIR}/.build_meta"
 GENERATED_VERSION_FILE="${GENERATED_VERSION_DIR}/version.json"
+SPLEETER_CLI_DIR="${ROOT_DIR}/dist/spleeter-cli"
+SPLEETER_CLI_EXE="${SPLEETER_CLI_DIR}/spleeter-cli"
+SPLEETER_CLI_STASH="${ROOT_DIR}/.build_meta/spleeter-cli-stash"
 APP_VERSION="0.0.0"
 APP_BUILD_ID=""
 export PIPENV_IGNORE_VIRTUALENVS=1
@@ -68,10 +71,36 @@ if [[ -n "${APP_BUILD_ID}" ]]; then
   echo "[INFO] Build id: ${APP_BUILD_ID}"
 fi
 
+if [[ ! -x "${SPLEETER_CLI_EXE}" ]]; then
+  printf "[INFO] Prebuilt spleeter-cli not found at %s\n" "${SPLEETER_CLI_EXE}"
+  read -r -p "Build spleeter-cli now? [y/N] " BUILD_SPLEETER
+  case "${BUILD_SPLEETER}" in
+    y|Y|yes|YES)
+      if ! "${ROOT_DIR}/spleeter-cli/build_pyinstaller_mac.sh"; then
+        echo "[ERROR] Failed to build spleeter-cli."
+        exit 1
+      fi
+      ;;
+    *)
+      echo "[WARN] Continuing without bundled spleeter-cli."
+      ;;
+  esac
+fi
+
 echo "[INFO] Cleaning previous PyInstaller output..."
 rm -rf build
-find dist -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+rm -rf "${SPLEETER_CLI_STASH}"
+if [[ -d "${SPLEETER_CLI_DIR}" ]]; then
+  echo "[INFO] Preserving prebuilt spleeter-cli payload..."
+  mkdir -p "${GENERATED_VERSION_DIR}"
+  mv "${SPLEETER_CLI_DIR}" "${SPLEETER_CLI_STASH}"
+fi
+find dist -mindepth 1 -maxdepth 1 ! -name 'spleeter-cli' -exec rm -rf {} + 2>/dev/null || true
+rm -rf "${SPLEETER_CLI_DIR}"
 mkdir -p dist
+if [[ -d "${SPLEETER_CLI_STASH}" ]]; then
+  mv "${SPLEETER_CLI_STASH}" "${SPLEETER_CLI_DIR}"
+fi
 
 echo "[INFO] Building documentation HTML..."
 if [[ ! -f "docs/source/conf.py" ]]; then
@@ -130,6 +159,18 @@ if [[ -x "${APP_BIN}" ]]; then
   if [[ -d "${ROOT_DIR}/dist/pySSP" ]]; then
     echo "[INFO] Removing redundant onedir output (dist/pySSP)..."
     rm -rf "${ROOT_DIR}/dist/pySSP"
+  fi
+
+  if [[ -x "${SPLEETER_CLI_EXE}" ]]; then
+    echo "[INFO] Bundling prebuilt spleeter-cli payload..."
+    APP_TOOLS_DIR="${ROOT_DIR}/dist/pySSP.app/Contents/MacOS/tools"
+    rm -rf "${APP_TOOLS_DIR}/spleeter-cli"
+    mkdir -p "${APP_TOOLS_DIR}"
+    cp -R "${SPLEETER_CLI_DIR}" "${APP_TOOLS_DIR}/spleeter-cli"
+  else
+    echo "[WARN] Bundled spleeter-cli not found at:"
+    echo "[WARN]   ${SPLEETER_CLI_EXE}"
+    echo "[WARN] Vocal removal will require building spleeter-cli separately."
   fi
 
   create_wrapper_app() {

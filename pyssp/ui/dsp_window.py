@@ -51,7 +51,7 @@ class DSPWindow(QDialog):
         eq_header.addWidget(QLabel("10-Band EQ"))
         self.eq_on_btn = QPushButton("EQ On")
         self.eq_on_btn.setCheckable(True)
-        self.eq_on_btn.setChecked(True)
+        self.eq_on_btn.setChecked(False)
         self.eq_on_btn.toggled.connect(self._on_eq_toggled)
         eq_header.addWidget(self.eq_on_btn)
         eq_header.addStretch(1)

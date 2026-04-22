@@ -187,6 +187,11 @@ Pipfile.lock
 .DS_Store
 /companion-modules/pyssp
 .build_meta/
-/pretrained_models/2stems
-/pyssp/assets/spleeter_models/2stems
+#
+# Spleeter model location:
+#   keep the canonical bundled model under `spleeter-cli/models/2stems`
+#   ignore all old/inactive model locations below
+#
+/pretrained_models/
+/pyssp/assets/spleeter_models/
 /.venv-spleeter

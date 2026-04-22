@@ -70,6 +70,7 @@ from pyssp.audio_engine import (
     clear_waveform_disk_cache,
     enforce_audio_preload_limits,
     get_audio_preload_capacity_bytes,
+    get_engine_output_meter_levels,
     get_audio_preload_runtime_status,
     get_preload_memory_limits_mb,
     get_media_ssp_units,
@@ -80,7 +81,8 @@ from pyssp.audio_engine import (
     set_output_device,
     shutdown_audio_preload,
 )
-from pyssp.ffmpeg_support import media_has_audio_stream
+from pyssp.audio_runtime import PlaybackRuntimeTracker
+from pyssp.ffmpeg_support import get_ffmpeg_executable, media_has_audio_stream
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import (
     format_timecode_offset_hhmmss,
@@ -123,6 +125,7 @@ from pyssp.midi_control import (
     normalize_midi_binding,
     split_midi_binding,
 )
+from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.path_safety import unsafe_path_reason
 from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
 from pyssp.timecode import (
@@ -155,11 +158,22 @@ from pyssp.ui.stage_display import (
     normalize_stage_display_gadgets,
 )
 from pyssp.ui.search_window import SearchWindow
+from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
 from pyssp.version import get_app_title_base, get_display_build_id, get_display_version
+
+LOSSY_AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".wma"}
+FFMPEG_AUDIO_CODEC_FLAGS = {
+    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+    ".m4a": ["-c:a", "aac", "-b:a", "256k"],
+    ".aac": ["-c:a", "aac", "-b:a", "256k"],
+    ".ogg": ["-c:a", "libvorbis", "-q:a", "5"],
+    ".flac": ["-c:a", "flac"],
+    ".wav": ["-c:a", "pcm_s16le"],
+}
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -285,6 +299,7 @@ def build_lock_icon(size: int = 18, color: str = "#202020") -> QPixmap:
 @dataclass
 class SoundButtonData:
     file_path: str = ""
+    vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
@@ -311,7 +326,7 @@ class SoundButtonData:
 
     @property
     def missing(self) -> bool:
-        return self.assigned and not os.path.exists(self.file_path)
+        return self.assigned and not os.path.exists(str(self.file_path or "").strip())
 
     def display_text(self) -> str:
         if self.marker:
@@ -321,6 +336,8 @@ class SoundButtonData:
         parts: List[str] = []
         if self.volume_override_pct is not None:
             parts.append("V")
+        if str(self.vocal_removed_file or "").strip():
+            parts.append("VR")
         has_cue = (self.cue_end_ms is not None) or ((self.cue_start_ms is not None) and int(self.cue_start_ms) > 0)
         if has_cue:
             parts.append("C")
@@ -1441,9 +1458,17 @@ class TransportProgressDisplay(QLabel):
 
         wave = self._waveform
         wave_count = len(wave)
+        sample_start_ratio = 0.0
+        sample_end_ratio = 1.0
+        if (not self._audio_file_mode) and (self._cue_out_ratio > self._cue_in_ratio):
+            sample_start_ratio = self._cue_in_ratio
+            sample_end_ratio = self._cue_out_ratio
         for x in range(w):
             if wave_count > 0:
-                idx = int((x / float(max(1, w - 1))) * float(max(0, wave_count - 1)))
+                x_ratio = x / float(max(1, w - 1))
+                sample_ratio = sample_start_ratio + ((sample_end_ratio - sample_start_ratio) * x_ratio)
+                idx = int(round(sample_ratio * float(max(0, wave_count - 1))))
+                idx = max(0, min(wave_count - 1, idx))
                 amp = wave[idx]
             else:
                 amp = 0.0
@@ -1827,9 +1852,13 @@ class MainWindow(QMainWindow):
         self._main_waveform_future_token = 0
         self._main_waveform_future_key: Optional[Tuple[str, int, int]] = None
         self.loop_enabled = False
+        self.play_vocal_removed_tracks = False
         self._manual_stop_requested = False
         self.talk_active = False
         self._fade_jobs: List[dict] = []
+        self._vocal_toggle_fade_jobs: Dict[int, dict] = {}
+        self._player_mix_volume_map: Dict[int, int] = {}
+        self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
         self._stop_fade_armed = False
@@ -1862,6 +1891,24 @@ class MainWindow(QMainWindow):
         self.fade_on_stop = bool(self.settings.fade_on_stop)
         self.fade_out_when_done_playing = bool(self.settings.fade_out_when_done_playing)
         self.fade_out_end_lead_sec = max(0.0, float(self.settings.fade_out_end_lead_sec))
+        self.vocal_removed_toggle_fade_mode = str(
+            getattr(self.settings, "vocal_removed_toggle_fade_mode", "follow_cross_fade")
+        ).strip().lower()
+        if self.vocal_removed_toggle_fade_mode not in {
+            "follow_cross_fade",
+            "follow_cross_fade_custom",
+            "never",
+            "always",
+        }:
+            self.vocal_removed_toggle_fade_mode = "follow_cross_fade"
+        self.vocal_removed_toggle_custom_sec = max(
+            0.0,
+            min(20.0, float(getattr(self.settings, "vocal_removed_toggle_custom_sec", 1.0))),
+        )
+        self.vocal_removed_toggle_always_sec = max(
+            0.0,
+            min(20.0, float(getattr(self.settings, "vocal_removed_toggle_always_sec", 1.0))),
+        )
         self.talk_volume_level = self.settings.talk_volume_level
         self.talk_fade_sec = self.settings.talk_fade_sec
         self.talk_volume_mode = (
@@ -2298,6 +2345,7 @@ class MainWindow(QMainWindow):
         self._player_slot_pct_map: Dict[int, int] = {}
         self._player_started_map: Dict[int, float] = {}
         self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
+        self._playback_runtime = PlaybackRuntimeTracker()
         self._player_end_override_ms: Dict[int, int] = {}
         self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
@@ -2337,6 +2385,7 @@ class MainWindow(QMainWindow):
         self._export_dir_edit: Optional[QLineEdit] = None
         self._export_format_combo: Optional[QComboBox] = None
         self._about_window: Optional[AboutWindowDialog] = None
+        self._audio_engine_insight_window: Optional[AudioEngineInsightDialog] = None
         self._system_info_window: Optional[SystemInformationDialog] = None
         self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
@@ -2408,8 +2457,8 @@ class MainWindow(QMainWindow):
             self._sync_lock_ui_state()
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self._refresh_group_buttons()
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -2667,23 +2716,24 @@ class MainWindow(QMainWindow):
         self.info_notice_banner.setVisible(False)
 
     def _timecode_current_follow_ms(self) -> int:
-        if self.player is None:
+        reference_player, reference_key = self._timecode_reference_context()
+        if reference_player is None:
             self._timecode_follow_anchor_ms = 0.0
             self._timecode_follow_anchor_t = time.perf_counter()
             self._timecode_follow_playing = False
             self._timecode_follow_intent_pending = False
             return 0
-        is_playing = self.player.state() == ExternalMediaPlayer.PlayingState
+        is_playing = reference_player.state() == ExternalMediaPlayer.PlayingState
         now = time.perf_counter()
         predicted_ms = self._timecode_follow_anchor_ms + max(0.0, (now - self._timecode_follow_anchor_t) * 1000.0)
         try:
-            absolute_ms = max(0, int(self.player.enginePositionMs()))
+            absolute_ms = max(0, int(reference_player.enginePositionMs()))
         except Exception:
             try:
-                absolute_ms = max(0, int(self.player.position()))
+                absolute_ms = max(0, int(reference_player.position()))
             except Exception:
                 absolute_ms = 0
-        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms))
+        media_ms = float(self._timecode_display_ms_from_absolute(absolute_ms, slot_key=reference_key))
         if not is_playing:
             if self._timecode_follow_intent_pending and self._timecode_follow_playing:
                 self._timecode_follow_anchor_ms = predicted_ms
@@ -2702,11 +2752,38 @@ class MainWindow(QMainWindow):
         self._timecode_last_media_t = now
         return int(max(0.0, self._timecode_follow_anchor_ms))
 
-    def _timecode_display_ms_from_absolute(self, absolute_ms: int) -> int:
+    def _timecode_reference_context(self) -> Tuple[Optional[ExternalMediaPlayer], Optional[Tuple[str, int, int]]]:
+        active_players = self._all_active_players()
+        reference_player = self._playback_runtime.timecode_player(active_players, self._is_multi_play_enabled())
+        if reference_player is None:
+            return None, None
+        reference_key = self._player_slot_key_map.get(id(reference_player))
+        return reference_player, reference_key
+
+    def _newest_active_playing_key(self) -> Optional[Tuple[str, int, int]]:
+        active_players = self._all_active_players()
+        newest_player = self._playback_runtime.newest_active_player(active_players)
+        if newest_player is not None:
+            newest_key = self._player_slot_key_map.get(id(newest_player))
+            if newest_key is not None:
+                return newest_key
+        if self._active_playing_keys:
+            return sorted(self._active_playing_keys)[-1]
+        return None
+
+    def _refresh_current_playing_from_active_players(self) -> None:
+        self.current_playing = self._newest_active_playing_key()
+
+    def _timecode_display_ms_from_absolute(
+        self,
+        absolute_ms: int,
+        slot_key: Optional[Tuple[str, int, int]] = None,
+    ) -> int:
         absolute = max(0, int(absolute_ms))
         slot: Optional[SoundButtonData] = None
-        if self.current_playing is not None:
-            slot = self._slot_for_key(self.current_playing)
+        effective_slot_key = slot_key if slot_key is not None else self.current_playing
+        if effective_slot_key is not None:
+            slot = self._slot_for_key(effective_slot_key)
         timeline_mode = self.timecode_timeline_mode
         if slot is not None:
             timeline_mode = self._effective_slot_timecode_timeline_mode(slot)
@@ -2894,6 +2971,8 @@ class MainWindow(QMainWindow):
         self.player_b = ExternalMediaPlayer(self)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
+        self._player_mix_volume_map[id(self.player)] = self.player.volume()
+        self._player_mix_volume_map[id(self.player_b)] = self.player_b.volume()
         self._main_waveform_poll_timer = QTimer(self)
         self._main_waveform_poll_timer.setInterval(50)
         self._main_waveform_poll_timer.timeout.connect(self._poll_main_waveform_refresh)
@@ -2905,6 +2984,7 @@ class MainWindow(QMainWindow):
 
     def _dispose_audio_players(self) -> None:
         self._cancel_all_pending_player_media_loads()
+        self._clear_all_vocal_shadow_players()
         for name in ["player", "player_b"]:
             player = getattr(self, name, None)
             if player is None:
@@ -2922,6 +3002,8 @@ class MainWindow(QMainWindow):
     def _init_silent_audio_players(self) -> None:
         self.player = NoAudioPlayer(self)
         self.player_b = NoAudioPlayer(self)
+        self._player_mix_volume_map[id(self.player)] = 100
+        self._player_mix_volume_map[id(self.player_b)] = 100
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
@@ -3144,6 +3226,9 @@ class MainWindow(QMainWindow):
         system_info_action = QAction("System Information", self)
         system_info_action.triggered.connect(self._open_system_information_window)
         help_menu.addAction(system_info_action)
+        audio_engine_insight_action = QAction("Audio Engine Insight", self)
+        audio_engine_insight_action.triggered.connect(self._open_audio_engine_insight_window)
+        help_menu.addAction(audio_engine_insight_action)
 
         help_action = QAction("Help", self)
         help_action.triggered.connect(self._open_help_window)
@@ -4260,8 +4345,15 @@ class MainWindow(QMainWindow):
 
     def _open_system_information_window(self) -> None:
         if self._is_playback_in_progress():
-            self._show_info_notice_banner(tr("Stop playback before opening System Information."))
-            return
+            answer = QMessageBox.question(
+                self,
+                tr("System Information"),
+                tr("Opening System Information during playback may interrupt playback. Do you want to continue?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
         if self._system_info_window is None:
             self._system_info_window = SystemInformationDialog(
                 app_version_text=self.app_version_text,
@@ -4275,6 +4367,143 @@ class MainWindow(QMainWindow):
         self._system_info_window.show()
         self._system_info_window.raise_()
         self._system_info_window.activateWindow()
+
+    def _open_audio_engine_insight_window(self) -> None:
+        if self._audio_engine_insight_window is None:
+            self._audio_engine_insight_window = AudioEngineInsightDialog(
+                snapshot_provider=self._audio_engine_insight_snapshot_data,
+                parent=self,
+            )
+            self._audio_engine_insight_window.destroyed.connect(
+                lambda _=None: self._clear_audio_engine_insight_window_ref()
+            )
+        self._audio_engine_insight_window.refresh()
+        self._audio_engine_insight_window.show()
+        self._audio_engine_insight_window.raise_()
+        self._audio_engine_insight_window.activateWindow()
+
+    def _audio_engine_insight_snapshot_data(self) -> dict:
+        ref_player, ref_key = self._timecode_reference_context()
+        engine_left, engine_right = get_engine_output_meter_levels()
+        summary = [
+            ("audio_output_device", self.audio_output_device or "default"),
+            ("timecode_audio_output_device", self.timecode_audio_output_device or "none"),
+            ("timecode_mode", self.timecode_mode),
+            ("multi_play_enabled", self._is_multi_play_enabled()),
+            ("active_playing_keys", len(self._active_playing_keys)),
+            ("current_playing", self.current_playing),
+            ("fade_jobs", len(self._fade_jobs)),
+            ("global_volume", self.volume_slider.value() if self.volume_slider is not None else 100),
+            ("dsp_config", self._describe_dsp_config(self._dsp_config)),
+            ("engine_output_meter", f"({engine_left:.4f}, {engine_right:.4f})"),
+            ("timecode_reference", "none" if ref_player is None else f"{self._audio_player_label(ref_player)} slot={ref_key}"),
+        ]
+        player_records: List[dict] = []
+        runtime_players = self._insight_runtime_players()
+        for index, player in enumerate(runtime_players):
+            player_records.append(self._audio_player_insight_record(player, index))
+        return {"summary": summary, "players": player_records}
+
+    def _insight_runtime_players(self) -> List[ExternalMediaPlayer]:
+        players: List[ExternalMediaPlayer] = [self.player, self.player_b, *self._multi_players]
+        for primary in [self.player, self.player_b, *self._multi_players]:
+            shadow = self._shadow_player_for(primary)
+            if shadow is not None:
+                players.append(shadow)
+        return players
+
+    def _audio_player_label(self, player: object) -> str:
+        if player is self.player:
+            return "primary"
+        if player is self.player_b:
+            return "secondary"
+        if player in self._multi_players:
+            try:
+                return f"multi[{self._multi_players.index(player)}]"
+            except Exception:
+                return "multi"
+        for primary in [self.player, self.player_b, *self._multi_players]:
+            shadow = self._shadow_player_for(primary)
+            if shadow is player:
+                return f"{self._audio_player_label(primary)}_shadow"
+        return "player"
+
+    def _describe_dsp_config(self, config: Optional[DSPConfig]) -> str:
+        cfg = normalize_config(config)
+        return (
+            f"eq_enabled={cfg.eq_enabled}, "
+            f"eq_bands={cfg.eq_bands}, "
+            f"reverb_sec={cfg.reverb_sec}, "
+            f"tempo_pct={cfg.tempo_pct}, "
+            f"pitch_pct={cfg.pitch_pct}, "
+            f"plugin_paths={cfg.plugin_paths}"
+        )
+
+    def _audio_player_insight_record(self, player: object, index: int) -> dict:
+        label = self._audio_player_label(player)
+        pid = id(player)
+        slot_key = self._player_slot_key_map.get(pid)
+        if slot_key is None:
+            for primary in [self.player, self.player_b, *self._multi_players]:
+                shadow = self._shadow_player_for(primary)
+                if shadow is player:
+                    slot_key = self._player_slot_key_map.get(id(primary))
+                    break
+        slot = self._slot_for_key(slot_key) if slot_key is not None else None
+        runtime_id = self._playback_runtime.runtime_id_for(player)
+        meter = getattr(player, "meterLevels", lambda: (0.0, 0.0))()
+        try:
+            state_name = self._api_player_state_name(player)  # type: ignore[arg-type]
+        except Exception:
+            state_name = "unknown"
+        try:
+            engine_pos = int(getattr(player, "enginePositionMs", lambda: 0)())
+        except Exception:
+            engine_pos = 0
+        try:
+            position_ms = int(getattr(player, "position", lambda: 0)())
+        except Exception:
+            position_ms = 0
+        try:
+            duration_ms = int(getattr(player, "duration", lambda: 0)())
+        except Exception:
+            duration_ms = 0
+        try:
+            volume = int(getattr(player, "volume", lambda: 0)())
+        except Exception:
+            volume = 0
+        title = "" if slot is None else self._build_now_playing_text(slot)
+        details = [
+            ("index", index),
+            ("label", label),
+            ("object_id", pid),
+            ("runtime_id", runtime_id if runtime_id is not None else "inactive"),
+            ("state", state_name),
+            ("slot_key", slot_key),
+            ("title", title),
+            ("file_path", "" if slot is None else slot.file_path),
+            ("volume", volume),
+            ("slot_volume_pct", self._slot_pct_for_player(player)),
+            ("duration_ms", duration_ms),
+            ("position_ms", position_ms),
+            ("engine_position_ms", engine_pos),
+            ("remaining_ms", max(0, duration_ms - position_ms)),
+            ("streaming_mode", bool(getattr(player, "_streaming_mode", False))),
+            ("media_path", getattr(player, "_media_path", "")),
+            ("cue_end_override_ms", self._player_end_override_ms.get(pid)),
+            ("ignore_cue_end", pid in self._player_ignore_cue_end),
+            ("started_at_monotonic", self._player_started_map.get(pid)),
+            ("meter_levels", meter),
+            ("dsp_config", self._describe_dsp_config(getattr(player, "_dsp_config", None))),
+        ]
+        return {
+            "index": index,
+            "label": label,
+            "runtime_id": runtime_id if runtime_id is not None else "inactive",
+            "state": state_name,
+            "title": title,
+            "details": details,
+        }
 
     def _open_help_window(self) -> None:
         help_index = self._help_index_path()
@@ -4382,6 +4611,9 @@ class MainWindow(QMainWindow):
 
     def _clear_about_window_ref(self) -> None:
         self._about_window = None
+
+    def _clear_audio_engine_insight_window_ref(self) -> None:
+        self._audio_engine_insight_window = None
 
     def _clear_system_info_window_ref(self) -> None:
         self._system_info_window = None
@@ -5628,7 +5860,11 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(self._open_dsp_window)
             elif text == "Go To Playing":
                 btn.clicked.connect(self._go_to_current_playing_page)
-            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag"}:
+            elif text == "Vocal Removed":
+                btn.setCheckable(True)
+                btn.setToolTip("")
+                btn.clicked.connect(self._toggle_global_vocal_removed_mode)
+            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed"}:
                 self.control_buttons[text] = btn
             self._main_control_buttons_ui[text] = btn
             btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
@@ -6155,6 +6391,7 @@ class MainWindow(QMainWindow):
             "slots": [
                 SoundButtonData(
                     file_path=slot.file_path,
+                    vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
@@ -6189,6 +6426,7 @@ class MainWindow(QMainWindow):
         self.data[self.current_group][page_index] = [
             SoundButtonData(
                 file_path=slot.file_path,
+                vocal_removed_file=slot.vocal_removed_file,
                 title=slot.title,
                 notes=slot.notes,
                 lyric_file=slot.lyric_file,
@@ -6314,6 +6552,9 @@ class MainWindow(QMainWindow):
             notes = clean_set_value(slot.notes or title)
             lines.append(f"c{slot_index}={notes}")
             lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
+            vocal_removed_file = clean_set_value(slot.vocal_removed_file)
+            if vocal_removed_file:
+                lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
             lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
             lines.append(f"n{slot_index}={title}")
             if slot.volume_override_pct is not None:
@@ -6415,8 +6656,10 @@ class MainWindow(QMainWindow):
                 )
             played = activity_code == "2"
             copied = section.get(f"ci{i}", "").strip().upper() == "Y"
+            vocal_removed_file = section.get(f"pysspvocalremoval{i}", "").strip()
             slots[i - 1] = SoundButtonData(
                 file_path=path,
+                vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,
                 lyric_file=section.get(f"pyssplyric{i}", "").strip(),
@@ -6461,11 +6704,13 @@ class MainWindow(QMainWindow):
                 button.setText("")
                 button.setToolTip("")
             else:
-                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(slot.file_path))
+                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(self._effective_slot_file_path(slot)))
                 has_cue = self._slot_has_custom_cue(slot)
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:
                     parts.append("V")
+                if str(slot.vocal_removed_file or "").strip():
+                    parts.append("VR")
                 if has_cue:
                     parts.append("C")
                 if self._slot_has_custom_timecode(slot):
@@ -7161,6 +7406,7 @@ class MainWindow(QMainWindow):
     def _clone_slot(self, slot: SoundButtonData) -> SoundButtonData:
         return SoundButtonData(
             file_path=slot.file_path,
+            vocal_removed_file=slot.vocal_removed_file,
             title=slot.title,
             notes=slot.notes,
             lyric_file=slot.lyric_file,
@@ -7188,29 +7434,55 @@ class MainWindow(QMainWindow):
         if slot.locked:
             self._show_info_notice_banner("This sound button is locked.")
             return
+        slot_key = (self._view_group_key(), self.current_page, slot_index)
         start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
-        dialog = EditSoundButtonDialog(
-            file_path=slot.file_path,
-            caption=slot.title,
-            notes=slot.notes,
-            lyric_file=slot.lyric_file,
-            volume_override_pct=slot.volume_override_pct,
-            sound_hotkey=slot.sound_hotkey,
-            sound_midi_hotkey=slot.sound_midi_hotkey,
-            available_midi_input_devices=list_midi_input_devices(),
-            selected_midi_input_device_ids=self.midi_input_device_ids,
-            start_dir=start_dir,
-            language=self.ui_language,
-            parent=self,
-        )
-        self._midi_context_handler = dialog
-        self._midi_context_block_actions = True
-        accepted = dialog.exec_() == QDialog.Accepted
-        self._midi_context_handler = None
-        self._midi_context_block_actions = False
-        if not accepted:
-            return
-        file_path, caption, notes, lyric_file, volume_override_pct, sound_hotkey, sound_midi_hotkey = dialog.values()
+        file_path = slot.file_path
+        caption = slot.title
+        notes = slot.notes
+        vocal_removed_file = slot.vocal_removed_file
+        lyric_file = slot.lyric_file
+        volume_override_pct = slot.volume_override_pct
+        sound_hotkey = slot.sound_hotkey
+        sound_midi_hotkey = slot.sound_midi_hotkey
+        while True:
+            dialog = EditSoundButtonDialog(
+                file_path=file_path,
+                caption=caption,
+                notes=notes,
+                vocal_removed_file=vocal_removed_file,
+                lyric_file=lyric_file,
+                volume_override_pct=volume_override_pct,
+                sound_hotkey=sound_hotkey,
+                sound_midi_hotkey=sound_midi_hotkey,
+                available_midi_input_devices=list_midi_input_devices(),
+                selected_midi_input_device_ids=self.midi_input_device_ids,
+                start_dir=start_dir,
+                language=self.ui_language,
+                parent=self,
+            )
+            self._midi_context_handler = dialog
+            self._midi_context_block_actions = True
+            result_code = dialog.exec_()
+            self._midi_context_handler = None
+            self._midi_context_block_actions = False
+            (
+                file_path,
+                caption,
+                notes,
+                vocal_removed_file,
+                lyric_file,
+                volume_override_pct,
+                sound_hotkey,
+                sound_midi_hotkey,
+            ) = dialog.values()
+            if result_code == EditSoundButtonDialog.REGENERATE_RESULT:
+                generated_path = self._generate_vocal_removed_file_for_slot(file_path, vocal_removed_file)
+                if generated_path:
+                    vocal_removed_file = generated_path
+                continue
+            if result_code != QDialog.Accepted:
+                return
+            break
         if not file_path:
             self._show_info_notice_banner("File is required.")
             return
@@ -7221,6 +7493,10 @@ class MainWindow(QMainWindow):
         lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Lyric file path rejected.\n\n{lyric_path_reason}")
+            return
+        vocal_removed_path_reason = self._path_safety_reason(vocal_removed_file) if vocal_removed_file else None
+        if vocal_removed_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Vocal removed file path rejected.\n\n{vocal_removed_path_reason}")
             return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
         if conflict is not None:
@@ -7247,6 +7523,7 @@ class MainWindow(QMainWindow):
         slot.file_path = file_path
         slot.title = caption or os.path.splitext(os.path.basename(file_path))[0]
         slot.notes = notes
+        slot.vocal_removed_file = vocal_removed_file
         slot.lyric_file = lyric_file
         slot.marker = False
         slot.played = False
@@ -7264,6 +7541,242 @@ class MainWindow(QMainWindow):
         self._refresh_page_list()
         self._refresh_sound_grid()
         self._apply_hotkeys()
+        self._refresh_playing_slot_after_audio_path_change(slot_key)
+
+    def _generate_vocal_removed_file_for_slot(self, file_path: str, current_output_path: str = "") -> str:
+        source_path = str(file_path or "").strip()
+        if not source_path:
+            QMessageBox.warning(self, tr("Vocal Removal"), tr("Select a source audio file first."))
+            return ""
+        source_reason = self._path_safety_reason(source_path)
+        if source_reason:
+            QMessageBox.warning(self, tr("Invalid File Path"), f"Sound file path rejected.\n\n{source_reason}")
+            return ""
+        if not os.path.exists(source_path):
+            QMessageBox.warning(self, tr("Missing File"), f"{tr('File not found:')}\n{source_path}")
+            return ""
+        cli_executable = str(find_bundled_spleeter_cli_executable() or "").strip()
+        if not cli_executable or not os.path.exists(cli_executable):
+            QMessageBox.warning(
+                self,
+                tr("Vocal Removal"),
+                tr("spleeter-cli was not found. Build it first before generating a vocal removed track."),
+            )
+            return ""
+        suggested_output = str(current_output_path or "").strip() or suggested_vocal_removed_output_path(source_path)
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Save Vocal Removed File"),
+            suggested_output,
+            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
+        )
+        output_path = str(output_path or "").strip()
+        if not output_path:
+            return ""
+        output_reason = self._path_safety_reason(output_path)
+        if output_reason:
+            QMessageBox.warning(self, tr("Invalid File Path"), f"Vocal removed file path rejected.\n\n{output_reason}")
+            return ""
+        if os.path.exists(output_path):
+            overwrite = QMessageBox.question(
+                self,
+                tr("Overwrite File"),
+                f"{tr('Overwrite existing file?')}\n{output_path}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if overwrite != QMessageBox.Yes:
+                return ""
+        try:
+            generated_path = self._run_vocal_removed_cli(source_path, output_path, cli_executable)
+        except Exception as exc:
+            QMessageBox.warning(self, tr("Vocal Removal"), f"{tr('Could not generate vocal removal track.')}\n\n{exc}")
+            return ""
+        self.settings.last_sound_dir = os.path.dirname(source_path) or self.settings.last_sound_dir
+        self._save_settings()
+        if os.path.normcase(os.path.abspath(generated_path)) != os.path.normcase(os.path.abspath(output_path)):
+            self._show_info_notice_banner(f"{tr('Vocal removed track generated:')} {generated_path}")
+        else:
+            self._show_info_notice_banner(tr("Vocal removed track generated."))
+        return generated_path
+
+    def _run_vocal_removed_cli(self, source_path: str, output_path: str, cli_executable: str) -> str:
+        source_ext = os.path.splitext(source_path)[1].lower()
+        output_ext = os.path.splitext(output_path)[1].lower()
+        progress = QProgressDialog(tr("Generating vocal removed track..."), tr("Cancel"), 0, 0, self)
+        progress.setWindowTitle(tr("Vocal Removal"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+        process: Optional[subprocess.Popen[str]] = None
+        stdout_text = ""
+        stderr_text = ""
+        try:
+            with tempfile.TemporaryDirectory(prefix="pyssp_vocal_removal_") as temp_dir:
+                temp_input_wav = source_path if source_ext == ".wav" else os.path.join(temp_dir, "input.wav")
+                temp_output_wav = output_path if output_ext == ".wav" else os.path.join(temp_dir, "output.wav")
+                if source_ext != ".wav":
+                    self._ffmpeg_transcode_to_wav(source_path, temp_input_wav)
+                stdout_log_path = os.path.join(temp_dir, "spleeter-cli-stdout.log")
+                stderr_log_path = os.path.join(temp_dir, "spleeter-cli-stderr.log")
+                command = [
+                    cli_executable,
+                    "--input",
+                    temp_input_wav,
+                    "--output",
+                    temp_output_wav,
+                ]
+                popen_kwargs: dict = {
+                    "stdout": None,
+                    "stderr": None,
+                    "stdin": subprocess.DEVNULL,
+                }
+                if os.name == "nt":
+                    popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    try:
+                        startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+                        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+                        startup.wShowWindow = 0
+                        popen_kwargs["startupinfo"] = startup
+                    except Exception:
+                        pass
+                with open(stdout_log_path, "w", encoding="utf-8", errors="replace") as stdout_fh, open(
+                    stderr_log_path, "w", encoding="utf-8", errors="replace"
+                ) as stderr_fh:
+                    popen_kwargs["stdout"] = stdout_fh
+                    popen_kwargs["stderr"] = stderr_fh
+                    process = subprocess.Popen(command, **popen_kwargs)
+                    while process.poll() is None:
+                        QApplication.processEvents()
+                        if progress.wasCanceled():
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except Exception:
+                                process.kill()
+                            raise RuntimeError("Cancelled.")
+                        time.sleep(0.05)
+                try:
+                    with open(stdout_log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        stdout_text = fh.read()
+                except Exception:
+                    stdout_text = ""
+                try:
+                    with open(stderr_log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        stderr_text = fh.read()
+                except Exception:
+                    stderr_text = ""
+                if process.returncode != 0:
+                    detail = (stderr_text or stdout_text or f"spleeter-cli exited with code {process.returncode}").strip()
+                    raise RuntimeError(detail)
+                if not os.path.exists(temp_output_wav):
+                    raise RuntimeError("spleeter-cli completed but no output file was produced.")
+                if output_ext == ".wav":
+                    if os.path.normcase(os.path.abspath(temp_output_wav)) != os.path.normcase(os.path.abspath(output_path)):
+                        shutil.copyfile(temp_output_wav, output_path)
+                    return output_path
+                self._ffmpeg_transcode_from_wav(temp_output_wav, output_path)
+                if not os.path.exists(output_path):
+                    raise RuntimeError("ffmpeg completed but the requested output file was not produced.")
+                return output_path
+        finally:
+            progress.close()
+        if process is None:
+            raise RuntimeError("Failed to start spleeter-cli.")
+        detail = (stderr_text or stdout_text or "spleeter-cli did not complete successfully.").strip()
+        raise RuntimeError(detail)
+
+    def _ffmpeg_transcode_to_wav(self, source_path: str, output_wav_path: str) -> None:
+        ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg is required to decode this source file to WAV.")
+        self._run_ffmpeg_audio_command(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                source_path,
+                "-vn",
+                "-sn",
+                "-dn",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                "-c:a",
+                "pcm_s16le",
+                output_wav_path,
+            ]
+        )
+
+    def _ffmpeg_transcode_from_wav(self, source_wav_path: str, output_path: str) -> None:
+        ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg is required to encode the generated WAV to the requested output format.")
+        ext = os.path.splitext(output_path)[1].lower()
+        codec_flags = list(FFMPEG_AUDIO_CODEC_FLAGS.get(ext, []))
+        if ext in LOSSY_AUDIO_EXTENSIONS and not codec_flags:
+            codec_flags = ["-c:a", "libmp3lame", "-q:a", "2"]
+        if not codec_flags:
+            raise RuntimeError(f"Unsupported vocal removed output format: {ext or '(no extension)'}")
+        self._run_ffmpeg_audio_command(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                source_wav_path,
+                *codec_flags,
+                output_path,
+            ]
+        )
+
+    def _run_ffmpeg_audio_command(self, command: List[str]) -> None:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode == 0:
+            return
+        detail = (completed.stderr or completed.stdout or "ffmpeg command failed").strip()
+        raise RuntimeError(detail)
+
+    def _refresh_playing_slot_after_audio_path_change(self, slot_key: Tuple[str, int, int]) -> None:
+        player = self._player_for_slot_key(slot_key)
+        if player is None:
+            return
+        slot = self._slot_for_key(slot_key)
+        if slot is None:
+            return
+        target_path = str(self._effective_slot_file_path(slot) or "").strip()
+        current_path = str(getattr(player, "_media_path", "") or "").strip()
+        if not target_path or os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(current_path)):
+            return
+        state = player.state()
+        position_ms = max(0, int(player.position()))
+        load_result = self._try_load_media(player, slot)
+        if load_result is None:
+            return
+        if not load_result:
+            return
+        player.setPosition(position_ms)
+        if state == ExternalMediaPlayer.PlayingState:
+            player.play()
+        elif state == ExternalMediaPlayer.PausedState:
+            player.play()
+            player.pause()
 
     def _find_sound_hotkey_conflict(
         self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
@@ -8092,7 +8605,7 @@ class MainWindow(QMainWindow):
             value_label.setText(f"Playback Volume: {value}%")
             if is_current_slot:
                 self._player_slot_volume_pct = max(0, min(100, int(value)))
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
 
         _sync_label(slider.value())
         slider.valueChanged.connect(_sync_label)
@@ -8112,7 +8625,7 @@ class MainWindow(QMainWindow):
             slot.volume_override_pct = None
             if is_current_slot:
                 self._player_slot_volume_pct = 75
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._set_dirty(True)
             self._refresh_sound_grid()
             committed["value"] = True
@@ -8123,7 +8636,7 @@ class MainWindow(QMainWindow):
             slot.volume_override_pct = value
             if is_current_slot:
                 self._player_slot_volume_pct = value
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._set_dirty(True)
             self._refresh_sound_grid()
             committed["value"] = True
@@ -8134,7 +8647,7 @@ class MainWindow(QMainWindow):
                 slot.volume_override_pct = original_override
                 if is_current_slot:
                     self._player_slot_volume_pct = original_slot_pct
-                    self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                    self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._recover_from_stuck_mouse_state()
             dialog.deleteLater()
             if getattr(self, "_active_playback_volume_dialog", None) is dialog:
@@ -8304,11 +8817,14 @@ class MainWindow(QMainWindow):
                 f"[TCDBG] {time.perf_counter():.6f} media_seek_done cross "
                 f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
             )
-            new_player.setVolume(0)
+            self._set_player_volume(new_player, 0)
             print(f"[TCDBG] {time.perf_counter():.6f} player_play cross key={playing_key}")
+            self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
             new_player.play()
+            self._sync_shadow_transport_from_primary(new_player)
             started_playback = True
             self._set_player_slot_key(new_player, playing_key)
+            self._mark_player_started(new_player)
             fade_seconds = self.cross_fade_sec
             self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
             if old_player is not None:
@@ -8350,23 +8866,30 @@ class MainWindow(QMainWindow):
             target_volume = self._effective_slot_target_volume(slot_pct)
             seek_t = time.perf_counter()
             self._seek_player_to_slot_start_cue(self.player, slot)
+            self._prepare_vocal_shadow_player(self.player, slot, start_playing=False)
             print(
                 f"[TCDBG] {time.perf_counter():.6f} media_seek_done primary "
                 f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
             )
             if fade_in_on:
-                self.player.setVolume(0)
+                self._set_player_volume(self.player, 0)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play fade_in key={playing_key}")
                 self.player.play()
+                self._sync_shadow_transport_from_primary(self.player)
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
+                self._mark_player_started(self.player)
+                self.current_playing = playing_key
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
-                self.player.setVolume(target_volume)
+                self._set_player_volume(self.player, target_volume)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
                 self.player.play()
+                self._sync_shadow_transport_from_primary(self.player)
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
+                self._mark_player_started(self.player)
+                self.current_playing = playing_key
 
         if started_playback:
             self._timecode_on_playback_start(slot)
@@ -8375,7 +8898,6 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(self.player)
         return True
 
     def _prepare_transport_for_new_playback(self) -> None:
@@ -8392,6 +8914,8 @@ class MainWindow(QMainWindow):
         self.elapsed_time.setText(format_clock_time(display_pos))
         self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))
         self._refresh_main_jog_meta(display_pos, total_ms)
+        if self.main_progress_display_mode == "waveform":
+            self._schedule_main_waveform_refresh(0)
 
     def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> bool:
         if not self._enforce_multi_play_limit():
@@ -8401,37 +8925,29 @@ class MainWindow(QMainWindow):
         extra_player.setDSPConfig(self._dsp_config)
         extra_player.mediaLoadFinished.connect(self._on_player_media_load_finished)
         slot_pct = self._slot_volume_pct(slot)
+        finish_multi = lambda p=extra_player, s=slot, key=playing_key, pct=slot_pct: self._finish_multi_loaded_playback(
+            p, s, key, pct
+        )
         try:
             load_result = self._try_load_media(
                 extra_player,
                 slot,
                 playing_key=playing_key,
                 allow_deferred=False,
-                on_success=lambda p=extra_player, s=slot, key=playing_key, pct=slot_pct: self._finish_multi_loaded_playback(
-                    p, s, key, pct
-                ),
+                on_success=finish_multi,
             )
             if load_result is None:
                 return True
             if not load_result:
                 extra_player.deleteLater()
                 return False
+            finish_multi()
         except Exception:
             try:
                 extra_player.deleteLater()
             except Exception:
                 pass
             return False
-        self._multi_players.append(extra_player)
-        self._set_player_slot_key(extra_player, playing_key)
-        self._mark_player_started(extra_player)
-        slot.played = True
-        slot.activity_code = "2"
-        self._set_dirty(True)
-        self.current_playing = playing_key
-        self._refresh_sound_grid()
-        self._update_now_playing_label(self._build_now_playing_text(slot))
-        self._append_play_log(slot.file_path)
         return True
 
     def _try_load_media(
@@ -8444,15 +8960,16 @@ class MainWindow(QMainWindow):
         on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
         self._cancel_pending_player_media_load(player)
-        reason = self._path_safety_reason(slot.file_path)
+        target_file_path = self._effective_slot_file_path(slot)
+        reason = self._path_safety_reason(target_file_path)
         if reason:
             slot.load_failed = True
             self._stop_player_internal(player)
-            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            title = slot.title.strip() or os.path.basename(target_file_path) or "(unknown)"
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {reason}")
-            print(f"[pySSP] Unsafe audio path rejected: {slot.file_path} | {reason}", flush=True)
+            print(f"[pySSP] Unsafe audio path rejected: {target_file_path} | {reason}", flush=True)
             return False
-        normalized_path = str(slot.file_path or "").strip()
+        normalized_path = str(target_file_path or "").strip()
         can_stream_now = can_stream_without_preload(normalized_path)
         if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)) and (not can_stream_now):
             try:
@@ -8471,7 +8988,7 @@ class MainWindow(QMainWindow):
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
             if sys.platform == "darwin":
-                request_id = player.setMediaAsync(slot.file_path, dsp_config=self._dsp_config)
+                request_id = player.setMediaAsync(target_file_path, dsp_config=self._dsp_config)
                 self._pending_player_media_loads[id(player)] = {
                     "request_id": int(request_id),
                     "player": player,
@@ -8481,20 +8998,21 @@ class MainWindow(QMainWindow):
                 }
                 self._schedule_player_media_load_status(player, slot)
                 return None
-            player.setMedia(slot.file_path, dsp_config=self._dsp_config)
+            player.setMedia(target_file_path, dsp_config=self._dsp_config)
             slot.load_failed = False
             self._hide_playback_warning_banner()
             return True
         except Exception as exc:
             slot.load_failed = True
             self._stop_player_internal(player)
-            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            title = slot.title.strip() or os.path.basename(target_file_path) or "(unknown)"
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
-            print(f"[pySSP] Audio load failed: {slot.file_path} | {exc}", flush=True)
+            print(f"[pySSP] Audio load failed: {target_file_path} | {exc}", flush=True)
             return False
 
     def _schedule_player_media_load_status(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
-        name = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+        path = self._effective_slot_file_path(slot)
+        name = slot.title.strip() or os.path.basename(path) or "(unknown)"
         self.statusBar().showMessage(f"{tr('Reading audio file...')} {name}")
         if player is self.player:
             self._set_now_playing_loading(name, 0)
@@ -8534,24 +9052,29 @@ class MainWindow(QMainWindow):
         slot_pct: int,
         fade_in_on: bool,
     ) -> None:
+        self.current_playing = playing_key
         self._player_slot_volume_pct = slot_pct
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
         if fade_in_on:
-            player.setVolume(0)
+            self._set_player_volume(player, 0)
             player.play()
+            self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
+            self._mark_player_started(player)
             self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
         else:
-            player.setVolume(target_volume)
+            self._set_player_volume(player, target_volume)
             player.play()
+            self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
+            self._mark_player_started(player)
         self._timecode_on_playback_start(slot)
         self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(player)
 
     def _finish_cross_loaded_playback(
         self,
@@ -8561,15 +9084,19 @@ class MainWindow(QMainWindow):
         playing_key: Tuple[str, int, int],
         slot_pct: int,
     ) -> None:
+        self.current_playing = playing_key
         if new_player is self.player:
             self._player_slot_volume_pct = slot_pct
         else:
             self._player_b_slot_volume_pct = slot_pct
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(new_player, slot)
-        new_player.setVolume(0)
+        self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
+        self._set_player_volume(new_player, 0)
         new_player.play()
+        self._sync_shadow_transport_from_primary(new_player)
         self._set_player_slot_key(new_player, playing_key)
+        self._mark_player_started(new_player)
         fade_seconds = self.cross_fade_sec
         self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
         if old_player is not None:
@@ -8581,7 +9108,6 @@ class MainWindow(QMainWindow):
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
-        self._mark_player_started(self.player)
 
     def _finish_multi_loaded_playback(
         self,
@@ -8593,12 +9119,14 @@ class MainWindow(QMainWindow):
         self._set_player_slot_pct(player, slot_pct)
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
         fade_in_on = self._is_fade_in_enabled()
         if fade_in_on and self.fade_in_sec > 0:
-            player.setVolume(0)
+            self._set_player_volume(player, 0)
         else:
-            player.setVolume(target_volume)
+            self._set_player_volume(player, target_volume)
         player.play()
+        self._sync_shadow_transport_from_primary(player)
         if fade_in_on and self.fade_in_sec > 0:
             self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
         if player not in self._multi_players:
@@ -8609,6 +9137,7 @@ class MainWindow(QMainWindow):
         slot.activity_code = "2"
         self._set_dirty(True)
         self.current_playing = playing_key
+        self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
@@ -8671,7 +9200,7 @@ class MainWindow(QMainWindow):
         def score(player: ExternalMediaPlayer) -> Tuple[int, int]:
             # Prefer actively playing channel, then louder channel.
             is_playing = 1 if player.state() == ExternalMediaPlayer.PlayingState else 0
-            return (is_playing, player.volume())
+            return (is_playing, self._logical_player_volume(player))
 
         a_active = is_active(self.player)
         b_active = is_active(self.player_b)
@@ -8813,7 +9342,7 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, duration: int) -> None:
         self.current_duration_ms = duration
-        if duration > 0 and self.main_progress_display_mode == "waveform":
+        if self.main_progress_display_mode == "waveform":
             self._schedule_main_waveform_refresh(120)
         else:
             self._cancel_main_waveform_refresh()
@@ -8835,8 +9364,6 @@ class MainWindow(QMainWindow):
         self._refresh_stage_display()
 
     def _schedule_main_waveform_refresh(self, delay_ms: int = 0) -> None:
-        if self.current_duration_ms <= 0:
-            return
         if self.current_playing is None:
             return
         token = self._main_waveform_request_token + 1
@@ -8852,15 +9379,21 @@ class MainWindow(QMainWindow):
         if self._main_waveform_poll_timer.isActive():
             self._main_waveform_poll_timer.stop()
 
+    def _clear_main_waveform_display(self) -> None:
+        self._cancel_main_waveform_refresh()
+        self._main_progress_waveform = []
+        self.progress_label.set_waveform([])
+
     def _start_main_waveform_refresh_if_current(self, token: int, expected_key: Optional[Tuple[str, int, int]]) -> None:
         if token != self._main_waveform_request_token:
             return
         if expected_key is None or self.current_playing != expected_key:
             return
-        if self.current_duration_ms <= 0:
+        player = self._player_for_slot_key(expected_key)
+        if player is None:
             return
         try:
-            self._main_waveform_future = self.player.waveformPeaksAsync(1800)
+            self._main_waveform_future = player.waveformPeaksAsync(1800)
             self._main_waveform_future_token = token
             self._main_waveform_future_key = expected_key
         except Exception:
@@ -8886,9 +9419,6 @@ class MainWindow(QMainWindow):
         self._main_waveform_future_key = None
         if token != self._main_waveform_request_token:
             return
-        if self.current_duration_ms <= 0:
-            self._main_waveform_poll_timer.stop()
-            return
         if expected_key is None or self.current_playing != expected_key:
             self._main_waveform_poll_timer.stop()
             return
@@ -8904,9 +9434,6 @@ class MainWindow(QMainWindow):
         if self.current_playing != expected_key:
             self._main_waveform_poll_timer.stop()
             return
-        if self.current_duration_ms <= 0:
-            self._main_waveform_poll_timer.stop()
-            return
         self._main_waveform_poll_timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
@@ -8919,7 +9446,10 @@ class MainWindow(QMainWindow):
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
             self._timecode_on_playback_stop()
+            self._clear_vocal_shadow_player(self.player)
+            self._player_mix_volume_map.pop(id(self.player), None)
             self._clear_player_slot_key(self.player)
+            self._clear_main_waveform_display()
             last_playing = self.current_playing
             playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
             manual_stop = self._manual_stop_requested
@@ -8988,6 +9518,9 @@ class MainWindow(QMainWindow):
         self._ignore_state_changes += 1
         try:
             player.stop()
+            shadow = self._shadow_player_for(player)
+            if shadow is not None:
+                shadow.stop()
         finally:
             self._ignore_state_changes = max(0, self._ignore_state_changes - 1)
 
@@ -9015,9 +9548,12 @@ class MainWindow(QMainWindow):
     def _tick_meter(self) -> None:
         self._tick_deferred_audio_start()
         self._prune_multi_players()
+        self._maintain_vocal_shadow_sync()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
             had_player_b_key = id(self.player_b) in self._player_slot_key_map
+            self._clear_vocal_shadow_player(self.player_b)
+            self._player_mix_volume_map.pop(id(self.player_b), None)
             self._clear_player_slot_key(self.player_b)
             if had_player_b_key:
                 self._refresh_sound_grid()
@@ -9031,18 +9567,12 @@ class MainWindow(QMainWindow):
             self.player.state() == ExternalMediaPlayer.PlayingState
             or self.player_b.state() == ExternalMediaPlayer.PlayingState
         )
-        left_a, right_a = self.player.meterLevels()
-        left_b, right_b = self.player_b.meterLevels()
-        sum_left = left_a + left_b
-        sum_right = right_a + right_b
         for extra in self._multi_players:
             if extra.state() == ExternalMediaPlayer.PlayingState:
                 any_playing = True
-            left_x, right_x = extra.meterLevels()
-            sum_left += left_x
-            sum_right += right_x
-        target_left = min(1.0, max(0.0, sum_left))
-        target_right = min(1.0, max(0.0, sum_right))
+        target_left, target_right = get_engine_output_meter_levels()
+        target_left = min(1.0, max(0.0, float(target_left)))
+        target_right = min(1.0, max(0.0, float(target_right)))
         attack = 0.92
         release = 0.68 if any_playing else 0.45
         if target_left >= self._vu_levels[0]:
@@ -9504,6 +10034,314 @@ class MainWindow(QMainWindow):
             return self.cue_page
         return self.data[self.current_group][self.current_page]
 
+    def _actual_slot_file_path(self, slot: SoundButtonData) -> str:
+        return str(slot.file_path or "").strip()
+
+    def _vocal_removed_slot_file_path(self, slot: SoundButtonData) -> str:
+        path = str(slot.vocal_removed_file or "").strip()
+        if path and os.path.exists(path):
+            return path
+        return ""
+
+    def _effective_slot_file_path(self, slot: SoundButtonData) -> str:
+        return self._actual_slot_file_path(slot)
+
+    def _logical_player_volume(self, player: ExternalMediaPlayer) -> int:
+        return max(0, min(100, int(self._player_mix_volume_map.get(id(player), player.volume()))))
+
+    def _shadow_player_for(self, player: Optional[ExternalMediaPlayer]) -> Optional[ExternalMediaPlayer]:
+        if player is None:
+            return None
+        return self._vocal_shadow_players.get(id(player))
+
+    def _create_vocal_shadow_player(self) -> ExternalMediaPlayer:
+        shadow = ExternalMediaPlayer(self)
+        shadow.setNotifyInterval(90)
+        shadow.setDSPConfig(self._dsp_config)
+        shadow.setVolume(0)
+        return shadow
+
+    def _clear_vocal_shadow_player(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        self._cancel_vocal_toggle_fade_for_player(player)
+        shadow = self._vocal_shadow_players.pop(id(player), None)
+        if shadow is None:
+            return
+        try:
+            shadow.stop()
+        except Exception:
+            pass
+        self._player_mix_volume_map.pop(id(shadow), None)
+        try:
+            shadow.deleteLater()
+        except Exception:
+            pass
+
+    def _clear_all_vocal_shadow_players(self) -> None:
+        for player_id in list(self._vocal_shadow_players.keys()):
+            shadow = self._vocal_shadow_players.pop(player_id, None)
+            if shadow is None:
+                continue
+            try:
+                shadow.stop()
+            except Exception:
+                pass
+            self._player_mix_volume_map.pop(id(shadow), None)
+            try:
+                shadow.deleteLater()
+            except Exception:
+                pass
+
+    def _apply_player_mix_volumes(self, player: Optional[ExternalMediaPlayer], logical_volume: Optional[int] = None) -> None:
+        if player is None:
+            return
+        if id(player) in self._vocal_toggle_fade_jobs and logical_volume is None:
+            return
+        if logical_volume is None:
+            logical = self._logical_player_volume(player)
+        else:
+            logical = max(0, min(100, int(logical_volume)))
+            self._player_mix_volume_map[id(player)] = logical
+        shadow = self._shadow_player_for(player)
+        primary_volume = logical
+        shadow_volume = 0
+        if self.play_vocal_removed_tracks and shadow is not None:
+            primary_volume = 0
+            shadow_volume = logical
+        player.setVolume(primary_volume)
+        if shadow is not None:
+            shadow.setVolume(shadow_volume)
+
+    def _cancel_vocal_toggle_fade_for_player(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        self._vocal_toggle_fade_jobs.pop(id(player), None)
+
+    def _start_vocal_toggle_fade(
+        self,
+        player: ExternalMediaPlayer,
+        shadow: ExternalMediaPlayer,
+        *,
+        target_primary: int,
+        target_shadow: int,
+        seconds: float,
+    ) -> None:
+        self._cancel_vocal_toggle_fade_for_player(player)
+        if seconds <= 0:
+            player.setVolume(max(0, min(100, int(target_primary))))
+            shadow.setVolume(max(0, min(100, int(target_shadow))))
+            return
+        self._vocal_toggle_fade_jobs[id(player)] = {
+            "player": player,
+            "shadow": shadow,
+            "start_primary": max(0, min(100, int(player.volume()))),
+            "start_shadow": max(0, min(100, int(shadow.volume()))),
+            "end_primary": max(0, min(100, int(target_primary))),
+            "end_shadow": max(0, min(100, int(target_shadow))),
+            "started": time.monotonic(),
+            "duration": max(0.01, float(seconds)),
+        }
+
+    def _vocal_removed_toggle_fade_seconds(self) -> float:
+        mode = str(self.vocal_removed_toggle_fade_mode or "follow_cross_fade").strip().lower()
+        if mode == "never":
+            return 0.0
+        if mode == "always":
+            return max(0.0, float(self.vocal_removed_toggle_always_sec))
+        if not self._is_cross_fade_enabled():
+            return 0.0
+        if mode == "follow_cross_fade_custom":
+            return max(0.0, float(self.vocal_removed_toggle_custom_sec))
+        return max(0.0, float(self.cross_fade_sec))
+
+    def _apply_vocal_removed_toggle_for_player(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        *,
+        current_vocal_removed_active: Optional[bool] = None,
+    ) -> None:
+        if player is None:
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            self._cancel_vocal_toggle_fade_for_player(player)
+            self._apply_player_mix_volumes(player)
+            return
+        if current_vocal_removed_active is None:
+            current_vocal_removed_active = bool(self.play_vocal_removed_tracks)
+        self._sync_vocal_pair_transport(
+            player,
+            audible_is_shadow=bool(current_vocal_removed_active),
+            force_seek=True,
+        )
+        logical_volume = self._logical_player_volume(player)
+        fade_seconds = self._vocal_removed_toggle_fade_seconds()
+        if player.state() != ExternalMediaPlayer.PlayingState or fade_seconds <= 0:
+            self._cancel_fade_for_player(player)
+            self._cancel_fade_for_player(shadow)
+            self._cancel_vocal_toggle_fade_for_player(player)
+            self._apply_player_mix_volumes(player, logical_volume)
+            return
+        self._cancel_fade_for_player(player)
+        self._cancel_fade_for_player(shadow)
+        if self.play_vocal_removed_tracks:
+            self._start_vocal_toggle_fade(
+                player,
+                shadow,
+                target_primary=0,
+                target_shadow=logical_volume,
+                seconds=fade_seconds,
+            )
+            return
+        self._start_vocal_toggle_fade(
+            player,
+            shadow,
+            target_primary=logical_volume,
+            target_shadow=0,
+            seconds=fade_seconds,
+        )
+
+    def _player_transport_sync_ms(self, player: ExternalMediaPlayer) -> int:
+        try:
+            if player.state() == ExternalMediaPlayer.PlayingState:
+                return max(0, int(player.enginePositionMs()))
+        except Exception:
+            pass
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
+
+    def _should_sync_vocal_shadow(self, player: ExternalMediaPlayer) -> bool:
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return False
+        if id(player) in self._vocal_toggle_fade_jobs:
+            return False
+        if player.state() != ExternalMediaPlayer.PlayingState:
+            return False
+        if shadow.state() != ExternalMediaPlayer.PlayingState:
+            return True
+        player_volume = max(0, min(100, int(player.volume())))
+        shadow_volume = max(0, min(100, int(shadow.volume())))
+        return player_volume == 0 or shadow_volume == 0
+
+    def _sync_vocal_pair_transport(
+        self,
+        player: ExternalMediaPlayer,
+        *,
+        audible_is_shadow: bool,
+        force_seek: bool = False,
+        max_drift_ms: int = 12,
+    ) -> None:
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return
+        source = shadow if audible_is_shadow else player
+        target = player if audible_is_shadow else shadow
+        target_ms = self._player_transport_sync_ms(source)
+        try:
+            target_pos = self._player_transport_sync_ms(target)
+        except Exception:
+            target_pos = 0
+        should_seek = force_seek or target.state() == ExternalMediaPlayer.StoppedState
+        if not should_seek:
+            should_seek = abs(target_ms - target_pos) > max(0, int(max_drift_ms))
+        if should_seek:
+            try:
+                target.setPosition(target_ms)
+            except Exception:
+                pass
+        try:
+            if source.state() == ExternalMediaPlayer.PlayingState:
+                target.play()
+            elif source.state() == ExternalMediaPlayer.PausedState:
+                target.pause()
+            else:
+                target.stop()
+        except Exception:
+            pass
+
+    def _maintain_vocal_shadow_sync(self) -> None:
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if not self._should_sync_vocal_shadow(player):
+                continue
+            self._sync_vocal_pair_transport(
+                player,
+                audible_is_shadow=bool(self.play_vocal_removed_tracks),
+                force_seek=False,
+                max_drift_ms=12,
+            )
+
+    def _sync_shadow_transport_from_primary(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        *,
+        force_seek: bool = True,
+        max_drift_ms: int = 45,
+    ) -> None:
+        if player is None:
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return
+        target_ms = self._player_transport_sync_ms(player)
+        try:
+            shadow_pos = self._player_transport_sync_ms(shadow)
+        except Exception:
+            shadow_pos = 0
+        should_seek = force_seek or shadow.state() == ExternalMediaPlayer.StoppedState
+        if not should_seek:
+            should_seek = abs(target_ms - shadow_pos) > max(0, int(max_drift_ms))
+        if should_seek:
+            try:
+                shadow.setPosition(target_ms)
+            except Exception:
+                pass
+        state = player.state()
+        try:
+            if state == ExternalMediaPlayer.PlayingState:
+                shadow.play()
+            elif state == ExternalMediaPlayer.PausedState:
+                shadow.pause()
+            else:
+                shadow.stop()
+        except Exception:
+            pass
+        if id(player) not in self._vocal_toggle_fade_jobs:
+            self._apply_player_mix_volumes(player)
+
+    def _prepare_vocal_shadow_player(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        slot: SoundButtonData,
+        *,
+        start_playing: bool,
+    ) -> None:
+        if player is None or not isinstance(player, ExternalMediaPlayer):
+            return
+        vocal_path = self._vocal_removed_slot_file_path(slot)
+        actual_path = self._actual_slot_file_path(slot)
+        if (not vocal_path) or vocal_path == actual_path:
+            self._clear_vocal_shadow_player(player)
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            shadow = self._create_vocal_shadow_player()
+            self._vocal_shadow_players[id(player)] = shadow
+        try:
+            shadow.setMedia(vocal_path, dsp_config=self._dsp_config)
+            self._seek_player_to_slot_start_cue(shadow, slot)
+            self._player_mix_volume_map[id(shadow)] = 0
+            if start_playing:
+                shadow.play()
+            else:
+                shadow.pause()
+            self._apply_player_mix_volumes(player)
+        except Exception:
+            self._clear_vocal_shadow_player(player)
+
     def _apply_audio_preload_cache_settings(self) -> None:
         configure_audio_preload_cache_policy(
             self.preload_audio_enabled,
@@ -9657,6 +10495,7 @@ class MainWindow(QMainWindow):
             if not cue_slot.assigned:
                 self.cue_page[i] = SoundButtonData(
                     file_path=slot.file_path,
+                    vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
@@ -9751,7 +10590,10 @@ class MainWindow(QMainWindow):
         self._player_slot_pct_map[id(player)] = slot_pct
 
     def _mark_player_started(self, player: ExternalMediaPlayer) -> None:
+        slot_key = self._player_slot_key_map.get(id(player))
         self._player_started_map[id(player)] = time.monotonic()
+        if slot_key is not None:
+            self._playback_runtime.mark_started(player, slot_key)
 
     def _set_player_slot_key(self, player: ExternalMediaPlayer, slot_key: Tuple[str, int, int]) -> None:
         pid = id(player)
@@ -9766,16 +10608,21 @@ class MainWindow(QMainWindow):
     def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
         pid = id(player)
         key = self._player_slot_key_map.pop(pid, None)
+        self._playback_runtime.clear(player)
         if key is not None:
             self._active_playing_keys.discard(key)
         self._clear_player_cue_behavior_override(player)
+        if self.current_playing == key:
+            self._refresh_current_playing_from_active_players()
         self._update_status_now_playing()
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
+        self._playback_runtime.clear_all()
         self._active_playing_keys.clear()
         self._player_end_override_ms.clear()
         self._player_ignore_cue_end.clear()
+        self.current_playing = None
         self._update_status_now_playing()
 
     def _is_multi_play_enabled(self) -> bool:
@@ -9791,18 +10638,25 @@ class MainWindow(QMainWindow):
 
     def _prune_multi_players(self) -> None:
         remaining: List[ExternalMediaPlayer] = []
+        current_changed = False
         for player in self._multi_players:
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
                 remaining.append(player)
                 continue
+            if self.current_playing == self._player_slot_key_map.get(id(player)):
+                current_changed = True
+            self._clear_vocal_shadow_player(player)
             self._clear_player_slot_key(player)
             self._player_slot_pct_map.pop(id(player), None)
             self._player_started_map.pop(id(player), None)
+            self._player_mix_volume_map.pop(id(player), None)
             try:
                 player.deleteLater()
             except Exception:
                 pass
         self._multi_players = remaining
+        if current_changed:
+            self._refresh_current_playing_from_active_players()
 
     def _enforce_multi_play_limit(self) -> bool:
         max_allowed = max(1, int(self.max_multi_play_songs))
@@ -9812,29 +10666,35 @@ class MainWindow(QMainWindow):
         if self.multi_play_limit_action == "disallow_more_play":
             self._show_info_notice_banner(f"Maximum Multi-Play songs reached ({max_allowed}).")
             return False
-        oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
+        oldest = self._playback_runtime.oldest_active_player(active_players)
+        if oldest is None:
+            oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
         self._stop_single_player(oldest)
         self._prune_multi_players()
         return True
 
     def _stop_single_player(self, player: ExternalMediaPlayer) -> None:
+        stopped_key = self._player_slot_key_map.get(id(player))
         self._cancel_fade_for_player(player)
         self._stop_player_internal(player)
+        self._clear_vocal_shadow_player(player)
         self._clear_player_slot_key(player)
         self._player_slot_pct_map.pop(id(player), None)
         self._player_started_map.pop(id(player), None)
+        self._player_mix_volume_map.pop(id(player), None)
         if player is self.player:
             self._player_slot_volume_pct = 75
-            if self.current_playing is not None:
-                self.current_playing = None
         elif player is self.player_b:
             self._player_b_slot_volume_pct = 75
+        if self.current_playing == stopped_key or self.current_playing is None:
+            self._refresh_current_playing_from_active_players()
 
     def _set_player_volume(self, player: ExternalMediaPlayer, volume: int) -> None:
-        player.setVolume(max(0, min(100, int(volume))))
+        self._apply_player_mix_volumes(player, volume)
 
     def _cancel_fade_for_player(self, player: ExternalMediaPlayer) -> None:
         self._fade_jobs = [job for job in self._fade_jobs if job["player"] is not player]
+        self._cancel_vocal_toggle_fade_for_player(player)
 
     def _start_fade(
         self,
@@ -9845,7 +10705,7 @@ class MainWindow(QMainWindow):
         pause_on_complete: bool = False,
         pause_resume_volume: Optional[int] = None,
     ) -> None:
-        start_volume = player.volume()
+        start_volume = self._logical_player_volume(player)
         target = max(0, min(100, int(target_volume)))
         self._cancel_fade_for_player(player)
         if target == start_volume:
@@ -9877,7 +10737,7 @@ class MainWindow(QMainWindow):
         )
 
     def _tick_fades(self) -> None:
-        if not self._fade_jobs:
+        if not self._fade_jobs and not self._vocal_toggle_fade_jobs:
             if self._stop_fade_armed:
                 self._stop_fade_armed = False
             self._update_fade_button_flash(False)
@@ -9885,6 +10745,28 @@ class MainWindow(QMainWindow):
         now = time.monotonic()
         remaining: List[dict] = []
         any_stopped = False
+        remaining_vocal_jobs: Dict[int, dict] = {}
+        for player_id, job in self._vocal_toggle_fade_jobs.items():
+            player = job.get("player")
+            shadow = job.get("shadow")
+            if not isinstance(player, ExternalMediaPlayer) or not isinstance(shadow, ExternalMediaPlayer):
+                continue
+            if player.state() not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                continue
+            if shadow.state() not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                continue
+            elapsed = now - job["started"]
+            ratio = max(0.0, min(1.0, elapsed / job["duration"]))
+            # Use an equal-power curve so the toggle sounds like a real crossfade,
+            # not a linear gain handoff that dips or feels abrupt in the middle.
+            curve_ratio = math.sin(ratio * (math.pi / 2.0))
+            primary_volume = int(job["start_primary"] + (job["end_primary"] - job["start_primary"]) * curve_ratio)
+            shadow_volume = int(job["start_shadow"] + (job["end_shadow"] - job["start_shadow"]) * curve_ratio)
+            player.setVolume(max(0, min(100, primary_volume)))
+            shadow.setVolume(max(0, min(100, shadow_volume)))
+            if ratio < 1.0:
+                remaining_vocal_jobs[player_id] = job
+        self._vocal_toggle_fade_jobs = remaining_vocal_jobs
         for job in self._fade_jobs:
             elapsed = now - job["started"]
             ratio = max(0.0, min(1.0, elapsed / job["duration"]))
@@ -9892,10 +10774,11 @@ class MainWindow(QMainWindow):
             self._set_player_volume(job["player"], volume)
             if ratio >= 1.0:
                 if job["stop"]:
-                    job["player"].stop()
+                    self._stop_player_internal(job["player"])
                     any_stopped = True
                 elif job.get("pause"):
                     job["player"].pause()
+                    self._sync_shadow_transport_from_primary(job["player"])
                     resume_volume = job.get("pause_resume_volume")
                     if resume_volume is not None:
                         self._set_player_volume(job["player"], int(resume_volume))
@@ -10039,6 +10922,9 @@ class MainWindow(QMainWindow):
             fade_on_stop=self.fade_on_stop,
             fade_out_when_done_playing=self.fade_out_when_done_playing,
             fade_out_end_lead_sec=self.fade_out_end_lead_sec,
+            vocal_removed_toggle_fade_mode=self.vocal_removed_toggle_fade_mode,
+            vocal_removed_toggle_custom_sec=self.vocal_removed_toggle_custom_sec,
+            vocal_removed_toggle_always_sec=self.vocal_removed_toggle_always_sec,
             talk_volume_level=self.talk_volume_level,
             talk_fade_sec=self.talk_fade_sec,
             talk_volume_mode=self.talk_volume_mode,
@@ -10185,6 +11071,9 @@ class MainWindow(QMainWindow):
         self.fade_on_stop = dialog.fade_on_stop_checkbox.isChecked()
         self.fade_out_when_done_playing = dialog.fade_out_when_done_checkbox.isChecked()
         self.fade_out_end_lead_sec = dialog.fade_out_end_lead_spin.value()
+        self.vocal_removed_toggle_fade_mode = dialog.selected_vocal_removed_toggle_fade_mode()
+        self.vocal_removed_toggle_custom_sec = dialog.vocal_removed_toggle_custom_spin.value()
+        self.vocal_removed_toggle_always_sec = dialog.vocal_removed_toggle_always_spin.value()
         self.talk_volume_level = dialog.talk_volume_spin.value()
         self.talk_fade_sec = dialog.talk_fade_spin.value()
         self.talk_volume_mode = dialog.selected_talk_volume_mode()
@@ -10615,9 +11504,7 @@ class MainWindow(QMainWindow):
     def _api_primary_playing_key(self) -> Optional[Tuple[str, int, int]]:
         if self.current_playing is not None:
             return self.current_playing
-        if self._active_playing_keys:
-            return sorted(self._active_playing_keys)[0]
-        return None
+        return self._newest_active_playing_key()
 
     def _api_lyric_openlp(self) -> dict:
         slot_key = self._api_primary_playing_key()
@@ -11446,6 +12333,7 @@ class MainWindow(QMainWindow):
             return
         for player in playing:
             player.pause()
+            self._sync_shadow_transport_from_primary(player)
 
     def _resume_players(self, players: List[ExternalMediaPlayer]) -> None:
         paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
@@ -11456,10 +12344,12 @@ class MainWindow(QMainWindow):
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._set_player_volume(player, 0)
                 player.play()
+                self._sync_shadow_transport_from_primary(player)
                 self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
             return
         for player in paused:
             player.play()
+            self._sync_shadow_transport_from_primary(player)
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -11565,6 +12455,8 @@ class MainWindow(QMainWindow):
             self._dsp_config = normalize_config(config)
             self.player.setDSPConfig(self._dsp_config)
             self.player_b.setDSPConfig(self._dsp_config)
+            for shadow in self._vocal_shadow_players.values():
+                shadow.setDSPConfig(self._dsp_config)
 
     def _go_to_found_match(self, match: dict) -> None:
         self._focus_found_slot(match, play=False, flash=True)
@@ -11586,6 +12478,20 @@ class MainWindow(QMainWindow):
             self._toggle_cue_mode(False)
         self._select_group(group_key)
         self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
+
+    def _toggle_global_vocal_removed_mode(self, checked: bool) -> None:
+        was_vocal_removed_active = bool(self.play_vocal_removed_tracks)
+        self.play_vocal_removed_tracks = bool(checked)
+        btn = self.control_buttons.get("Vocal Removed")
+        if btn is not None and btn.isChecked() != bool(checked):
+            btn.setChecked(bool(checked))
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                self._apply_vocal_removed_toggle_for_player(
+                    player,
+                    current_vocal_removed_active=was_vocal_removed_active,
+                )
+        self._refresh_sound_grid()
 
     def _find_sound_matches(self, query: str) -> List[dict]:
         terms = [part.casefold() for part in query.split() if part.strip()]
@@ -11706,7 +12612,7 @@ class MainWindow(QMainWindow):
         else:
             self._stop_single_player(player)
         if self.current_playing == slot_key:
-            self.current_playing = None
+            self._refresh_current_playing_from_active_players()
         self._refresh_sound_grid()
         return True
 
@@ -11740,6 +12646,7 @@ class MainWindow(QMainWindow):
         old_player = self.player
         old_player_b = self.player_b
         old_multi_players = list(self._multi_players)
+        self._clear_all_vocal_shadow_players()
         if not set_output_device(device_name):
             QMessageBox.warning(self, "Audio Device", "Could not switch to selected audio device.")
             return False
@@ -11772,8 +12679,8 @@ class MainWindow(QMainWindow):
                     "Audio output failed. Running in no-audio mode.\n\n"
                     f"Primary error:\n{exc}\n\nFallback error:\n{exc2}",
                 )
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self.current_playing = None
         self.current_duration_ms = 0
         self.seek_slider.setRange(0, 0)
@@ -11825,6 +12732,7 @@ class MainWindow(QMainWindow):
         self._manual_stop_requested = True
         self._pending_start_request = None
         self._pending_start_token += 1
+        self._vocal_toggle_fade_jobs.clear()
         self._clear_pending_deferred_audio_start()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
@@ -11862,6 +12770,7 @@ class MainWindow(QMainWindow):
         self._stop_fade_armed = False
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
         for extra in list(self._multi_players):
@@ -11869,6 +12778,7 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._player_started_map.clear()
         self._player_slot_pct_map.clear()
+        self._player_mix_volume_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
         self.current_playing = None
@@ -11886,6 +12796,7 @@ class MainWindow(QMainWindow):
 
     def _hard_stop_all(self) -> None:
         self._fade_jobs.clear()
+        self._vocal_toggle_fade_jobs.clear()
         self._update_fade_button_flash(False)
         self._pending_start_request = None
         self._pending_start_token += 1
@@ -11896,6 +12807,7 @@ class MainWindow(QMainWindow):
         self._cancel_all_pending_player_media_loads()
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
         for extra in list(self._multi_players):
@@ -11903,6 +12815,7 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._player_started_map.clear()
         self._player_slot_pct_map.clear()
+        self._player_mix_volume_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
 
@@ -12182,6 +13095,7 @@ class MainWindow(QMainWindow):
         clamped_display = max(0, min(total_ms, int(display_ms)))
         absolute = max(0, int(self._transport_absolute_ms_for_display(clamped_display)))
         self.player.setPosition(absolute)
+        self._sync_shadow_transport_from_primary(self.player)
         self.seek_slider.setValue(clamped_display)
         self._apply_main_jog_outside_cue_behavior(absolute)
         self._mtc_sender.request_resync()
@@ -12305,8 +13219,6 @@ class MainWindow(QMainWindow):
         cue_in_ms: Optional[int] = None,
         cue_out_ms: Optional[int] = None,
     ) -> None:
-        if self.current_duration_ms <= 0 and self._main_progress_waveform:
-            self._main_progress_waveform = []
         fill_stop = max(0.0, min(1.0, float(progress_ratio)))
         pct = int(fill_stop * 100)
         in_ratio = 0.0
@@ -12314,7 +13226,7 @@ class MainWindow(QMainWindow):
         in_ms = 0 if cue_in_ms is None else max(0, int(cue_in_ms))
         out_ms = self.current_duration_ms if cue_out_ms is None else max(0, int(cue_out_ms))
         audio_file_mode = self.main_transport_timeline_mode == "audio_file" and self.current_duration_ms > 0
-        if audio_file_mode:
+        if self.current_duration_ms > 0:
             in_ms = max(0, min(self.current_duration_ms, in_ms))
             out_ms = max(0, min(self.current_duration_ms, out_ms))
             if out_ms < in_ms:
@@ -12343,11 +13255,11 @@ class MainWindow(QMainWindow):
         self.progress_label.setStyleSheet(self._build_progress_bar_stylesheet(fill_stop, cue_in_ms, cue_out_ms))
 
     def _on_volume_changed(self, value: int) -> None:
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         for player in self._multi_players:
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
-                player.setVolume(self._effective_slot_target_volume(self._slot_pct_for_player(player)))
+                self._set_player_volume(player, self._effective_slot_target_volume(self._slot_pct_for_player(player)))
         self.settings.volume = value
 
     def _reset_set_data(self) -> None:
@@ -12513,6 +13425,9 @@ class MainWindow(QMainWindow):
                         notes = clean_set_value(slot.notes or title)
                         lines.append(f"c{slot_index}={notes}")
                         lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
+                        vocal_removed_file = clean_set_value(slot.vocal_removed_file)
+                        if vocal_removed_file:
+                            lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
                         lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")
                         lines.append(f"n{slot_index}={title}")
                         if slot.volume_override_pct is not None:
@@ -12590,6 +13505,7 @@ class MainWindow(QMainWindow):
                     src = result.pages[group][page_index][slot_index]
                     self.data[group][page_index][slot_index] = SoundButtonData(
                         file_path=src.file_path,
+                        vocal_removed_file=src.vocal_removed_file,
                         title=src.title,
                         notes=src.notes,
                         lyric_file=src.lyric_file,
@@ -12682,7 +13598,9 @@ class MainWindow(QMainWindow):
         self.settings.lock_password = self.lock_password
         self.settings.lock_restart_state = self.lock_restart_state
         self.settings.lock_was_locked_on_exit = bool(self._ui_locked)
-        self.settings.volume = self.volume_slider.value() if self.volume_slider is not None else self.player.volume()
+        self.settings.volume = (
+            self.volume_slider.value() if self.volume_slider is not None else self._logical_player_volume(self.player)
+        )
         self.settings.last_set_path = self.current_set_path
         self.settings.last_group = self.current_group
         self.settings.last_page = self.current_page
@@ -12696,6 +13614,9 @@ class MainWindow(QMainWindow):
         self.settings.fade_on_stop = bool(self.fade_on_stop)
         self.settings.fade_out_when_done_playing = bool(self.fade_out_when_done_playing)
         self.settings.fade_out_end_lead_sec = float(self.fade_out_end_lead_sec)
+        self.settings.vocal_removed_toggle_fade_mode = str(self.vocal_removed_toggle_fade_mode)
+        self.settings.vocal_removed_toggle_custom_sec = float(self.vocal_removed_toggle_custom_sec)
+        self.settings.vocal_removed_toggle_always_sec = float(self.vocal_removed_toggle_always_sec)
         self.settings.talk_volume_level = self.talk_volume_level
         self.settings.talk_fade_sec = self.talk_fade_sec
         self.settings.talk_volume_mode = self.talk_volume_mode

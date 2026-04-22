@@ -32,6 +32,12 @@ class TestI18n(unittest.TestCase):
             translate_text("Type sure to unlock to continue.", LANG_ZH_CN),
             "请输入 sure to unlock 以继续。",
         )
+        self.assertEqual(translate_text("Vocal Removed File", LANG_ZH_CN), "去人声文件")
+        self.assertEqual(translate_text("Select Vocal Removed File", LANG_ZH_CN), "选择去人声文件")
+        self.assertEqual(
+            translate_text("Follow Cross Fade (X), but use custom seconds", LANG_ZH_CN),
+            "跟随交叉淡化（X），但使用自定义秒数",
+        )
 
     def test_localize_label_text(self):
         label = QLabel("Options")

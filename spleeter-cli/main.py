@@ -49,7 +49,7 @@ def main() -> int:
     sample_rate, waveform = wavfile.read(input_path)
     waveform_f32 = _to_float32_stereo(waveform)
 
-    separator = Separator("spleeter:2stems")
+    separator = Separator("spleeter:2stems", multiprocess=False)
     sources = separator.separate(waveform_f32, audio_descriptor=input_path)
     accompaniment = sources.get("accompaniment")
     if accompaniment is None:

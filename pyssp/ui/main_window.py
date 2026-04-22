@@ -1856,6 +1856,9 @@ class MainWindow(QMainWindow):
         self._manual_stop_requested = False
         self.talk_active = False
         self._fade_jobs: List[dict] = []
+        self._vocal_toggle_fade_jobs: Dict[int, dict] = {}
+        self._player_mix_volume_map: Dict[int, int] = {}
+        self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
         self._stop_fade_armed = False
@@ -1888,6 +1891,24 @@ class MainWindow(QMainWindow):
         self.fade_on_stop = bool(self.settings.fade_on_stop)
         self.fade_out_when_done_playing = bool(self.settings.fade_out_when_done_playing)
         self.fade_out_end_lead_sec = max(0.0, float(self.settings.fade_out_end_lead_sec))
+        self.vocal_removed_toggle_fade_mode = str(
+            getattr(self.settings, "vocal_removed_toggle_fade_mode", "follow_cross_fade")
+        ).strip().lower()
+        if self.vocal_removed_toggle_fade_mode not in {
+            "follow_cross_fade",
+            "follow_cross_fade_custom",
+            "never",
+            "always",
+        }:
+            self.vocal_removed_toggle_fade_mode = "follow_cross_fade"
+        self.vocal_removed_toggle_custom_sec = max(
+            0.0,
+            min(20.0, float(getattr(self.settings, "vocal_removed_toggle_custom_sec", 1.0))),
+        )
+        self.vocal_removed_toggle_always_sec = max(
+            0.0,
+            min(20.0, float(getattr(self.settings, "vocal_removed_toggle_always_sec", 1.0))),
+        )
         self.talk_volume_level = self.settings.talk_volume_level
         self.talk_fade_sec = self.settings.talk_fade_sec
         self.talk_volume_mode = (
@@ -2436,8 +2457,8 @@ class MainWindow(QMainWindow):
             self._sync_lock_ui_state()
         self._update_talk_button_visual()
         self.volume_slider.setValue(self.settings.volume)
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self._refresh_group_buttons()
         self._refresh_page_list()
         self._refresh_sound_grid()
@@ -2950,6 +2971,8 @@ class MainWindow(QMainWindow):
         self.player_b = ExternalMediaPlayer(self)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
+        self._player_mix_volume_map[id(self.player)] = self.player.volume()
+        self._player_mix_volume_map[id(self.player_b)] = self.player_b.volume()
         self._main_waveform_poll_timer = QTimer(self)
         self._main_waveform_poll_timer.setInterval(50)
         self._main_waveform_poll_timer.timeout.connect(self._poll_main_waveform_refresh)
@@ -2961,6 +2984,7 @@ class MainWindow(QMainWindow):
 
     def _dispose_audio_players(self) -> None:
         self._cancel_all_pending_player_media_loads()
+        self._clear_all_vocal_shadow_players()
         for name in ["player", "player_b"]:
             player = getattr(self, name, None)
             if player is None:
@@ -2978,6 +3002,8 @@ class MainWindow(QMainWindow):
     def _init_silent_audio_players(self) -> None:
         self.player = NoAudioPlayer(self)
         self.player_b = NoAudioPlayer(self)
+        self._player_mix_volume_map[id(self.player)] = 100
+        self._player_mix_volume_map[id(self.player_b)] = 100
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
@@ -4373,10 +4399,18 @@ class MainWindow(QMainWindow):
             ("timecode_reference", "none" if ref_player is None else f"{self._audio_player_label(ref_player)} slot={ref_key}"),
         ]
         player_records: List[dict] = []
-        runtime_players = [self.player, self.player_b, *self._multi_players]
+        runtime_players = self._insight_runtime_players()
         for index, player in enumerate(runtime_players):
             player_records.append(self._audio_player_insight_record(player, index))
         return {"summary": summary, "players": player_records}
+
+    def _insight_runtime_players(self) -> List[ExternalMediaPlayer]:
+        players: List[ExternalMediaPlayer] = [self.player, self.player_b, *self._multi_players]
+        for primary in [self.player, self.player_b, *self._multi_players]:
+            shadow = self._shadow_player_for(primary)
+            if shadow is not None:
+                players.append(shadow)
+        return players
 
     def _audio_player_label(self, player: object) -> str:
         if player is self.player:
@@ -4388,6 +4422,10 @@ class MainWindow(QMainWindow):
                 return f"multi[{self._multi_players.index(player)}]"
             except Exception:
                 return "multi"
+        for primary in [self.player, self.player_b, *self._multi_players]:
+            shadow = self._shadow_player_for(primary)
+            if shadow is player:
+                return f"{self._audio_player_label(primary)}_shadow"
         return "player"
 
     def _describe_dsp_config(self, config: Optional[DSPConfig]) -> str:
@@ -4405,6 +4443,12 @@ class MainWindow(QMainWindow):
         label = self._audio_player_label(player)
         pid = id(player)
         slot_key = self._player_slot_key_map.get(pid)
+        if slot_key is None:
+            for primary in [self.player, self.player_b, *self._multi_players]:
+                shadow = self._shadow_player_for(primary)
+                if shadow is player:
+                    slot_key = self._player_slot_key_map.get(id(primary))
+                    break
         slot = self._slot_for_key(slot_key) if slot_key is not None else None
         runtime_id = self._playback_runtime.runtime_id_for(player)
         meter = getattr(player, "meterLevels", lambda: (0.0, 0.0))()
@@ -7576,6 +7620,8 @@ class MainWindow(QMainWindow):
                 temp_output_wav = output_path if output_ext == ".wav" else os.path.join(temp_dir, "output.wav")
                 if source_ext != ".wav":
                     self._ffmpeg_transcode_to_wav(source_path, temp_input_wav)
+                stdout_log_path = os.path.join(temp_dir, "spleeter-cli-stdout.log")
+                stderr_log_path = os.path.join(temp_dir, "spleeter-cli-stderr.log")
                 command = [
                     cli_executable,
                     "--input",
@@ -7584,10 +7630,9 @@ class MainWindow(QMainWindow):
                     temp_output_wav,
                 ]
                 popen_kwargs: dict = {
-                    "stdout": subprocess.PIPE,
-                    "stderr": subprocess.PIPE,
+                    "stdout": None,
+                    "stderr": None,
                     "stdin": subprocess.DEVNULL,
-                    "text": True,
                 }
                 if os.name == "nt":
                     popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -7598,18 +7643,32 @@ class MainWindow(QMainWindow):
                         popen_kwargs["startupinfo"] = startup
                     except Exception:
                         pass
-                process = subprocess.Popen(command, **popen_kwargs)
-                while process.poll() is None:
-                    QApplication.processEvents()
-                    if progress.wasCanceled():
-                        process.terminate()
-                        try:
-                            process.wait(timeout=5)
-                        except Exception:
-                            process.kill()
-                        raise RuntimeError("Cancelled.")
-                    time.sleep(0.05)
-                stdout_text, stderr_text = process.communicate()
+                with open(stdout_log_path, "w", encoding="utf-8", errors="replace") as stdout_fh, open(
+                    stderr_log_path, "w", encoding="utf-8", errors="replace"
+                ) as stderr_fh:
+                    popen_kwargs["stdout"] = stdout_fh
+                    popen_kwargs["stderr"] = stderr_fh
+                    process = subprocess.Popen(command, **popen_kwargs)
+                    while process.poll() is None:
+                        QApplication.processEvents()
+                        if progress.wasCanceled():
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except Exception:
+                                process.kill()
+                            raise RuntimeError("Cancelled.")
+                        time.sleep(0.05)
+                try:
+                    with open(stdout_log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        stdout_text = fh.read()
+                except Exception:
+                    stdout_text = ""
+                try:
+                    with open(stderr_log_path, "r", encoding="utf-8", errors="replace") as fh:
+                        stderr_text = fh.read()
+                except Exception:
+                    stderr_text = ""
                 if process.returncode != 0:
                     detail = (stderr_text or stdout_text or f"spleeter-cli exited with code {process.returncode}").strip()
                     raise RuntimeError(detail)
@@ -8546,7 +8605,7 @@ class MainWindow(QMainWindow):
             value_label.setText(f"Playback Volume: {value}%")
             if is_current_slot:
                 self._player_slot_volume_pct = max(0, min(100, int(value)))
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
 
         _sync_label(slider.value())
         slider.valueChanged.connect(_sync_label)
@@ -8566,7 +8625,7 @@ class MainWindow(QMainWindow):
             slot.volume_override_pct = None
             if is_current_slot:
                 self._player_slot_volume_pct = 75
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._set_dirty(True)
             self._refresh_sound_grid()
             committed["value"] = True
@@ -8577,7 +8636,7 @@ class MainWindow(QMainWindow):
             slot.volume_override_pct = value
             if is_current_slot:
                 self._player_slot_volume_pct = value
-                self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._set_dirty(True)
             self._refresh_sound_grid()
             committed["value"] = True
@@ -8588,7 +8647,7 @@ class MainWindow(QMainWindow):
                 slot.volume_override_pct = original_override
                 if is_current_slot:
                     self._player_slot_volume_pct = original_slot_pct
-                    self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
+                    self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
             self._recover_from_stuck_mouse_state()
             dialog.deleteLater()
             if getattr(self, "_active_playback_volume_dialog", None) is dialog:
@@ -8758,9 +8817,11 @@ class MainWindow(QMainWindow):
                 f"[TCDBG] {time.perf_counter():.6f} media_seek_done cross "
                 f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
             )
-            new_player.setVolume(0)
+            self._set_player_volume(new_player, 0)
             print(f"[TCDBG] {time.perf_counter():.6f} player_play cross key={playing_key}")
+            self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
             new_player.play()
+            self._sync_shadow_transport_from_primary(new_player)
             started_playback = True
             self._set_player_slot_key(new_player, playing_key)
             self._mark_player_started(new_player)
@@ -8805,23 +8866,26 @@ class MainWindow(QMainWindow):
             target_volume = self._effective_slot_target_volume(slot_pct)
             seek_t = time.perf_counter()
             self._seek_player_to_slot_start_cue(self.player, slot)
+            self._prepare_vocal_shadow_player(self.player, slot, start_playing=False)
             print(
                 f"[TCDBG] {time.perf_counter():.6f} media_seek_done primary "
                 f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
             )
             if fade_in_on:
-                self.player.setVolume(0)
+                self._set_player_volume(self.player, 0)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play fade_in key={playing_key}")
                 self.player.play()
+                self._sync_shadow_transport_from_primary(self.player)
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
                 self._mark_player_started(self.player)
                 self.current_playing = playing_key
                 self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
             else:
-                self.player.setVolume(target_volume)
+                self._set_player_volume(self.player, target_volume)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
                 self.player.play()
+                self._sync_shadow_transport_from_primary(self.player)
                 started_playback = True
                 self._set_player_slot_key(self.player, playing_key)
                 self._mark_player_started(self.player)
@@ -8992,15 +9056,18 @@ class MainWindow(QMainWindow):
         self._player_slot_volume_pct = slot_pct
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
         if fade_in_on:
-            player.setVolume(0)
+            self._set_player_volume(player, 0)
             player.play()
+            self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
             self._mark_player_started(player)
             self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
         else:
-            player.setVolume(target_volume)
+            self._set_player_volume(player, target_volume)
             player.play()
+            self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
             self._mark_player_started(player)
         self._timecode_on_playback_start(slot)
@@ -9024,8 +9091,10 @@ class MainWindow(QMainWindow):
             self._player_b_slot_volume_pct = slot_pct
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(new_player, slot)
-        new_player.setVolume(0)
+        self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
+        self._set_player_volume(new_player, 0)
         new_player.play()
+        self._sync_shadow_transport_from_primary(new_player)
         self._set_player_slot_key(new_player, playing_key)
         self._mark_player_started(new_player)
         fade_seconds = self.cross_fade_sec
@@ -9050,12 +9119,14 @@ class MainWindow(QMainWindow):
         self._set_player_slot_pct(player, slot_pct)
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
         fade_in_on = self._is_fade_in_enabled()
         if fade_in_on and self.fade_in_sec > 0:
-            player.setVolume(0)
+            self._set_player_volume(player, 0)
         else:
-            player.setVolume(target_volume)
+            self._set_player_volume(player, target_volume)
         player.play()
+        self._sync_shadow_transport_from_primary(player)
         if fade_in_on and self.fade_in_sec > 0:
             self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
         if player not in self._multi_players:
@@ -9129,7 +9200,7 @@ class MainWindow(QMainWindow):
         def score(player: ExternalMediaPlayer) -> Tuple[int, int]:
             # Prefer actively playing channel, then louder channel.
             is_playing = 1 if player.state() == ExternalMediaPlayer.PlayingState else 0
-            return (is_playing, player.volume())
+            return (is_playing, self._logical_player_volume(player))
 
         a_active = is_active(self.player)
         b_active = is_active(self.player_b)
@@ -9375,6 +9446,8 @@ class MainWindow(QMainWindow):
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
             self._timecode_on_playback_stop()
+            self._clear_vocal_shadow_player(self.player)
+            self._player_mix_volume_map.pop(id(self.player), None)
             self._clear_player_slot_key(self.player)
             self._clear_main_waveform_display()
             last_playing = self.current_playing
@@ -9445,6 +9518,9 @@ class MainWindow(QMainWindow):
         self._ignore_state_changes += 1
         try:
             player.stop()
+            shadow = self._shadow_player_for(player)
+            if shadow is not None:
+                shadow.stop()
         finally:
             self._ignore_state_changes = max(0, self._ignore_state_changes - 1)
 
@@ -9472,9 +9548,12 @@ class MainWindow(QMainWindow):
     def _tick_meter(self) -> None:
         self._tick_deferred_audio_start()
         self._prune_multi_players()
+        self._maintain_vocal_shadow_sync()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
             had_player_b_key = id(self.player_b) in self._player_slot_key_map
+            self._clear_vocal_shadow_player(self.player_b)
+            self._player_mix_volume_map.pop(id(self.player_b), None)
             self._clear_player_slot_key(self.player_b)
             if had_player_b_key:
                 self._refresh_sound_grid()
@@ -9955,14 +10034,313 @@ class MainWindow(QMainWindow):
             return self.cue_page
         return self.data[self.current_group][self.current_page]
 
+    def _actual_slot_file_path(self, slot: SoundButtonData) -> str:
+        return str(slot.file_path or "").strip()
+
+    def _vocal_removed_slot_file_path(self, slot: SoundButtonData) -> str:
+        path = str(slot.vocal_removed_file or "").strip()
+        if path and os.path.exists(path):
+            return path
+        return ""
+
     def _effective_slot_file_path(self, slot: SoundButtonData) -> str:
-        primary = str(slot.file_path or "").strip()
-        if not self.play_vocal_removed_tracks:
-            return primary
-        vocal_removed = str(slot.vocal_removed_file or "").strip()
-        if vocal_removed and os.path.exists(vocal_removed):
-            return vocal_removed
-        return primary
+        return self._actual_slot_file_path(slot)
+
+    def _logical_player_volume(self, player: ExternalMediaPlayer) -> int:
+        return max(0, min(100, int(self._player_mix_volume_map.get(id(player), player.volume()))))
+
+    def _shadow_player_for(self, player: Optional[ExternalMediaPlayer]) -> Optional[ExternalMediaPlayer]:
+        if player is None:
+            return None
+        return self._vocal_shadow_players.get(id(player))
+
+    def _create_vocal_shadow_player(self) -> ExternalMediaPlayer:
+        shadow = ExternalMediaPlayer(self)
+        shadow.setNotifyInterval(90)
+        shadow.setDSPConfig(self._dsp_config)
+        shadow.setVolume(0)
+        return shadow
+
+    def _clear_vocal_shadow_player(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        self._cancel_vocal_toggle_fade_for_player(player)
+        shadow = self._vocal_shadow_players.pop(id(player), None)
+        if shadow is None:
+            return
+        try:
+            shadow.stop()
+        except Exception:
+            pass
+        self._player_mix_volume_map.pop(id(shadow), None)
+        try:
+            shadow.deleteLater()
+        except Exception:
+            pass
+
+    def _clear_all_vocal_shadow_players(self) -> None:
+        for player_id in list(self._vocal_shadow_players.keys()):
+            shadow = self._vocal_shadow_players.pop(player_id, None)
+            if shadow is None:
+                continue
+            try:
+                shadow.stop()
+            except Exception:
+                pass
+            self._player_mix_volume_map.pop(id(shadow), None)
+            try:
+                shadow.deleteLater()
+            except Exception:
+                pass
+
+    def _apply_player_mix_volumes(self, player: Optional[ExternalMediaPlayer], logical_volume: Optional[int] = None) -> None:
+        if player is None:
+            return
+        if id(player) in self._vocal_toggle_fade_jobs and logical_volume is None:
+            return
+        if logical_volume is None:
+            logical = self._logical_player_volume(player)
+        else:
+            logical = max(0, min(100, int(logical_volume)))
+            self._player_mix_volume_map[id(player)] = logical
+        shadow = self._shadow_player_for(player)
+        primary_volume = logical
+        shadow_volume = 0
+        if self.play_vocal_removed_tracks and shadow is not None:
+            primary_volume = 0
+            shadow_volume = logical
+        player.setVolume(primary_volume)
+        if shadow is not None:
+            shadow.setVolume(shadow_volume)
+
+    def _cancel_vocal_toggle_fade_for_player(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        self._vocal_toggle_fade_jobs.pop(id(player), None)
+
+    def _start_vocal_toggle_fade(
+        self,
+        player: ExternalMediaPlayer,
+        shadow: ExternalMediaPlayer,
+        *,
+        target_primary: int,
+        target_shadow: int,
+        seconds: float,
+    ) -> None:
+        self._cancel_vocal_toggle_fade_for_player(player)
+        if seconds <= 0:
+            player.setVolume(max(0, min(100, int(target_primary))))
+            shadow.setVolume(max(0, min(100, int(target_shadow))))
+            return
+        self._vocal_toggle_fade_jobs[id(player)] = {
+            "player": player,
+            "shadow": shadow,
+            "start_primary": max(0, min(100, int(player.volume()))),
+            "start_shadow": max(0, min(100, int(shadow.volume()))),
+            "end_primary": max(0, min(100, int(target_primary))),
+            "end_shadow": max(0, min(100, int(target_shadow))),
+            "started": time.monotonic(),
+            "duration": max(0.01, float(seconds)),
+        }
+
+    def _vocal_removed_toggle_fade_seconds(self) -> float:
+        mode = str(self.vocal_removed_toggle_fade_mode or "follow_cross_fade").strip().lower()
+        if mode == "never":
+            return 0.0
+        if mode == "always":
+            return max(0.0, float(self.vocal_removed_toggle_always_sec))
+        if not self._is_cross_fade_enabled():
+            return 0.0
+        if mode == "follow_cross_fade_custom":
+            return max(0.0, float(self.vocal_removed_toggle_custom_sec))
+        return max(0.0, float(self.cross_fade_sec))
+
+    def _apply_vocal_removed_toggle_for_player(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        *,
+        current_vocal_removed_active: Optional[bool] = None,
+    ) -> None:
+        if player is None:
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            self._cancel_vocal_toggle_fade_for_player(player)
+            self._apply_player_mix_volumes(player)
+            return
+        if current_vocal_removed_active is None:
+            current_vocal_removed_active = bool(self.play_vocal_removed_tracks)
+        self._sync_vocal_pair_transport(
+            player,
+            audible_is_shadow=bool(current_vocal_removed_active),
+            force_seek=True,
+        )
+        logical_volume = self._logical_player_volume(player)
+        fade_seconds = self._vocal_removed_toggle_fade_seconds()
+        if player.state() != ExternalMediaPlayer.PlayingState or fade_seconds <= 0:
+            self._cancel_fade_for_player(player)
+            self._cancel_fade_for_player(shadow)
+            self._cancel_vocal_toggle_fade_for_player(player)
+            self._apply_player_mix_volumes(player, logical_volume)
+            return
+        self._cancel_fade_for_player(player)
+        self._cancel_fade_for_player(shadow)
+        if self.play_vocal_removed_tracks:
+            self._start_vocal_toggle_fade(
+                player,
+                shadow,
+                target_primary=0,
+                target_shadow=logical_volume,
+                seconds=fade_seconds,
+            )
+            return
+        self._start_vocal_toggle_fade(
+            player,
+            shadow,
+            target_primary=logical_volume,
+            target_shadow=0,
+            seconds=fade_seconds,
+        )
+
+    def _player_transport_sync_ms(self, player: ExternalMediaPlayer) -> int:
+        try:
+            if player.state() == ExternalMediaPlayer.PlayingState:
+                return max(0, int(player.enginePositionMs()))
+        except Exception:
+            pass
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
+
+    def _should_sync_vocal_shadow(self, player: ExternalMediaPlayer) -> bool:
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return False
+        if id(player) in self._vocal_toggle_fade_jobs:
+            return False
+        if player.state() != ExternalMediaPlayer.PlayingState:
+            return False
+        if shadow.state() != ExternalMediaPlayer.PlayingState:
+            return True
+        player_volume = max(0, min(100, int(player.volume())))
+        shadow_volume = max(0, min(100, int(shadow.volume())))
+        return player_volume == 0 or shadow_volume == 0
+
+    def _sync_vocal_pair_transport(
+        self,
+        player: ExternalMediaPlayer,
+        *,
+        audible_is_shadow: bool,
+        force_seek: bool = False,
+        max_drift_ms: int = 12,
+    ) -> None:
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return
+        source = shadow if audible_is_shadow else player
+        target = player if audible_is_shadow else shadow
+        target_ms = self._player_transport_sync_ms(source)
+        try:
+            target_pos = self._player_transport_sync_ms(target)
+        except Exception:
+            target_pos = 0
+        should_seek = force_seek or target.state() == ExternalMediaPlayer.StoppedState
+        if not should_seek:
+            should_seek = abs(target_ms - target_pos) > max(0, int(max_drift_ms))
+        if should_seek:
+            try:
+                target.setPosition(target_ms)
+            except Exception:
+                pass
+        try:
+            if source.state() == ExternalMediaPlayer.PlayingState:
+                target.play()
+            elif source.state() == ExternalMediaPlayer.PausedState:
+                target.pause()
+            else:
+                target.stop()
+        except Exception:
+            pass
+
+    def _maintain_vocal_shadow_sync(self) -> None:
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if not self._should_sync_vocal_shadow(player):
+                continue
+            self._sync_vocal_pair_transport(
+                player,
+                audible_is_shadow=bool(self.play_vocal_removed_tracks),
+                force_seek=False,
+                max_drift_ms=12,
+            )
+
+    def _sync_shadow_transport_from_primary(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        *,
+        force_seek: bool = True,
+        max_drift_ms: int = 45,
+    ) -> None:
+        if player is None:
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            return
+        target_ms = self._player_transport_sync_ms(player)
+        try:
+            shadow_pos = self._player_transport_sync_ms(shadow)
+        except Exception:
+            shadow_pos = 0
+        should_seek = force_seek or shadow.state() == ExternalMediaPlayer.StoppedState
+        if not should_seek:
+            should_seek = abs(target_ms - shadow_pos) > max(0, int(max_drift_ms))
+        if should_seek:
+            try:
+                shadow.setPosition(target_ms)
+            except Exception:
+                pass
+        state = player.state()
+        try:
+            if state == ExternalMediaPlayer.PlayingState:
+                shadow.play()
+            elif state == ExternalMediaPlayer.PausedState:
+                shadow.pause()
+            else:
+                shadow.stop()
+        except Exception:
+            pass
+        if id(player) not in self._vocal_toggle_fade_jobs:
+            self._apply_player_mix_volumes(player)
+
+    def _prepare_vocal_shadow_player(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        slot: SoundButtonData,
+        *,
+        start_playing: bool,
+    ) -> None:
+        if player is None or not isinstance(player, ExternalMediaPlayer):
+            return
+        vocal_path = self._vocal_removed_slot_file_path(slot)
+        actual_path = self._actual_slot_file_path(slot)
+        if (not vocal_path) or vocal_path == actual_path:
+            self._clear_vocal_shadow_player(player)
+            return
+        shadow = self._shadow_player_for(player)
+        if shadow is None:
+            shadow = self._create_vocal_shadow_player()
+            self._vocal_shadow_players[id(player)] = shadow
+        try:
+            shadow.setMedia(vocal_path, dsp_config=self._dsp_config)
+            self._seek_player_to_slot_start_cue(shadow, slot)
+            self._player_mix_volume_map[id(shadow)] = 0
+            if start_playing:
+                shadow.play()
+            else:
+                shadow.pause()
+            self._apply_player_mix_volumes(player)
+        except Exception:
+            self._clear_vocal_shadow_player(player)
 
     def _apply_audio_preload_cache_settings(self) -> None:
         configure_audio_preload_cache_policy(
@@ -10267,9 +10645,11 @@ class MainWindow(QMainWindow):
                 continue
             if self.current_playing == self._player_slot_key_map.get(id(player)):
                 current_changed = True
+            self._clear_vocal_shadow_player(player)
             self._clear_player_slot_key(player)
             self._player_slot_pct_map.pop(id(player), None)
             self._player_started_map.pop(id(player), None)
+            self._player_mix_volume_map.pop(id(player), None)
             try:
                 player.deleteLater()
             except Exception:
@@ -10297,9 +10677,11 @@ class MainWindow(QMainWindow):
         stopped_key = self._player_slot_key_map.get(id(player))
         self._cancel_fade_for_player(player)
         self._stop_player_internal(player)
+        self._clear_vocal_shadow_player(player)
         self._clear_player_slot_key(player)
         self._player_slot_pct_map.pop(id(player), None)
         self._player_started_map.pop(id(player), None)
+        self._player_mix_volume_map.pop(id(player), None)
         if player is self.player:
             self._player_slot_volume_pct = 75
         elif player is self.player_b:
@@ -10308,10 +10690,11 @@ class MainWindow(QMainWindow):
             self._refresh_current_playing_from_active_players()
 
     def _set_player_volume(self, player: ExternalMediaPlayer, volume: int) -> None:
-        player.setVolume(max(0, min(100, int(volume))))
+        self._apply_player_mix_volumes(player, volume)
 
     def _cancel_fade_for_player(self, player: ExternalMediaPlayer) -> None:
         self._fade_jobs = [job for job in self._fade_jobs if job["player"] is not player]
+        self._cancel_vocal_toggle_fade_for_player(player)
 
     def _start_fade(
         self,
@@ -10322,7 +10705,7 @@ class MainWindow(QMainWindow):
         pause_on_complete: bool = False,
         pause_resume_volume: Optional[int] = None,
     ) -> None:
-        start_volume = player.volume()
+        start_volume = self._logical_player_volume(player)
         target = max(0, min(100, int(target_volume)))
         self._cancel_fade_for_player(player)
         if target == start_volume:
@@ -10354,7 +10737,7 @@ class MainWindow(QMainWindow):
         )
 
     def _tick_fades(self) -> None:
-        if not self._fade_jobs:
+        if not self._fade_jobs and not self._vocal_toggle_fade_jobs:
             if self._stop_fade_armed:
                 self._stop_fade_armed = False
             self._update_fade_button_flash(False)
@@ -10362,6 +10745,28 @@ class MainWindow(QMainWindow):
         now = time.monotonic()
         remaining: List[dict] = []
         any_stopped = False
+        remaining_vocal_jobs: Dict[int, dict] = {}
+        for player_id, job in self._vocal_toggle_fade_jobs.items():
+            player = job.get("player")
+            shadow = job.get("shadow")
+            if not isinstance(player, ExternalMediaPlayer) or not isinstance(shadow, ExternalMediaPlayer):
+                continue
+            if player.state() not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                continue
+            if shadow.state() not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                continue
+            elapsed = now - job["started"]
+            ratio = max(0.0, min(1.0, elapsed / job["duration"]))
+            # Use an equal-power curve so the toggle sounds like a real crossfade,
+            # not a linear gain handoff that dips or feels abrupt in the middle.
+            curve_ratio = math.sin(ratio * (math.pi / 2.0))
+            primary_volume = int(job["start_primary"] + (job["end_primary"] - job["start_primary"]) * curve_ratio)
+            shadow_volume = int(job["start_shadow"] + (job["end_shadow"] - job["start_shadow"]) * curve_ratio)
+            player.setVolume(max(0, min(100, primary_volume)))
+            shadow.setVolume(max(0, min(100, shadow_volume)))
+            if ratio < 1.0:
+                remaining_vocal_jobs[player_id] = job
+        self._vocal_toggle_fade_jobs = remaining_vocal_jobs
         for job in self._fade_jobs:
             elapsed = now - job["started"]
             ratio = max(0.0, min(1.0, elapsed / job["duration"]))
@@ -10369,10 +10774,11 @@ class MainWindow(QMainWindow):
             self._set_player_volume(job["player"], volume)
             if ratio >= 1.0:
                 if job["stop"]:
-                    job["player"].stop()
+                    self._stop_player_internal(job["player"])
                     any_stopped = True
                 elif job.get("pause"):
                     job["player"].pause()
+                    self._sync_shadow_transport_from_primary(job["player"])
                     resume_volume = job.get("pause_resume_volume")
                     if resume_volume is not None:
                         self._set_player_volume(job["player"], int(resume_volume))
@@ -10516,6 +10922,9 @@ class MainWindow(QMainWindow):
             fade_on_stop=self.fade_on_stop,
             fade_out_when_done_playing=self.fade_out_when_done_playing,
             fade_out_end_lead_sec=self.fade_out_end_lead_sec,
+            vocal_removed_toggle_fade_mode=self.vocal_removed_toggle_fade_mode,
+            vocal_removed_toggle_custom_sec=self.vocal_removed_toggle_custom_sec,
+            vocal_removed_toggle_always_sec=self.vocal_removed_toggle_always_sec,
             talk_volume_level=self.talk_volume_level,
             talk_fade_sec=self.talk_fade_sec,
             talk_volume_mode=self.talk_volume_mode,
@@ -10662,6 +11071,9 @@ class MainWindow(QMainWindow):
         self.fade_on_stop = dialog.fade_on_stop_checkbox.isChecked()
         self.fade_out_when_done_playing = dialog.fade_out_when_done_checkbox.isChecked()
         self.fade_out_end_lead_sec = dialog.fade_out_end_lead_spin.value()
+        self.vocal_removed_toggle_fade_mode = dialog.selected_vocal_removed_toggle_fade_mode()
+        self.vocal_removed_toggle_custom_sec = dialog.vocal_removed_toggle_custom_spin.value()
+        self.vocal_removed_toggle_always_sec = dialog.vocal_removed_toggle_always_spin.value()
         self.talk_volume_level = dialog.talk_volume_spin.value()
         self.talk_fade_sec = dialog.talk_fade_spin.value()
         self.talk_volume_mode = dialog.selected_talk_volume_mode()
@@ -11921,6 +12333,7 @@ class MainWindow(QMainWindow):
             return
         for player in playing:
             player.pause()
+            self._sync_shadow_transport_from_primary(player)
 
     def _resume_players(self, players: List[ExternalMediaPlayer]) -> None:
         paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
@@ -11931,10 +12344,12 @@ class MainWindow(QMainWindow):
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._set_player_volume(player, 0)
                 player.play()
+                self._sync_shadow_transport_from_primary(player)
                 self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
             return
         for player in paused:
             player.play()
+            self._sync_shadow_transport_from_primary(player)
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -12040,6 +12455,8 @@ class MainWindow(QMainWindow):
             self._dsp_config = normalize_config(config)
             self.player.setDSPConfig(self._dsp_config)
             self.player_b.setDSPConfig(self._dsp_config)
+            for shadow in self._vocal_shadow_players.values():
+                shadow.setDSPConfig(self._dsp_config)
 
     def _go_to_found_match(self, match: dict) -> None:
         self._focus_found_slot(match, play=False, flash=True)
@@ -12063,10 +12480,17 @@ class MainWindow(QMainWindow):
         self._select_page(max(0, min(PAGE_COUNT - 1, int(page_index))))
 
     def _toggle_global_vocal_removed_mode(self, checked: bool) -> None:
+        was_vocal_removed_active = bool(self.play_vocal_removed_tracks)
         self.play_vocal_removed_tracks = bool(checked)
         btn = self.control_buttons.get("Vocal Removed")
         if btn is not None and btn.isChecked() != bool(checked):
             btn.setChecked(bool(checked))
+        for player in [self.player, self.player_b, *self._multi_players]:
+            if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
+                self._apply_vocal_removed_toggle_for_player(
+                    player,
+                    current_vocal_removed_active=was_vocal_removed_active,
+                )
         self._refresh_sound_grid()
 
     def _find_sound_matches(self, query: str) -> List[dict]:
@@ -12222,6 +12646,7 @@ class MainWindow(QMainWindow):
         old_player = self.player
         old_player_b = self.player_b
         old_multi_players = list(self._multi_players)
+        self._clear_all_vocal_shadow_players()
         if not set_output_device(device_name):
             QMessageBox.warning(self, "Audio Device", "Could not switch to selected audio device.")
             return False
@@ -12254,8 +12679,8 @@ class MainWindow(QMainWindow):
                     "Audio output failed. Running in no-audio mode.\n\n"
                     f"Primary error:\n{exc}\n\nFallback error:\n{exc2}",
                 )
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         self.current_playing = None
         self.current_duration_ms = 0
         self.seek_slider.setRange(0, 0)
@@ -12307,6 +12732,7 @@ class MainWindow(QMainWindow):
         self._manual_stop_requested = True
         self._pending_start_request = None
         self._pending_start_token += 1
+        self._vocal_toggle_fade_jobs.clear()
         self._clear_pending_deferred_audio_start()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
@@ -12344,6 +12770,7 @@ class MainWindow(QMainWindow):
         self._stop_fade_armed = False
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
         for extra in list(self._multi_players):
@@ -12351,6 +12778,7 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._player_started_map.clear()
         self._player_slot_pct_map.clear()
+        self._player_mix_volume_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
         self.current_playing = None
@@ -12368,6 +12796,7 @@ class MainWindow(QMainWindow):
 
     def _hard_stop_all(self) -> None:
         self._fade_jobs.clear()
+        self._vocal_toggle_fade_jobs.clear()
         self._update_fade_button_flash(False)
         self._pending_start_request = None
         self._pending_start_token += 1
@@ -12378,6 +12807,7 @@ class MainWindow(QMainWindow):
         self._cancel_all_pending_player_media_loads()
         self.player.stop()
         self.player_b.stop()
+        self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
         for extra in list(self._multi_players):
@@ -12385,6 +12815,7 @@ class MainWindow(QMainWindow):
         self._prune_multi_players()
         self._player_started_map.clear()
         self._player_slot_pct_map.clear()
+        self._player_mix_volume_map.clear()
         self._player_slot_volume_pct = 75
         self._player_b_slot_volume_pct = 75
 
@@ -12664,6 +13095,7 @@ class MainWindow(QMainWindow):
         clamped_display = max(0, min(total_ms, int(display_ms)))
         absolute = max(0, int(self._transport_absolute_ms_for_display(clamped_display)))
         self.player.setPosition(absolute)
+        self._sync_shadow_transport_from_primary(self.player)
         self.seek_slider.setValue(clamped_display)
         self._apply_main_jog_outside_cue_behavior(absolute)
         self._mtc_sender.request_resync()
@@ -12823,11 +13255,11 @@ class MainWindow(QMainWindow):
         self.progress_label.setStyleSheet(self._build_progress_bar_stylesheet(fill_stop, cue_in_ms, cue_out_ms))
 
     def _on_volume_changed(self, value: int) -> None:
-        self.player.setVolume(self._effective_slot_target_volume(self._player_slot_volume_pct))
-        self.player_b.setVolume(self._effective_slot_target_volume(self._player_b_slot_volume_pct))
+        self._set_player_volume(self.player, self._effective_slot_target_volume(self._player_slot_volume_pct))
+        self._set_player_volume(self.player_b, self._effective_slot_target_volume(self._player_b_slot_volume_pct))
         for player in self._multi_players:
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
-                player.setVolume(self._effective_slot_target_volume(self._slot_pct_for_player(player)))
+                self._set_player_volume(player, self._effective_slot_target_volume(self._slot_pct_for_player(player)))
         self.settings.volume = value
 
     def _reset_set_data(self) -> None:
@@ -13166,7 +13598,9 @@ class MainWindow(QMainWindow):
         self.settings.lock_password = self.lock_password
         self.settings.lock_restart_state = self.lock_restart_state
         self.settings.lock_was_locked_on_exit = bool(self._ui_locked)
-        self.settings.volume = self.volume_slider.value() if self.volume_slider is not None else self.player.volume()
+        self.settings.volume = (
+            self.volume_slider.value() if self.volume_slider is not None else self._logical_player_volume(self.player)
+        )
         self.settings.last_set_path = self.current_set_path
         self.settings.last_group = self.current_group
         self.settings.last_page = self.current_page
@@ -13180,6 +13614,9 @@ class MainWindow(QMainWindow):
         self.settings.fade_on_stop = bool(self.fade_on_stop)
         self.settings.fade_out_when_done_playing = bool(self.fade_out_when_done_playing)
         self.settings.fade_out_end_lead_sec = float(self.fade_out_end_lead_sec)
+        self.settings.vocal_removed_toggle_fade_mode = str(self.vocal_removed_toggle_fade_mode)
+        self.settings.vocal_removed_toggle_custom_sec = float(self.vocal_removed_toggle_custom_sec)
+        self.settings.vocal_removed_toggle_always_sec = float(self.vocal_removed_toggle_always_sec)
         self.settings.talk_volume_level = self.talk_volume_level
         self.settings.talk_fade_sec = self.talk_fade_sec
         self.settings.talk_volume_mode = self.talk_volume_mode

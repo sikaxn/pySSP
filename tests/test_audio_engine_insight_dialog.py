@@ -78,6 +78,9 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
     monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
     monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
     monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
 
     window = mw.MainWindow()
     try:

@@ -222,6 +222,12 @@ class WebRemoteServer:
         m = re.fullmatch(r"/api/talk/([^/]+)", endpoint)
         if m:
             return send("talk", mode=m.group(1))
+        m = re.fullmatch(r"/api/vocal-removed/([^/]+)", endpoint)
+        if m:
+            return send("vocal_removed", mode=m.group(1))
+        m = re.fullmatch(r"/api/vocalremoved/([^/]+)", endpoint)
+        if m:
+            return send("vocal_removed", mode=m.group(1))
         m = re.fullmatch(r"/api/playlist/([^/]+)", endpoint)
         if m:
             return send("playlist", mode=m.group(1))

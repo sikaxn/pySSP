@@ -136,6 +136,23 @@ def test_navigation_and_selected_play_routes_dispatch():
     assert calls[-1][0] == "mute"
 
 
+def test_vocal_removed_routes_dispatch():
+    calls = []
+    client = _make_client(calls)
+
+    response = client.post("/api/vocal-removed/toggle")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "vocal_removed"
+    assert calls[-1][1]["mode"] == "toggle"
+
+    response = client.post("/api/vocalremoved/enable")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "vocal_removed"
+    assert calls[-1][1]["mode"] == "enable"
+
+
 def test_seek_routes_dispatch_payload():
     calls = []
     client = _make_client(calls)
@@ -208,6 +225,8 @@ def test_dispatch_api_path_matches_http_routes():
         ("/api/lyric/show", "lyric_display"),
         ("/api/lyric/blank", "lyric_display"),
         ("/api/lyric/toggle", "lyric_display"),
+        ("/api/vocal-removed/toggle", "vocal_removed"),
+        ("/api/vocalremoved/enable", "vocal_removed"),
         ("/api/volume/73", "volume_set"),
         ("/api/mute", "mute"),
         ("/api/lock", "lock"),
@@ -271,6 +290,7 @@ def test_ws_api_request_dispatches_same_commands_as_http():
         ("/api/seek/percent/22.5", "seek"),
         ("/api/seek/time/01:23", "seek"),
         ("/api/lyric/toggle", "lyric_display"),
+        ("/api/vocal-removed/toggle", "vocal_removed"),
         ("/api/alert/clear", "alert"),
         ("/api/query/page/a-1", "query_page"),
     ]

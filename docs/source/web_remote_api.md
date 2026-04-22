@@ -119,6 +119,9 @@ Notes:
 Mode values: `enable`, `disable`, `toggle`
 
 - `GET/POST /api/talk/<mode>`
+- `GET/POST /api/vocal-removed/<mode>`
+- `GET/POST /api/vocalremoved/<mode>`
+  - Alias routes for vocal-removed playback mode.
 - `GET/POST /api/playlist/<mode>`
 - `GET/POST /api/playlist/shuffle/<mode>`
   - Returns error if playlist is not enabled.
@@ -205,6 +208,7 @@ Mode values: `enable`, `disable`, `toggle`
   - Includes:
     - `screen_locked`: `true` when pySSP is currently locked
     - `automation_locked`: `true` when the current lock is automation lock
+    - `vocal_removed_active`: `true` when vocal-removed playback mode is enabled
   - Includes `playing_tracks` array with active song title(s), button id(s), and remaining time (`remaining`, `remaining_ms`).
 - `GET /api/query/button/<button_id>`
   - Example: `/api/query/button/a-1-1`
@@ -229,6 +233,7 @@ Mode values: `enable`, `disable`, `toggle`
 curl http://192.168.1.10:5050/
 curl http://192.168.1.10:5050/api/play/a-1-1
 curl http://192.168.1.10:5050/api/talk/toggle
+curl http://192.168.1.10:5050/api/vocal-removed/toggle
 curl http://192.168.1.10:5050/api/resume
 curl http://192.168.1.10:5050/api/playlist/enable
 curl http://192.168.1.10:5050/api/playlist/shuffle/enable

@@ -11485,6 +11485,7 @@ class MainWindow(QMainWindow):
             "current_page": current_page + 1,
             "cue_mode": self.cue_mode,
             "talk_active": self.talk_active,
+            "vocal_removed_active": bool(self.play_vocal_removed_tracks),
             "multi_play_enabled": self._is_multi_play_enabled(),
             "fade_in_enabled": self._is_fade_in_enabled(),
             "fade_out_enabled": self._is_fade_out_enabled(),
@@ -11962,6 +11963,19 @@ class MainWindow(QMainWindow):
             return self._api_success(
                 {
                     "lyric_display": "blank" if self._lyric_force_blank else "show",
+                    "state": self._api_state(),
+                }
+            )
+        if cmd == "vocal_removed":
+            mode = self._parse_api_mode(params.get("mode", ""))
+            if mode is None:
+                return self._api_error("invalid_mode", "Mode must be enable, disable, or toggle.")
+            current = bool(self.play_vocal_removed_tracks)
+            new_value = (not current) if mode == "toggle" else (mode == "enable")
+            self._toggle_global_vocal_removed_mode(new_value)
+            return self._api_success(
+                {
+                    "vocal_removed_active": bool(self.play_vocal_removed_tracks),
                     "state": self._api_state(),
                 }
             )

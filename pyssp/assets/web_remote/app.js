@@ -289,6 +289,7 @@
       screen_locked: s.screen_locked,
       automation_locked: s.automation_locked,
       talk_active: s.talk_active,
+      vocal_removed_active: s.vocal_removed_active,
       playlist_enabled: s.playlist_enabled,
       shuffle_enabled: s.shuffle_enabled,
       multi_play_enabled: s.multi_play_enabled,

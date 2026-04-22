@@ -33,20 +33,14 @@ class AudioEngineInsightDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        title = QLabel("Live audio engine player list and runtime details")
-        title.setStyleSheet("QLabel{font-size:13pt;font-weight:bold;}")
-        root.addWidget(title)
-
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(8)
-        self._status_label = QLabel("")
-        self._status_label.setStyleSheet("QLabel{color:#50565D;}")
         self._keep_legacy_checkbox = QCheckBox("Keep Legacy", self)
         self._keep_legacy_checkbox.toggled.connect(self._on_keep_legacy_toggled)
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self.refresh)
-        controls.addWidget(self._status_label, 1)
+        controls.addStretch(1)
         controls.addWidget(self._keep_legacy_checkbox)
         controls.addWidget(refresh_button)
         root.addLayout(controls)
@@ -98,9 +92,6 @@ class AudioEngineInsightDialog(QDialog):
             }
         self._current_snapshot = self._merge_legacy_players(snapshot)
         self._rebuild_player_list()
-        player_count = len(list(self._current_snapshot.get("players", [])))
-        legacy_count = sum(1 for player in self._current_snapshot.get("players", []) if player.get("is_legacy"))
-        self._status_label.setText(f"Auto refresh: 500 ms | Players: {player_count} | Legacy: {legacy_count}")
         if self._player_list.count() <= 0:
             self._populate_detail_table(list(self._current_snapshot.get("summary", [])))
             return

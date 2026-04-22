@@ -9,6 +9,7 @@ Python dependencies:
 - pygame-ce
 - numpy
 - sounddevice
+- pedalboard
 - Flask
 - Werkzeug
 - simple-websocket
@@ -20,6 +21,16 @@ Python dependencies:
 - sphinx
 - myst-parser
 - sphinx-rtd-theme
+
+Bundled vocal removal tool:
+- spleeter-cli
+  - Bundled helper executable used by pySSP for vocal removal.
+- Spleeter by Deezer (MIT License)
+  - pySSP's vocal removal feature is based on Deezer's Spleeter project:
+    https://github.com/deezer/spleeter
+  - pySSP uses the `spleeter:2stems` model and writes the accompaniment stem as the vocal-removed output.
+- TensorFlow
+- SciPy
 
 FFmpeg notice:
 This software uses code of [FFmpeg](http://ffmpeg.org) licensed under the [LGPLv2.1](http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) and its source can be downloaded from the release page linked on the pySSP download page.

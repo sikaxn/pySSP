@@ -5862,7 +5862,7 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(self._go_to_current_playing_page)
             elif text == "Vocal Removed":
                 btn.setCheckable(True)
-                btn.setToolTip("Play vocal removed files when available")
+                btn.setToolTip("")
                 btn.clicked.connect(self._toggle_global_vocal_removed_mode)
             if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed"}:
                 self.control_buttons[text] = btn

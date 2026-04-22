@@ -620,18 +620,15 @@ class PagesSlotsMixin:
 
     def _refresh_vocal_removed_warning_banner(self) -> None:
         message = ""
-        if self.play_vocal_removed_tracks:
-            missing_count = sum(
-                1
-                for slot in self._current_page_slots()
-                if slot.assigned and (not slot.marker) and (not str(slot.vocal_removed_file or "").strip())
-            )
-            if missing_count > 0:
-                plural = "button has" if missing_count == 1 else "buttons have"
-                message = (
-                    f"{tr('VOCAL REMOVED ENABLED:')} "
-                    f"{missing_count} sound {plural} no vocal removed track on this page."
-                )
+        if self.play_vocal_removed_tracks and self.current_playing is not None:
+            slot = self._slot_for_key(self.current_playing)
+            if (
+                slot is not None
+                and slot.assigned
+                and (not slot.marker)
+                and (not str(slot.vocal_removed_file or "").strip())
+            ):
+                message = f"{tr('VOCAL REMOVED ENABLED:')} {tr('The currently playing song has no vocal removed track.')}"
         self.vocal_removed_warning_banner.setText(message)
         self.vocal_removed_warning_banner.setVisible(bool(message))
 

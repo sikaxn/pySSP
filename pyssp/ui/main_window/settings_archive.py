@@ -8,7 +8,7 @@ from .widgets import *
 
 class SettingsArchiveMixin:
     def _project_root_path(self) -> str:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
     def _asset_file_path(self, *parts: str) -> str:
         if getattr(sys, "frozen", False):

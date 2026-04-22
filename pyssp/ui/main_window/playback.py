@@ -1559,6 +1559,7 @@ class PlaybackMixin:
         self._player_slot_key_map[pid] = slot_key
         self._active_playing_keys.add(slot_key)
         self._update_status_now_playing()
+        self._refresh_vocal_removed_warning_banner()
 
     def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
         pid = id(player)
@@ -1570,6 +1571,7 @@ class PlaybackMixin:
         if self.current_playing == key:
             self._refresh_current_playing_from_active_players()
         self._update_status_now_playing()
+        self._refresh_vocal_removed_warning_banner()
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
@@ -1579,6 +1581,7 @@ class PlaybackMixin:
         self._player_ignore_cue_end.clear()
         self.current_playing = None
         self._update_status_now_playing()
+        self._refresh_vocal_removed_warning_banner()
 
     def _is_multi_play_enabled(self) -> bool:
         btn = self.control_buttons.get("Multi-Play")

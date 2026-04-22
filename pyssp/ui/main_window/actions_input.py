@@ -254,6 +254,7 @@ class ActionsInputMixin:
                     player,
                     current_vocal_removed_active=was_vocal_removed_active,
                 )
+        self._refresh_vocal_removed_warning_banner()
         self._refresh_sound_grid()
 
     def _find_sound_matches(self, query: str) -> List[dict]:

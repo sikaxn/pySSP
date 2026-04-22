@@ -296,6 +296,20 @@ def build_lock_icon(size: int = 18, color: str = "#202020") -> QPixmap:
     return pixmap
 
 
+def _equal_power_crossfade_volume(start: int, end: int, ratio: float) -> int:
+    clamped_ratio = max(0.0, min(1.0, float(ratio)))
+    angle = clamped_ratio * (math.pi / 2.0)
+    start_value = max(0, min(100, int(start)))
+    end_value = max(0, min(100, int(end)))
+    if end_value >= start_value:
+        curve_ratio = math.sin(angle)
+        value = start_value + ((end_value - start_value) * curve_ratio)
+    else:
+        curve_ratio = math.cos(angle)
+        value = end_value + ((start_value - end_value) * curve_ratio)
+    return max(0, min(100, int(value)))
+
+
 @dataclass
 class SoundButtonData:
     file_path: str = ""
@@ -10757,11 +10771,16 @@ class MainWindow(QMainWindow):
                 continue
             elapsed = now - job["started"]
             ratio = max(0.0, min(1.0, elapsed / job["duration"]))
-            # Use an equal-power curve so the toggle sounds like a real crossfade,
-            # not a linear gain handoff that dips or feels abrupt in the middle.
-            curve_ratio = math.sin(ratio * (math.pi / 2.0))
-            primary_volume = int(job["start_primary"] + (job["end_primary"] - job["start_primary"]) * curve_ratio)
-            shadow_volume = int(job["start_shadow"] + (job["end_shadow"] - job["start_shadow"]) * curve_ratio)
+            primary_volume = _equal_power_crossfade_volume(
+                job["start_primary"],
+                job["end_primary"],
+                ratio,
+            )
+            shadow_volume = _equal_power_crossfade_volume(
+                job["start_shadow"],
+                job["end_shadow"],
+                ratio,
+            )
             player.setVolume(max(0, min(100, primary_volume)))
             shadow.setVolume(max(0, min(100, shadow_volume)))
             if ratio < 1.0:

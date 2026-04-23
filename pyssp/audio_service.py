@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass
 import itertools
 import queue
@@ -99,15 +100,23 @@ class AudioService(QObject):
     durationChanged = pyqtSignal(str, int)
     stateChanged = pyqtSignal(str, int)
     mediaLoadFinished = pyqtSignal(str, int, bool, str)
+    commandResultReady = pyqtSignal(int, bool, object)
 
     @pyqtSlot(str, str, object, object)
     def handle_command(self, player_id: str, command: str, payload: object, result_queue: object) -> None:
+        result_token: Optional[int] = None
+        if isinstance(result_queue, int):
+            result_token = int(result_queue)
+            result_queue = None
         result = None
         error = None
         try:
             result = self._dispatch(str(player_id), str(command), payload if isinstance(payload, dict) else {})
         except Exception as exc:
             error = exc
+        if result_token is not None:
+            self.commandResultReady.emit(result_token, error is None, result if error is None else error)
+            return
         if result_queue is not None:
             try:
                 result_queue.put((error is None, result if error is None else error), block=False)
@@ -160,6 +169,13 @@ class AudioService(QObject):
             return True
         if command == "setMediaAsync":
             return int(player.setMediaAsync(str(payload.get("file_path", "")), dsp_config=payload.get("dsp_config")))
+        if command == "setMediaAsyncRequest":
+            player.setMediaAsync(
+                str(payload.get("file_path", "")),
+                dsp_config=payload.get("dsp_config"),
+                request_id=int(payload.get("request_id", 0)),
+            )
+            return True
         if command == "setDSPConfig":
             player.setDSPConfig(payload.get("dsp_config", DSPConfig()))
             return True
@@ -216,14 +232,17 @@ class AudioServiceController(QObject):
         self._service.durationChanged.connect(self._on_service_duration_changed)
         self._service.stateChanged.connect(self._on_service_state_changed)
         self._service.mediaLoadFinished.connect(self.mediaLoadFinished)
+        self._service.commandResultReady.connect(self._on_command_result_ready)
         self._counter = itertools.count(1)
+        self._request_counter = itertools.count(1)
+        self._pending_results: Dict[int, Future] = {}
         self._thread.start()
 
     def create_player(self, parent: Optional[QObject] = None) -> "AudioPlayerProxy":
         player_id = f"player-{next(self._counter)}"
         self.state_cache.ensure(player_id)
         proxy = AudioPlayerProxy(self, player_id, parent)
-        self.call(player_id, "create", {}, timeout=5.0)
+        self.post(player_id, "create", {})
         return proxy
 
     def call(self, player_id: str, command: str, payload: Optional[dict] = None, timeout: float = 2.0):
@@ -238,6 +257,13 @@ class AudioServiceController(QObject):
 
     def post(self, player_id: str, command: str, payload: Optional[dict] = None) -> None:
         self.commandRequested.emit(str(player_id), str(command), dict(payload or {}), None)
+
+    def request_async(self, player_id: str, command: str, payload: Optional[dict] = None) -> Future:
+        token = int(next(self._request_counter))
+        future: Future = Future()
+        self._pending_results[token] = future
+        self.commandRequested.emit(str(player_id), str(command), dict(payload or {}), token)
+        return future
 
     def shutdown(self) -> None:
         try:
@@ -260,6 +286,17 @@ class AudioServiceController(QObject):
         self.state_cache.update_state(player_id, value)
         self.stateChanged.emit(str(player_id), int(value))
 
+    def _on_command_result_ready(self, token: int, ok: bool, value: object) -> None:
+        future = self._pending_results.pop(int(token), None)
+        if future is None or future.done():
+            return
+        if ok:
+            future.set_result(value)
+        elif isinstance(value, Exception):
+            future.set_exception(value)
+        else:
+            future.set_exception(RuntimeError(str(value)))
+
 
 class AudioPlayerProxy(QObject):
     StoppedState = ExternalMediaPlayer.StoppedState
@@ -279,6 +316,8 @@ class AudioPlayerProxy(QObject):
         self._position_ms = 0
         self._duration_ms = 0
         self._volume = 100
+        self._meter_levels: Tuple[float, float] = (0.0, 0.0)
+        self._media_request_counter = itertools.count(1_000_000)
         controller.positionChanged.connect(self._on_position_changed)
         controller.durationChanged.connect(self._on_duration_changed)
         controller.stateChanged.connect(self._on_state_changed)
@@ -298,10 +337,21 @@ class AudioPlayerProxy(QObject):
         self._post("setNotifyInterval", {"interval_ms": int(interval_ms)})
 
     def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
-        self._call("setMedia", {"file_path": file_path, "dsp_config": dsp_config}, timeout=60.0)
+        self.setMediaAsync(file_path, dsp_config=dsp_config)
 
     def setMediaAsync(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> int:
-        return int(self._call("setMediaAsync", {"file_path": file_path, "dsp_config": dsp_config}, timeout=2.0))
+        request_id = int(next(self._media_request_counter))
+        self._state = self.StoppedState
+        self._position_ms = 0
+        self._duration_ms = 0
+        self._controller.state_cache.update_state(self._player_id, self._state)
+        self._controller.state_cache.update_position(self._player_id, self._position_ms)
+        self._controller.state_cache.update_duration(self._player_id, self._duration_ms)
+        self._post(
+            "setMediaAsyncRequest",
+            {"file_path": file_path, "dsp_config": dsp_config, "request_id": request_id},
+        )
+        return request_id
 
     def setDSPConfig(self, dsp_config: DSPConfig) -> None:
         self._post("setDSPConfig", {"dsp_config": dsp_config})
@@ -335,10 +385,6 @@ class AudioPlayerProxy(QObject):
         return int(self._position_ms)
 
     def enginePositionMs(self) -> int:
-        try:
-            self._position_ms = int(self._call("enginePositionMs", timeout=0.2))
-        except Exception:
-            pass
         return int(self._position_ms)
 
     def duration(self) -> int:
@@ -353,17 +399,43 @@ class AudioPlayerProxy(QObject):
         return int(self._volume)
 
     def meterLevels(self) -> Tuple[float, float]:
-        try:
-            left, right = self._call("meterLevels", timeout=0.1)
-            return float(left), float(right)
-        except Exception:
-            return 0.0, 0.0
+        return float(self._meter_levels[0]), float(self._meter_levels[1])
 
     def waveformPeaks(self, sample_count: int = 1024):
         return self._call("waveformPeaks", {"sample_count": int(sample_count)}, timeout=20.0)
 
     def waveformPeaksAsync(self, sample_count: int = 1024):
-        return self._call("waveformPeaksAsync", {"sample_count": int(sample_count)}, timeout=1.0)
+        outer = self._controller.request_async(
+            self._player_id,
+            "waveformPeaksAsync",
+            {"sample_count": int(sample_count)},
+        )
+        chained: Future = Future()
+
+        def _finish_outer(done_future: Future) -> None:
+            if chained.done():
+                return
+            try:
+                inner = done_future.result()
+            except Exception as exc:
+                chained.set_exception(exc)
+                return
+            if not isinstance(inner, Future):
+                chained.set_result(inner)
+                return
+
+            def _finish_inner(inner_future: Future) -> None:
+                if chained.done():
+                    return
+                try:
+                    chained.set_result(inner_future.result())
+                except Exception as exc:
+                    chained.set_exception(exc)
+
+            inner.add_done_callback(_finish_inner)
+
+        outer.add_done_callback(_finish_outer)
+        return chained
 
     def deleteLater(self) -> None:
         try:

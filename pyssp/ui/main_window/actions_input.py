@@ -2066,10 +2066,22 @@ class ActionsInputMixin:
             self._midi_poll_thread.update_devices(midi_selectors, launchpad_selectors)
         except Exception:
             pass
-        try:
-            self._apply_launchpad_output_state()
-        except Exception:
-            pass
+        now = time.perf_counter()
+        output_signature = (
+            bool(self.launchpad_enabled),
+            self._resolved_launchpad_selector(),
+            str(getattr(self, "launchpad_output_device_id", "") or "").strip(),
+        )
+        if (
+            output_signature != self._launchpad_last_output_state_signature
+            or (now - self._launchpad_last_output_state_sync_t) >= 2.0
+        ):
+            self._launchpad_last_output_state_signature = output_signature
+            self._launchpad_last_output_state_sync_t = now
+            try:
+                self._apply_launchpad_output_state()
+            except Exception:
+                pass
         try:
             self._refresh_midi_connection_warning(force_refresh=False)
         except Exception:
@@ -2129,6 +2141,7 @@ class ActionsInputMixin:
         if not device_name:
             self._release_launchpad_output()
             return
+        opened_now = False
         if self._launchpad_output_device_id != output_device_id:
             self._release_launchpad_output()
             if not self._launchpad_output.open(output_device_id):
@@ -2137,14 +2150,12 @@ class ActionsInputMixin:
                 return
             self._launchpad_output_device_id = str(output_device_id)
             self._launchpad_output_device_name = str(device_name or "").strip()
-        payload = launchpad_programmer_toggle_sysex(self._launchpad_output_device_name, enabled=True)
-        if payload:
-            try:
-                self._launchpad_output.send_long(payload)
-            except Exception:
-                self._release_launchpad_output()
-                return
-        self._refresh_launchpad_feedback(force=True)
+            opened_now = True
+        if opened_now:
+            payload = launchpad_programmer_toggle_sysex(self._launchpad_output_device_name, enabled=True)
+            if payload:
+                self._send_launchpad_payload_async(payload, ())
+        self._refresh_launchpad_feedback(force=opened_now or not bool(self._launchpad_last_feedback_signature))
 
     def _launchpad_action_feedback_color(self, action_key: str, token: str = "") -> str:
         slot_index = launchpad_action_slot_index(action_key)
@@ -2211,6 +2222,7 @@ class ActionsInputMixin:
     def _refresh_launchpad_feedback(self, force: bool = False) -> None:
         if (not self.launchpad_enabled) or (not self._launchpad_output_device_name) or (not self._launchpad_output.available()):
             return
+        self._drain_launchpad_feedback_send()
         led_colors = []
         for idx in range(48):
             note = launchpad_page_slot_note(idx, layout=self.launchpad_layout)
@@ -2229,11 +2241,42 @@ class ActionsInputMixin:
         payload = launchpad_led_rgb_sysex(self._launchpad_output_device_name, led_colors)
         if not payload:
             return
+        self._send_launchpad_payload_async(payload, signature)
+
+    def _drain_launchpad_feedback_send(self) -> None:
+        future = getattr(self, "_launchpad_feedback_send_future", None)
+        if future is not None and future.done():
+            try:
+                future.result()
+            except Exception:
+                pass
+            self._launchpad_feedback_send_future = None
+        if self._launchpad_feedback_send_future is not None:
+            return
+        pending = getattr(self, "_launchpad_pending_feedback", None)
+        if pending is None:
+            return
+        self._launchpad_pending_feedback = None
+        payload, signature = pending
+        self._send_launchpad_payload_async(payload, signature)
+
+    def _send_launchpad_payload_async(self, payload: bytes, signature: tuple) -> None:
+        if not payload:
+            return
+        future = getattr(self, "_launchpad_feedback_send_future", None)
+        if future is not None and not future.done():
+            self._launchpad_pending_feedback = (bytes(payload), tuple(signature))
+            return
+
+        def _send() -> None:
+            self._launchpad_output.send_long(bytes(payload))
+
         try:
-            self._launchpad_output.send_long(payload)
-            self._launchpad_last_feedback_signature = signature
+            self._launchpad_feedback_send_future = self._launchpad_feedback_executor.submit(_send)
+            if signature:
+                self._launchpad_last_feedback_signature = tuple(signature)
         except Exception:
-            self._release_launchpad_output()
+            self._launchpad_feedback_send_future = None
 
     def _on_launchpad_binding_triggered(
         self,
@@ -2575,6 +2618,10 @@ class ActionsInputMixin:
             pass
         try:
             self._midi_poll_thread.wait(1500)
+        except Exception:
+            pass
+        try:
+            self._launchpad_feedback_executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
         self._release_launchpad_output()

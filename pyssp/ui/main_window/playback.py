@@ -971,11 +971,14 @@ class PlaybackMixin:
         else:
             self._vu_levels[1] += (target_right - self._vu_levels[1]) * release
         self._sync_preload_pause_state(any_playing)
-        self._refresh_timecode_panel()
         self.left_meter.setLevel(self._vu_levels[0])
         self.right_meter.setLevel(self._vu_levels[1])
-        self._refresh_stage_display()
-        self._refresh_lyric_display()
+        now = time.monotonic()
+        if (now - self._last_meter_aux_refresh_t) >= 0.18:
+            self._last_meter_aux_refresh_t = now
+            self._refresh_timecode_panel()
+            self._refresh_stage_display()
+            self._refresh_lyric_display()
 
     def _update_group_status(self) -> None:
         self.group_status.setText("")
@@ -1018,6 +1021,7 @@ class PlaybackMixin:
         shadow.setNotifyInterval(90)
         shadow.setDSPConfig(self._dsp_config)
         shadow.setVolume(0)
+        shadow.mediaLoadFinished.connect(self._on_vocal_shadow_media_load_finished)
         return shadow
 
     def _clear_vocal_shadow_player(self, player: Optional[ExternalMediaPlayer]) -> None:
@@ -1027,6 +1031,7 @@ class PlaybackMixin:
         shadow = self._vocal_shadow_players.pop(id(player), None)
         if shadow is None:
             return
+        self._vocal_shadow_pending_loads.pop(id(shadow), None)
         try:
             shadow.stop()
         except Exception:
@@ -1042,6 +1047,7 @@ class PlaybackMixin:
             shadow = self._vocal_shadow_players.pop(player_id, None)
             if shadow is None:
                 continue
+            self._vocal_shadow_pending_loads.pop(id(shadow), None)
             try:
                 shadow.stop()
             except Exception:
@@ -1051,6 +1057,7 @@ class PlaybackMixin:
                 shadow.deleteLater()
             except Exception:
                 pass
+        self._vocal_shadow_pending_loads.clear()
 
     def _apply_player_mix_volumes(self, player: Optional[ExternalMediaPlayer], logical_volume: Optional[int] = None) -> None:
         if player is None:
@@ -1065,7 +1072,8 @@ class PlaybackMixin:
         shadow = self._shadow_player_for(player)
         primary_volume = logical
         shadow_volume = 0
-        if self.play_vocal_removed_tracks and shadow is not None:
+        shadow_ready = shadow is not None and id(shadow) not in self._vocal_shadow_pending_loads
+        if self.play_vocal_removed_tracks and shadow_ready:
             primary_volume = 0
             shadow_volume = logical
         player.setVolume(primary_volume)
@@ -1290,16 +1298,56 @@ class PlaybackMixin:
             shadow = self._create_vocal_shadow_player()
             self._vocal_shadow_players[id(player)] = shadow
         try:
-            shadow.setMedia(vocal_path, dsp_config=self._dsp_config)
-            self._seek_player_to_slot_start_cue(shadow, slot)
+            self._vocal_shadow_pending_loads.pop(id(shadow), None)
+            request_id = shadow.setMediaAsync(vocal_path, dsp_config=self._dsp_config)
+            self._vocal_shadow_pending_loads[id(shadow)] = {
+                "request_id": int(request_id),
+                "primary": player,
+                "slot": slot,
+                "vocal_path": vocal_path,
+                "start_playing": bool(start_playing),
+                "started_at": time.perf_counter(),
+            }
             self._player_mix_volume_map[id(shadow)] = 0
-            if start_playing:
-                shadow.play()
-            else:
-                shadow.pause()
             self._apply_player_mix_volumes(player)
         except Exception:
             self._clear_vocal_shadow_player(player)
+
+    def _on_vocal_shadow_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
+        shadow = self.sender()
+        if not self._is_audio_player(shadow):
+            return
+        pending = self._vocal_shadow_pending_loads.get(id(shadow))
+        if pending is None or int(pending.get("request_id", -1)) != int(request_id):
+            return
+        self._vocal_shadow_pending_loads.pop(id(shadow), None)
+        primary = pending.get("primary")
+        if not self._is_audio_player(primary):
+            try:
+                shadow.deleteLater()
+            except Exception:
+                pass
+            return
+        if self._shadow_player_for(primary) is not shadow:
+            try:
+                shadow.deleteLater()
+            except Exception:
+                pass
+            return
+        if not ok:
+            print(f"[pySSP] Vocal-removed shadow load failed: {pending.get('vocal_path')} | {error}", flush=True)
+            self._clear_vocal_shadow_player(primary)
+            return
+        slot = pending.get("slot")
+        if isinstance(slot, SoundButtonData):
+            self._seek_player_to_slot_start_cue(shadow, slot)
+        self._player_mix_volume_map[id(shadow)] = 0
+        if bool(pending.get("start_playing", False)):
+            shadow.play()
+        else:
+            shadow.pause()
+        self._sync_shadow_transport_from_primary(primary)
+        self._apply_player_mix_volumes(primary)
 
     def _apply_audio_preload_cache_settings(self) -> None:
         configure_audio_preload_cache_policy(

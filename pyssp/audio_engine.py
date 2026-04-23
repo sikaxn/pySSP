@@ -1119,12 +1119,21 @@ class ExternalMediaPlayer(QObject):
         )
         self._install_prepared_media(file_path, frames, duration_ms, use_streaming, new_decoder, dsp_config)
 
-    def setMediaAsync(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> int:
+    def setMediaAsync(
+        self,
+        file_path: str,
+        dsp_config: Optional[DSPConfig] = None,
+        request_id: Optional[int] = None,
+    ) -> int:
         self.stop()
         with self._lock:
             self._discard_declick_history_locked()
-            self._pending_media_request_id += 1
-            request_id = int(self._pending_media_request_id)
+            if request_id is None:
+                self._pending_media_request_id += 1
+                request_id = int(self._pending_media_request_id)
+            else:
+                request_id = max(1, int(request_id))
+                self._pending_media_request_id = request_id
 
         def _worker() -> None:
             try:

@@ -66,8 +66,10 @@ class MainWindow(
         self._vocal_toggle_fade_jobs: Dict[int, dict] = {}
         self._player_mix_volume_map: Dict[int, int] = {}
         self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
+        self._vocal_shadow_pending_loads: Dict[int, dict] = {}
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
+        self._last_meter_aux_refresh_t = 0.0
         self._stop_fade_armed = False
         self.active_group_color = self.settings.active_group_color
         self.inactive_group_color = self.settings.inactive_group_color
@@ -663,6 +665,11 @@ class MainWindow(
         self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
         self._launchpad_output_device_name = ""
         self._launchpad_last_feedback_signature: tuple = ()
+        self._launchpad_feedback_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-launchpad-led")
+        self._launchpad_feedback_send_future: Optional[Future] = None
+        self._launchpad_pending_feedback: Optional[Tuple[bytes, tuple]] = None
+        self._launchpad_last_output_state_sync_t = 0.0
+        self._launchpad_last_output_state_signature: tuple = ()
         self._launchpad_action_keys: Dict[str, str] = {}
         self._launchpad_blink_on = True
         self._launchpad_reset_hold_token = ""

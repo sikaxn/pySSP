@@ -1,6 +1,6 @@
 ## spleeter-cli
 
-Standalone CPU-only Spleeter command-line tool for pySSP.
+Standalone Spleeter command-line tool for pySSP.
 
 Purpose:
 - keep Spleeter out of the main pySSP Python 3.12 runtime
@@ -18,8 +18,12 @@ Typical flow:
 3. The root build copies `dist\spleeter-cli\` into the pySSP app bundle.
 
 Notes:
-- this CLI is CPU-only
+- default runtime mode is `auto`: prefer `CUDA`, then macOS `Metal`, then `CPU`
+- pass `--device cpu`, `--device cuda`, or `--device metal` to override auto selection
 - it writes the accompaniment stem as the vocal-removed track
 - ffmpeg conversion is handled inside the CLI
+- Windows native CUDA builds use Python 3.10 plus `tensorflow==2.10.1`
+- Windows target machines still need the matching NVIDIA CUDA/cuDNN runtime for TensorFlow GPU to activate; otherwise the CLI falls back to CPU
 - macOS Apple Silicon uses Python 3.10 plus `tensorflow-macos==2.12.0`
+- macOS Apple Silicon also installs `tensorflow-metal` so TensorFlow can use the Metal backend
 - `build_pyinstaller_mac.sh` will create `.venv-spleeter` and install the macOS dependency set automatically

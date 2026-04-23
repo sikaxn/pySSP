@@ -48,7 +48,7 @@ ensure_spleeter_venv() {
 }
 
 ensure_spleeter_packages() {
-  if "${SPLEETER_PYTHON}" -c "import spleeter, tensorflow, scipy" >/dev/null 2>&1; then
+  if "${SPLEETER_PYTHON}" -c "import importlib.util, ffmpeg, httpx, norbert, pandas, scipy, spleeter, tensorflow, typer; assert importlib.util.find_spec('tensorflow_metal') is not None" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -62,6 +62,7 @@ ensure_spleeter_packages() {
   "${SPLEETER_PYTHON}" -m pip install --upgrade pip setuptools wheel
   "${SPLEETER_PYTHON}" -m pip install -r "${MACOS_REQUIREMENTS_FILE}"
   "${SPLEETER_PYTHON}" -m pip install --no-deps "spleeter==2.4.2"
+  "${SPLEETER_PYTHON}" -c "import importlib.util, ffmpeg, httpx, norbert, pandas, scipy, spleeter, tensorflow, typer; assert importlib.util.find_spec('tensorflow_metal') is not None" >/dev/null 2>&1
 }
 
 if [[ ! -f "${CLI_DIR}/main.py" ]]; then
@@ -117,6 +118,7 @@ if ! "${SPLEETER_PYTHON}" -m PyInstaller \
   --paths "${CLI_DIR}" \
   --collect-all "spleeter" \
   --collect-all "tensorflow" \
+  --collect-all "tensorflow_metal" \
   --collect-all "scipy" \
   --collect-all "imageio_ffmpeg" \
   --add-data "${CLI_DIR}/models:models" \

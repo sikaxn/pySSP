@@ -5,20 +5,30 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Standalone CPU-only WAV-in/WAV-out Spleeter CLI for pySSP.")
+    parser = argparse.ArgumentParser(
+        description="Standalone WAV-in/WAV-out Spleeter CLI for pySSP with automatic hardware acceleration detection."
+    )
     parser.add_argument("--input", required=True, help="Input WAV path")
     parser.add_argument("--output", required=True, help="Output WAV path")
     parser.add_argument("--model-root", default="", help="Optional Spleeter model root override")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda", "metal"),
+        default="auto",
+        help="Execution backend. Default: auto-detect CUDA or Metal and fall back to CPU.",
+    )
     args = parser.parse_args()
 
     input_path = str(args.input or "").strip()
     output_path = str(args.output or "").strip()
     model_root = str(args.model_root or "").strip() or _bundled_model_root()
+    requested_device = str(args.device or "auto").strip().lower() or "auto"
 
     if not input_path or not os.path.exists(input_path):
         raise FileNotFoundError(input_path or "(missing input)")
@@ -34,17 +44,17 @@ def main() -> int:
 
     if model_root and os.path.isdir(model_root):
         os.environ["MODEL_PATH"] = model_root
-    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    if requested_device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
     from scipy.io import wavfile  # type: ignore
     import tensorflow as tf  # type: ignore
     from spleeter.separator import Separator  # type: ignore
 
-    try:
-        tf.config.set_visible_devices([], "GPU")
-    except Exception:
-        pass
+    device, device_detail = _select_backend(tf, requested_device)
+    _configure_backend(tf, device)
+    print(f"[spleeter-cli] backend={device} detail={device_detail}", file=sys.stderr)
 
     sample_rate, waveform = wavfile.read(input_path)
     waveform_f32 = _to_float32_stereo(waveform)
@@ -56,6 +66,71 @@ def main() -> int:
         raise RuntimeError("Spleeter did not produce accompaniment output.")
     wavfile.write(output_path, int(sample_rate), _to_int16_pcm(accompaniment))
     return 0
+
+
+def _select_backend(tf: Any, requested_device: str) -> tuple[str, str]:
+    requested = str(requested_device or "auto").strip().lower() or "auto"
+    detected, detail = _detect_backend(tf)
+    if requested == "auto":
+        return detected, detail
+    if requested == detected:
+        return detected, detail
+    if requested == "cpu":
+        return "cpu", "forced by --device=cpu"
+    return "cpu", f"requested {requested} unavailable; {detail}"
+
+
+def _detect_backend(tf: Any) -> tuple[str, str]:
+    try:
+        gpus = list(tf.config.list_physical_devices("GPU"))
+    except Exception as exc:
+        return "cpu", f"gpu detection failed: {exc}"
+    if not gpus:
+        return "cpu", "no GPU devices reported by TensorFlow"
+
+    if sys.platform == "darwin":
+        return "metal", _describe_devices(gpus, fallback="TensorFlow GPU available on macOS")
+
+    if _is_cuda_build(tf):
+        return "cuda", _describe_devices(gpus, fallback="CUDA-capable TensorFlow GPU available")
+    return "cpu", "GPU devices reported but TensorFlow build does not appear CUDA-enabled"
+
+
+def _configure_backend(tf: Any, device: str) -> None:
+    if device != "cpu":
+        return
+    try:
+        tf.config.set_visible_devices([], "GPU")
+    except Exception:
+        pass
+
+
+def _is_cuda_build(tf: Any) -> bool:
+    try:
+        build_info = tf.sysconfig.get_build_info()
+    except Exception:
+        build_info = {}
+    if not isinstance(build_info, dict):
+        build_info = {}
+
+    flags = (
+        build_info.get("is_cuda_build"),
+        build_info.get("cuda_version"),
+        build_info.get("cudnn_version"),
+        build_info.get("cuda_compute_capabilities"),
+    )
+    return any(bool(flag) for flag in flags)
+
+
+def _describe_devices(devices: list[Any], fallback: str) -> str:
+    names: list[str] = []
+    for device in devices:
+        name = str(getattr(device, "name", "") or "").strip()
+        device_type = str(getattr(device, "device_type", "") or "").strip()
+        label = name or device_type
+        if label:
+            names.append(label)
+    return ", ".join(names) if names else fallback
 
 
 def _bundled_model_root() -> str:

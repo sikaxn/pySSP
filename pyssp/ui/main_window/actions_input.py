@@ -2071,6 +2071,14 @@ class ActionsInputMixin:
         except Exception:
             pass
 
+    def _poll_midi_inputs(self) -> None:
+        # Compatibility shim for tests/plugins that monkeypatch the former UI timer path.
+        self._sync_midi_polling_state()
+
+    def _poll_launchpad_inputs(self) -> None:
+        # Launchpad input now runs through MidiPollingThread; keep the old hook harmless.
+        self._sync_midi_polling_state()
+
     def _on_midi_poll_status(self, midi_missing, launchpad_missing) -> None:
         self._midi_missing_selectors = {str(v).strip() for v in list(midi_missing or []) if str(v).strip()}
         self._launchpad_missing_selectors = {str(v).strip() for v in list(launchpad_missing or []) if str(v).strip()}
@@ -2542,6 +2550,10 @@ class ActionsInputMixin:
             pass
         try:
             self._mtc_sender.shutdown()
+        except Exception:
+            pass
+        try:
+            self._audio_service.shutdown()
         except Exception:
             pass
         try:

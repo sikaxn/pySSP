@@ -7,9 +7,13 @@ from .widgets import *
 
 
 class PlaybackMixin:
+    @staticmethod
+    def _is_audio_player(player) -> bool:
+        return isinstance(player, (ExternalMediaPlayer, AudioPlayerProxy))
+
     def _init_audio_players(self) -> None:
-        self.player = ExternalMediaPlayer(self)
-        self.player_b = ExternalMediaPlayer(self)
+        self.player = self._audio_service.create_player(self)
+        self.player_b = self._audio_service.create_player(self)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
         self._player_mix_volume_map[id(self.player)] = self.player.volume()
@@ -303,7 +307,7 @@ class PlaybackMixin:
     def _play_slot_multi(self, slot: SoundButtonData, playing_key: Tuple[str, int, int]) -> bool:
         if not self._enforce_multi_play_limit():
             return False
-        extra_player = ExternalMediaPlayer(self)
+        extra_player = self._audio_service.create_player(self)
         extra_player.setNotifyInterval(90)
         extra_player.setDSPConfig(self._dsp_config)
         extra_player.mediaLoadFinished.connect(self._on_player_media_load_finished)
@@ -370,7 +374,7 @@ class PlaybackMixin:
                 self._cancel_main_waveform_refresh()
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
-            if sys.platform == "darwin":
+            if isinstance(player, AudioPlayerProxy) or sys.platform == "darwin":
                 request_id = player.setMediaAsync(target_file_path, dsp_config=self._dsp_config)
                 self._pending_player_media_loads[id(player)] = {
                     "request_id": int(request_id),
@@ -415,7 +419,7 @@ class PlaybackMixin:
         self._pending_player_media_loads.clear()
         self.statusBar().clearMessage()
         for player in pending_players:
-            if not isinstance(player, ExternalMediaPlayer):
+            if not self._is_audio_player(player):
                 continue
             try:
                 player.stop()
@@ -527,7 +531,7 @@ class PlaybackMixin:
 
     def _on_player_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
         player = self.sender()
-        if not isinstance(player, ExternalMediaPlayer):
+        if not self._is_audio_player(player):
             return
         pending = self._pending_player_media_loads.get(id(player))
         if pending is None or int(pending.get("request_id", -1)) != int(request_id):
@@ -1010,7 +1014,7 @@ class PlaybackMixin:
         return self._vocal_shadow_players.get(id(player))
 
     def _create_vocal_shadow_player(self) -> ExternalMediaPlayer:
-        shadow = ExternalMediaPlayer(self)
+        shadow = self._audio_service.create_player(self)
         shadow.setNotifyInterval(90)
         shadow.setDSPConfig(self._dsp_config)
         shadow.setVolume(0)
@@ -1274,7 +1278,7 @@ class PlaybackMixin:
         *,
         start_playing: bool,
     ) -> None:
-        if player is None or not isinstance(player, ExternalMediaPlayer):
+        if player is None or not self._is_audio_player(player):
             return
         vocal_path = self._vocal_removed_slot_file_path(slot)
         actual_path = self._actual_slot_file_path(slot)
@@ -1707,7 +1711,7 @@ class PlaybackMixin:
         for player_id, job in self._vocal_toggle_fade_jobs.items():
             player = job.get("player")
             shadow = job.get("shadow")
-            if not isinstance(player, ExternalMediaPlayer) or not isinstance(shadow, ExternalMediaPlayer):
+            if not self._is_audio_player(player) or not self._is_audio_player(shadow):
                 continue
             if player.state() not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
                 continue

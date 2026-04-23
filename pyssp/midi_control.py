@@ -426,28 +426,40 @@ class MidiPollingThread(QThread):
 
     def run(self) -> None:
         while self._running:
-            try:
-                self._midi_router.poll()
-            except Exception:
-                pass
-            try:
-                self._launchpad_router.poll()
-            except Exception:
-                pass
             now = time.perf_counter()
             with self._state_lock:
                 midi_selectors = list(self._midi_selectors)
                 launchpad_selectors = list(self._launchpad_selectors)
-            if (now - self._last_midi_sync_t) >= 0.9:
+            if midi_selectors:
+                try:
+                    self._midi_router.poll()
+                except Exception:
+                    pass
+            if launchpad_selectors:
+                try:
+                    self._launchpad_router.poll()
+                except Exception:
+                    pass
+            if midi_selectors and (now - self._last_midi_sync_t) >= 0.9:
                 self._last_midi_sync_t = now
                 try:
                     self._midi_router.set_devices(midi_selectors)
                 except Exception:
                     pass
-            if (now - self._last_launchpad_sync_t) >= 0.9:
+            elif not midi_selectors and self._midi_router.selected_device_ids():
+                try:
+                    self._midi_router.set_devices([])
+                except Exception:
+                    pass
+            if launchpad_selectors and (now - self._last_launchpad_sync_t) >= 0.9:
                 self._last_launchpad_sync_t = now
                 try:
                     self._launchpad_router.set_devices(launchpad_selectors)
+                except Exception:
+                    pass
+            elif not launchpad_selectors and self._launchpad_router.selected_device_ids():
+                try:
+                    self._launchpad_router.set_devices([])
                 except Exception:
                     pass
             if midi_selectors and (now - self._last_midi_force_t) >= 5.0:
@@ -481,8 +493,8 @@ class MidiPollingThread(QThread):
                 signature = (midi_missing, launchpad_missing)
                 if signature != self._last_status_signature:
                     self._last_status_signature = signature
-                self.status_changed.emit(list(midi_missing), list(launchpad_missing))
-            self.msleep(10)
+                    self.status_changed.emit(list(midi_missing), list(launchpad_missing))
+            time.sleep(0.01)
         try:
             self._midi_router.close()
         except Exception:

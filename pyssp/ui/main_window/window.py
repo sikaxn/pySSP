@@ -477,6 +477,7 @@ class MainWindow(
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(getattr(self.settings, "midi_rotary_jog_step_ms", 250))))
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._main_thread_executor = MainThreadExecutor(self)
+        self._audio_service = AudioServiceController(self)
 
         startup_audio_warning: Optional[str] = None
         configured_device = self.audio_output_device.strip()

@@ -2127,7 +2127,7 @@ class ActionsInputMixin:
             return
         if self._launchpad_output_device_id != output_device_id:
             self._release_launchpad_output()
-            if not self._launchpad_output.open(int(output_device_id)):
+            if not self._launchpad_output.open(output_device_id):
                 self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
                 self._launchpad_output_device_name = ""
                 return
@@ -2588,4 +2588,3 @@ class ActionsInputMixin:
         if not self._skip_save_on_close:
             self._save_settings()
         QMainWindow.closeEvent(self, event)
-

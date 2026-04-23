@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 import time
 from ctypes import wintypes
+from threading import Lock
 from time import perf_counter
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import sounddevice as sd
+
+try:
+    import pygame.midi as pg_midi
+except Exception:  # pragma: no cover - dependency/runtime fallback
+    pg_midi = None
 
 TIMECODE_MODE_ZERO = "zero"
 TIMECODE_MODE_FOLLOW = "follow_media"
@@ -24,6 +31,217 @@ TIME_CODE_SAMPLE_RATES: List[int] = [44100, 48000, 96000]
 TIME_CODE_BIT_DEPTHS: List[int] = [8, 16, 32]
 
 MIDI_OUTPUT_DEVICE_NONE = "__none__"
+
+_PYGAME_MIDI_INIT_LOCK = Lock()
+_PYGAME_MIDI_READY = False
+_COREMIDI_DEVICE_PREFIX = "coremidi:"
+_COREMIDI_FRAMEWORK = "/System/Library/Frameworks/CoreMIDI.framework/CoreMIDI"
+_COREFOUNDATION_FRAMEWORK = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+_K_CFSTRING_ENCODING_UTF8 = 0x08000100
+
+
+def _ensure_pygame_midi_init() -> bool:
+    global _PYGAME_MIDI_READY
+    if pg_midi is None:
+        return False
+    with _PYGAME_MIDI_INIT_LOCK:
+        if _PYGAME_MIDI_READY:
+            return True
+        try:
+            pg_midi.init()
+            _PYGAME_MIDI_READY = True
+        except Exception:
+            _PYGAME_MIDI_READY = False
+    return _PYGAME_MIDI_READY
+
+
+class _CoreMidiOut:
+    def __init__(self) -> None:
+        self._coremidi = None
+        self._corefoundation = None
+        self._client = ctypes.c_uint32(0)
+        self._port = ctypes.c_uint32(0)
+        self._destination = ctypes.c_uint32(0)
+        self._opened = False
+        if sys.platform != "darwin":
+            return
+        try:
+            self._coremidi = ctypes.CDLL(_COREMIDI_FRAMEWORK)
+            self._corefoundation = ctypes.CDLL(_COREFOUNDATION_FRAMEWORK)
+            self._configure_api()
+        except Exception:
+            self._coremidi = None
+            self._corefoundation = None
+
+    def _configure_api(self) -> None:
+        cf = self._corefoundation
+        cm = self._coremidi
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        cf.CFStringGetCString.restype = ctypes.c_bool
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
+        cm.MIDIClientCreate.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        cm.MIDIClientCreate.restype = ctypes.c_int32
+        cm.MIDIOutputPortCreate.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        cm.MIDIOutputPortCreate.restype = ctypes.c_int32
+        cm.MIDIPortDispose.argtypes = [ctypes.c_uint32]
+        cm.MIDIPortDispose.restype = ctypes.c_int32
+        cm.MIDIClientDispose.argtypes = [ctypes.c_uint32]
+        cm.MIDIClientDispose.restype = ctypes.c_int32
+        cm.MIDIGetNumberOfDestinations.argtypes = []
+        cm.MIDIGetNumberOfDestinations.restype = ctypes.c_ulong
+        cm.MIDIGetDestination.argtypes = [ctypes.c_ulong]
+        cm.MIDIGetDestination.restype = ctypes.c_uint32
+        cm.MIDIObjectGetStringProperty.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        cm.MIDIObjectGetStringProperty.restype = ctypes.c_int32
+        cm.MIDIPacketListInit.argtypes = [ctypes.c_void_p]
+        cm.MIDIPacketListInit.restype = ctypes.c_void_p
+        cm.MIDIPacketListAdd.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        cm.MIDIPacketListAdd.restype = ctypes.c_void_p
+        cm.MIDISend.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+        cm.MIDISend.restype = ctypes.c_int32
+
+    def available(self) -> bool:
+        return self._coremidi is not None and self._corefoundation is not None
+
+    def _cf_string(self, value: str) -> ctypes.c_void_p:
+        if not self._corefoundation:
+            return ctypes.c_void_p()
+        return ctypes.c_void_p(
+            self._corefoundation.CFStringCreateWithCString(
+                None,
+                str(value or "").encode("utf-8"),
+                _K_CFSTRING_ENCODING_UTF8,
+            )
+        )
+
+    def _release(self, value: ctypes.c_void_p) -> None:
+        if self._corefoundation and value:
+            try:
+                self._corefoundation.CFRelease(value)
+            except Exception:
+                pass
+
+    def _endpoint_property(self, endpoint: int, property_name: str) -> str:
+        if not self.available() or not endpoint:
+            return ""
+        key = self._cf_string(property_name)
+        value = ctypes.c_void_p()
+        try:
+            if not key:
+                return ""
+            if self._coremidi.MIDIObjectGetStringProperty(int(endpoint), key, ctypes.byref(value)) != 0:
+                return ""
+            if not value:
+                return ""
+            buf = ctypes.create_string_buffer(1024)
+            if not self._corefoundation.CFStringGetCString(value, buf, len(buf), _K_CFSTRING_ENCODING_UTF8):
+                return ""
+            return buf.value.decode("utf-8", errors="ignore").strip()
+        finally:
+            self._release(value)
+            self._release(key)
+
+    def list_devices(self) -> List[Tuple[str, str]]:
+        if not self.available():
+            return []
+        try:
+            count = int(self._coremidi.MIDIGetNumberOfDestinations())
+        except Exception:
+            return []
+        devices: List[Tuple[str, str]] = []
+        for idx in range(max(0, count)):
+            endpoint = int(self._coremidi.MIDIGetDestination(idx))
+            if not endpoint:
+                continue
+            name = self._endpoint_property(endpoint, "displayName") or self._endpoint_property(endpoint, "name")
+            devices.append((f"{_COREMIDI_DEVICE_PREFIX}{idx}", name or f"MIDI Output {idx}"))
+        return devices
+
+    def open(self, device_id) -> bool:
+        self.close()
+        if not self.available():
+            return False
+        raw = str(device_id or "").strip()
+        if raw.startswith(_COREMIDI_DEVICE_PREFIX):
+            raw = raw[len(_COREMIDI_DEVICE_PREFIX):]
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            return False
+        try:
+            destination = int(self._coremidi.MIDIGetDestination(index))
+        except Exception:
+            destination = 0
+        if not destination:
+            return False
+        client_name = self._cf_string("pySSP MIDI")
+        port_name = self._cf_string("pySSP MIDI Output")
+        try:
+            if self._coremidi.MIDIClientCreate(client_name, None, None, ctypes.byref(self._client)) != 0:
+                return False
+            if self._coremidi.MIDIOutputPortCreate(self._client.value, port_name, ctypes.byref(self._port)) != 0:
+                self.close()
+                return False
+        finally:
+            self._release(port_name)
+            self._release(client_name)
+        self._destination = ctypes.c_uint32(destination)
+        self._opened = True
+        return True
+
+    def _send_bytes(self, payload: bytes) -> None:
+        if not self._opened or not self._port.value or not self._destination.value:
+            return
+        data = bytes(payload or b"")
+        if not data:
+            return
+        packet_list_size = max(1024, len(data) + 128)
+        packet_list = ctypes.create_string_buffer(packet_list_size)
+        data_buf = (ctypes.c_ubyte * len(data))(*data)
+        packet = self._coremidi.MIDIPacketListInit(packet_list)
+        packet = self._coremidi.MIDIPacketListAdd(
+            packet_list,
+            packet_list_size,
+            packet,
+            0,
+            len(data),
+            ctypes.cast(data_buf, ctypes.c_void_p),
+        )
+        if packet:
+            self._coremidi.MIDISend(self._port.value, self._destination.value, packet_list)
+
+    def send_short(self, status: int, data1: int = 0, data2: int = 0) -> None:
+        self._send_bytes(bytes([int(status) & 0xFF, int(data1) & 0xFF, int(data2) & 0xFF]))
+
+    def send_long(self, payload: bytes) -> None:
+        self._send_bytes(bytes(payload or b""))
+
+    def close(self) -> None:
+        if self._coremidi:
+            if self._port.value:
+                try:
+                    self._coremidi.MIDIPortDispose(self._port.value)
+                except Exception:
+                    pass
+            if self._client.value:
+                try:
+                    self._coremidi.MIDIClientDispose(self._client.value)
+                except Exception:
+                    pass
+        self._client = ctypes.c_uint32(0)
+        self._port = ctypes.c_uint32(0)
+        self._destination = ctypes.c_uint32(0)
+        self._opened = False
 
 
 class _MIDIIOCAPSW(ctypes.Structure):
@@ -54,10 +272,12 @@ class _MIDIHDR(ctypes.Structure):
     ]
 
 
-class WinMMMidiOut:
+class MidiOutput:
     def __init__(self) -> None:
+        self._coremidi = _CoreMidiOut()
         self._winmm = None
         self._handle = wintypes.HANDLE()
+        self._pygame_output = None
         self._opened = False
         try:
             dword_ptr = getattr(wintypes, "DWORD_PTR", ctypes.c_size_t)
@@ -83,38 +303,93 @@ class WinMMMidiOut:
             self._winmm = None
 
     def available(self) -> bool:
-        return self._winmm is not None
+        return self._coremidi.available() or (self._winmm is not None) or _ensure_pygame_midi_init()
 
     def list_devices(self) -> List[Tuple[str, str]]:
-        if not self._winmm:
-            return []
-        count = int(self._winmm.midiOutGetNumDevs())
         devices: List[Tuple[str, str]] = []
-        for idx in range(count):
-            caps = _MIDIIOCAPSW()
-            if self._winmm.midiOutGetDevCapsW(idx, ctypes.byref(caps), ctypes.sizeof(caps)) == 0:
-                devices.append((str(idx), str(caps.szPname)))
+        if self._coremidi.available():
+            devices = self._coremidi.list_devices()
+            if devices:
+                return devices
+        if self._winmm:
+            count = int(self._winmm.midiOutGetNumDevs())
+            for idx in range(count):
+                caps = _MIDIIOCAPSW()
+                if self._winmm.midiOutGetDevCapsW(idx, ctypes.byref(caps), ctypes.sizeof(caps)) == 0:
+                    devices.append((str(idx), str(caps.szPname)))
+            return devices
+        if not _ensure_pygame_midi_init():
+            return []
+        try:
+            count = int(pg_midi.get_count())
+        except Exception:
+            return []
+        for idx in range(max(0, count)):
+            try:
+                info = pg_midi.get_device_info(idx)
+            except Exception:
+                continue
+            if not info or len(info) < 5:
+                continue
+            is_output = int(info[3]) == 1
+            if not is_output:
+                continue
+            name = bytes(info[1]).decode(errors="ignore").strip() if isinstance(info[1], (bytes, bytearray)) else str(info[1])
+            devices.append((str(idx), name or f"MIDI Output {idx}"))
         return devices
 
-    def open(self, device_id: int) -> bool:
-        if not self._winmm:
-            return False
+    def open(self, device_id) -> bool:
         self.close()
-        result = self._winmm.midiOutOpen(ctypes.byref(self._handle), int(device_id), 0, 0, 0)
-        self._opened = result == 0
+        if self._coremidi.available() and str(device_id or "").strip().startswith(_COREMIDI_DEVICE_PREFIX):
+            self._opened = self._coremidi.open(device_id)
+            return self._opened
+        if self._winmm:
+            result = self._winmm.midiOutOpen(ctypes.byref(self._handle), int(device_id), 0, 0, 0)
+            self._opened = result == 0
+            return self._opened
+        if not _ensure_pygame_midi_init():
+            return False
+        try:
+            self._pygame_output = pg_midi.Output(int(device_id))
+            self._opened = True
+        except Exception:
+            self._pygame_output = None
+            self._opened = False
         return self._opened
 
     def send_short(self, status: int, data1: int = 0, data2: int = 0) -> None:
-        if not self._opened or not self._winmm:
+        if not self._opened:
             return
-        message = (int(status) & 0xFF) | ((int(data1) & 0xFF) << 8) | ((int(data2) & 0xFF) << 16)
-        self._winmm.midiOutShortMsg(self._handle, message)
+        if self._coremidi.available() and self._coremidi._opened:
+            self._coremidi.send_short(status, data1, data2)
+            return
+        if self._winmm:
+            message = (int(status) & 0xFF) | ((int(data1) & 0xFF) << 8) | ((int(data2) & 0xFF) << 16)
+            self._winmm.midiOutShortMsg(self._handle, message)
+            return
+        if self._pygame_output is None:
+            return
+        try:
+            self._pygame_output.write_short(int(status) & 0xFF, int(data1) & 0xFF, int(data2) & 0xFF)
+        except Exception:
+            pass
 
     def send_long(self, payload: bytes) -> None:
-        if not self._opened or not self._winmm:
+        if not self._opened:
             return
         data = bytes(payload or b"")
         if not data:
+            return
+        if self._coremidi.available() and self._coremidi._opened:
+            self._coremidi.send_long(data)
+            return
+        if not self._winmm:
+            if self._pygame_output is None or pg_midi is None:
+                return
+            try:
+                self._pygame_output.write_sys_ex(pg_midi.time(), data)
+            except Exception:
+                pass
             return
         buf = ctypes.create_string_buffer(data)
         hdr = _MIDIHDR()
@@ -134,16 +409,28 @@ class WinMMMidiOut:
             self._winmm.midiOutUnprepareHeader(self._handle, ctypes.byref(hdr), size)
 
     def close(self) -> None:
-        if not self._opened or not self._winmm:
+        if not self._opened:
             return
-        self._winmm.midiOutReset(self._handle)
-        self._winmm.midiOutClose(self._handle)
+        if self._coremidi.available() and self._coremidi._opened:
+            self._coremidi.close()
+        elif self._winmm:
+            self._winmm.midiOutReset(self._handle)
+            self._winmm.midiOutClose(self._handle)
+        elif self._pygame_output is not None:
+            try:
+                self._pygame_output.close()
+            except Exception:
+                pass
+            self._pygame_output = None
         self._opened = False
 
 
 def list_midi_output_devices() -> List[Tuple[str, str]]:
-    midi = WinMMMidiOut()
+    midi = MidiOutput()
     return midi.list_devices() if midi.available() else []
+
+
+WinMMMidiOut = MidiOutput
 
 
 def _find_output_device_index(device_name: str) -> Optional[int]:
@@ -347,7 +634,7 @@ class LtcAudioOutput:
 class MtcMidiOutput:
     def __init__(self, idle_behavior_provider: Optional[Callable[[], str]] = None) -> None:
         self.idle_behavior_provider = idle_behavior_provider or (lambda: MTC_IDLE_KEEP_STREAM)
-        self._midi = WinMMMidiOut()
+        self._midi = MidiOutput()
         self._device = MIDI_OUTPUT_DEVICE_NONE
         self._opened_device = MIDI_OUTPUT_DEVICE_NONE
         self._opened = False
@@ -387,7 +674,7 @@ class MtcMidiOutput:
                     self._midi.close()
                     self._opened = False
                     try:
-                        self._opened = self._midi.open(int(self._device))
+                        self._opened = self._midi.open(self._device)
                     except (TypeError, ValueError):
                         self._opened = False
                     if self._opened:

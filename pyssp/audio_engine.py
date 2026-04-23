@@ -449,6 +449,10 @@ def _ensure_decoder() -> None:
         _DECODER_READY = True
 
 
+def ensure_audio_decoder_ready() -> None:
+    _ensure_decoder()
+
+
 def _allocate_stream_id() -> int:
     global _NEXT_STREAM_ID
     stream_id = _NEXT_STREAM_ID

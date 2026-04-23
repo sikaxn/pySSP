@@ -491,6 +491,7 @@ class MainWindow(
         else:
             set_output_device(configured_device)
         try:
+            ensure_audio_decoder_ready()
             self._init_audio_players()
         except Exception as exc:
             self._dispose_audio_players()
@@ -498,6 +499,7 @@ class MainWindow(
             self.audio_output_device = ""
             self.settings.audio_output_device = ""
             try:
+                ensure_audio_decoder_ready()
                 self._init_audio_players()
             except Exception as exc2:
                 self._init_silent_audio_players()
@@ -654,7 +656,7 @@ class MainWindow(
         self._stage_alert_message: str = ""
         self._stage_alert_until_monotonic: float = 0.0
         self._stage_alert_sticky: bool = False
-        self._launchpad_output = WinMMMidiOut()
+        self._launchpad_output = MidiOutput()
         self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
         self._launchpad_output_device_name = ""
         self._launchpad_last_feedback_signature: tuple = ()

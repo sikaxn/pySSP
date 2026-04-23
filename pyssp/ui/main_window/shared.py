@@ -68,6 +68,7 @@ from pyssp.audio_engine import (
     configure_audio_preload_cache_policy,
     configure_waveform_disk_cache,
     clear_waveform_disk_cache,
+    ensure_audio_decoder_ready,
     enforce_audio_preload_limits,
     get_audio_preload_capacity_bytes,
     get_engine_output_meter_levels,
@@ -145,6 +146,7 @@ from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,
+    MidiOutput,
     MtcMidiOutput,
     MTC_IDLE_ALLOW_DARK,
     MTC_IDLE_KEEP_STREAM,
@@ -156,7 +158,6 @@ from pyssp.timecode import (
     list_midi_output_devices,
     ms_to_timecode_string,
     nominal_fps,
-    WinMMMidiOut,
 )
 from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog

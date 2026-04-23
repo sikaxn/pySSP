@@ -29,6 +29,18 @@ class _BlockingDecoder:
         assert self.resume.wait(1.0)
 
 
+class _TrackingDecoder:
+    def __init__(self, *_args, **_kwargs):
+        self.seek_calls = []
+        self.close_calls = 0
+
+    def seek(self, target):
+        self.seek_calls.append(int(target))
+
+    def close(self):
+        self.close_calls += 1
+
+
 def _wait_for(predicate, app, timeout=1.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -73,6 +85,127 @@ def test_stream_seek_does_not_report_eof_while_decoder_restarts(monkeypatch):
         assert not worker.is_alive()
         with player._lock:
             assert player._stream_seek_in_progress is False
+    finally:
+        player.deleteLater()
+
+
+def test_prepare_media_source_streaming_does_not_start_decoder_on_load(monkeypatch):
+    decoder = _TrackingDecoder()
+
+    monkeypatch.setattr(audio_engine, "_peek_cached_media_frames", lambda _path: None)
+    monkeypatch.setattr(audio_engine, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(audio_engine, "probe_media_duration_ms", lambda _path: 4321)
+    monkeypatch.setattr(audio_engine, "FFmpegPCMStream", lambda *args, **kwargs: decoder)
+
+    frames, duration_ms, use_streaming, prepared_decoder = audio_engine._prepare_media_source("demo.mp3", 44100, 2)
+
+    assert frames is None
+    assert duration_ms == 4321
+    assert use_streaming is True
+    assert prepared_decoder is decoder
+    assert decoder.seek_calls == []
+
+
+def test_stop_closes_stream_decoder_but_keeps_streaming_media_loaded(monkeypatch):
+    monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))
+    monkeypatch.setattr(audio_engine.ExternalMediaPlayer, "_create_stream", lambda self: _DummyStream())
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    player = audio_engine.ExternalMediaPlayer()
+    decoder = _TrackingDecoder()
+    try:
+        with player._lock:
+            player._stream_decoder = decoder
+            player._streaming_mode = True
+            player._media_path = "demo.mp3"
+            player._duration_ms = 5000
+            player._state = player.PlayingState
+
+        player.stop()
+
+        assert decoder.close_calls == 1
+        with player._lock:
+            assert player._stream_decoder is None
+            assert player._streaming_mode is True
+            assert player._media_path == "demo.mp3"
+            assert player._position_ms == 0
+    finally:
+        player.deleteLater()
+
+
+def test_play_restarts_idle_stream_decoder_from_current_position(monkeypatch):
+    monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))
+    monkeypatch.setattr(audio_engine.ExternalMediaPlayer, "_create_stream", lambda self: _DummyStream())
+
+    created = []
+
+    def _make_decoder(*_args, **_kwargs):
+        decoder = _TrackingDecoder()
+        created.append(decoder)
+        return decoder
+
+    monkeypatch.setattr(audio_engine, "FFmpegPCMStream", _make_decoder)
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    player = audio_engine.ExternalMediaPlayer()
+    try:
+        with player._lock:
+            player._streaming_mode = True
+            player._media_path = "demo.mp3"
+            player._duration_ms = 5000
+            player._position_ms = 1200
+
+        player.play()
+
+        assert len(created) == 1
+        assert created[0].seek_calls == [1200]
+        with player._lock:
+            assert player._stream_decoder is created[0]
+        assert player.state() == player.PlayingState
+    finally:
+        player.deleteLater()
+
+
+def test_set_position_while_stopped_closes_idle_stream_decoder_without_restarting(monkeypatch):
+    monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))
+    monkeypatch.setattr(audio_engine.ExternalMediaPlayer, "_create_stream", lambda self: _DummyStream())
+
+    created = []
+
+    def _make_decoder(*_args, **_kwargs):
+        decoder = _TrackingDecoder()
+        created.append(decoder)
+        return decoder
+
+    monkeypatch.setattr(audio_engine, "FFmpegPCMStream", _make_decoder)
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    player = audio_engine.ExternalMediaPlayer()
+    decoder = _TrackingDecoder()
+    try:
+        with player._lock:
+            player._stream_decoder = decoder
+            player._streaming_mode = True
+            player._media_path = "demo.mp3"
+            player._duration_ms = 5000
+            player._state = player.StoppedState
+
+        player.setPosition(1500)
+
+        assert decoder.close_calls == 1
+        assert created == []
+        with player._lock:
+            assert player._stream_decoder is None
+            assert player._position_ms == 1500
     finally:
         player.deleteLater()
 

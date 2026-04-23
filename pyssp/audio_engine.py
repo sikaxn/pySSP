@@ -903,7 +903,6 @@ def _prepare_media_source(
         frames, duration_ms = cached
     elif (not force_frame_decode) and ffmpeg_available():
         decoder = FFmpegPCMStream(file_path, sample_rate=sample_rate, channels=channels)
-        decoder.start(0)
         duration_ms = max(0, int(probe_media_duration_ms(file_path)))
         use_streaming = True
     else:
@@ -1170,11 +1169,19 @@ class ExternalMediaPlayer(QObject):
         self._pending_dsp_config = cfg
 
     def play(self) -> None:
+        start_stream = False
+        target = 0
         with self._lock:
             if (self._source_frames is None) and (not self._streaming_mode):
                 return
             if self._state == self.PlayingState:
                 return
+            if self._streaming_mode:
+                start_stream = True
+                target = int(self._position_ms)
+        if start_stream and (not self._seek_stream_decoder_to_position(target)):
+            return
+        with self._lock:
             if self._fresh_media_start_pending:
                 self._arm_declick_fade_in_locked(self._fresh_media_fade_frames)
                 self._fresh_media_start_pending = False
@@ -1187,27 +1194,35 @@ class ExternalMediaPlayer(QObject):
             self._set_state_locked(self.PlayingState)
 
     def pause(self) -> None:
+        decoder_to_close: Optional[FFmpegPCMStream] = None
         with self._lock:
             if self._state != self.PlayingState:
                 return
             self._queue_declick_tail_locked()
             if self._streaming_mode:
                 self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+                decoder_to_close = self._detach_stream_decoder_locked()
             else:
                 self._position_ms = self._position_from_source_pos_locked()
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = self._tempo_ratio_locked()
             self._set_state_locked(self.PausedState)
+        if decoder_to_close is not None:
+            try:
+                decoder_to_close.close()
+            except Exception:
+                pass
 
     def stop(self) -> None:
-        decoder_to_seek: Optional[FFmpegPCMStream] = None
+        decoder_to_close: Optional[FFmpegPCMStream] = None
         clear_meter_now = True
         with self._lock:
             self._pending_media_request_id += 1
             self._queue_declick_tail_locked()
             clear_meter_now = len(self._declick_tail) <= 0
-            decoder_to_seek = self._stream_decoder if self._streaming_mode else None
+            if self._streaming_mode:
+                decoder_to_close = self._detach_stream_decoder_locked()
             self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
             self._source_pos = 0.0
             self._source_pos_anchor = 0.0
@@ -1220,9 +1235,9 @@ class ExternalMediaPlayer(QObject):
             self._set_state_locked(self.StoppedState)
         if clear_meter_now:
             _clear_engine_output_meter(self._stream_id)
-        if decoder_to_seek is not None:
+        if decoder_to_close is not None:
             try:
-                decoder_to_seek.seek(0)
+                decoder_to_close.close()
             except Exception:
                 pass
         self.positionChanged.emit(0)
@@ -1232,7 +1247,8 @@ class ExternalMediaPlayer(QObject):
             return self._state
 
     def setPosition(self, position_ms: int) -> None:
-        decoder_to_seek: Optional[FFmpegPCMStream] = None
+        close_stream_decoder = False
+        seek_stream_decoder = False
         target = 0
         with self._lock:
             target = max(0, min(int(position_ms), self._duration_ms))
@@ -1248,24 +1264,29 @@ class ExternalMediaPlayer(QObject):
                 self._source_pos_anchor_t = time.perf_counter()
                 self._source_pos_anchor_tempo = self._tempo_ratio_locked()
                 self._ended = False
-            elif self._streaming_mode and self._stream_decoder is not None:
-                decoder_to_seek = self._stream_decoder
-                self._stream_seek_in_progress = True
+            elif self._streaming_mode:
                 self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
                 self._source_pos = (target / 1000.0) * self._sample_rate
                 self._source_pos_anchor = self._source_pos
                 self._source_pos_anchor_t = time.perf_counter()
                 self._source_pos_anchor_tempo = 1.0
                 self._ended = False
-        if decoder_to_seek is not None:
+                seek_stream_decoder = self._state == self.PlayingState
+                close_stream_decoder = not seek_stream_decoder
+                if close_stream_decoder:
+                    decoder_to_close = self._detach_stream_decoder_locked()
+                else:
+                    decoder_to_close = None
+            else:
+                decoder_to_close = None
+        if close_stream_decoder and decoder_to_close is not None:
             try:
-                decoder_to_seek.seek(target)
+                decoder_to_close.close()
             except Exception:
-                with self._lock:
-                    self._ended = True
-            finally:
-                with self._lock:
-                    self._stream_seek_in_progress = False
+                pass
+        if seek_stream_decoder and (not self._seek_stream_decoder_to_position(target)):
+            with self._lock:
+                self._ended = True
         self.positionChanged.emit(target)
 
     def position(self) -> int:
@@ -1339,6 +1360,47 @@ class ExternalMediaPlayer(QObject):
         if path:
             _save_waveform_peaks_to_disk(path, points, peaks)
         return peaks
+
+    def _detach_stream_decoder_locked(self) -> Optional[FFmpegPCMStream]:
+        decoder = self._stream_decoder
+        self._stream_decoder = None
+        self._stream_seek_in_progress = False
+        return decoder
+
+    def _seek_stream_decoder_to_position(self, target_ms: int) -> bool:
+        decoder: Optional[FFmpegPCMStream]
+        created_decoder = False
+        with self._lock:
+            if (not self._streaming_mode) or self._source_frames is not None:
+                return False
+            decoder = self._stream_decoder
+            if decoder is None:
+                media_path = str(self._media_path or "").strip()
+                if not media_path:
+                    return False
+                decoder = FFmpegPCMStream(media_path, sample_rate=self._sample_rate, channels=self._channels)
+                created_decoder = True
+            self._stream_seek_in_progress = True
+        ok = False
+        try:
+            decoder.seek(max(0, int(target_ms)))
+            ok = True
+            return True
+        except Exception:
+            return False
+        finally:
+            with self._lock:
+                if ok:
+                    self._stream_decoder = decoder
+                    self._ended = False
+                elif self._stream_decoder is decoder:
+                    self._stream_decoder = None
+                self._stream_seek_in_progress = False
+            if (not ok) and created_decoder:
+                try:
+                    decoder.close()
+                except Exception:
+                    pass
 
     def _create_stream(self):
         device_index = None

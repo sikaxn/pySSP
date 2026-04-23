@@ -222,6 +222,7 @@ class OptionsDialog(
         "launchpad_device_selector": "",
         "launchpad_output_device_id": "",
         "launchpad_layout": "bottom_six",
+        "launchpad_turn_off_empty_sound_button_lights": True,
         "launchpad_control_bindings": [
             "prev_group",
             "prev_page",
@@ -381,6 +382,7 @@ class OptionsDialog(
         launchpad_device_selector: str,
         launchpad_output_device_id: str,
         launchpad_layout: str,
+        launchpad_turn_off_empty_sound_button_lights: bool,
         launchpad_control_bindings: List[str],
         midi_hotkeys: Dict[str, tuple[str, str]],
         midi_quick_action_enabled: bool,
@@ -460,6 +462,7 @@ class OptionsDialog(
         self._launchpad_device_selector = str(launchpad_device_selector or "").strip()
         self._launchpad_output_device_id = str(launchpad_output_device_id or "").strip()
         self._launchpad_layout = normalize_launchpad_layout(launchpad_layout)
+        self._launchpad_turn_off_empty_sound_button_lights = bool(launchpad_turn_off_empty_sound_button_lights)
         self._launchpad_action_options = build_launchpad_action_options(self._LAUNCHPAD_ACTION_ROWS)
         self._launchpad_control_bindings = [str(value or "").strip() for value in list(launchpad_control_bindings)[:16]]
         if len(self._launchpad_control_bindings) < 16:

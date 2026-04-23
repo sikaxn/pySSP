@@ -634,6 +634,9 @@ class SettingsArchiveMixin:
             "launchpad_device_selector": self.launchpad_device_selector,
             "launchpad_output_device_id": self.launchpad_output_device_id,
             "launchpad_layout": self.launchpad_layout,
+            "launchpad_turn_off_empty_sound_button_lights": bool(
+                self.launchpad_turn_off_empty_sound_button_lights
+            ),
             "launchpad_control_bindings": list(self.launchpad_control_bindings[:16]),
             "midi_hotkeys": {k: [v[0], v[1]] for k, v in self.midi_hotkeys.items()},
             "midi_quick_action_enabled": bool(self.midi_quick_action_enabled),
@@ -732,6 +735,12 @@ class SettingsArchiveMixin:
         ).strip()
         self.launchpad_layout = normalize_launchpad_layout(
             payload.get("launchpad_layout", self.launchpad_layout)
+        )
+        self.launchpad_turn_off_empty_sound_button_lights = self._coerce_bool(
+            payload.get(
+                "launchpad_turn_off_empty_sound_button_lights",
+                self.launchpad_turn_off_empty_sound_button_lights,
+            )
         )
         raw_launchpad_controls = payload.get("launchpad_control_bindings", [])
         if isinstance(raw_launchpad_controls, list):
@@ -1283,6 +1292,9 @@ class SettingsArchiveMixin:
         self.settings.launchpad_device_selector = self.launchpad_device_selector
         self.settings.launchpad_output_device_id = self.launchpad_output_device_id
         self.settings.launchpad_layout = self.launchpad_layout
+        self.settings.launchpad_turn_off_empty_sound_button_lights = bool(
+            self.launchpad_turn_off_empty_sound_button_lights
+        )
         self.settings.launchpad_control_bindings = list(self.launchpad_control_bindings[:16])
         self.settings.midi_hotkey_new_set_1 = self.midi_hotkeys.get("new_set", ("", ""))[0]
         self.settings.midi_hotkey_new_set_2 = self.midi_hotkeys.get("new_set", ("", ""))[1]
@@ -1399,4 +1411,3 @@ class SettingsArchiveMixin:
         self.settings.disable_path_safety = bool(self.disable_path_safety)
         self.settings.window_layout = normalize_window_layout(self.window_layout)
         save_settings(self.settings)
-

@@ -49,6 +49,17 @@ def test_main_progress_show_text_defaults_true_and_loads_false():
     assert settings.main_progress_show_text is False
 
 
+def test_launchpad_empty_sound_button_lights_default_on_and_loads_false():
+    parser = configparser.ConfigParser()
+    parser["main"] = {}
+    settings = _from_parser(parser)
+    assert settings.launchpad_turn_off_empty_sound_button_lights is True
+
+    parser["main"]["launchpad_turn_off_empty_sound_button_lights"] = "0"
+    settings = _from_parser(parser)
+    assert settings.launchpad_turn_off_empty_sound_button_lights is False
+
+
 def test_lock_screen_settings_default_false_and_load_true():
     parser = configparser.ConfigParser()
     parser["main"] = {}

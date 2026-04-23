@@ -1493,6 +1493,7 @@ class ActionsInputMixin:
             launchpad_device_selector=self.launchpad_device_selector,
             launchpad_output_device_id=self.launchpad_output_device_id,
             launchpad_layout=self.launchpad_layout,
+            launchpad_turn_off_empty_sound_button_lights=self.launchpad_turn_off_empty_sound_button_lights,
             launchpad_control_bindings=self.launchpad_control_bindings,
             midi_hotkeys=self.midi_hotkeys,
             midi_quick_action_enabled=self.midi_quick_action_enabled,
@@ -1668,6 +1669,9 @@ class ActionsInputMixin:
         self.launchpad_device_selector = dialog.selected_launchpad_device_selector()
         self.launchpad_output_device_id = dialog.selected_launchpad_output_device_id()
         self.launchpad_layout = dialog.selected_launchpad_layout()
+        self.launchpad_turn_off_empty_sound_button_lights = (
+            dialog.selected_launchpad_turn_off_empty_sound_button_lights()
+        )
         self.launchpad_control_bindings = dialog.selected_launchpad_control_bindings()[:16]
         if len(self.launchpad_control_bindings) < 16:
             self.launchpad_control_bindings.extend(["" for _ in range(16 - len(self.launchpad_control_bindings))])
@@ -2147,9 +2151,14 @@ class ActionsInputMixin:
         if slot_index is not None:
             page = self._current_page_slots()
             if 0 <= slot_index < len(page):
+                slot = page[slot_index]
+                if bool(getattr(self, "launchpad_turn_off_empty_sound_button_lights", True)) and not (
+                    slot.assigned or slot.marker
+                ):
+                    return "#000000"
                 if self._launchpad_slot_blink_active(slot_index) and (not self._launchpad_blink_on):
                     return "#000000"
-                return self._slot_color(page[slot_index], slot_index)
+                return self._slot_color(slot, slot_index)
             return "#101010"
         toggle_buttons = {
             "multi_play": "Multi-Play",

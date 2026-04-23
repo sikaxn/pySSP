@@ -62,6 +62,8 @@ class DeviceMidiMixin:
             self._launchpad_layout = normalize_launchpad_layout(
                 str(self.launchpad_layout_combo.currentData() or "bottom_six")
             )
+        if hasattr(self, "launchpad_empty_lights_off_checkbox"):
+            self.launchpad_empty_lights_off_checkbox.setEnabled(enabled)
         self._launchpad_enabled = enabled
         if hasattr(self, "midi_input_list") and (not bool(getattr(self, "_launchpad_refreshing_devices", False))):
             self._refresh_midi_input_devices(force_refresh=False)
@@ -468,4 +470,3 @@ class DeviceMidiMixin:
         )
         self._refresh_midi_input_devices(force_refresh=False)
         localize_widget_tree(self, self._ui_language)
-

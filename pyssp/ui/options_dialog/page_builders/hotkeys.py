@@ -4,6 +4,45 @@ from ..shared import *
 from ..widgets import *
 
 
+_LAUNCHPAD_ACTION_COMBO_STYLE = """
+QComboBox {
+    background: #20262D;
+    color: #E7EEF7;
+    border: 1px solid #44505F;
+    border-radius: 4px;
+    padding: 4px 22px 4px 6px;
+}
+QComboBox:disabled {
+    background: #171C22;
+    color: #7E8995;
+    border-color: #303842;
+}
+QComboBox:hover {
+    border-color: #6A7A8F;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+QComboBox QAbstractItemView {
+    background: #20262D;
+    color: #E7EEF7;
+    border: 1px solid #44505F;
+    selection-background-color: #2E65FF;
+    selection-color: #FFFFFF;
+    outline: 0;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 22px;
+    padding: 3px 6px;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: #324052;
+    color: #FFFFFF;
+}
+""".strip()
+
+
 class HotkeysPageMixin:
     def _build_hotkey_page(self) -> QWidget:
         page = QWidget()
@@ -79,6 +118,10 @@ class HotkeysPageMixin:
         self.launchpad_layout_combo.currentIndexChanged.connect(self._sync_launchpad_controls)
         launchpad_layout.addRow("Grid layout:", self.launchpad_layout_combo)
 
+        self.launchpad_empty_lights_off_checkbox = QCheckBox("Turn off Launchpad lights for empty sound buttons")
+        self.launchpad_empty_lights_off_checkbox.setChecked(bool(self._launchpad_turn_off_empty_sound_button_lights))
+        launchpad_layout.addRow(self.launchpad_empty_lights_off_checkbox)
+
         launchpad_note = QLabel(
             "The selected Launchpad is handled independently from the MIDI devices above."
         )
@@ -149,6 +192,7 @@ class HotkeysPageMixin:
                 if is_control_row:
                     combo = QComboBox()
                     combo.setMinimumWidth(120)
+                    combo.setStyleSheet(_LAUNCHPAD_ACTION_COMBO_STYLE)
                     for option in self._launchpad_action_options:
                         combo.addItem(option.label, option.key)
                     self._set_combo_data_or_default(combo, self._launchpad_control_bindings[index], LAUNCHPAD_ACTION_NONE)
@@ -495,4 +539,3 @@ class HotkeysPageMixin:
         row_layout.addWidget(clear2)
         self._hotkey_edits[key] = (edit1, edit2)
         form.addRow(f"{tr(label)}:", row)
-

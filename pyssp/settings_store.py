@@ -651,6 +651,7 @@ class AppSettings:
     launchpad_device_selector: str = ""
     launchpad_output_device_id: str = ""
     launchpad_layout: str = "bottom_six"
+    launchpad_turn_off_empty_sound_button_lights: bool = True
     launchpad_control_bindings: list[str] = field(default_factory=default_launchpad_control_bindings)
     midi_hotkey_new_set_1: str = ""
     midi_hotkey_new_set_2: str = ""
@@ -978,6 +979,7 @@ def save_settings(settings: AppSettings) -> None:
         "launchpad_device_selector": settings.launchpad_device_selector,
         "launchpad_output_device_id": settings.launchpad_output_device_id,
         "launchpad_layout": settings.launchpad_layout,
+        "launchpad_turn_off_empty_sound_button_lights": "1" if settings.launchpad_turn_off_empty_sound_button_lights else "0",
         "launchpad_control_bindings": "\t".join(settings.launchpad_control_bindings[:16]),
         "midi_hotkey_new_set_1": settings.midi_hotkey_new_set_1,
         "midi_hotkey_new_set_2": settings.midi_hotkey_new_set_2,
@@ -1259,6 +1261,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     launchpad_layout = str(section.get("launchpad_layout", "bottom_six")).strip().lower()
     if launchpad_layout not in {"bottom_six", "top_six"}:
         launchpad_layout = "bottom_six"
+    launchpad_turn_off_empty_sound_button_lights = _get_bool(
+        section,
+        "launchpad_turn_off_empty_sound_button_lights",
+        True,
+    )
     launchpad_control_raw = str(section.get("launchpad_control_bindings", "")).strip()
     if launchpad_control_raw:
         launchpad_control_bindings = [str(item or "").strip() for item in launchpad_control_raw.split("\t")[:16]]
@@ -1563,6 +1570,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         launchpad_device_selector=launchpad_device_selector,
         launchpad_output_device_id=launchpad_output_device_id,
         launchpad_layout=launchpad_layout,
+        launchpad_turn_off_empty_sound_button_lights=launchpad_turn_off_empty_sound_button_lights,
         launchpad_control_bindings=launchpad_control_bindings,
         midi_hotkey_new_set_1=str(section.get("midi_hotkey_new_set_1", "")).strip(),
         midi_hotkey_new_set_2=str(section.get("midi_hotkey_new_set_2", "")).strip(),

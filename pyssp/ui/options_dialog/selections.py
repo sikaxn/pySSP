@@ -341,6 +341,9 @@ class SelectionMixin:
     def selected_launchpad_layout(self) -> str:
         return normalize_launchpad_layout(str(self.launchpad_layout_combo.currentData() or "bottom_six"))
 
+    def selected_launchpad_turn_off_empty_sound_button_lights(self) -> bool:
+        return bool(self.launchpad_empty_lights_off_checkbox.isChecked())
+
     def selected_launchpad_control_bindings(self) -> List[str]:
         return [str(combo.currentData() or "").strip() for combo in self._launchpad_control_combos]
 
@@ -453,4 +456,3 @@ class SelectionMixin:
     def _sync_jog_outside_group_enabled(self) -> None:
         enabled = self.cue_timeline_audio_file_radio.isChecked()
         self.jog_outside_group.setEnabled(enabled)
-

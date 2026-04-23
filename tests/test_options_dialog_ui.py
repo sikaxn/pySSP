@@ -117,6 +117,9 @@ def _build_dialog(**overrides):
         launchpad_device_selector=str(overrides.get("launchpad_device_selector", "")),
         launchpad_output_device_id=str(overrides.get("launchpad_output_device_id", "")),
         launchpad_layout=str(overrides.get("launchpad_layout", "bottom_six")),
+        launchpad_turn_off_empty_sound_button_lights=bool(
+            overrides.get("launchpad_turn_off_empty_sound_button_lights", True)
+        ),
         launchpad_control_bindings=overrides.get("launchpad_control_bindings", defaults["launchpad_control_bindings"]),
         midi_hotkeys=overrides.get("midi_hotkeys", {}),
         midi_quick_action_enabled=bool(overrides.get("midi_quick_action_enabled", False)),
@@ -495,6 +498,9 @@ def test_launchpad_selection_round_trip(qapp):
     assert dialog.selected_launchpad_device_selector() == "name::Launchpad X"
     assert dialog.selected_launchpad_output_device_id() == "3"
     assert dialog.selected_launchpad_layout() == "top_six"
+    assert dialog.selected_launchpad_turn_off_empty_sound_button_lights() is True
+    dialog.launchpad_empty_lights_off_checkbox.setChecked(False)
+    assert dialog.selected_launchpad_turn_off_empty_sound_button_lights() is False
 
 
 def test_launchpad_control_bindings_round_trip(qapp):
@@ -506,6 +512,8 @@ def test_launchpad_control_bindings_round_trip(qapp):
         initial_page="Midi Control",
     )
     assert dialog.selected_launchpad_control_bindings()[:2] == ["play_selected", "loop"]
+    assert "#20262D" in dialog._launchpad_control_combos[0].styleSheet()
+    assert "selection-background-color" in dialog._launchpad_control_combos[0].styleSheet()
 
 
 def test_launchpad_defaults_include_control_rows(qapp):

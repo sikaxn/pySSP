@@ -375,6 +375,9 @@ class MainWindow(
         self.launchpad_device_selector = str(getattr(self.settings, "launchpad_device_selector", "")).strip()
         self.launchpad_output_device_id = str(getattr(self.settings, "launchpad_output_device_id", "")).strip()
         self.launchpad_layout = normalize_launchpad_layout(getattr(self.settings, "launchpad_layout", "bottom_six"))
+        self.launchpad_turn_off_empty_sound_button_lights = bool(
+            getattr(self.settings, "launchpad_turn_off_empty_sound_button_lights", True)
+        )
         self.launchpad_control_bindings = [str(value or "").strip() for value in getattr(self.settings, "launchpad_control_bindings", [])[:16]]
         if len(self.launchpad_control_bindings) < 16:
             self.launchpad_control_bindings.extend(["" for _ in range(16 - len(self.launchpad_control_bindings))])

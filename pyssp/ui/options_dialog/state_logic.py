@@ -239,7 +239,22 @@ class StateLogicMixin:
     def _restore_midi_defaults(self) -> None:
         d = self._DEFAULTS
         self._midi_input_device_ids = list(d.get("midi_input_device_ids", []))
+        self._launchpad_enabled = bool(d.get("launchpad_enabled", False))
+        self._launchpad_device_selector = str(d.get("launchpad_device_selector", "")).strip()
+        self._launchpad_output_device_id = str(d.get("launchpad_output_device_id", "")).strip()
+        self._launchpad_layout = normalize_launchpad_layout(str(d.get("launchpad_layout", "bottom_six")))
+        self._launchpad_control_bindings = [
+            str(value or "").strip() for value in d.get("launchpad_control_bindings", [""] * 16)[:16]
+        ]
+        if len(self._launchpad_control_bindings) < 16:
+            self._launchpad_control_bindings.extend(["" for _ in range(16 - len(self._launchpad_control_bindings))])
         self._refresh_midi_input_devices()
+        self._set_combo_data_or_default(self.launchpad_layout_combo, self._launchpad_layout, "bottom_six")
+        self._set_combo_data_or_default(self.launchpad_device_combo, self._launchpad_device_selector, "")
+        self._set_combo_data_or_default(self.launchpad_output_combo, self._launchpad_output_device_id, "")
+        for index, combo in enumerate(self._launchpad_control_combos):
+            self._set_combo_data_or_default(combo, self._launchpad_control_bindings[index], LAUNCHPAD_ACTION_NONE)
+        self._sync_launchpad_controls()
         defaults = dict(d.get("midi_hotkeys", {}))
         for key, (edit1, edit2) in self._midi_hotkey_edits.items():
             v1, v2 = defaults.get(key, ("", ""))

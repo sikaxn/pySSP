@@ -620,35 +620,80 @@ class RemoteApiMixin:
 
     def _refresh_midi_connection_warning(self, force_refresh: bool = False) -> None:
         previous_missing = set(self._midi_missing_selectors)
+        previous_launchpad_missing = set(getattr(self, "_launchpad_missing_selectors", set()))
+        previous_launchpad_output_missing = bool(getattr(self, "_launchpad_output_missing", False))
         selected = [str(v).strip() for v in self.midi_input_device_ids if str(v).strip()]
-        if not selected:
-            self._midi_missing_selectors = set()
-            self._hide_midi_connection_warning_banner()
-            return
-        missing_selectors = set(self._midi_router.missing_selected_selectors())
+        missing_selectors = set(self._midi_missing_selectors) if selected else set()
         self._midi_missing_selectors = missing_selectors
-        if not missing_selectors:
+
+        launchpad_selector = str(getattr(self, "launchpad_device_selector", "") or "").strip()
+        if bool(getattr(self, "launchpad_enabled", False)) and launchpad_selector:
+            launchpad_missing = set(self._launchpad_missing_selectors)
+        else:
+            launchpad_missing = set()
+        self._launchpad_missing_selectors = launchpad_missing
+
+        launchpad_output_missing = False
+        launchpad_output_id = str(getattr(self, "launchpad_output_device_id", "") or "").strip()
+        if bool(getattr(self, "launchpad_enabled", False)) and launchpad_output_id:
+            launchpad_output_missing = True
+            for device_id, _device_name in list_midi_output_devices():
+                if str(device_id).strip() == launchpad_output_id:
+                    launchpad_output_missing = False
+                    break
+        self._launchpad_output_missing = launchpad_output_missing
+
+        if not missing_selectors and not launchpad_missing and not launchpad_output_missing:
+            recovered_parts = []
             if previous_missing:
                 recovered_labels = [midi_input_selector_name(v) or str(v) for v in sorted(previous_missing) if str(v).strip()]
                 display = ", ".join(recovered_labels[:3])
                 if len(recovered_labels) > 3:
                     display += f" (+{len(recovered_labels) - 3} more)"
-                self._debug_midi_connection(f"reconnected={display or '<none>'}")
+                recovered_parts.append(f"{tr('MIDI input reconnected:')} {display}")
+            if previous_launchpad_missing:
+                recovered_labels = [midi_input_selector_name(v) or str(v) for v in sorted(previous_launchpad_missing) if str(v).strip()]
+                display = ", ".join(recovered_labels[:3])
+                if len(recovered_labels) > 3:
+                    display += f" (+{len(recovered_labels) - 3} more)"
+                recovered_parts.append(f"{tr('Launchpad input reconnected:')} {display}")
+            if previous_launchpad_output_missing and launchpad_output_id:
+                recovered_parts.append(f"{tr('Launchpad output reconnected:')} {launchpad_output_id}")
+            if recovered_parts:
+                message = ". ".join(part for part in recovered_parts if part)
+                self._debug_midi_connection(f"reconnected={message or '<none>'}")
                 self._show_midi_connection_warning_banner(
-                    f"{tr('MIDI input reconnected:')} {display}. {tr('MIDI control restored.')}",
+                    f"{message}. {tr('MIDI control restored.')}",
                     timeout_ms=4500,
                 )
             else:
                 self._hide_midi_connection_warning_banner()
             return
-        current_labels = [midi_input_selector_name(v) or str(v) for v in sorted(missing_selectors)]
-        display = ", ".join(current_labels[:3])
-        if len(current_labels) > 3:
-            display += f" (+{len(current_labels) - 3} more)"
-        if missing_selectors != previous_missing:
-            self._debug_midi_connection(f"disconnected={display or '<none>'}")
+
+        problem_parts = []
+        if missing_selectors:
+            current_labels = [midi_input_selector_name(v) or str(v) for v in sorted(missing_selectors)]
+            display = ", ".join(current_labels[:3])
+            if len(current_labels) > 3:
+                display += f" (+{len(current_labels) - 3} more)"
+            problem_parts.append(f"{tr('MIDI input disconnected:')} {display}")
+        if launchpad_missing:
+            current_labels = [midi_input_selector_name(v) or str(v) for v in sorted(launchpad_missing)]
+            display = ", ".join(current_labels[:3])
+            if len(current_labels) > 3:
+                display += f" (+{len(current_labels) - 3} more)"
+            problem_parts.append(f"{tr('Launchpad input disconnected:')} {display}")
+        if launchpad_output_missing and launchpad_output_id:
+            problem_parts.append(f"{tr('Launchpad output disconnected:')} {launchpad_output_id}")
+        message = ". ".join(problem_parts)
+        if (
+            missing_selectors != previous_missing
+            or launchpad_missing != previous_launchpad_missing
+            or launchpad_output_missing != previous_launchpad_output_missing
+        ):
+            self._debug_midi_connection(f"disconnected={message or '<none>'}")
         self._show_midi_connection_warning_banner(
-            f"{tr('MIDI input disconnected:')} {display}. {tr('MIDI control will resume automatically when reconnected.')}",
+            f"{message}. {tr('MIDI control will resume automatically when reconnected.')}",
             timeout_ms=0,
         )
 

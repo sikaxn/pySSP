@@ -365,6 +365,10 @@ class UiBuildMixin:
         list_sound_device_midi_mapping_action.triggered.connect(self._list_sound_device_midi_mappings)
         tools_menu.addAction(list_sound_device_midi_mapping_action)
 
+        apply_launchpad_mapping_action = QAction("Apply Launchpad MIDI Mapping to Current Page", self)
+        apply_launchpad_mapping_action.triggered.connect(self._apply_launchpad_mapping_to_current_page)
+        tools_menu.addAction(apply_launchpad_mapping_action)
+
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)
@@ -1128,6 +1132,10 @@ class UiBuildMixin:
                 inst.setStyleSheet(primary.styleSheet())
                 inst.setIcon(primary.icon())
                 inst.blockSignals(False)
+        try:
+            self._refresh_launchpad_feedback(force=False)
+        except Exception:
+            pass
 
     def _apply_top_control_layout(self) -> None:
         if not hasattr(self, "_main_control_grid_layout") or not hasattr(self, "_fade_control_grid_layout"):

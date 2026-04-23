@@ -52,6 +52,14 @@ from pyssp.settings_store import (
     normalize_window_layout,
 )
 from pyssp.i18n import localize_widget_tree, normalize_language, tr
+from pyssp.launchpad import (
+    LAUNCHPAD_ACTION_NONE,
+    build_launchpad_action_options,
+    is_launchpad_name,
+    launchpad_action_slot_index,
+    launchpad_layout_options,
+    normalize_launchpad_layout,
+)
 from pyssp.midi_control import (
     list_midi_input_devices,
     midi_binding_to_display,

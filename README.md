@@ -71,6 +71,7 @@ python -m venv .venv
 - Talk mode, multi-play, fade in/out, crossfade toggles
 - Cue page and per-button cue point editing
 - Timecode display and timeline behavior options
+- MIDI input learning, quick actions, and Launchpad page-mapping helper for current-page sound buttons
 
 ### Timecode output
 

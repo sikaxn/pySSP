@@ -5,6 +5,8 @@ from threading import Lock
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
+from PyQt5.QtCore import QThread, pyqtSignal
+
 try:
     import pygame.midi as pg_midi
 except Exception:  # pragma: no cover - dependency/runtime fallback
@@ -390,3 +392,108 @@ class MidiInputRouter:
             if not any(device_id in open_ids for device_id in resolved_ids):
                 missing.add(token)
         self._missing_selectors = missing
+
+
+class MidiPollingThread(QThread):
+    midi_event = pyqtSignal(str, str, int, int, int)
+    launchpad_event = pyqtSignal(str, str, int, int, int)
+    status_changed = pyqtSignal(object, object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._state_lock = Lock()
+        self._running = True
+        self._midi_selectors: List[str] = []
+        self._launchpad_selectors: List[str] = []
+        self._midi_router = MidiInputRouter(self._emit_midi_event)
+        self._launchpad_router = MidiInputRouter(self._emit_launchpad_event)
+        self._last_status_emit_t = 0.0
+        self._last_midi_sync_t = 0.0
+        self._last_launchpad_sync_t = 0.0
+        self._last_midi_force_t = 0.0
+        self._last_launchpad_force_t = 0.0
+        self._last_midi_missing_force_t = 0.0
+        self._last_launchpad_missing_force_t = 0.0
+        self._last_status_signature: Tuple[Tuple[str, ...], Tuple[str, ...]] = ((), ())
+
+    def update_devices(self, midi_selectors: List[str], launchpad_selectors: List[str]) -> None:
+        with self._state_lock:
+            self._midi_selectors = [str(v).strip() for v in midi_selectors if str(v).strip()]
+            self._launchpad_selectors = [str(v).strip() for v in launchpad_selectors if str(v).strip()]
+
+    def stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        while self._running:
+            try:
+                self._midi_router.poll()
+            except Exception:
+                pass
+            try:
+                self._launchpad_router.poll()
+            except Exception:
+                pass
+            now = time.perf_counter()
+            with self._state_lock:
+                midi_selectors = list(self._midi_selectors)
+                launchpad_selectors = list(self._launchpad_selectors)
+            if (now - self._last_midi_sync_t) >= 0.9:
+                self._last_midi_sync_t = now
+                try:
+                    self._midi_router.set_devices(midi_selectors)
+                except Exception:
+                    pass
+            if (now - self._last_launchpad_sync_t) >= 0.9:
+                self._last_launchpad_sync_t = now
+                try:
+                    self._launchpad_router.set_devices(launchpad_selectors)
+                except Exception:
+                    pass
+            if midi_selectors and (now - self._last_midi_force_t) >= 5.0:
+                self._last_midi_force_t = now
+                try:
+                    self._midi_router.set_devices(midi_selectors, force_refresh=True)
+                except Exception:
+                    pass
+            if launchpad_selectors and (now - self._last_launchpad_force_t) >= 5.0:
+                self._last_launchpad_force_t = now
+                try:
+                    self._launchpad_router.set_devices(launchpad_selectors, force_refresh=True)
+                except Exception:
+                    pass
+            if self._midi_router.missing_selected_selectors() and (now - self._last_midi_missing_force_t) >= 2.5:
+                self._last_midi_missing_force_t = now
+                try:
+                    self._midi_router.set_devices(midi_selectors, force_refresh=True)
+                except Exception:
+                    pass
+            if self._launchpad_router.missing_selected_selectors() and (now - self._last_launchpad_missing_force_t) >= 2.5:
+                self._last_launchpad_missing_force_t = now
+                try:
+                    self._launchpad_router.set_devices(launchpad_selectors, force_refresh=True)
+                except Exception:
+                    pass
+            if (now - self._last_status_emit_t) >= 0.9:
+                self._last_status_emit_t = now
+                midi_missing = tuple(self._midi_router.missing_selected_selectors())
+                launchpad_missing = tuple(self._launchpad_router.missing_selected_selectors())
+                signature = (midi_missing, launchpad_missing)
+                if signature != self._last_status_signature:
+                    self._last_status_signature = signature
+                self.status_changed.emit(list(midi_missing), list(launchpad_missing))
+            self.msleep(10)
+        try:
+            self._midi_router.close()
+        except Exception:
+            pass
+        try:
+            self._launchpad_router.close()
+        except Exception:
+            pass
+
+    def _emit_midi_event(self, token: str, selector: str, status: int, data1: int, data2: int) -> None:
+        self.midi_event.emit(str(token), str(selector), int(status), int(data1), int(data2))
+
+    def _emit_launchpad_event(self, token: str, selector: str, status: int, data1: int, data2: int) -> None:
+        self.launchpad_event.emit(str(token), str(selector), int(status), int(data1), int(data2))

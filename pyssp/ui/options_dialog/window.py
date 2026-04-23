@@ -16,6 +16,36 @@ class OptionsDialog(
     StateLogicMixin,
     QDialog,
 ):
+    _LAUNCHPAD_ACTION_ROWS = [
+        ("play_selected_pause", "Play Selected / Pause"),
+        ("play_selected", "Play Selected"),
+        ("pause_toggle", "Pause/Resume"),
+        ("stop_playback", "Stop Playback"),
+        ("talk", "Talk"),
+        ("next_group", "Next Group"),
+        ("prev_group", "Previous Group"),
+        ("next_page", "Next Page"),
+        ("prev_page", "Previous Page"),
+        ("next_sound_button", "Next Sound Button"),
+        ("prev_sound_button", "Previous Sound Button"),
+        ("multi_play", "Multi-Play"),
+        ("go_to_playing", "Go To Playing"),
+        ("loop", "Loop"),
+        ("next", "Next"),
+        ("rapid_fire", "Rapid Fire"),
+        ("shuffle", "Shuffle"),
+        ("reset_page", "Reset Page"),
+        ("play_list", "Play List"),
+        ("fade_in", "Fade In"),
+        ("cross_fade", "X (Cross Fade)"),
+        ("fade_out", "Fade Out"),
+        ("mute", "Mute"),
+        ("volume_up", "Volume Up"),
+        ("volume_down", "Volume Down"),
+        ("open_hide_lyric_navigator", "Open / Hide Lyric Navigator"),
+        ("cue", "Cue"),
+        ("vocal_removed", "Vocal Removed"),
+    ]
     _HOTKEY_ROWS = [
         ("new_set", "New Set"),
         ("open_set", "Open Set"),
@@ -188,6 +218,28 @@ class OptionsDialog(
         "sound_button_hotkey_priority": "system_first",
         "sound_button_hotkey_go_to_playing": False,
         "midi_input_device_ids": [],
+        "launchpad_enabled": False,
+        "launchpad_device_selector": "",
+        "launchpad_output_device_id": "",
+        "launchpad_layout": "bottom_six",
+        "launchpad_control_bindings": [
+            "prev_group",
+            "prev_page",
+            "prev_sound_button",
+            "go_to_playing",
+            "play_selected",
+            "play_selected_pause",
+            "pause_toggle",
+            "stop_playback",
+            "next_group",
+            "next_page",
+            "next_sound_button",
+            "loop",
+            "next",
+            "rapid_fire",
+            "talk",
+            "reset_page",
+        ],
         "midi_hotkeys": {},
         "midi_quick_action_enabled": False,
         "midi_quick_action_bindings": ["" for _ in range(48)],
@@ -325,6 +377,11 @@ class OptionsDialog(
         sound_button_hotkey_priority: str,
         sound_button_hotkey_go_to_playing: bool,
         midi_input_device_ids: List[str],
+        launchpad_enabled: bool,
+        launchpad_device_selector: str,
+        launchpad_output_device_id: str,
+        launchpad_layout: str,
+        launchpad_control_bindings: List[str],
         midi_hotkeys: Dict[str, tuple[str, str]],
         midi_quick_action_enabled: bool,
         midi_quick_action_bindings: List[str],
@@ -399,6 +456,15 @@ class OptionsDialog(
         )
         self._sound_button_hotkey_go_to_playing = bool(sound_button_hotkey_go_to_playing)
         self._midi_input_device_ids = [str(v).strip() for v in midi_input_device_ids if str(v).strip()]
+        self._launchpad_enabled = bool(launchpad_enabled)
+        self._launchpad_device_selector = str(launchpad_device_selector or "").strip()
+        self._launchpad_output_device_id = str(launchpad_output_device_id or "").strip()
+        self._launchpad_layout = normalize_launchpad_layout(launchpad_layout)
+        self._launchpad_action_options = build_launchpad_action_options(self._LAUNCHPAD_ACTION_ROWS)
+        self._launchpad_control_bindings = [str(value or "").strip() for value in list(launchpad_control_bindings)[:16]]
+        if len(self._launchpad_control_bindings) < 16:
+            self._launchpad_control_bindings.extend(["" for _ in range(16 - len(self._launchpad_control_bindings))])
+        self._launchpad_control_combos: List[QComboBox] = []
         self._midi_hotkeys = dict(midi_hotkeys)
         self._midi_hotkey_edits: Dict[str, tuple[MidiCaptureEdit, MidiCaptureEdit]] = {}
         self._midi_quick_action_enabled = bool(midi_quick_action_enabled)

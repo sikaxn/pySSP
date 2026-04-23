@@ -87,6 +87,27 @@ def _normalize_supported_audio_format_extensions(values: list[str]) -> list[str]
     return output
 
 
+def default_launchpad_control_bindings() -> list[str]:
+    return [
+        "prev_group",
+        "prev_page",
+        "prev_sound_button",
+        "go_to_playing",
+        "play_selected",
+        "play_selected_pause",
+        "pause_toggle",
+        "stop_playback",
+        "next_group",
+        "next_page",
+        "next_sound_button",
+        "loop",
+        "next",
+        "rapid_fire",
+        "talk",
+        "reset_page",
+    ]
+
+
 WINDOW_LAYOUT_MAIN_GRID_COLS = 4
 WINDOW_LAYOUT_MAIN_GRID_ROWS = 4
 WINDOW_LAYOUT_FADE_GRID_COLS = 3
@@ -626,6 +647,11 @@ class AppSettings:
     sound_button_hotkey_go_to_playing: bool = False
     sound_button_hotkey_system_order: list[str] = field(default_factory=list)
     midi_input_device_ids: list[str] = field(default_factory=list)
+    launchpad_enabled: bool = False
+    launchpad_device_selector: str = ""
+    launchpad_output_device_id: str = ""
+    launchpad_layout: str = "bottom_six"
+    launchpad_control_bindings: list[str] = field(default_factory=default_launchpad_control_bindings)
     midi_hotkey_new_set_1: str = ""
     midi_hotkey_new_set_2: str = ""
     midi_hotkey_open_set_1: str = ""
@@ -948,6 +974,11 @@ def save_settings(settings: AppSettings) -> None:
         "sound_button_hotkey_go_to_playing": "1" if settings.sound_button_hotkey_go_to_playing else "0",
         "sound_button_hotkey_system_order": "\t".join(settings.sound_button_hotkey_system_order),
         "midi_input_device_ids": "\t".join(settings.midi_input_device_ids),
+        "launchpad_enabled": "1" if settings.launchpad_enabled else "0",
+        "launchpad_device_selector": settings.launchpad_device_selector,
+        "launchpad_output_device_id": settings.launchpad_output_device_id,
+        "launchpad_layout": settings.launchpad_layout,
+        "launchpad_control_bindings": "\t".join(settings.launchpad_control_bindings[:16]),
         "midi_hotkey_new_set_1": settings.midi_hotkey_new_set_1,
         "midi_hotkey_new_set_2": settings.midi_hotkey_new_set_2,
         "midi_hotkey_open_set_1": settings.midi_hotkey_open_set_1,
@@ -1222,6 +1253,30 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     else:
         quick_action_keys = default_quick_action_keys()
     midi_input_device_ids = [item.strip() for item in str(section.get("midi_input_device_ids", "")).split("\t") if item.strip()]
+    launchpad_enabled = _get_bool(section, "launchpad_enabled", False)
+    launchpad_device_selector = str(section.get("launchpad_device_selector", "")).strip()
+    launchpad_output_device_id = str(section.get("launchpad_output_device_id", "")).strip()
+    launchpad_layout = str(section.get("launchpad_layout", "bottom_six")).strip().lower()
+    if launchpad_layout not in {"bottom_six", "top_six"}:
+        launchpad_layout = "bottom_six"
+    launchpad_control_raw = str(section.get("launchpad_control_bindings", "")).strip()
+    if launchpad_control_raw:
+        launchpad_control_bindings = [str(item or "").strip() for item in launchpad_control_raw.split("\t")[:16]]
+        if len(launchpad_control_bindings) < 16:
+            launchpad_control_bindings.extend(["" for _ in range(16 - len(launchpad_control_bindings))])
+    else:
+        legacy_launchpad_action_raw = str(section.get("launchpad_action_bindings", "")).strip()
+        if legacy_launchpad_action_raw:
+            launchpad_control_bindings = [
+                item
+                for item in [str(item or "").strip() for item in legacy_launchpad_action_raw.split("\t")[:48]]
+                if item and (not item.startswith("slot:"))
+            ][:16]
+            defaults = default_launchpad_control_bindings()
+            if len(launchpad_control_bindings) < 16:
+                launchpad_control_bindings.extend(defaults[len(launchpad_control_bindings):16])
+        else:
+            launchpad_control_bindings = default_launchpad_control_bindings()
     midi_quick_action_raw = str(section.get("midi_quick_action_bindings", "")).strip()
     if midi_quick_action_raw:
         midi_quick_action_bindings = _normalize_midi_quick_action_bindings(midi_quick_action_raw.split("\t"))
@@ -1504,6 +1559,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         sound_button_hotkey_go_to_playing=_get_bool(section, "sound_button_hotkey_go_to_playing", False),
         sound_button_hotkey_system_order=sound_button_hotkey_system_order,
         midi_input_device_ids=midi_input_device_ids,
+        launchpad_enabled=launchpad_enabled,
+        launchpad_device_selector=launchpad_device_selector,
+        launchpad_output_device_id=launchpad_output_device_id,
+        launchpad_layout=launchpad_layout,
+        launchpad_control_bindings=launchpad_control_bindings,
         midi_hotkey_new_set_1=str(section.get("midi_hotkey_new_set_1", "")).strip(),
         midi_hotkey_new_set_2=str(section.get("midi_hotkey_new_set_2", "")).strip(),
         midi_hotkey_open_set_1=str(section.get("midi_hotkey_open_set_1", "")).strip(),

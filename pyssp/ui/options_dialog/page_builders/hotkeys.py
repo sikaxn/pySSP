@@ -29,6 +29,7 @@ class HotkeysPageMixin:
         tabs = QTabWidget()
         tabs.addTab(self._build_midi_settings_tab(), "Midi Setting")
         tabs.addTab(self._build_midi_system_hotkey_tab(), "System Hotkey")
+        tabs.addTab(self._build_launchpad_hotkey_tab(), "Launchpad Hotkey")
         tabs.addTab(self._build_midi_system_rotary_tab(), "System Rotary")
         tabs.addTab(self._build_midi_quick_action_tab(), "Quick Action Key")
         tabs.addTab(self._build_midi_sound_button_hotkey_tab(), "Sound Button Hot Key")
@@ -61,6 +62,30 @@ class HotkeysPageMixin:
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
+        launchpad_group = QGroupBox("Launchpad Device")
+        launchpad_layout = QFormLayout(launchpad_group)
+        self.launchpad_device_combo = QComboBox()
+        self.launchpad_device_combo.currentIndexChanged.connect(self._sync_launchpad_controls)
+        launchpad_layout.addRow("Launchpad device:", self.launchpad_device_combo)
+
+        self.launchpad_output_combo = QComboBox()
+        self.launchpad_output_combo.currentIndexChanged.connect(self._sync_launchpad_controls)
+        launchpad_layout.addRow("Launchpad output:", self.launchpad_output_combo)
+
+        self.launchpad_layout_combo = QComboBox()
+        for option in launchpad_layout_options():
+            self.launchpad_layout_combo.addItem(option.label, option.key)
+        self._set_combo_data_or_default(self.launchpad_layout_combo, self._launchpad_layout, "bottom_six")
+        self.launchpad_layout_combo.currentIndexChanged.connect(self._sync_launchpad_controls)
+        launchpad_layout.addRow("Grid layout:", self.launchpad_layout_combo)
+
+        launchpad_note = QLabel(
+            "The selected Launchpad is handled independently from the MIDI devices above."
+        )
+        launchpad_note.setWordWrap(True)
+        launchpad_layout.addRow(launchpad_note)
+        layout.addWidget(launchpad_group)
+
         mtc_group = QGroupBox("MIDI Timecode (MTC)")
         mtc_group.setEnabled(False)
         mtc_layout = QVBoxLayout(mtc_group)
@@ -69,6 +94,80 @@ class HotkeysPageMixin:
         mtc_layout.addWidget(mtc_note)
         layout.addWidget(mtc_group)
         self._refresh_midi_input_devices()
+        self._sync_launchpad_controls()
+        return page
+
+    def _build_launchpad_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        note = QLabel(
+            "The 6-row sound area is mapped directly to Quick Action buttons 1-48. The remaining 2 rows are Launchpad-only controls."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(8)
+        grid_frame = QFrame()
+        grid_frame.setFrameShape(QFrame.StyledPanel)
+        grid_frame.setStyleSheet("QFrame{background:#15191E;border:1px solid #3A424D;border-radius:8px;}")
+        grid = QGridLayout(grid_frame)
+        grid.setContentsMargins(10, 10, 10, 10)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        for col in range(8):
+            header = QLabel(str(col + 1))
+            header.setAlignment(Qt.AlignCenter)
+            header.setStyleSheet("color:#D6DCE4;font-weight:bold;")
+            grid.addWidget(header, 0, col + 1)
+        control_rows = {0, 1} if self._launchpad_layout == "bottom_six" else {6, 7}
+        for row in range(8):
+            row_label = QLabel(str(row + 1))
+            row_label.setAlignment(Qt.AlignCenter)
+            row_label.setStyleSheet("color:#D6DCE4;font-weight:bold;")
+            grid.addWidget(row_label, row + 1, 0)
+            for col in range(8):
+                cell = QWidget()
+                cell_layout = QVBoxLayout(cell)
+                cell_layout.setContentsMargins(0, 0, 0, 0)
+                cell_layout.setSpacing(2)
+                is_control_row = row in control_rows
+                if is_control_row:
+                    control_row = row if self._launchpad_layout == "bottom_six" else row - 6
+                    index = (control_row * 8) + col
+                    pad_label = QLabel(f"C{index + 1}")
+                else:
+                    slot_row = row - 2 if self._launchpad_layout == "bottom_six" else row
+                    index = (slot_row * 8) + col
+                    pad_label = QLabel(f"B{index + 1}")
+                pad_label.setAlignment(Qt.AlignCenter)
+                pad_label.setStyleSheet("color:#AEB8C4;font-size:9pt;")
+                cell_layout.addWidget(pad_label)
+                if is_control_row:
+                    combo = QComboBox()
+                    combo.setMinimumWidth(120)
+                    for option in self._launchpad_action_options:
+                        combo.addItem(option.label, option.key)
+                    self._set_combo_data_or_default(combo, self._launchpad_control_bindings[index], LAUNCHPAD_ACTION_NONE)
+                    self._launchpad_control_combos.append(combo)
+                    cell_layout.addWidget(combo)
+                else:
+                    fixed = QLabel(f"Quick Action {index + 1}")
+                    fixed.setAlignment(Qt.AlignCenter)
+                    fixed.setStyleSheet(
+                        "background:#20262D;color:#E7EEF7;border:1px solid #44505F;border-radius:4px;padding:6px;"
+                    )
+                    cell_layout.addWidget(fixed)
+                grid.addWidget(cell, row + 1, col + 1)
+        outer.addWidget(grid_frame)
+        legend = QLabel("B pads are fixed sound-button pads. C pads are configurable Launchpad control pads with LED feedback.")
+        legend.setWordWrap(True)
+        outer.addWidget(legend)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
         return page
 
     def _build_midi_system_hotkey_tab(self) -> QWidget:

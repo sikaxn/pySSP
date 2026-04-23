@@ -102,6 +102,18 @@ from pyssp.settings_store import (
     save_settings,
 )
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
+from pyssp.launchpad import (
+    LAUNCHPAD_ACTION_NONE,
+    launchpad_control_bindings,
+    launchpad_control_note,
+    launchpad_action_slot_index,
+    launchpad_find_matching_output,
+    launchpad_led_rgb_sysex,
+    launchpad_page_bindings,
+    launchpad_page_slot_note,
+    launchpad_programmer_toggle_sysex,
+    normalize_launchpad_layout,
+)
 from pyssp.library_archive import (
     ArchiveOperationCancelled,
     PackAudioLibraryDialog,
@@ -118,6 +130,7 @@ from pyssp.library_archive import (
     write_manifest,
 )
 from pyssp.midi_control import (
+    MidiPollingThread,
     MidiInputRouter,
     list_midi_input_devices,
     midi_input_name_selector,
@@ -142,6 +155,7 @@ from pyssp.timecode import (
     list_midi_output_devices,
     ms_to_timecode_string,
     nominal_fps,
+    WinMMMidiOut,
 )
 from pyssp.ui.dsp_window import DSPWindow
 from pyssp.ui.cue_point_dialog import CuePointDialog

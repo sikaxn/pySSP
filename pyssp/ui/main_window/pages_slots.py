@@ -617,6 +617,10 @@ class PagesSlotsMixin:
             )
         self._refresh_vocal_removed_warning_banner()
         self._update_status_totals()
+        try:
+            self._refresh_launchpad_feedback(force=False)
+        except Exception:
+            pass
 
     def _refresh_vocal_removed_warning_banner(self) -> None:
         message = ""

@@ -5,7 +5,69 @@ from .widgets import *
 
 
 class DeviceMidiMixin:
+    def _populate_launchpad_device_combo(self) -> None:
+        if not hasattr(self, "launchpad_device_combo"):
+            return
+        selected = str(getattr(self, "_launchpad_device_selector", "") or "").strip()
+        options: List[tuple[str, str]] = []
+        seen: set[str] = set()
+        for device_id, device_name in list_midi_input_devices(force_refresh=False):
+            selector = midi_input_name_selector(device_name)
+            if selector in seen or (not is_launchpad_name(device_name)):
+                continue
+            seen.add(selector)
+            options.append((selector, str(device_name).strip()))
+        self.launchpad_device_combo.blockSignals(True)
+        self.launchpad_device_combo.clear()
+        self.launchpad_device_combo.addItem("Disabled", "")
+        for selector, name in options:
+            self.launchpad_device_combo.addItem(name, selector)
+        if selected and selected not in seen:
+            disconnected_name = midi_input_selector_name(selected) or selected
+            self.launchpad_device_combo.addItem(f"{disconnected_name} (Disconnected)", selected)
+        self._set_combo_data_or_default(self.launchpad_device_combo, selected, "")
+        self.launchpad_device_combo.blockSignals(False)
+
+    def _populate_launchpad_output_combo(self) -> None:
+        if not hasattr(self, "launchpad_output_combo"):
+            return
+        selected = str(getattr(self, "_launchpad_output_device_id", "") or "").strip()
+        options: List[tuple[str, str]] = []
+        seen: set[str] = set()
+        for device_id, device_name in list_midi_output_devices():
+            normalized_id = str(device_id).strip()
+            normalized_name = str(device_name).strip()
+            if (not normalized_id) or (normalized_id in seen) or (not is_launchpad_name(normalized_name)):
+                continue
+            seen.add(normalized_id)
+            options.append((normalized_id, normalized_name))
+        self.launchpad_output_combo.blockSignals(True)
+        self.launchpad_output_combo.clear()
+        self.launchpad_output_combo.addItem("Disabled", "")
+        for device_id, name in options:
+            self.launchpad_output_combo.addItem(name, device_id)
+        if selected and selected not in seen:
+            self.launchpad_output_combo.addItem(f"Output {selected} (Disconnected)", selected)
+        self._set_combo_data_or_default(self.launchpad_output_combo, selected, "")
+        self.launchpad_output_combo.blockSignals(False)
+
+    def _sync_launchpad_controls(self) -> None:
+        if hasattr(self, "launchpad_device_combo"):
+            self._launchpad_device_selector = str(self.launchpad_device_combo.currentData() or "").strip()
+        if hasattr(self, "launchpad_output_combo"):
+            self._launchpad_output_device_id = str(self.launchpad_output_combo.currentData() or "").strip()
+        enabled = bool(self._launchpad_device_selector)
+        if hasattr(self, "launchpad_layout_combo"):
+            self.launchpad_layout_combo.setEnabled(enabled)
+            self._launchpad_layout = normalize_launchpad_layout(
+                str(self.launchpad_layout_combo.currentData() or "bottom_six")
+            )
+        self._launchpad_enabled = enabled
+        if hasattr(self, "midi_input_list") and (not bool(getattr(self, "_launchpad_refreshing_devices", False))):
+            self._refresh_midi_input_devices(force_refresh=False)
+
     def _refresh_midi_input_devices(self, force_refresh: bool = False) -> None:
+        self._launchpad_refreshing_devices = True
         current_ids = set(self._checked_midi_input_device_ids() or self._midi_input_device_ids)
         current_names = set(self._checked_midi_input_device_names())
         for selector in current_ids:
@@ -29,6 +91,7 @@ class DeviceMidiMixin:
         except Exception:
             pass
         self.midi_input_list.clear()
+        launchpad_selector = str(getattr(self, "_launchpad_device_selector", "") or "").strip()
         for device_id, device_name in list_midi_input_devices(force_refresh=force_refresh):
             selector = midi_input_name_selector(device_name)
             listed_selectors.add(selector)
@@ -37,6 +100,7 @@ class DeviceMidiMixin:
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             checked = (selector in current_ids) or (str(device_name).strip() in current_names) or (str(device_id) in current_ids)
             blocked_for_mtc = bool(mtc_device_name) and str(device_name).strip().lower() == mtc_device_name.lower()
+            blocked_for_launchpad = bool(launchpad_selector) and (selector == launchpad_selector)
             if blocked_for_mtc:
                 checked = False
                 item.setFlags(Qt.NoItemFlags)
@@ -46,6 +110,14 @@ class DeviceMidiMixin:
                 item.setText(f"{device_name} (used by MTC)")
                 item.setForeground(QColor("#7A7A7A"))
                 mtc_blocked_labels.append(str(device_name).strip() or str(selector))
+            elif blocked_for_launchpad:
+                checked = False
+                item.setFlags(Qt.NoItemFlags)
+                font = item.font()
+                font.setStrikeOut(True)
+                item.setFont(font)
+                item.setText(f"{device_name} (used by Launchpad)")
+                item.setForeground(QColor("#7A7A7A"))
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
             self.midi_input_list.addItem(item)
         for selector in list(selected_before):
@@ -62,6 +134,8 @@ class DeviceMidiMixin:
             disconnected_labels.append(disconnected_name)
         self.midi_input_list.itemChanged.connect(self._on_midi_input_selection_changed)
         self._on_midi_input_selection_changed()
+        self._populate_launchpad_device_combo()
+        self._populate_launchpad_output_combo()
         notices: List[str] = []
         if disconnected_labels:
             display = ", ".join(disconnected_labels[:3])
@@ -77,6 +151,7 @@ class DeviceMidiMixin:
         if hasattr(self, "midi_input_status_label") and self.midi_input_status_label is not None:
             self.midi_input_status_label.setText(" ".join(notices))
             self.midi_input_status_label.setVisible(bool(notices))
+        self._launchpad_refreshing_devices = False
 
     def _checked_midi_input_device_ids(self) -> List[str]:
         selected: List[str] = []

@@ -458,9 +458,25 @@ class ActionsInputMixin:
         return True
 
     def _tick_talk_blink(self) -> None:
+        try:
+            self._update_launchpad_hold_state()
+        except Exception:
+            pass
+        launchpad_refresh_needed = False
         if not self.talk_active:
-            return
-        self._update_talk_button_visual(toggle=True)
+            if self._launchpad_needs_blink():
+                self._launchpad_blink_on = not bool(self._launchpad_blink_on)
+                launchpad_refresh_needed = True
+        else:
+            self._update_talk_button_visual(toggle=True)
+            if self._launchpad_needs_blink():
+                self._launchpad_blink_on = not bool(self._launchpad_blink_on)
+                launchpad_refresh_needed = True
+        if launchpad_refresh_needed:
+            try:
+                self._refresh_launchpad_feedback(force=False)
+            except Exception:
+                pass
 
     def _update_talk_button_visual(self, toggle: bool = False) -> None:
         talk_button = self.control_buttons.get("Talk")
@@ -846,6 +862,42 @@ class ActionsInputMixin:
             pause_button.setText("Pause")
             pause_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         self._sync_control_button_instances("Pause")
+        try:
+            self._refresh_launchpad_feedback(force=False)
+        except Exception:
+            pass
+
+    def _launchpad_pause_blink_active(self) -> bool:
+        if self._is_multi_play_enabled():
+            players = self._all_active_players()
+            any_playing = any(p.state() == ExternalMediaPlayer.PlayingState for p in players)
+            any_paused = any(p.state() == ExternalMediaPlayer.PausedState for p in players)
+            return any_paused and not any_playing
+        return self.player.state() == ExternalMediaPlayer.PausedState
+
+    def _launchpad_slot_blink_active(self, slot_index: int) -> bool:
+        slot_key = (self._view_group_key(), self.current_page, int(slot_index))
+        return slot_key in self._active_playing_keys
+
+    def _launchpad_needs_blink(self) -> bool:
+        if self._launchpad_reset_hold_token and (not self._launchpad_reset_hold_fired):
+            return True
+        page = self._current_page_slots()
+        for slot_index in range(len(page)):
+            if self._launchpad_slot_blink_active(slot_index):
+                return True
+        return self._launchpad_pause_blink_active()
+
+    def _update_launchpad_hold_state(self) -> None:
+        if (not self._launchpad_reset_hold_token) or self._launchpad_reset_hold_fired:
+            return
+        if (time.perf_counter() - self._launchpad_reset_hold_started_t) < 5.0:
+            return
+        self._launchpad_reset_hold_fired = True
+        self._run_locked_input("midi", self._reset_current_page_state_no_prompt)
+        self._launchpad_reset_hold_token = ""
+        self._launchpad_reset_hold_started_t = 0.0
+        self._refresh_launchpad_feedback(force=True)
 
     def _on_seek_pressed(self) -> None:
         self._is_scrubbing = True
@@ -1437,6 +1489,11 @@ class ActionsInputMixin:
             sound_button_hotkey_priority=self.sound_button_hotkey_priority,
             sound_button_hotkey_go_to_playing=self.sound_button_hotkey_go_to_playing,
             midi_input_device_ids=self.midi_input_device_ids,
+            launchpad_enabled=self.launchpad_enabled,
+            launchpad_device_selector=self.launchpad_device_selector,
+            launchpad_output_device_id=self.launchpad_output_device_id,
+            launchpad_layout=self.launchpad_layout,
+            launchpad_control_bindings=self.launchpad_control_bindings,
             midi_hotkeys=self.midi_hotkeys,
             midi_quick_action_enabled=self.midi_quick_action_enabled,
             midi_quick_action_bindings=self.midi_quick_action_bindings,
@@ -1607,6 +1664,13 @@ class ActionsInputMixin:
         self.sound_button_hotkey_priority = dialog.selected_sound_button_hotkey_priority()
         self.sound_button_hotkey_go_to_playing = dialog.selected_sound_button_hotkey_go_to_playing()
         self.midi_input_device_ids = dialog.selected_midi_input_devices()
+        self.launchpad_enabled = dialog.selected_launchpad_enabled()
+        self.launchpad_device_selector = dialog.selected_launchpad_device_selector()
+        self.launchpad_output_device_id = dialog.selected_launchpad_output_device_id()
+        self.launchpad_layout = dialog.selected_launchpad_layout()
+        self.launchpad_control_bindings = dialog.selected_launchpad_control_bindings()[:16]
+        if len(self.launchpad_control_bindings) < 16:
+            self.launchpad_control_bindings.extend(["" for _ in range(16 - len(self.launchpad_control_bindings))])
         self.midi_hotkeys = dialog.selected_midi_hotkeys()
         self.midi_quick_action_enabled = dialog.selected_midi_quick_action_enabled()
         self.midi_quick_action_bindings = dialog.selected_midi_quick_action_bindings()[:48]
@@ -1665,6 +1729,7 @@ class ActionsInputMixin:
             self.ui_language = selected_ui_language
             self._apply_language()
         self._apply_hotkeys()
+        self._apply_launchpad_output_state()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65534, int(dialog.web_remote_port_spin.value())))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
@@ -1990,45 +2055,211 @@ class ActionsInputMixin:
         if self.midi_sound_button_hotkey_go_to_playing:
             self._go_to_current_playing_page()
 
-    def _poll_midi_inputs(self) -> None:
+    def _sync_midi_polling_state(self) -> None:
+        midi_selectors = list(self.midi_input_device_ids)
+        launchpad_selectors = [self._resolved_launchpad_selector()] if self.launchpad_enabled and self._resolved_launchpad_selector() else []
         try:
-            self._midi_router.poll()
+            self._midi_poll_thread.update_devices(midi_selectors, launchpad_selectors)
         except Exception:
             pass
-        now = time.perf_counter()
-        if (now - self._midi_last_status_scan_t) < 0.9:
-            return
-        self._midi_last_status_scan_t = now
         try:
-            self._midi_router.set_devices(self.midi_input_device_ids)
+            self._apply_launchpad_output_state()
         except Exception:
             pass
         try:
             self._refresh_midi_connection_warning(force_refresh=False)
         except Exception:
             pass
-        if self.midi_input_device_ids and (now - self._midi_last_periodic_force_rebind_t) >= 5.0:
-            self._midi_last_periodic_force_rebind_t = now
+
+    def _on_midi_poll_status(self, midi_missing, launchpad_missing) -> None:
+        self._midi_missing_selectors = {str(v).strip() for v in list(midi_missing or []) if str(v).strip()}
+        self._launchpad_missing_selectors = {str(v).strip() for v in list(launchpad_missing or []) if str(v).strip()}
+        try:
+            self._apply_launchpad_output_state()
+        except Exception:
+            pass
+        try:
+            self._refresh_midi_connection_warning(force_refresh=False)
+        except Exception:
+            pass
+
+    def _resolved_launchpad_selector(self) -> str:
+        selector = str(getattr(self, "launchpad_device_selector", "") or "").strip()
+        return selector if selector else ""
+
+    def _release_launchpad_output(self) -> None:
+        try:
+            if self._launchpad_output_device_name:
+                payload = launchpad_programmer_toggle_sysex(self._launchpad_output_device_name, enabled=False)
+                if payload:
+                    self._launchpad_output.send_long(payload)
+        except Exception:
+            pass
+        try:
+            self._launchpad_output.close()
+        except Exception:
+            pass
+        self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
+        self._launchpad_output_device_name = ""
+        self._launchpad_last_feedback_signature = ()
+
+    def _apply_launchpad_output_state(self) -> None:
+        selector = self._resolved_launchpad_selector()
+        output_device_id = str(getattr(self, "launchpad_output_device_id", "") or "").strip()
+        if (not self.launchpad_enabled) or (not selector) or (not output_device_id) or (not self._launchpad_output.available()):
+            self._release_launchpad_output()
+            return
+        device_name = ""
+        for listed_device_id, listed_device_name in list_midi_output_devices():
+            if str(listed_device_id).strip() == output_device_id:
+                device_name = str(listed_device_name or "").strip()
+                break
+        if not device_name:
+            self._release_launchpad_output()
+            return
+        if self._launchpad_output_device_id != output_device_id:
+            self._release_launchpad_output()
+            if not self._launchpad_output.open(int(output_device_id)):
+                self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
+                self._launchpad_output_device_name = ""
+                return
+            self._launchpad_output_device_id = str(output_device_id)
+            self._launchpad_output_device_name = str(device_name or "").strip()
+        payload = launchpad_programmer_toggle_sysex(self._launchpad_output_device_name, enabled=True)
+        if payload:
             try:
-                self._midi_router.set_devices(self.midi_input_device_ids, force_refresh=True)
+                self._launchpad_output.send_long(payload)
             except Exception:
-                pass
-            try:
-                self._refresh_midi_connection_warning(force_refresh=True)
-            except Exception:
-                pass
-        if self._midi_missing_selectors and (now - self._midi_last_force_rescan_t) >= 2.5:
-            self._midi_last_force_rescan_t = now
-            # When some selected devices are missing, force backend re-enumeration
-            # so reconnect works even if other MIDI devices remain active.
-            try:
-                self._midi_router.set_devices(self.midi_input_device_ids, force_refresh=True)
-            except Exception:
-                pass
-            try:
-                self._refresh_midi_connection_warning(force_refresh=True)
-            except Exception:
-                pass
+                self._release_launchpad_output()
+                return
+        self._refresh_launchpad_feedback(force=True)
+
+    def _launchpad_action_feedback_color(self, action_key: str, token: str = "") -> str:
+        slot_index = launchpad_action_slot_index(action_key)
+        if slot_index is not None:
+            page = self._current_page_slots()
+            if 0 <= slot_index < len(page):
+                if self._launchpad_slot_blink_active(slot_index) and (not self._launchpad_blink_on):
+                    return "#000000"
+                return self._slot_color(page[slot_index], slot_index)
+            return "#101010"
+        toggle_buttons = {
+            "multi_play": "Multi-Play",
+            "loop": "Loop",
+            "shuffle": "Shuffle",
+            "play_list": "Play List",
+            "fade_in": "Fade In",
+            "cross_fade": "X",
+            "fade_out": "Fade Out",
+            "talk": "Talk",
+            "cue": "Cue",
+            "vocal_removed": "Vocal Removed",
+        }
+        button_name = toggle_buttons.get(action_key)
+        if button_name:
+            button = self.control_buttons.get(button_name)
+            if button is not None and button.isCheckable() and button.isChecked():
+                return "#39C36A"
+            return "#2A2F36"
+        colors = {
+            "play_selected_pause": "#5A8CFF",
+            "play_selected": "#4C7DFF",
+            "pause_toggle": "#8E7CFF" if (not self._launchpad_pause_blink_active() or self._launchpad_blink_on) else "#000000",
+            "stop_playback": "#FF5E5E",
+            "next_group": "#3F8FBF",
+            "prev_group": "#3F8FBF",
+            "next_page": "#3F8FBF",
+            "prev_page": "#3F8FBF",
+            "next_sound_button": "#3F8FBF",
+            "prev_sound_button": "#3F8FBF",
+            "go_to_playing": "#2E65FF",
+            "next": "#FF9E4A",
+            "rapid_fire": "#FF9E4A",
+            "reset_page": (
+                "#B0B0B0"
+                if (token != self._launchpad_reset_hold_token) or self._launchpad_blink_on
+                else "#000000"
+            ),
+            "mute": "#FF7B7B" if int(self.volume_slider.value()) == 0 else "#2A2F36",
+            "volume_up": "#FFD45A",
+            "volume_down": "#FFD45A",
+            "open_hide_lyric_navigator": (
+                "#57C3A4"
+                if self._lyric_navigator_window is not None and self._lyric_navigator_window.isVisible()
+                else "#2A2F36"
+            ),
+        }
+        return colors.get(action_key, "#202428")
+
+    def _refresh_launchpad_feedback(self, force: bool = False) -> None:
+        if (not self.launchpad_enabled) or (not self._launchpad_output_device_name) or (not self._launchpad_output.available()):
+            return
+        led_colors = []
+        for idx in range(48):
+            note = launchpad_page_slot_note(idx, layout=self.launchpad_layout)
+            led_colors.append((note, self._launchpad_action_feedback_color(f"slot:{idx}")))
+        effective_controls = list(self.launchpad_control_bindings[:16])
+        if len(effective_controls) < 16:
+            effective_controls.extend(["" for _ in range(16 - len(effective_controls))])
+        for idx in range(16):
+            action_key = str(effective_controls[idx] or "").strip()
+            token = launchpad_control_bindings(layout=self.launchpad_layout, selector="")[idx]
+            note = launchpad_control_note(idx, layout=self.launchpad_layout)
+            led_colors.append((note, self._launchpad_action_feedback_color(action_key, token) if action_key else "#000000"))
+        signature = tuple(led_colors)
+        if (not force) and signature == self._launchpad_last_feedback_signature:
+            return
+        payload = launchpad_led_rgb_sysex(self._launchpad_output_device_name, led_colors)
+        if not payload:
+            return
+        try:
+            self._launchpad_output.send_long(payload)
+            self._launchpad_last_feedback_signature = signature
+        except Exception:
+            self._release_launchpad_output()
+
+    def _on_launchpad_binding_triggered(
+        self,
+        token: str,
+        source_selector: str = "",
+        status: int = 0,
+        data1: int = 0,
+        data2: int = 0,
+    ) -> None:
+        normalized_token = ""
+        _selector, parsed_token = split_midi_binding(token)
+        if parsed_token:
+            normalized_token = parsed_token
+        high = int(status) & 0xF0
+        if (not normalized_token) and high in {0x80, 0x90}:
+            normalized_token = normalize_midi_binding(f"{(0x90 | (int(status) & 0x0F)):02X}:{int(data1) & 0xFF:02X}")
+        if not normalized_token:
+            return
+        action_key = str(self._launchpad_action_keys.get(normalized_token, "") or "").strip()
+        is_release = (high == 0x80) or ((high == 0x90) and (int(data2) <= 0))
+        if is_release:
+            if action_key == "reset_page" and self._launchpad_reset_hold_token == normalized_token:
+                self._launchpad_reset_hold_token = ""
+                self._launchpad_reset_hold_started_t = 0.0
+                self._launchpad_reset_hold_fired = False
+                self._refresh_launchpad_feedback(force=False)
+            return
+        if action_key == "reset_page":
+            self._launchpad_reset_hold_token = normalized_token
+            self._launchpad_reset_hold_started_t = time.perf_counter()
+            self._launchpad_reset_hold_fired = False
+            self._refresh_launchpad_feedback(force=False)
+            return
+        handler = self._launchpad_action_handlers.get(normalized_token)
+        if handler is None:
+            return
+        now = time.perf_counter()
+        last = self._launchpad_last_trigger_t.get(normalized_token, 0.0)
+        if (now - last) < 0.06:
+            return
+        self._launchpad_last_trigger_t[normalized_token] = now
+        handler()
+        self._refresh_launchpad_feedback(force=False)
 
     def _cc_binding_matches(self, configured: str, source_selector: str, cc_token: str) -> bool:
         selector, token = split_midi_binding(configured)
@@ -2318,13 +2549,14 @@ class ActionsInputMixin:
         except Exception:
             pass
         try:
-            self._midi_poll_timer.stop()
+            self._midi_poll_thread.stop()
         except Exception:
             pass
         try:
-            self._midi_router.close()
+            self._midi_poll_thread.wait(1500)
         except Exception:
             pass
+        self._release_launchpad_output()
         try:
             if self._stage_display_window is not None:
                 self._stage_display_window.close()

@@ -320,7 +320,29 @@ class SelectionMixin:
         return result
 
     def selected_midi_input_devices(self) -> List[str]:
-        return self._checked_midi_input_device_ids()
+        return list(self._checked_midi_input_device_ids())
+
+    def selected_launchpad_enabled(self) -> bool:
+        return bool(self.selected_launchpad_device_selector())
+
+    def selected_launchpad_device_selector(self) -> str:
+        selected = str(self.launchpad_device_combo.currentData() or "").strip()
+        if selected:
+            return selected
+        for index in range(self.launchpad_device_combo.count()):
+            candidate = str(self.launchpad_device_combo.itemData(index) or "").strip()
+            if candidate:
+                return candidate
+        return ""
+
+    def selected_launchpad_output_device_id(self) -> str:
+        return str(self.launchpad_output_combo.currentData() or "").strip()
+
+    def selected_launchpad_layout(self) -> str:
+        return normalize_launchpad_layout(str(self.launchpad_layout_combo.currentData() or "bottom_six"))
+
+    def selected_launchpad_control_bindings(self) -> List[str]:
+        return [str(combo.currentData() or "").strip() for combo in self._launchpad_control_combos]
 
     def selected_midi_hotkeys(self) -> Dict[str, tuple[str, str]]:
         result: Dict[str, tuple[str, str]] = {}

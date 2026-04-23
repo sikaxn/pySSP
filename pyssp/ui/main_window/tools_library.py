@@ -4,9 +4,75 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.launchpad import (
+    LAUNCHPAD_LAYOUT_BOTTOM_SIX,
+    launchpad_layout_options,
+    launchpad_page_bindings,
+    launchpad_profile_label,
+)
 
 
 class ToolsLibraryMixin:
+    def _apply_launchpad_mapping_to_current_page(self) -> None:
+        slots = self._current_page_slots()
+        assigned_slots = [slot for slot in slots if slot.assigned and (not slot.marker)]
+        if not assigned_slots:
+            self._show_info_notice_banner("No assigned sound buttons on the current page.")
+            return
+
+        layout_options = launchpad_layout_options()
+        labels = [item.label for item in layout_options]
+        default_index = 0
+        selected_label, ok = QInputDialog.getItem(
+            self,
+            "Apply Launchpad MIDI Mapping",
+            "Launchpad layout:",
+            labels,
+            default_index,
+            False,
+        )
+        if not ok:
+            return
+
+        selected_layout = LAUNCHPAD_LAYOUT_BOTTOM_SIX
+        for item in layout_options:
+            if item.label == selected_label:
+                selected_layout = item.key
+                break
+
+        page_label = "Cue Page" if self.cue_mode else self._page_display_name(self.current_group, self.current_page)
+        answer = QMessageBox.question(
+            self,
+            "Apply Launchpad MIDI Mapping",
+            f"Apply {launchpad_profile_label('programmer')} mapping to {page_label}?\n\n"
+            "This replaces Sound Button MIDI Hot Key values on the current page.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        selected_inputs = [str(value).strip() for value in list(self.midi_input_device_ids or []) if str(value).strip()]
+        selector = selected_inputs[0] if len(selected_inputs) == 1 else ""
+        bindings = launchpad_page_bindings(layout=selected_layout, selector=selector)
+        mapped_count = 0
+        cleared_count = 0
+        for index, slot in enumerate(slots[:48]):
+            if slot.assigned and (not slot.marker):
+                slot.sound_midi_hotkey = bindings[index]
+                mapped_count += 1
+            else:
+                if str(slot.sound_midi_hotkey or "").strip():
+                    cleared_count += 1
+                slot.sound_midi_hotkey = ""
+
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._show_save_notice_banner(
+            f"Launchpad MIDI mapping applied to {page_label}: {mapped_count} button(s) mapped"
+            f"{', ' + str(cleared_count) + ' cleared' if cleared_count else ''}."
+        )
+
     def _sports_sounds_pro_folder(self) -> str:
         default_path = r"C:\SportsSoundsPro"
         if os.path.isdir(default_path):

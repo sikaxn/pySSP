@@ -630,6 +630,11 @@ class SettingsArchiveMixin:
             "type": "pyssp_midi_bindings",
             "version": 1,
             "midi_input_device_ids": list(self.midi_input_device_ids),
+            "launchpad_enabled": bool(self.launchpad_enabled),
+            "launchpad_device_selector": self.launchpad_device_selector,
+            "launchpad_output_device_id": self.launchpad_output_device_id,
+            "launchpad_layout": self.launchpad_layout,
+            "launchpad_control_bindings": list(self.launchpad_control_bindings[:16]),
             "midi_hotkeys": {k: [v[0], v[1]] for k, v in self.midi_hotkeys.items()},
             "midi_quick_action_enabled": bool(self.midi_quick_action_enabled),
             "midi_quick_action_bindings": list(self.midi_quick_action_bindings[:48]),
@@ -718,6 +723,23 @@ class SettingsArchiveMixin:
         raw_inputs = payload.get("midi_input_device_ids", [])
         midi_inputs = [str(v).strip() for v in raw_inputs] if isinstance(raw_inputs, list) else []
         self.midi_input_device_ids = self._normalize_midi_input_selectors([v for v in midi_inputs if v])
+        self.launchpad_enabled = self._coerce_bool(payload.get("launchpad_enabled", self.launchpad_enabled))
+        self.launchpad_device_selector = str(
+            payload.get("launchpad_device_selector", self.launchpad_device_selector)
+        ).strip()
+        self.launchpad_output_device_id = str(
+            payload.get("launchpad_output_device_id", self.launchpad_output_device_id)
+        ).strip()
+        self.launchpad_layout = normalize_launchpad_layout(
+            payload.get("launchpad_layout", self.launchpad_layout)
+        )
+        raw_launchpad_controls = payload.get("launchpad_control_bindings", [])
+        if isinstance(raw_launchpad_controls, list):
+            self.launchpad_control_bindings = [str(v or "").strip() for v in raw_launchpad_controls[:16]]
+        else:
+            self.launchpad_control_bindings = list(self.launchpad_control_bindings[:16])
+        if len(self.launchpad_control_bindings) < 16:
+            self.launchpad_control_bindings.extend(["" for _ in range(16 - len(self.launchpad_control_bindings))])
         self.midi_hotkeys = next_midi_hotkeys
         self.midi_quick_action_enabled = self._coerce_bool(
             payload.get("midi_quick_action_enabled", self.midi_quick_action_enabled)
@@ -792,6 +814,7 @@ class SettingsArchiveMixin:
             5000,
         )
         self._apply_hotkeys()
+        self._apply_launchpad_output_state()
         self._save_settings()
         QMessageBox.information(self, "Restore MIDI Bindings", "MIDI bindings restored.")
 
@@ -939,6 +962,7 @@ class SettingsArchiveMixin:
                 )
                 self._runtime_hotkey_shortcuts.append(shortcut)
         self._apply_midi_bindings()
+        self._apply_launchpad_bindings()
         self._sync_lock_ui_state()
 
     def _runtime_action_handlers(self) -> Dict[str, Callable[[], None]]:
@@ -995,7 +1019,7 @@ class SettingsArchiveMixin:
     def _apply_midi_bindings(self) -> None:
         self._midi_action_handlers = {}
         self._midi_last_trigger_t = {}
-        self._midi_router.set_devices(self.midi_input_device_ids)
+        self._sync_midi_polling_state()
         self._refresh_midi_connection_warning(force_refresh=False)
         runtime_handlers = self._runtime_action_handlers()
         ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
@@ -1031,6 +1055,36 @@ class SettingsArchiveMixin:
                 if self.midi_sound_button_hotkey_priority == "system_first" and token in registered_tokens:
                     continue
                 self._midi_action_handlers[token] = (lambda sk=slot_key: self._sound_button_midi_hotkey_trigger(sk))
+
+    def _apply_launchpad_bindings(self) -> None:
+        self._launchpad_action_handlers = {}
+        self._launchpad_action_keys = {}
+        self._launchpad_last_trigger_t = {}
+        self._launchpad_reset_hold_token = ""
+        self._launchpad_reset_hold_started_t = 0.0
+        self._launchpad_reset_hold_fired = False
+        selector = str(self._resolved_launchpad_selector() or "").strip() if self.launchpad_enabled else ""
+        self._sync_midi_polling_state()
+        if not selector:
+            return
+        runtime_handlers = self._runtime_action_handlers()
+        runtime_handlers["cue"] = lambda: self._toggle_cue_mode(not bool(self.cue_mode))
+        runtime_handlers["vocal_removed"] = lambda: self._toggle_global_vocal_removed_mode(
+            not bool(self.play_vocal_removed_tracks)
+        )
+        for idx, token in enumerate(launchpad_page_bindings(layout=self.launchpad_layout, selector="")):
+            self._launchpad_action_keys[token] = f"slot:{idx}"
+            self._launchpad_action_handlers[token] = (lambda slot=idx: self._quick_action_trigger(slot))
+        effective_controls = list(self.launchpad_control_bindings[:16])
+        if len(effective_controls) < 16:
+            effective_controls.extend(["" for _ in range(16 - len(effective_controls))])
+        for idx, token in enumerate(launchpad_control_bindings(layout=self.launchpad_layout, selector="")):
+            action_key = str(effective_controls[idx] or "").strip()
+            self._launchpad_action_keys[token] = action_key
+            handler = runtime_handlers.get(action_key)
+            if handler is not None:
+                self._launchpad_action_handlers[token] = lambda fn=handler: self._run_locked_input("midi", fn)
+        self._refresh_launchpad_feedback(force=True)
 
     def _restore_last_set_on_startup(self) -> None:
         last_set_path = self.settings.last_set_path.strip()
@@ -1225,6 +1279,11 @@ class SettingsArchiveMixin:
         self.settings.sound_button_hotkey_priority = self.sound_button_hotkey_priority
         self.settings.sound_button_hotkey_go_to_playing = bool(self.sound_button_hotkey_go_to_playing)
         self.settings.midi_input_device_ids = list(self.midi_input_device_ids)
+        self.settings.launchpad_enabled = bool(self.launchpad_enabled)
+        self.settings.launchpad_device_selector = self.launchpad_device_selector
+        self.settings.launchpad_output_device_id = self.launchpad_output_device_id
+        self.settings.launchpad_layout = self.launchpad_layout
+        self.settings.launchpad_control_bindings = list(self.launchpad_control_bindings[:16])
         self.settings.midi_hotkey_new_set_1 = self.midi_hotkeys.get("new_set", ("", ""))[0]
         self.settings.midi_hotkey_new_set_2 = self.midi_hotkeys.get("new_set", ("", ""))[1]
         self.settings.midi_hotkey_open_set_1 = self.midi_hotkeys.get("open_set", ("", ""))[0]

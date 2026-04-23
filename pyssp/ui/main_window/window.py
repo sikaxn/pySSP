@@ -371,6 +371,17 @@ class MainWindow(
         self.sound_button_hotkey_go_to_playing = bool(self.settings.sound_button_hotkey_go_to_playing)
         self.midi_input_device_ids: List[str] = [str(v).strip() for v in self.settings.midi_input_device_ids if str(v).strip()]
         self.midi_input_device_ids = self._normalize_midi_input_selectors(self.midi_input_device_ids)
+        self.launchpad_enabled = bool(getattr(self.settings, "launchpad_enabled", False))
+        self.launchpad_device_selector = str(getattr(self.settings, "launchpad_device_selector", "")).strip()
+        self.launchpad_output_device_id = str(getattr(self.settings, "launchpad_output_device_id", "")).strip()
+        self.launchpad_layout = normalize_launchpad_layout(getattr(self.settings, "launchpad_layout", "bottom_six"))
+        self.launchpad_control_bindings = [str(value or "").strip() for value in getattr(self.settings, "launchpad_control_bindings", [])[:16]]
+        if len(self.launchpad_control_bindings) < 16:
+            self.launchpad_control_bindings.extend(["" for _ in range(16 - len(self.launchpad_control_bindings))])
+        if self.launchpad_enabled and self.launchpad_device_selector:
+            self.midi_input_device_ids = [
+                selector for selector in self.midi_input_device_ids if str(selector).strip() != self.launchpad_device_selector
+            ]
         self.midi_hotkeys: Dict[str, tuple[str, str]] = {
             "new_set": (self.settings.midi_hotkey_new_set_1, self.settings.midi_hotkey_new_set_2),
             "open_set": (self.settings.midi_hotkey_open_set_1, self.settings.midi_hotkey_open_set_2),
@@ -581,15 +592,19 @@ class MainWindow(
         self._automation_locked = False
         self._lock_screen_overlay: Optional[LockScreenOverlay] = None
         self.lock_screen_button: Optional[QToolButton] = None
-        self._midi_router = MidiInputRouter(self._on_midi_binding_triggered)
+        self._midi_poll_thread = MidiPollingThread(self)
+        self._midi_poll_thread.midi_event.connect(self._on_midi_binding_triggered)
+        self._midi_poll_thread.launchpad_event.connect(self._on_launchpad_binding_triggered)
+        self._midi_poll_thread.status_changed.connect(self._on_midi_poll_status)
         self._midi_action_handlers: Dict[str, Callable[[], None]] = {}
+        self._launchpad_action_handlers: Dict[str, Callable[[], None]] = {}
+        self._launchpad_last_trigger_t: Dict[str, float] = {}
         self._midi_last_trigger_t: Dict[str, float] = {}
         self._midi_context_handler = None
         self._midi_context_block_actions = False
-        self._midi_last_status_scan_t = 0.0
-        self._midi_last_force_rescan_t = 0.0
-        self._midi_last_periodic_force_rebind_t = 0.0
         self._midi_missing_selectors: set[str] = set()
+        self._launchpad_missing_selectors: set[str] = set()
+        self._launchpad_output_missing = False
         self._skip_save_on_close = False
         self._export_buttons_window: Optional[QDialog] = None
         self._export_dir_edit: Optional[QLineEdit] = None
@@ -638,11 +653,22 @@ class MainWindow(
         self._stage_alert_message: str = ""
         self._stage_alert_until_monotonic: float = 0.0
         self._stage_alert_sticky: bool = False
+        self._launchpad_output = WinMMMidiOut()
+        self._launchpad_output_device_id = MIDI_OUTPUT_DEVICE_NONE
+        self._launchpad_output_device_name = ""
+        self._launchpad_last_feedback_signature: tuple = ()
+        self._launchpad_action_keys: Dict[str, str] = {}
+        self._launchpad_blink_on = True
+        self._launchpad_reset_hold_token = ""
+        self._launchpad_reset_hold_started_t = 0.0
+        self._launchpad_reset_hold_fired = False
 
         self._build_ui()
         self._lock_screen_overlay = LockScreenOverlay(self)
         self._lock_screen_overlay.unlocked.connect(self._attempt_unlock_from_overlay)
+        self._midi_poll_thread.start()
         self._apply_language()
+        self._apply_launchpad_output_state()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
         self._sync_lock_ui_state()
@@ -705,10 +731,6 @@ class MainWindow(
         self.talk_blink_timer = QTimer(self)
         self.talk_blink_timer.timeout.connect(self._tick_talk_blink)
         self.talk_blink_timer.start(280)
-
-        self._midi_poll_timer = QTimer(self)
-        self._midi_poll_timer.timeout.connect(self._poll_midi_inputs)
-        self._midi_poll_timer.start(15)
 
         self.current_group = self.settings.last_group
         self.current_page = self.settings.last_page

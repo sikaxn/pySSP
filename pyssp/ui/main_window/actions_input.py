@@ -2190,6 +2190,7 @@ class ActionsInputMixin:
                 return "#39C36A"
             return "#2A2F36"
         colors = {
+            LAUNCHPAD_ACTION_SHIFT_LAYER: "#00E5FF" if token == getattr(self, "_launchpad_shift_token", "") else "#30343A",
             "play_selected_pause": "#5A8CFF",
             "play_selected": "#4C7DFF",
             "pause_toggle": "#8E7CFF" if (not self._launchpad_pause_blink_active() or self._launchpad_blink_on) else "#000000",
@@ -2219,22 +2220,98 @@ class ActionsInputMixin:
         }
         return colors.get(action_key, "#202428")
 
+    def _launchpad_layer_operation_color(self) -> str:
+        operation = str(getattr(self, "_launchpad_layer_operation", "master_volume") or "master_volume")
+        if operation == "jog":
+            return "#4C7DFF"
+        return "#39C36A"
+
+    def _launchpad_layer_display_colors(self) -> list[str]:
+        operation = str(getattr(self, "_launchpad_layer_operation", "master_volume") or "master_volume")
+        active = self._launchpad_layer_operation_color()
+        accent = "#FFD45A" if bool(getattr(self, "_launchpad_layer_absolute_mode", True)) else "#FF9E4A"
+        dim = "#081015"
+        if operation == "jog":
+            pattern = [
+                "..#..#..",
+                ".##..##.",
+                "########",
+                "########",
+                ".##..##.",
+                "..#..#..",
+            ]
+        else:
+            pattern = [
+                "##....#.",
+                "##...##.",
+                "##..###.",
+                "##.####.",
+                "######..",
+                "#####...",
+            ]
+        colors: list[str] = []
+        for row in pattern:
+            for char in row:
+                colors.append(active if char == "#" else (accent if char == "*" else dim))
+        return colors[:48]
+
+    def _launchpad_layer_bar_colors(self) -> list[str]:
+        operation = str(getattr(self, "_launchpad_layer_operation", "master_volume") or "master_volume")
+        active = self._launchpad_layer_operation_color()
+        absolute_mode = bool(getattr(self, "_launchpad_layer_absolute_mode", True))
+        if not absolute_mode:
+            sensitivity = max(1, min(3, int(getattr(self, "_launchpad_layer_sensitivity", 2))))
+            strength = ["#2A2F36", "#4D3620", "#8A5522"][sensitivity - 1]
+            return [strength, strength, strength, strength, "#21462E", "#21462E", "#21462E", "#21462E"]
+        if operation == "jog":
+            total_ms = max(0, int(self._transport_total_ms()))
+            current = max(0, min(total_ms, int(self.seek_slider.value())))
+            level = 0 if total_ms <= 0 else int(round((current / float(total_ms)) * 7.0))
+        else:
+            level = int(round((max(0, min(100, int(self.volume_slider.value()))) / 100.0) * 7.0))
+        return [active if idx <= level else "#1B2328" for idx in range(8)]
+
+    def _launchpad_shift_layer_led_colors(self) -> list[tuple[int, str]]:
+        led_colors: list[tuple[int, str]] = []
+        display_colors = self._launchpad_layer_display_colors()
+        for idx, color in enumerate(display_colors):
+            led_colors.append((launchpad_page_slot_note(idx, layout=self.launchpad_layout), color))
+        bar_colors = self._launchpad_layer_bar_colors()
+        for idx, color in enumerate(bar_colors):
+            led_colors.append((launchpad_control_note(idx, layout=self.launchpad_layout), color))
+        operation = str(getattr(self, "_launchpad_layer_operation", "master_volume") or "master_volume")
+        absolute_mode = bool(getattr(self, "_launchpad_layer_absolute_mode", True))
+        sensitivity = max(1, min(3, int(getattr(self, "_launchpad_layer_sensitivity", 2))))
+        control_colors = ["#000000" for _ in range(8)]
+        control_colors[0] = "#00E5FF"
+        control_colors[1] = "#39C36A" if operation == "master_volume" else "#18351F"
+        control_colors[2] = "#4C7DFF" if operation == "jog" else "#18233D"
+        control_colors[4] = "#FFD45A" if absolute_mode else "#4D4427"
+        for idx in range(3):
+            control_colors[5 + idx] = "#FF9E4A" if (not absolute_mode and sensitivity == idx + 1) else "#2A2F36"
+        for idx, color in enumerate(control_colors, start=8):
+            led_colors.append((launchpad_control_note(idx, layout=self.launchpad_layout), color))
+        return led_colors
+
     def _refresh_launchpad_feedback(self, force: bool = False) -> None:
         if (not self.launchpad_enabled) or (not self._launchpad_output_device_name) or (not self._launchpad_output.available()):
             return
         self._drain_launchpad_feedback_send()
-        led_colors = []
-        for idx in range(48):
-            note = launchpad_page_slot_note(idx, layout=self.launchpad_layout)
-            led_colors.append((note, self._launchpad_action_feedback_color(f"slot:{idx}")))
-        effective_controls = list(self.launchpad_control_bindings[:16])
-        if len(effective_controls) < 16:
-            effective_controls.extend(["" for _ in range(16 - len(effective_controls))])
-        for idx in range(16):
-            action_key = str(effective_controls[idx] or "").strip()
-            token = launchpad_control_bindings(layout=self.launchpad_layout, selector="")[idx]
-            note = launchpad_control_note(idx, layout=self.launchpad_layout)
-            led_colors.append((note, self._launchpad_action_feedback_color(action_key, token) if action_key else "#000000"))
+        if bool(getattr(self, "_launchpad_shift_active", False)) and getattr(self, "_launchpad_shift_token", ""):
+            led_colors = self._launchpad_shift_layer_led_colors()
+        else:
+            led_colors = []
+            for idx in range(48):
+                note = launchpad_page_slot_note(idx, layout=self.launchpad_layout)
+                led_colors.append((note, self._launchpad_action_feedback_color(f"slot:{idx}")))
+            effective_controls = list(self.launchpad_control_bindings[:16])
+            if len(effective_controls) < 16:
+                effective_controls.extend(["" for _ in range(16 - len(effective_controls))])
+            for idx in range(16):
+                action_key = str(effective_controls[idx] or "").strip()
+                token = launchpad_control_bindings(layout=self.launchpad_layout, selector="")[idx]
+                note = launchpad_control_note(idx, layout=self.launchpad_layout)
+                led_colors.append((note, self._launchpad_action_feedback_color(action_key, token) if action_key else "#000000"))
         signature = tuple(led_colors)
         if (not force) and signature == self._launchpad_last_feedback_signature:
             return
@@ -2278,6 +2355,81 @@ class ActionsInputMixin:
         except Exception:
             self._launchpad_feedback_send_future = None
 
+    def _launchpad_set_master_volume_from_bar(self, bar_index: int) -> None:
+        level = int(round((max(0, min(7, int(bar_index))) / 7.0) * 100.0))
+        self.volume_slider.setValue(max(0, min(100, level)))
+
+    def _launchpad_adjust_master_volume_from_bar(self, bar_index: int) -> None:
+        idx = max(0, min(7, int(bar_index)))
+        if idx < 4:
+            units = idx - 4
+        else:
+            units = idx - 3
+        sensitivity = max(1, min(3, int(getattr(self, "_launchpad_layer_sensitivity", 2))))
+        current = int(self.volume_slider.value())
+        self.volume_slider.setValue(max(0, min(100, current + (units * sensitivity * 2))))
+
+    def _launchpad_set_jog_from_bar(self, bar_index: int) -> None:
+        total_ms = max(0, int(self._transport_total_ms()))
+        if total_ms <= 0:
+            return
+        display_ms = int(round((max(0, min(7, int(bar_index))) / 7.0) * float(total_ms)))
+        self._seek_transport_display_ms(display_ms)
+
+    def _launchpad_adjust_jog_from_bar(self, bar_index: int) -> None:
+        total_ms = max(0, int(self._transport_total_ms()))
+        if total_ms <= 0:
+            return
+        idx = max(0, min(7, int(bar_index)))
+        if idx < 4:
+            units = idx - 4
+        else:
+            units = idx - 3
+        sensitivity = max(1, min(3, int(getattr(self, "_launchpad_layer_sensitivity", 2))))
+        current = int(self.seek_slider.value())
+        step_ms = max(10, int(getattr(self, "midi_rotary_jog_step_ms", 250)))
+        self._seek_transport_display_ms(max(0, min(total_ms, current + (units * sensitivity * step_ms))))
+
+    def _handle_launchpad_shift_layer_press(self, normalized_token: str) -> bool:
+        page_tokens = launchpad_page_bindings(layout=self.launchpad_layout, selector="")
+        if normalized_token in page_tokens:
+            return True
+        control_tokens = launchpad_control_bindings(layout=self.launchpad_layout, selector="")
+        try:
+            control_index = control_tokens.index(normalized_token)
+        except ValueError:
+            return False
+        if 0 <= control_index <= 7:
+            operation = str(getattr(self, "_launchpad_layer_operation", "master_volume") or "master_volume")
+            absolute_mode = bool(getattr(self, "_launchpad_layer_absolute_mode", True))
+            if operation == "jog":
+                if absolute_mode:
+                    self._launchpad_set_jog_from_bar(control_index)
+                else:
+                    self._launchpad_adjust_jog_from_bar(control_index)
+            else:
+                if absolute_mode:
+                    self._launchpad_set_master_volume_from_bar(control_index)
+                else:
+                    self._launchpad_adjust_master_volume_from_bar(control_index)
+            return True
+        if control_index == LAUNCHPAD_SHIFT_CONTROL_INDEX:
+            return True
+        if control_index == 9:
+            self._launchpad_layer_operation = "master_volume"
+            return True
+        if control_index == 10:
+            self._launchpad_layer_operation = "jog"
+            return True
+        if control_index == 12:
+            self._launchpad_layer_absolute_mode = not bool(getattr(self, "_launchpad_layer_absolute_mode", True))
+            return True
+        if control_index in {13, 14, 15}:
+            if not bool(getattr(self, "_launchpad_layer_absolute_mode", True)):
+                self._launchpad_layer_sensitivity = control_index - 12
+            return True
+        return True
+
     def _on_launchpad_binding_triggered(
         self,
         token: str,
@@ -2297,6 +2449,11 @@ class ActionsInputMixin:
             return
         action_key = str(self._launchpad_action_keys.get(normalized_token, "") or "").strip()
         is_release = (high == 0x80) or ((high == 0x90) and (int(data2) <= 0))
+        if normalized_token == getattr(self, "_launchpad_shift_token", "") and action_key == LAUNCHPAD_ACTION_SHIFT_LAYER:
+            if not is_release:
+                self._launchpad_shift_active = not bool(getattr(self, "_launchpad_shift_active", False))
+                self._refresh_launchpad_feedback(force=True)
+            return
         if is_release:
             if action_key == "reset_page" and self._launchpad_reset_hold_token == normalized_token:
                 self._launchpad_reset_hold_token = ""
@@ -2304,6 +2461,15 @@ class ActionsInputMixin:
                 self._launchpad_reset_hold_fired = False
                 self._refresh_launchpad_feedback(force=False)
             return
+        if bool(getattr(self, "_launchpad_shift_active", False)) and getattr(self, "_launchpad_shift_token", ""):
+            now = time.perf_counter()
+            last = self._launchpad_last_trigger_t.get(normalized_token, 0.0)
+            if (now - last) < 0.04:
+                return
+            self._launchpad_last_trigger_t[normalized_token] = now
+            if self._handle_launchpad_shift_layer_press(normalized_token):
+                self._refresh_launchpad_feedback(force=False)
+                return
         if action_key == "reset_page":
             self._launchpad_reset_hold_token = normalized_token
             self._launchpad_reset_hold_started_t = time.perf_counter()

@@ -54,6 +54,8 @@ from pyssp.settings_store import (
 from pyssp.i18n import localize_widget_tree, normalize_language, tr
 from pyssp.launchpad import (
     LAUNCHPAD_ACTION_NONE,
+    LAUNCHPAD_ACTION_SHIFT_LAYER,
+    LAUNCHPAD_SHIFT_CONTROL_INDEX,
     build_launchpad_action_options,
     is_launchpad_name,
     launchpad_action_slot_index,

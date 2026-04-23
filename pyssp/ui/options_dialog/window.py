@@ -17,6 +17,7 @@ class OptionsDialog(
     QDialog,
 ):
     _LAUNCHPAD_ACTION_ROWS = [
+        ("shift_layer", "Shift Layer (C9 only)"),
         ("play_selected_pause", "Play Selected / Pause"),
         ("play_selected", "Play Selected"),
         ("pause_toggle", "Pause/Resume"),
@@ -232,7 +233,7 @@ class OptionsDialog(
             "play_selected_pause",
             "pause_toggle",
             "stop_playback",
-            "next_group",
+            "shift_layer",
             "next_page",
             "next_sound_button",
             "loop",

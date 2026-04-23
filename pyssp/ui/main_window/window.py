@@ -675,6 +675,11 @@ class MainWindow(
         self._launchpad_reset_hold_token = ""
         self._launchpad_reset_hold_started_t = 0.0
         self._launchpad_reset_hold_fired = False
+        self._launchpad_shift_token = ""
+        self._launchpad_shift_active = False
+        self._launchpad_layer_operation = "master_volume"
+        self._launchpad_layer_absolute_mode = True
+        self._launchpad_layer_sensitivity = 2
 
         self._build_ui()
         self._lock_screen_overlay = LockScreenOverlay(self)

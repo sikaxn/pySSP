@@ -97,7 +97,7 @@ def default_launchpad_control_bindings() -> list[str]:
         "play_selected_pause",
         "pause_toggle",
         "stop_playback",
-        "next_group",
+        "shift_layer",
         "next_page",
         "next_sound_button",
         "loop",

@@ -1072,6 +1072,8 @@ class SettingsArchiveMixin:
         self._launchpad_reset_hold_token = ""
         self._launchpad_reset_hold_started_t = 0.0
         self._launchpad_reset_hold_fired = False
+        self._launchpad_shift_token = ""
+        self._launchpad_shift_active = False
         selector = str(self._resolved_launchpad_selector() or "").strip() if self.launchpad_enabled else ""
         self._sync_midi_polling_state()
         if not selector:
@@ -1090,6 +1092,9 @@ class SettingsArchiveMixin:
         for idx, token in enumerate(launchpad_control_bindings(layout=self.launchpad_layout, selector="")):
             action_key = str(effective_controls[idx] or "").strip()
             self._launchpad_action_keys[token] = action_key
+            if idx == LAUNCHPAD_SHIFT_CONTROL_INDEX and action_key == LAUNCHPAD_ACTION_SHIFT_LAYER:
+                self._launchpad_shift_token = token
+                continue
             handler = runtime_handlers.get(action_key)
             if handler is not None:
                 self._launchpad_action_handlers[token] = lambda fn=handler: self._run_locked_input("midi", fn)

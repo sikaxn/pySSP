@@ -106,6 +106,8 @@ from pyssp.settings_store import (
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.launchpad import (
     LAUNCHPAD_ACTION_NONE,
+    LAUNCHPAD_ACTION_SHIFT_LAYER,
+    LAUNCHPAD_SHIFT_CONTROL_INDEX,
     launchpad_control_bindings,
     launchpad_control_note,
     launchpad_action_slot_index,

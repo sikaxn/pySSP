@@ -144,7 +144,9 @@ class HotkeysPageMixin:
         page = QWidget()
         layout = QVBoxLayout(page)
         note = QLabel(
-            "The 6-row sound area is mapped directly to Quick Action buttons 1-48. The remaining 2 rows are Launchpad-only controls."
+            "The 6-row sound area is mapped directly to Quick Action buttons 1-48. The remaining 2 rows are Launchpad-only controls. "
+            "C9 defaults to Shift Layer; press C9 to toggle the sound-button area between normal mode and the second-layer display. "
+            "Only C9 can open that layer, so assigning another action to C9 disables second-layer access."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -181,7 +183,10 @@ class HotkeysPageMixin:
                 if is_control_row:
                     control_row = row if self._launchpad_layout == "bottom_six" else row - 6
                     index = (control_row * 8) + col
-                    pad_label = QLabel(f"C{index + 1}")
+                    pad_label_text = f"C{index + 1}"
+                    if index == LAUNCHPAD_SHIFT_CONTROL_INDEX:
+                        pad_label_text = f"{pad_label_text} Shift"
+                    pad_label = QLabel(pad_label_text)
                 else:
                     slot_row = row - 2 if self._launchpad_layout == "bottom_six" else row
                     index = (slot_row * 8) + col
@@ -207,7 +212,11 @@ class HotkeysPageMixin:
                     cell_layout.addWidget(fixed)
                 grid.addWidget(cell, row + 1, col + 1)
         outer.addWidget(grid_frame)
-        legend = QLabel("B pads are fixed sound-button pads. C pads are configurable Launchpad control pads with LED feedback.")
+        legend = QLabel(
+            "B pads are fixed sound-button pads. C pads are configurable Launchpad control pads with LED feedback. "
+            "On the Shift layer, C1-C8 become the operation bar, C10 selects Master Volume, C11 selects Jog, "
+            "C13 toggles absolute mode, and C14-C16 select relative sensitivity."
+        )
         legend.setWordWrap(True)
         outer.addWidget(legend)
         scroll.setWidget(container)

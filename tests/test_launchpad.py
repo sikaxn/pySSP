@@ -3,9 +3,11 @@ from __future__ import annotations
 import pytest
 
 from pyssp.launchpad import (
+    LAUNCHPAD_ACTION_SHIFT_LAYER,
     LAUNCHPAD_CONTROL_PAD_COUNT,
     LAUNCHPAD_LAYOUT_BOTTOM_SIX,
     LAUNCHPAD_LAYOUT_TOP_SIX,
+    LAUNCHPAD_SHIFT_CONTROL_INDEX,
     is_launchpad_name,
     launchpad_control_bindings,
     launchpad_control_note,
@@ -16,6 +18,7 @@ from pyssp.launchpad import (
     launchpad_programmer_toggle_sysex,
     launchpad_programmer_note,
 )
+from pyssp.settings_store import default_launchpad_control_bindings
 
 
 def test_launchpad_programmer_note_uses_documented_programmer_grid_coordinates() -> None:
@@ -51,6 +54,13 @@ def test_launchpad_control_note_top_six_maps_controls_to_bottom_two_rows() -> No
     assert launchpad_control_note(7, layout=LAUNCHPAD_LAYOUT_TOP_SIX) == 28
     assert launchpad_control_note(8, layout=LAUNCHPAD_LAYOUT_TOP_SIX) == 11
     assert launchpad_control_note(15, layout=LAUNCHPAD_LAYOUT_TOP_SIX) == 18
+
+
+def test_launchpad_shift_layer_uses_left_button_on_user_assignable_lower_row() -> None:
+    assert LAUNCHPAD_SHIFT_CONTROL_INDEX == 8
+    assert launchpad_control_note(LAUNCHPAD_SHIFT_CONTROL_INDEX, layout=LAUNCHPAD_LAYOUT_BOTTOM_SIX) == 71
+    assert launchpad_control_note(LAUNCHPAD_SHIFT_CONTROL_INDEX, layout=LAUNCHPAD_LAYOUT_TOP_SIX) == 11
+    assert default_launchpad_control_bindings()[LAUNCHPAD_SHIFT_CONTROL_INDEX] == LAUNCHPAD_ACTION_SHIFT_LAYER
 
 
 def test_launchpad_page_slot_binding_can_be_device_specific() -> None:

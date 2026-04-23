@@ -326,6 +326,18 @@ class UiBuildMixin:
         remove_linked_lyrics_action.triggered.connect(self._remove_all_linked_lyric_files)
         tools_menu.addAction(remove_linked_lyrics_action)
 
+        bulk_generate_vocal_removed_action = QAction("Bulk Generate Vocal Removed Track", self)
+        bulk_generate_vocal_removed_action.triggered.connect(self._bulk_generate_vocal_removed_tracks)
+        tools_menu.addAction(bulk_generate_vocal_removed_action)
+
+        link_unlinked_vocal_removed_action = QAction("Link Unlinked Vocal Removed Track", self)
+        link_unlinked_vocal_removed_action.triggered.connect(self._link_unlinked_vocal_removed_tracks)
+        tools_menu.addAction(link_unlinked_vocal_removed_action)
+
+        remove_linked_vocal_removed_action = QAction("Unlink All Vocal Removed Track", self)
+        remove_linked_vocal_removed_action.triggered.connect(self._remove_all_linked_vocal_removed_files)
+        tools_menu.addAction(remove_linked_vocal_removed_action)
+
         disable_playlist_all_pages_action = QAction("Disable Play List on All Pages", self)
         disable_playlist_all_pages_action.triggered.connect(self._disable_playlist_on_all_pages)
         tools_menu.addAction(disable_playlist_all_pages_action)
@@ -365,9 +377,9 @@ class UiBuildMixin:
         list_sound_device_midi_mapping_action.triggered.connect(self._list_sound_device_midi_mappings)
         tools_menu.addAction(list_sound_device_midi_mapping_action)
 
-        apply_launchpad_mapping_action = QAction("Apply Launchpad MIDI Mapping to Current Page", self)
-        apply_launchpad_mapping_action.triggered.connect(self._apply_launchpad_mapping_to_current_page)
-        tools_menu.addAction(apply_launchpad_mapping_action)
+        launchpad_cheatsheet_action = QAction("Launchpad Cheat Sheet", self)
+        launchpad_cheatsheet_action.triggered.connect(self._show_launchpad_cheatsheet)
+        tools_menu.addAction(launchpad_cheatsheet_action)
 
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)

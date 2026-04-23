@@ -1482,17 +1482,28 @@ class PagesSlotsMixin:
             self._show_info_notice_banner(tr("Vocal removed track generated."))
         return generated_path
 
-    def _run_vocal_removed_cli(self, source_path: str, output_path: str, cli_executable: str) -> str:
+    def _run_vocal_removed_cli(
+        self,
+        source_path: str,
+        output_path: str,
+        cli_executable: str,
+        progress_dialog: Optional[QProgressDialog] = None,
+        progress_label: str = "",
+    ) -> str:
         source_ext = os.path.splitext(source_path)[1].lower()
         output_ext = os.path.splitext(output_path)[1].lower()
-        progress = QProgressDialog(tr("Generating vocal removed track..."), tr("Cancel"), 0, 0, self)
-        progress.setWindowTitle(tr("Vocal Removal"))
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.setValue(0)
-        progress.show()
+        own_progress = progress_dialog is None
+        progress = progress_dialog or QProgressDialog(tr("Generating vocal removed track..."), tr("Cancel"), 0, 0, self)
+        if own_progress:
+            progress.setWindowTitle(tr("Vocal Removal"))
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.setValue(0)
+            progress.show()
+        elif progress_label:
+            progress.setLabelText(progress_label)
         process: Optional[subprocess.Popen[str]] = None
         stdout_text = ""
         stderr_text = ""
@@ -1532,6 +1543,8 @@ class PagesSlotsMixin:
                     popen_kwargs["stderr"] = stderr_fh
                     process = subprocess.Popen(command, **popen_kwargs)
                     while process.poll() is None:
+                        if progress_label:
+                            progress.setLabelText(progress_label)
                         QApplication.processEvents()
                         if progress.wasCanceled():
                             process.terminate()
@@ -1565,7 +1578,8 @@ class PagesSlotsMixin:
                     raise RuntimeError("ffmpeg completed but the requested output file was not produced.")
                 return output_path
         finally:
-            progress.close()
+            if own_progress:
+                progress.close()
         if process is None:
             raise RuntimeError("Failed to start spleeter-cli.")
         detail = (stderr_text or stdout_text or "spleeter-cli did not complete successfully.").strip()

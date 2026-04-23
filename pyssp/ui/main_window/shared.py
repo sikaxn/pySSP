@@ -127,6 +127,7 @@ from pyssp.library_archive import (
     UnpackLibraryDialog,
     build_archive_audio_entries,
     build_archive_lyric_entries,
+    build_archive_vocal_removed_entries,
     build_manifest,
     default_unpack_directory,
     rewrite_packed_set_paths,

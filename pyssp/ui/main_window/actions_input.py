@@ -1195,10 +1195,12 @@ class ActionsInputMixin:
         self,
         selected_pages: Optional[set[Tuple[str, int]]] = None,
         slot_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
+        vocal_removed_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         lyric_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         skipped_slots: Optional[set[Tuple[str, int, int]]] = None,
     ) -> List[str]:
         overrides = slot_path_overrides or {}
+        vocal_removed_overrides = vocal_removed_path_overrides or {}
         lyric_overrides = lyric_path_overrides or {}
         skipped = skipped_slots or set()
         lines: List[str] = [
@@ -1241,7 +1243,7 @@ class ActionsInputMixin:
                         notes = clean_set_value(slot.notes or title)
                         lines.append(f"c{slot_index}={notes}")
                         lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
-                        vocal_removed_file = clean_set_value(slot.vocal_removed_file)
+                        vocal_removed_file = clean_set_value(vocal_removed_overrides.get(slot_key, slot.vocal_removed_file))
                         if vocal_removed_file:
                             lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
                         lines.append(f"t{slot_index}={format_set_time(slot.duration_ms)}")

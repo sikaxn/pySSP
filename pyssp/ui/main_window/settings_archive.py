@@ -209,13 +209,19 @@ class SettingsArchiveMixin:
         entry_by_path = {
             os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_audio_entries
         }
+        vocal_removed_path_usage = self._collect_pack_vocal_removed_path_usage(selected_pages)
+        vocal_removed_ordered_paths = [item["source_path"] for item in vocal_removed_path_usage.values()]
+        planned_vocal_removed_entries = build_archive_vocal_removed_entries(vocal_removed_ordered_paths, maintain_structure)
+        vocal_removed_entry_by_path = {
+            os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_vocal_removed_entries
+        }
         lyric_path_usage = self._collect_pack_lyric_path_usage(selected_pages) if include_lyrics else {}
         lyric_ordered_paths = [item["source_path"] for item in lyric_path_usage.values()]
         planned_lyric_entries = build_archive_lyric_entries(lyric_ordered_paths, maintain_structure) if include_lyrics else []
         lyric_entry_by_path = {
             os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_lyric_entries
         }
-        total_steps = len(planned_audio_entries) + len(planned_lyric_entries) + 2 + (1 if settings_source else 0)
+        total_steps = len(planned_audio_entries) + len(planned_vocal_removed_entries) + len(planned_lyric_entries) + 2 + (1 if settings_source else 0)
         progress = QProgressDialog(tr("Packing audio library..."), tr("Cancel"), 0, max(1, total_steps), self)
         progress.setWindowTitle(tr("Pack Audio Library"))
         progress.setWindowModality(Qt.WindowModal)
@@ -224,8 +230,10 @@ class SettingsArchiveMixin:
 
         set_member_name = f"{os.path.splitext(os.path.basename(package_path))[0]}.set"
         packed_audio_entries: List[object] = []
+        packed_vocal_removed_entries: List[object] = []
         packed_lyric_entries: List[object] = []
         slot_path_overrides: Dict[Tuple[str, int, int], str] = {}
+        vocal_removed_path_overrides: Dict[Tuple[str, int, int], str] = {}
         lyric_path_overrides: Dict[Tuple[str, int, int], str] = {}
         skipped_slots: set[Tuple[str, int, int]] = set()
         report_rows: List[PackReportRow] = []
@@ -279,6 +287,32 @@ class SettingsArchiveMixin:
                                 f"{tr('Processed')} {os.path.basename(source_path)}",
                             )
 
+                    for normalized_path, path_info in vocal_removed_path_usage.items():
+                        if progress.wasCanceled():
+                            raise ArchiveOperationCancelled()
+                        source_path = str(path_info["source_path"])
+                        if not os.path.exists(source_path):
+                            continue
+                        progress.setLabelText(f"{tr('Verifying and packing')} {os.path.basename(source_path)}...")
+                        cause = self._diagnose_sound_button_issue(source_path)
+                        if cause:
+                            continue
+                        entry = vocal_removed_entry_by_path.get(normalized_path)
+                        if entry is None:
+                            raise RuntimeError(f"Missing vocal removed archive entry for {source_path}")
+                        archive.write(source_path, arcname=entry.archive_member)
+                        packed_vocal_removed_entries.append(entry)
+                        for slot_info in path_info["slots"]:
+                            slot_key = (slot_info["group"], slot_info["page"], slot_info["slot"])
+                            vocal_removed_path_overrides[slot_key] = entry.set_path
+                        step += 1
+                        self._update_archive_progress(
+                            progress,
+                            step,
+                            total_steps,
+                            f"{tr('Processed')} {os.path.basename(source_path)}",
+                        )
+
                     for normalized_path, path_info in lyric_path_usage.items():
                         if progress.wasCanceled():
                             raise ArchiveOperationCancelled()
@@ -306,6 +340,7 @@ class SettingsArchiveMixin:
                     pack_lines = self._build_set_file_lines(
                         selected_pages=selected_pages,
                         slot_path_overrides=slot_path_overrides,
+                        vocal_removed_path_overrides=vocal_removed_path_overrides,
                         lyric_path_overrides=lyric_path_overrides,
                         skipped_slots=skipped_slots,
                     )
@@ -325,6 +360,7 @@ class SettingsArchiveMixin:
                         set_member_name,
                         packed_audio_entries,
                         bool(settings_source),
+                        vocal_removed_entries=packed_vocal_removed_entries,
                         lyric_entries=packed_lyric_entries,
                     )
                     write_manifest(archive, manifest)
@@ -381,11 +417,18 @@ class SettingsArchiveMixin:
                 ),
                 is_cancelled=progress.wasCanceled,
             )
-            if result.audio_path_map or result.lyric_path_map or (bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics)):
+            if (
+                result.audio_path_map
+                or result.vocal_removed_path_map
+                or result.lyric_path_map
+                or (bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics))
+            ):
                 rewrite_packed_set_paths(
                     result.extracted_set_path,
                     result.audio_path_map,
+                    vocal_removed_replacements=result.vocal_removed_path_map,
                     lyric_replacements=result.lyric_path_map,
+                    clear_missing_vocal_removed=False,
                     clear_missing_lyrics=(
                         bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics)
                     ),
@@ -502,6 +545,28 @@ class SettingsArchiveMixin:
                 normalized = os.path.normcase(os.path.abspath(lyric_path))
                 if normalized not in usage:
                     usage[normalized] = {"source_path": lyric_path, "slots": []}
+                usage[normalized]["slots"].append(
+                    {
+                        "group": group,
+                        "page": page_index,
+                        "slot": slot_index,
+                        "location": location,
+                        "title": slot.title.strip() or "",
+                    }
+                )
+        return usage
+
+    def _collect_pack_vocal_removed_path_usage(self, selected_pages: set[Tuple[str, int]]) -> Dict[str, dict]:
+        usage: Dict[str, dict] = {}
+        for group, page_index in sorted(selected_pages):
+            location = self._page_display_name(group, page_index)
+            for slot_index, slot in enumerate(self.data[group][page_index]):
+                vocal_removed_path = str(slot.vocal_removed_file or "").strip()
+                if not vocal_removed_path:
+                    continue
+                normalized = os.path.normcase(os.path.abspath(vocal_removed_path))
+                if normalized not in usage:
+                    usage[normalized] = {"source_path": vocal_removed_path, "slots": []}
                 usage[normalized]["slots"].append(
                     {
                         "group": group,

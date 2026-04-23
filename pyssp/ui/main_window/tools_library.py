@@ -4,15 +4,202 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.ui.vocal_removed_batch_dialog import VocalRemovedBatchDialog
+from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.launchpad import (
+    LAUNCHPAD_ACTION_SHIFT_LAYER,
     LAUNCHPAD_LAYOUT_BOTTOM_SIX,
+    LAUNCHPAD_SHIFT_CONTROL_INDEX,
     launchpad_layout_options,
     launchpad_page_bindings,
     launchpad_profile_label,
+    normalize_launchpad_layout,
 )
 
 
 class ToolsLibraryMixin:
+    _LAUNCHPAD_CHEATSHEET_ACTION_LABELS = {
+        "": "(Unused)",
+        LAUNCHPAD_ACTION_SHIFT_LAYER: "Shift Layer",
+        "play_selected_pause": "Play / Pause",
+        "play_selected": "Play Selected",
+        "pause_toggle": "Pause / Resume",
+        "stop_playback": "Stop",
+        "talk": "Talk",
+        "next_group": "Next Group",
+        "prev_group": "Previous Group",
+        "next_page": "Next Page",
+        "prev_page": "Previous Page",
+        "next_sound_button": "Next Sound Button",
+        "prev_sound_button": "Previous Sound Button",
+        "multi_play": "Multi-Play",
+        "go_to_playing": "Go To Playing",
+        "loop": "Loop",
+        "next": "Next",
+        "rapid_fire": "Rapid Fire",
+        "shuffle": "Shuffle",
+        "reset_page": "Reset Page",
+        "play_list": "Play List",
+        "fade_in": "Fade In",
+        "cross_fade": "Cross Fade",
+        "fade_out": "Fade Out",
+        "mute": "Mute",
+        "volume_up": "Volume Up",
+        "volume_down": "Volume Down",
+        "open_hide_lyric_navigator": "Lyric Navigator",
+        "cue": "Cue",
+        "vocal_removed": "Vocal Removed",
+    }
+
+    def _launchpad_cheatsheet_action_label(self, action_key: str) -> str:
+        key = str(action_key or "").strip()
+        return self._LAUNCHPAD_CHEATSHEET_ACTION_LABELS.get(key, key.replace("_", " ").title() if key else "(Unused)")
+
+    def _launchpad_cheatsheet_cell(self, title: str, body: str, role: str = "normal") -> QLabel:
+        label = QLabel(f"<b>{html.escape(title)}</b><br>{html.escape(body)}")
+        label.setTextFormat(Qt.RichText)
+        label.setAlignment(Qt.AlignCenter)
+        label.setWordWrap(True)
+        label.setMinimumSize(104, 64)
+        colors = {
+            "sound": ("#20262D", "#44505F", "#E7EEF7"),
+            "control": ("#182033", "#3F8FBF", "#E7EEF7"),
+            "shift": ("#073D46", "#00E5FF", "#EFFFFF"),
+            "display": ("#111820", "#324457", "#D8E6F3"),
+            "bar": ("#1D2A20", "#39C36A", "#E8FFF0"),
+            "unused": ("#171A1E", "#30343A", "#7D8791"),
+        }
+        bg, border, fg = colors.get(role, colors["control"])
+        label.setStyleSheet(
+            f"QLabel{{background:{bg};color:{fg};border:1px solid {border};border-radius:7px;padding:5px;font-size:9pt;}}"
+        )
+        return label
+
+    def _launchpad_cheatsheet_control_text(self, control_index: int) -> tuple[str, str, str]:
+        if control_index == LAUNCHPAD_SHIFT_CONTROL_INDEX:
+            return (f"C{control_index + 1}", "Shift Toggle", "shift")
+        if 0 <= control_index <= 7:
+            return (f"C{control_index + 1}", f"Bar {control_index + 1}", "bar")
+        shift_controls = {
+            9: "Master Volume",
+            10: "Jog",
+            12: "Absolute Mode",
+            13: "Sensitivity 1",
+            14: "Sensitivity 2",
+            15: "Sensitivity 3",
+        }
+        text = shift_controls.get(control_index, "Unused")
+        role = "control" if control_index in shift_controls else "unused"
+        return (f"C{control_index + 1}", text, role)
+
+    def _build_launchpad_cheatsheet_grid(self, *, shift_layer: bool) -> QWidget:
+        frame = QFrame()
+        frame.setStyleSheet("QFrame{background:#101418;border:1px solid #303943;border-radius:10px;}")
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(10, 10, 10, 10)
+        grid.setHorizontalSpacing(7)
+        grid.setVerticalSpacing(7)
+
+        layout_key = normalize_launchpad_layout(getattr(self, "launchpad_layout", LAUNCHPAD_LAYOUT_BOTTOM_SIX))
+        control_rows = {0, 1} if layout_key == LAUNCHPAD_LAYOUT_BOTTOM_SIX else {6, 7}
+        slots = self._current_page_slots()
+        controls = list(getattr(self, "launchpad_control_bindings", [])[:16])
+        if len(controls) < 16:
+            controls.extend(["" for _ in range(16 - len(controls))])
+
+        for row in range(8):
+            for col in range(8):
+                if row in control_rows:
+                    control_row = row if layout_key == LAUNCHPAD_LAYOUT_BOTTOM_SIX else row - 6
+                    index = (control_row * 8) + col
+                    if shift_layer:
+                        title, body, role = self._launchpad_cheatsheet_control_text(index)
+                    else:
+                        action_key = str(controls[index] or "").strip()
+                        title = f"C{index + 1}"
+                        body = self._launchpad_cheatsheet_action_label(action_key)
+                        role = "shift" if index == LAUNCHPAD_SHIFT_CONTROL_INDEX and action_key == LAUNCHPAD_ACTION_SHIFT_LAYER else "control"
+                        if not action_key:
+                            role = "unused"
+                    grid.addWidget(self._launchpad_cheatsheet_cell(title, body, role), row, col)
+                    continue
+
+                slot_row = row - 2 if layout_key == LAUNCHPAD_LAYOUT_BOTTOM_SIX else row
+                slot_index = (slot_row * 8) + col
+                title = f"B{slot_index + 1}"
+                if shift_layer:
+                    grid.addWidget(self._launchpad_cheatsheet_cell(title, "Display Area", "display"), row, col)
+                    continue
+                slot = slots[slot_index] if 0 <= slot_index < len(slots) else None
+                if slot is not None and bool(getattr(slot, "assigned", False)) and not bool(getattr(slot, "marker", False)):
+                    body = str(slot.title or "").strip() or os.path.splitext(os.path.basename(str(slot.file_path or "")))[0]
+                else:
+                    body = f"Quick Action {slot_index + 1}"
+                grid.addWidget(self._launchpad_cheatsheet_cell(title, body, "sound"), row, col)
+        return frame
+
+    def _populate_launchpad_cheatsheet_tabs(self, tabs: QTabWidget) -> None:
+        while tabs.count():
+            widget = tabs.widget(0)
+            tabs.removeTab(0)
+            if widget is not None:
+                widget.deleteLater()
+        tabs.addTab(self._build_launchpad_cheatsheet_grid(shift_layer=False), "Normal Layer")
+        tabs.addTab(self._build_launchpad_cheatsheet_grid(shift_layer=True), "Shift Layer")
+
+    def _show_launchpad_cheatsheet(self) -> None:
+        key = "launchpad_cheatsheet"
+        window = self._tool_windows.get(key)
+        if window is not None:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Launchpad Cheat Sheet")
+        dialog.resize(980, 760)
+        dialog.setModal(False)
+        dialog.setWindowModality(Qt.NonModal)
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        note = QLabel(
+            "Offline Launchpad simulator. It uses the current Launchpad layout and saved control bindings, "
+            "but does not require a Launchpad connection and does not send MIDI or LED messages."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#555555;")
+        root.addWidget(note)
+
+        tabs = QTabWidget(dialog)
+        self._populate_launchpad_cheatsheet_tabs(tabs)
+        root.addWidget(tabs, 1)
+
+        details = QLabel(
+            "Shift layer: C9 toggles the layer. C1-C8 are the operation bar. "
+            "C10 selects Master Volume, C11 selects Jog, C13 toggles absolute mode, and C14-C16 set relative sensitivity."
+        )
+        details.setWordWrap(True)
+        root.addWidget(details)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(lambda _=False, t=tabs: self._populate_launchpad_cheatsheet_tabs(t))
+        button_row.addWidget(refresh_btn)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        button_row.addWidget(close_btn)
+        root.addLayout(button_row)
+
+        dialog.destroyed.connect(lambda _=None, k=key: self._tool_windows.pop(k, None))
+        self._tool_windows[key] = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def _apply_launchpad_mapping_to_current_page(self) -> None:
         slots = self._current_page_slots()
         assigned_slots = [slot for slot in slots if slot.assigned and (not slot.marker)]
@@ -124,6 +311,94 @@ class ToolsLibraryMixin:
                     }
                 )
         return entries
+
+    def _iter_all_sound_button_slot_refs(self, include_cue: bool = True) -> List[dict]:
+        refs: List[dict] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                location = self._page_display_name(group, page_index)
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    refs.append(
+                        {
+                            "group": group,
+                            "page": page_index,
+                            "slot": slot_index,
+                            "slot_ref": slot,
+                            "location": location,
+                        }
+                    )
+        if include_cue:
+            for slot_index, slot in enumerate(self.cue_page):
+                refs.append(
+                    {
+                        "group": "Q",
+                        "page": 0,
+                        "slot": slot_index,
+                        "slot_ref": slot,
+                        "location": "Cue Page",
+                    }
+                )
+        return refs
+
+    def _find_generated_vocal_removed_file(
+        self,
+        source_path: str,
+        directory_cache: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> str:
+        path = str(source_path or "").strip()
+        if not path:
+            return ""
+        exact = str(suggested_vocal_removed_output_path(path) or "").strip()
+        if exact and os.path.isfile(exact):
+            return exact
+        directory = os.path.dirname(path)
+        if not directory or not os.path.isdir(directory):
+            return ""
+        stem = os.path.splitext(os.path.basename(path))[0]
+        target_stem = f"{stem}_pyssp_vocal_removal".casefold()
+        normalized_directory = os.path.normcase(os.path.abspath(directory))
+        if directory_cache is None:
+            directory_cache = {}
+        cached = directory_cache.get(normalized_directory)
+        if cached is None:
+            cached = {}
+            try:
+                for name in os.listdir(directory):
+                    candidate = os.path.join(directory, name)
+                    if not os.path.isfile(candidate):
+                        continue
+                    file_stem, _ext = os.path.splitext(name)
+                    folded = file_stem.casefold()
+                    existing = cached.get(folded, "")
+                    if (not existing) or (candidate.casefold() < existing.casefold()):
+                        cached[folded] = candidate
+            except OSError:
+                cached = {}
+            directory_cache[normalized_directory] = cached
+        return str(cached.get(target_stem, "") or "")
+
+    def _show_vocal_removed_failures(self, title: str, failures: List[str]) -> None:
+        if not failures:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(860, 420)
+        root = QVBoxLayout(dialog)
+        note = QLabel("Some vocal removed tracks could not be processed.", dialog)
+        note.setWordWrap(True)
+        root.addWidget(note)
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        text.setPlainText("\n\n".join(failures))
+        root.addWidget(text, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.clicked.connect(dialog.accept)
+        root.addWidget(buttons)
+        dialog.exec_()
 
     def _print_lines(self, title: str, lines: List[str]) -> None:
         text = "\n".join(lines).strip() or "(no items)"
@@ -429,6 +704,11 @@ class ToolsLibraryMixin:
             audio_cause = slot_cause(slot)
             if audio_cause:
                 causes.append(audio_cause)
+            vocal_removed_path = str(slot.vocal_removed_file or "").strip()
+            if vocal_removed_path:
+                vocal_removed_cause = self._diagnose_sound_button_issue(vocal_removed_path)
+                if vocal_removed_cause:
+                    causes.append(f"Vocal removed track: {vocal_removed_cause}")
             lyric_cause = self._diagnose_slot_lyric_issue(slot)
             if lyric_cause:
                 causes.append(lyric_cause)
@@ -618,6 +898,306 @@ class ToolsLibraryMixin:
         self._refresh_stage_display()
         self._refresh_lyric_display(force=True)
         self._show_save_notice_banner(f"Removed linked lyric files from {changed} sound button(s).")
+
+    def _bulk_generate_vocal_removed_tracks(self) -> None:
+        cli_executable = str(find_bundled_spleeter_cli_executable() or "").strip()
+        if not cli_executable or not os.path.exists(cli_executable):
+            QMessageBox.warning(
+                self,
+                tr("Vocal Removal"),
+                tr("spleeter-cli was not found. Build it first before generating a vocal removed track."),
+            )
+            return
+
+        refs: List[dict] = []
+        rows: List[tuple[str, str, str, bool]] = []
+        for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
+            slot = ref["slot_ref"]
+            if not slot.assigned or slot.marker:
+                continue
+            if str(slot.vocal_removed_file or "").strip():
+                continue
+            source_path = str(slot.file_path or "").strip()
+            if not source_path:
+                continue
+            output_path = str(suggested_vocal_removed_output_path(source_path) or "").strip()
+            refs.append(ref)
+            rows.append((source_path, output_path, str(ref["location"]), bool(output_path)))
+
+        if not rows:
+            self._show_info_notice_banner("All assigned sound buttons already have vocal removed tracks linked.")
+            return
+
+        dialog = VocalRemovedBatchDialog(
+            title="Bulk Generate Vocal Removed Tracks",
+            note=(
+                "Select which sound buttons to generate. Generated files will be saved automatically beside the source "
+                "audio file using the *_pyssp_vocal_removal* filename pattern. No save location prompt is shown."
+            ),
+            rows=rows,
+            target_header="Generated File",
+            action_header="Generate",
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        flags = dialog.checked_flags()
+        selected = [refs[idx] for idx in range(len(refs)) if idx < len(flags) and bool(flags[idx])]
+        if not selected:
+            self._show_info_notice_banner("No vocal removed tracks were selected for generation.")
+            return
+
+        progress = QProgressDialog("Generating vocal removed tracks...", "Cancel", 0, max(1, len(selected)), self)
+        progress.setWindowTitle("Bulk Generate Vocal Removed Tracks")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+
+        generated = 0
+        linked_existing = 0
+        failures: List[str] = []
+        last_source_dir = ""
+        changed_keys: List[Tuple[str, int, int]] = []
+
+        cancelled = False
+        for index, ref in enumerate(selected):
+            remaining = max(0, len(selected) - index - 1)
+            progress.setValue(index)
+            progress.setLabelText(
+                f"Generating file {index + 1} of {len(selected)} ({remaining} remaining): "
+                f"{os.path.basename(str(ref['slot_ref'].file_path or '').strip())}"
+            )
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            slot = ref["slot_ref"]
+            slot_key = (str(ref["group"]), int(ref["page"]), int(ref["slot"]))
+            source_path = str(slot.file_path or "").strip()
+            output_path = str(suggested_vocal_removed_output_path(source_path) or "").strip()
+            source_reason = self._path_safety_reason(source_path)
+            if source_reason:
+                failures.append(f"{ref['location']} - Button {int(ref['slot']) + 1}\nSource path rejected: {source_reason}")
+                continue
+            output_reason = self._path_safety_reason(output_path) if output_path else "Output path is empty."
+            if output_reason:
+                failures.append(
+                    f"{ref['location']} - Button {int(ref['slot']) + 1}\nVocal removed output path rejected: {output_reason}"
+                )
+                continue
+            if not os.path.exists(source_path):
+                failures.append(f"{ref['location']} - Button {int(ref['slot']) + 1}\nMissing source file:\n{source_path}")
+                continue
+            try:
+                if os.path.exists(output_path):
+                    final_path = output_path
+                    linked_existing += 1
+                else:
+                    final_path = self._run_vocal_removed_cli(
+                        source_path,
+                        output_path,
+                        cli_executable,
+                        progress_dialog=progress,
+                        progress_label=(
+                            f"Generating file {index + 1} of {len(selected)} ({remaining} remaining): "
+                            f"{os.path.basename(source_path)}"
+                        ),
+                    )
+                    generated += 1
+                if str(slot.vocal_removed_file or "").strip() != final_path:
+                    slot.vocal_removed_file = final_path
+                    changed_keys.append(slot_key)
+                last_source_dir = os.path.dirname(source_path) or last_source_dir
+            except Exception as exc:
+                if str(exc).strip().lower() == "cancelled.":
+                    cancelled = True
+                    break
+                failures.append(f"{ref['location']} - Button {int(ref['slot']) + 1}\n{exc}")
+        progress.setValue(len(selected))
+        progress.close()
+
+        if last_source_dir:
+            self.settings.last_sound_dir = last_source_dir
+            self._save_settings()
+
+        if changed_keys:
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            self._refresh_vocal_removed_warning_banner()
+            for slot_key in changed_keys:
+                self._refresh_playing_slot_after_audio_path_change(slot_key)
+
+        if failures:
+            self._show_vocal_removed_failures("Bulk Generate Vocal Removed Tracks", failures)
+
+        if cancelled and not (generated or linked_existing or changed_keys):
+            self._show_info_notice_banner("Vocal removed batch cancelled.")
+            return
+        if generated or linked_existing:
+            self._show_save_notice_banner(
+                f"Vocal removed batch {'cancelled' if cancelled else 'complete'}. Generated: {generated}, Linked existing: {linked_existing}, Failed: {len(failures)}."
+            )
+            return
+        self._show_info_notice_banner("No vocal removed tracks were generated.")
+
+    def _link_unlinked_vocal_removed_tracks(self) -> None:
+        all_refs = self._iter_all_sound_button_slot_refs(include_cue=True)
+        total = len(all_refs)
+        if total <= 0:
+            self._show_info_notice_banner("No sound buttons assigned.")
+            return
+
+        progress = QProgressDialog("Scanning vocal removed files...", "Skip", 0, max(1, total), self)
+        progress.setWindowTitle("Link Unlinked Vocal Removed Track")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
+
+        refs: List[dict] = []
+        rows: List[tuple[str, str, str, bool]] = []
+        found_any = False
+        directory_cache: Dict[str, Dict[str, str]] = {}
+        processed = 0
+        cancelled = False
+        for ref in all_refs:
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            slot = ref["slot_ref"]
+            progress.setLabelText(f"Scanning {ref['location']} - Button {int(ref['slot']) + 1}...")
+            if not slot.assigned or slot.marker:
+                processed += 1
+                progress.setValue(processed)
+                QApplication.processEvents()
+                continue
+            if str(slot.vocal_removed_file or "").strip():
+                processed += 1
+                progress.setValue(processed)
+                QApplication.processEvents()
+                continue
+            source_path = str(slot.file_path or "").strip()
+            if not source_path:
+                processed += 1
+                progress.setValue(processed)
+                QApplication.processEvents()
+                continue
+            candidate = self._find_generated_vocal_removed_file(source_path, directory_cache)
+            if candidate:
+                found_any = True
+            refs.append(ref)
+            rows.append((source_path, candidate, str(ref["location"]), bool(candidate)))
+            processed += 1
+            progress.setValue(processed)
+            QApplication.processEvents()
+        progress.close()
+
+        if not refs:
+            self._show_info_notice_banner("No unlinked vocal removed tracks were found.")
+            return
+        if cancelled and found_any:
+            self._show_info_notice_banner(f"Vocal removed scan skipped ({processed}/{total}). Showing partial scan results.")
+        elif cancelled:
+            self._show_info_notice_banner(f"Vocal removed scan cancelled ({processed}/{total}).")
+            return
+        if not found_any:
+            self._show_info_notice_banner("No matching generated vocal removed files were found.")
+            return
+
+        dialog = VocalRemovedBatchDialog(
+            title="Link Unlinked Vocal Removed Tracks",
+            note=(
+                "Matching generated vocal removed files were found by filename search. "
+                "pySSP looks beside each source audio file for names like *_pyssp_vocal_removal* with any extension."
+            ),
+            rows=rows,
+            target_header="Vocal Removed File Found",
+            action_header="Link",
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        flags = dialog.checked_flags()
+        changed = 0
+        linked = 0
+        changed_keys: List[Tuple[str, int, int]] = []
+        for idx, ref in enumerate(refs):
+            candidate = rows[idx][1]
+            should_link = idx < len(flags) and bool(flags[idx]) and bool(candidate)
+            next_value = candidate if should_link else ""
+            slot = ref["slot_ref"]
+            if str(slot.vocal_removed_file or "").strip() == next_value:
+                continue
+            slot.vocal_removed_file = next_value
+            changed += 1
+            if should_link:
+                linked += 1
+            changed_keys.append((str(ref["group"]), int(ref["page"]), int(ref["slot"])))
+
+        if changed <= 0:
+            self._show_info_notice_banner("Vocal removed filename scan complete. No changes.")
+            return
+
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._refresh_vocal_removed_warning_banner()
+        for slot_key in changed_keys:
+            self._refresh_playing_slot_after_audio_path_change(slot_key)
+        self._show_save_notice_banner(f"Vocal removed filename scan complete. Linked: {linked}, Unlinked: {changed - linked}.")
+
+    def _remove_all_linked_vocal_removed_files(self) -> None:
+        linked_count = 0
+        for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
+            slot = ref["slot_ref"]
+            if not slot.assigned or slot.marker:
+                continue
+            if str(slot.vocal_removed_file or "").strip():
+                linked_count += 1
+
+        if linked_count <= 0:
+            self._show_info_notice_banner("No linked vocal removed tracks to remove.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Remove All Linked Vocal Removed Tracks",
+            f"Remove linked vocal removed tracks from {linked_count} sound button(s)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        changed = 0
+        changed_keys: List[Tuple[str, int, int]] = []
+        for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
+            slot = ref["slot_ref"]
+            if not slot.assigned or slot.marker:
+                continue
+            if not str(slot.vocal_removed_file or "").strip():
+                continue
+            slot.vocal_removed_file = ""
+            changed += 1
+            changed_keys.append((str(ref["group"]), int(ref["page"]), int(ref["slot"])))
+
+        if changed <= 0:
+            self._show_info_notice_banner("No linked vocal removed tracks were removed.")
+            return
+
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._refresh_vocal_removed_warning_banner()
+        for slot_key in changed_keys:
+            self._refresh_playing_slot_after_audio_path_change(slot_key)
+        self._show_save_notice_banner(f"Removed linked vocal removed tracks from {changed} sound button(s).")
 
     def _diagnose_sound_button_issue(self, file_path: str) -> Optional[str]:
         path = str(file_path or "").strip()

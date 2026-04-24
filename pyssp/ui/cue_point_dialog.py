@@ -41,11 +41,16 @@ class CuePointDialog(QDialog):
         self.setWindowTitle("Set Cue Points")
         self.resize(760, 260)
 
-        self._player = ExternalMediaPlayer(self)
+        audio_service = getattr(parent, "_audio_service", None)
+        if audio_service is not None:
+            self._player = audio_service.create_player(self)
+        else:
+            self._player = ExternalMediaPlayer(self)
         self._player.setNotifyInterval(30)
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.stateChanged.connect(self._on_state_changed)
+        self._player.mediaLoadFinished.connect(self._on_media_load_finished)
 
         self._duration_ms = 0
         self._cue_start_ms = cue_start_ms
@@ -58,6 +63,7 @@ class CuePointDialog(QDialog):
         self._file_path = file_path
         self._load_wait_started = 0.0
         self._load_wait_timeout_sec = 120.0
+        self._media_load_request_id = 0
         self._waveform_refresh: Optional[WaveformRefreshController] = None
         self._stop_host_playback = stop_host_playback
 
@@ -266,21 +272,32 @@ class CuePointDialog(QDialog):
 
     def _finalize_media_load(self) -> None:
         try:
-            self._player.setMedia(self._file_path)
-            self._duration_ms = max(0, int(self._player.duration()))
-            self.jog_slider.setRange(0, self._duration_ms)
-            self._request_waveform_refresh()
-            self._normalize_cues()
-            self._refresh_timecode_edits()
-            self._refresh_cue_indicator()
-            self._apply_jog_bounds()
-            self._refresh_transport_times(self._player.position())
+            self._media_load_request_id = int(self._player.setMediaAsync(self._file_path))
         except Exception as exc:
             self._load_error = str(exc)
             self.error_label.setText(f"Could not load audio preview: {exc}")
-        finally:
             self._set_loading_state(False)
             self._refresh_transport_buttons()
+
+    def _on_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
+        if int(request_id) != int(self._media_load_request_id):
+            return
+        if not ok:
+            self._load_error = str(error or "Unknown audio load failure")
+            self.error_label.setText(f"Could not load audio preview: {self._load_error}")
+            self._set_loading_state(False)
+            self._refresh_transport_buttons()
+            return
+        self._duration_ms = max(0, int(self._player.duration()))
+        self.jog_slider.setRange(0, self._duration_ms)
+        self._request_waveform_refresh()
+        self._normalize_cues()
+        self._refresh_timecode_edits()
+        self._refresh_cue_indicator()
+        self._apply_jog_bounds()
+        self._refresh_transport_times(self._player.position())
+        self._set_loading_state(False)
+        self._refresh_transport_buttons()
 
     def _play(self) -> None:
         if self._load_error or self._is_loading_media:

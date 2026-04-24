@@ -71,6 +71,7 @@ python -m venv .venv
 - Talk mode, multi-play, fade in/out, crossfade toggles
 - Cue page and per-button cue point editing
 - Timecode display and timeline behavior options
+- MIDI input learning, quick actions, and Launchpad page-mapping helper for current-page sound buttons
 
 ### Timecode output
 
@@ -113,6 +114,11 @@ Run unit tests with:
 ```powershell
 python -m pytest
 ```
+
+Helper scripts are also provided:
+
+- `run_tests_venv.sh` / `run_test_venv.sh`
+- `run_tests_venv.bat` / `run_test_venv.bat`
 
 Monkey tests are included in the default `pytest` run.
 

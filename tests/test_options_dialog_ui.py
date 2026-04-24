@@ -113,6 +113,14 @@ def _build_dialog(**overrides):
         sound_button_hotkey_priority=str(overrides.get("sound_button_hotkey_priority", "system_first")),
         sound_button_hotkey_go_to_playing=bool(overrides.get("sound_button_hotkey_go_to_playing", False)),
         midi_input_device_ids=overrides.get("midi_input_device_ids", []),
+        launchpad_enabled=bool(overrides.get("launchpad_enabled", False)),
+        launchpad_device_selector=str(overrides.get("launchpad_device_selector", "")),
+        launchpad_output_device_id=str(overrides.get("launchpad_output_device_id", "")),
+        launchpad_layout=str(overrides.get("launchpad_layout", "bottom_six")),
+        launchpad_turn_off_empty_sound_button_lights=bool(
+            overrides.get("launchpad_turn_off_empty_sound_button_lights", True)
+        ),
+        launchpad_control_bindings=overrides.get("launchpad_control_bindings", defaults["launchpad_control_bindings"]),
         midi_hotkeys=overrides.get("midi_hotkeys", {}),
         midi_quick_action_enabled=bool(overrides.get("midi_quick_action_enabled", False)),
         midi_quick_action_bindings=overrides.get("midi_quick_action_bindings", [""] * 48),
@@ -458,3 +466,58 @@ def test_disable_path_safety_warning_visibility(qapp):
     dialog.disable_path_safety_checkbox.setChecked(True)
     assert dialog.selected_disable_path_safety() is True
     assert dialog.disable_path_safety_warning_label.isHidden() is False
+
+
+def test_launchpad_selection_is_added_to_midi_inputs(qapp):
+    dialog = _build_dialog(
+        midi_input_device_ids=[],
+        launchpad_enabled=True,
+        launchpad_device_selector="name::Launchpad Mini MK3",
+        initial_page="Midi Control",
+    )
+    dialog.launchpad_device_combo.addItem("Launchpad Mini MK3", "name::Launchpad Mini MK3")
+    dialog.launchpad_device_combo.setCurrentIndex(dialog.launchpad_device_combo.findData("name::Launchpad Mini MK3"))
+    selected = dialog.selected_midi_input_devices()
+    assert "name::Launchpad Mini MK3" not in selected
+
+
+def test_launchpad_selection_round_trip(qapp):
+    dialog = _build_dialog(
+        launchpad_enabled=True,
+        launchpad_device_selector="name::Launchpad X",
+        launchpad_output_device_id="3",
+        launchpad_layout="top_six",
+        initial_page="Midi Control",
+    )
+    dialog.launchpad_device_combo.addItem("Launchpad X", "name::Launchpad X")
+    dialog.launchpad_device_combo.setCurrentIndex(dialog.launchpad_device_combo.findData("name::Launchpad X"))
+    dialog.launchpad_output_combo.addItem("LPX MIDI", "3")
+    dialog.launchpad_output_combo.setCurrentIndex(dialog.launchpad_output_combo.findData("3"))
+    dialog.launchpad_layout_combo.setCurrentIndex(dialog.launchpad_layout_combo.findData("top_six"))
+    assert dialog.selected_launchpad_enabled() is True
+    assert dialog.selected_launchpad_device_selector() == "name::Launchpad X"
+    assert dialog.selected_launchpad_output_device_id() == "3"
+    assert dialog.selected_launchpad_layout() == "top_six"
+    assert dialog.selected_launchpad_turn_off_empty_sound_button_lights() is True
+    dialog.launchpad_empty_lights_off_checkbox.setChecked(False)
+    assert dialog.selected_launchpad_turn_off_empty_sound_button_lights() is False
+
+
+def test_launchpad_control_bindings_round_trip(qapp):
+    bindings = ["play_selected", "loop"] + [""] * 14
+    dialog = _build_dialog(
+        launchpad_enabled=True,
+        launchpad_device_selector="name::Launchpad X",
+        launchpad_control_bindings=bindings,
+        initial_page="Midi Control",
+    )
+    assert dialog.selected_launchpad_control_bindings()[:2] == ["play_selected", "loop"]
+    assert "#20262D" in dialog._launchpad_control_combos[0].styleSheet()
+    assert "selection-background-color" in dialog._launchpad_control_combos[0].styleSheet()
+
+
+def test_launchpad_defaults_include_control_rows(qapp):
+    dialog = _build_dialog(initial_page="Midi Control")
+    selected = dialog.selected_launchpad_control_bindings()
+    assert selected[0] == "prev_group"
+    assert selected[15] == "reset_page"

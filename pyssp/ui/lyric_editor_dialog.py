@@ -59,6 +59,7 @@ class LyricEditorDialog(QDialog):
         self._is_loading_media = False
         self._load_wait_started = 0.0
         self._load_wait_timeout_sec = 120.0
+        self._media_load_request_id = 0
         self._waveform_refresh: Optional[WaveformRefreshController] = None
         self._cue_start_ms = None if cue_start_ms is None else max(0, int(cue_start_ms))
         self._cue_end_ms = None if cue_end_ms is None else max(0, int(cue_end_ms))
@@ -88,11 +89,16 @@ class LyricEditorDialog(QDialog):
         self._path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self._path_label)
 
-        self._player = ExternalMediaPlayer(self)
+        audio_service = getattr(parent, "_audio_service", None)
+        if audio_service is not None:
+            self._player = audio_service.create_player(self)
+        else:
+            self._player = ExternalMediaPlayer(self)
         self._player.setNotifyInterval(40)
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.stateChanged.connect(self._on_state_changed)
+        self._player.mediaLoadFinished.connect(self._on_media_load_finished)
 
         transport = QHBoxLayout()
         self._play_btn = QPushButton("Play")
@@ -292,14 +298,22 @@ class LyricEditorDialog(QDialog):
 
     def _finalize_media_load(self) -> None:
         try:
-            self._player.setMedia(self._audio_path)
-            self._duration_ms = max(0, int(self._player.duration()))
-            self._slider.setRange(0, self._duration_ms)
-            self._request_waveform_refresh()
-            self._refresh_cue_indicator()
-            self._refresh_transport_times(self._player.position())
-        finally:
+            self._media_load_request_id = int(self._player.setMediaAsync(self._audio_path))
+        except Exception:
             self._set_loading_state(False)
+
+    def _on_media_load_finished(self, request_id: int, ok: bool, _error: str) -> None:
+        if int(request_id) != int(self._media_load_request_id):
+            return
+        if not ok:
+            self._set_loading_state(False)
+            return
+        self._duration_ms = max(0, int(self._player.duration()))
+        self._slider.setRange(0, self._duration_ms)
+        self._request_waveform_refresh()
+        self._refresh_cue_indicator()
+        self._refresh_transport_times(self._player.position())
+        self._set_loading_state(False)
 
     def _load_rows_from_file(self) -> None:
         rows: List[Tuple[int, str]] = []
@@ -547,7 +561,8 @@ class LyricEditorDialog(QDialog):
                 except Exception:
                     pass
             if self._duration_ms <= 0:
-                self._player.setMedia(self._audio_path)
+                self._load_preview_media()
+                return
             self._player.play()
         self._refresh_buttons()
 

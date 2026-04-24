@@ -44,6 +44,18 @@ def build_audio_file_dialog_filter(
     return base
 
 
+def effective_audio_file_extensions(
+    supported_audio_format_extensions: List[str],
+    allow_other_unsupported_audio_files: bool,
+) -> List[str]:
+    supported = normalize_supported_audio_extensions(supported_audio_format_extensions)
+    if supported and (not allow_other_unsupported_audio_files):
+        return supported
+    return normalize_supported_audio_extensions(
+        [".wav", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", *ffmpeg_supported_audio_extensions()]
+    )
+
+
 def ensure_supported_audio_formats_ready(
     *,
     timeout_sec: float = 10.0,

@@ -624,15 +624,30 @@ class PagesSlotsMixin:
 
     def _refresh_vocal_removed_warning_banner(self) -> None:
         message = ""
-        if self.play_vocal_removed_tracks and self.current_playing is not None:
-            slot = self._slot_for_key(self.current_playing)
+        if self.play_vocal_removed_tracks:
+            current_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
             if (
-                slot is not None
-                and slot.assigned
-                and (not slot.marker)
-                and (not str(slot.vocal_removed_file or "").strip())
+                current_slot is not None
+                and current_slot.assigned
+                and (not current_slot.marker)
+                and (not str(current_slot.vocal_removed_file or "").strip())
             ):
                 message = f"{tr('VOCAL REMOVED ENABLED:')} {tr('The currently playing song has no vocal removed track.')}"
+            else:
+                missing_count = 0
+                for slot in self.data[self.current_group][self.current_page]:
+                    if (
+                        slot.assigned
+                        and (not slot.marker)
+                        and (not str(slot.vocal_removed_file or "").strip())
+                    ):
+                        missing_count += 1
+                if missing_count:
+                    noun = "sound button" if missing_count == 1 else "sound buttons"
+                    message = (
+                        f"{tr('VOCAL REMOVED ENABLED:')} "
+                        f"{missing_count} {noun} on this page have no vocal removed track."
+                    )
         self.vocal_removed_warning_banner.setText(message)
         self.vocal_removed_warning_banner.setVisible(bool(message))
 
@@ -2597,4 +2612,3 @@ class PagesSlotsMixin:
         if self.cue_mode:
             return self.cue_page
         return self.data[self.current_group][self.current_page]
-

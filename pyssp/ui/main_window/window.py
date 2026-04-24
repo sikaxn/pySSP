@@ -16,6 +16,31 @@ from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
 
 
+def _stop_qthread_safely(thread: Optional[QThread], timeout_ms: int = 1500) -> None:
+    if thread is None:
+        return
+    try:
+        stop = getattr(thread, "stop", None)
+        if callable(stop):
+            stop()
+    except Exception:
+        pass
+    try:
+        if thread.isRunning():
+            thread.wait(timeout_ms)
+    except Exception:
+        pass
+
+
+def _shutdown_executor_safely(executor) -> None:
+    if executor is None:
+        return
+    try:
+        executor.shutdown(wait=True, cancel_futures=True)
+    except Exception:
+        pass
+
+
 class MainWindow(
     UiBuildMixin,
     TimecodeMixin,
@@ -604,6 +629,7 @@ class MainWindow(
         self._midi_poll_thread.midi_event.connect(self._on_midi_binding_triggered)
         self._midi_poll_thread.launchpad_event.connect(self._on_launchpad_binding_triggered)
         self._midi_poll_thread.status_changed.connect(self._on_midi_poll_status)
+        self.destroyed.connect(lambda _=None, thread=self._midi_poll_thread: _stop_qthread_safely(thread))
         self._midi_action_handlers: Dict[str, Callable[[], None]] = {}
         self._launchpad_action_handlers: Dict[str, Callable[[], None]] = {}
         self._launchpad_last_trigger_t: Dict[str, float] = {}
@@ -773,6 +799,30 @@ class MainWindow(
         self._suspend_settings_save = False
         if self.tips_open_on_startup:
             QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
+
+    def _shutdown_runtime_threads(self) -> None:
+        try:
+            self._ltc_sender.shutdown()
+        except Exception:
+            pass
+        try:
+            self._mtc_sender.shutdown()
+        except Exception:
+            pass
+        try:
+            self._audio_service.shutdown()
+        except Exception:
+            pass
+        try:
+            shutdown_audio_preload()
+        except Exception:
+            pass
+        _stop_qthread_safely(getattr(self, "_midi_poll_thread", None))
+        _shutdown_executor_safely(getattr(self, "_launchpad_feedback_executor", None))
+
+    def close(self) -> bool:
+        self._shutdown_runtime_threads()
+        return QMainWindow.close(self)
 
 
 

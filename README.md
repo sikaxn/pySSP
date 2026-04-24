@@ -115,6 +115,11 @@ Run unit tests with:
 python -m pytest
 ```
 
+Helper scripts are also provided:
+
+- `run_tests_venv.sh` / `run_test_venv.sh`
+- `run_tests_venv.bat` / `run_test_venv.bat`
+
 Monkey tests are included in the default `pytest` run.
 
 Auto-test implementation notes and roadmap:

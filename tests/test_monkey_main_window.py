@@ -7,6 +7,7 @@ from itertools import combinations
 from pathlib import Path
 
 import pytest
+from PyQt5.QtCore import QMimeData, QUrl
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from pyssp.settings_store import AppSettings
@@ -395,6 +396,139 @@ def test_pick_sound_limits_verify_and_lyric_scan_to_available_slots(qapp, monkey
         assert calls["lyric_paths"] == 1
         assert window.data["A"][0][0].assigned is True
         assert window.data["A"][0][0].file_path == str(audio_paths[0])
+    finally:
+        for timer_name in [
+            "meter_timer",
+            "timecode_mtc_timer",
+            "fade_timer",
+            "_preload_trim_timer",
+            "_preload_status_timer",
+            "talk_blink_timer",
+            "_midi_poll_timer",
+        ]:
+            timer = getattr(window, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        window.hide()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.monkey
+def test_drop_audio_files_on_sound_button_uses_add_sound_flow(qapp, monkeypatch, tmp_path):
+    audio_a = tmp_path / "drop_a.wav"
+    audio_b = tmp_path / "drop_b.wav"
+    lyric_a = tmp_path / "drop_a.lrc"
+    _write_dummy_wav(audio_a)
+    _write_dummy_wav(audio_b)
+    lyric_a.write_text("", encoding="utf-8")
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    settings.search_lyric_on_add_sound_button = True
+    settings.verify_sound_file_on_add = True
+    settings.supported_audio_format_extensions = [".wav"]
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    calls = {"verify": 0, "lyric": 0}
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        window.current_group = "A"
+        window.current_page = 0
+        window.page_names["A"][0] = "Drop Page"
+        window.verify_sound_file_on_add = True
+        window.search_lyric_on_add_sound_button = True
+        window.allow_other_unsupported_audio_files = False
+        window.supported_audio_format_extensions = [".wav"]
+
+        def _verify(paths):
+            calls["verify"] += 1
+            assert [Path(path) for path in paths] == [audio_a, audio_b]
+            return []
+
+        def _prompt(paths):
+            calls["lyric"] += 1
+            assert [Path(path) for path in paths] == [audio_a, audio_b]
+            return [str(lyric_a), ""]
+
+        window._verify_audio_files_before_add = _verify  # type: ignore[method-assign]
+        window._prompt_lyric_link_selection = _prompt  # type: ignore[method-assign]
+
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(audio_a)), QUrl.fromLocalFile(str(audio_b))])
+
+        assert window._is_button_drag_enabled() is False
+        assert window._can_accept_sound_file_drop(mime) is True
+        assert window._handle_sound_button_drop(0, mime) is True
+
+        first = window.data["A"][0][0]
+        second = window.data["A"][0][1]
+        assert Path(first.file_path) == audio_a
+        assert Path(second.file_path) == audio_b
+        assert Path(first.lyric_file) == lyric_a
+        assert second.lyric_file == ""
+        assert calls["verify"] == 1
+        assert calls["lyric"] == 1
     finally:
         for timer_name in [
             "meter_timer",

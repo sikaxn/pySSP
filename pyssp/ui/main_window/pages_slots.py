@@ -958,6 +958,38 @@ class PagesSlotsMixin:
     def _can_accept_sound_button_drop(self, mime_data: QMimeData) -> bool:
         return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-slot")
 
+    def _extract_dropped_sound_file_paths(self, mime_data: QMimeData) -> List[str]:
+        if mime_data is None or (not mime_data.hasUrls()):
+            return []
+        allow_any_file = bool(self.allow_other_unsupported_audio_files)
+        allowed_extensions = set(
+            effective_audio_file_extensions(
+                self.supported_audio_format_extensions,
+                self.allow_other_unsupported_audio_files,
+            )
+        )
+        paths: List[str] = []
+        seen: set[str] = set()
+        for url in mime_data.urls():
+            if not isinstance(url, QUrl) or (not url.isLocalFile()):
+                continue
+            local_path = str(url.toLocalFile() or "").strip()
+            if (not local_path) or (not os.path.isfile(local_path)):
+                continue
+            if not allow_any_file:
+                suffix = os.path.splitext(local_path)[1].lower()
+                if allowed_extensions and suffix not in allowed_extensions:
+                    continue
+            normalized_key = os.path.normcase(os.path.normpath(local_path))
+            if normalized_key in seen:
+                continue
+            seen.add(normalized_key)
+            paths.append(local_path)
+        return paths
+
+    def _can_accept_sound_file_drop(self, mime_data: QMimeData) -> bool:
+        return bool(self._extract_dropped_sound_file_paths(mime_data))
+
     def _can_accept_page_button_drop(self, mime_data: QMimeData) -> bool:
         return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-page")
 
@@ -1034,13 +1066,7 @@ class PagesSlotsMixin:
         self._clear_sound_button_drop_target()
 
     def _set_sound_button_drop_target(self, slot_index: Optional[int]) -> None:
-        if (
-            slot_index is None
-            or (not self._is_button_drag_enabled())
-            or self.cue_mode
-            or slot_index < 0
-            or slot_index >= SLOTS_PER_PAGE
-        ):
+        if slot_index is None or slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
             target = None
         else:
             target = (self.current_group, self.current_page, int(slot_index))
@@ -1100,58 +1126,59 @@ class PagesSlotsMixin:
 
     def _handle_sound_button_drop(self, dest_slot_index: int, mime_data: QMimeData) -> bool:
         source_key = self._parse_drag_mime(mime_data)
-        if source_key is None:
-            return False
-        if self.cue_mode:
-            return False
-        dest_key = (self.current_group, self.current_page, dest_slot_index)
-        if dest_key == source_key:
-            return False
-        if not self._is_page_created(dest_key[0], dest_key[1]):
-            self._show_info_notice_banner("Cannot drag into a blank page.")
-            return False
-        if source_key in self._active_playing_keys or dest_key in self._active_playing_keys:
-            self._show_info_notice_banner("Cannot drag currently playing buttons.")
-            return False
-
-        source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
-        dest_slot = self.data[dest_key[0]][dest_key[1]][dest_key[2]]
-        if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
-            return False
-        if dest_slot.locked:
-            self._show_info_notice_banner("Destination button is locked.")
-            return False
-
-        source_clone = self._clone_slot(source_slot)
-        dest_has_content = bool(dest_slot.assigned or dest_slot.title)
-        if not dest_has_content:
-            self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
-            self.data[source_key[0]][source_key[1]][source_key[2]] = SoundButtonData()
-        else:
-            box = QMessageBox(self)
-            box.setWindowTitle("Button Drag")
-            box.setText("Destination has content.")
-            replace_btn = box.addButton("Replace", QMessageBox.AcceptRole)
-            swap_btn = box.addButton("Swap", QMessageBox.ActionRole)
-            cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
-            box.exec_()
-            clicked = box.clickedButton()
-            if clicked == cancel_btn or clicked is None:
+        if source_key is not None:
+            if self.cue_mode:
                 return False
-            if clicked == replace_btn:
+            dest_key = (self.current_group, self.current_page, dest_slot_index)
+            if dest_key == source_key:
+                return False
+            if not self._is_page_created(dest_key[0], dest_key[1]):
+                self._show_info_notice_banner("Cannot drag into a blank page.")
+                return False
+            if source_key in self._active_playing_keys or dest_key in self._active_playing_keys:
+                self._show_info_notice_banner("Cannot drag currently playing buttons.")
+                return False
+
+            source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
+            dest_slot = self.data[dest_key[0]][dest_key[1]][dest_key[2]]
+            if source_slot.locked or source_slot.marker or (not source_slot.assigned and not source_slot.title):
+                return False
+            if dest_slot.locked:
+                self._show_info_notice_banner("Destination button is locked.")
+                return False
+
+            source_clone = self._clone_slot(source_slot)
+            dest_has_content = bool(dest_slot.assigned or dest_slot.title)
+            if not dest_has_content:
                 self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
                 self.data[source_key[0]][source_key[1]][source_key[2]] = SoundButtonData()
-            elif clicked == swap_btn:
-                dest_clone = self._clone_slot(dest_slot)
-                self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
-                self.data[source_key[0]][source_key[1]][source_key[2]] = dest_clone
             else:
-                return False
+                box = QMessageBox(self)
+                box.setWindowTitle("Button Drag")
+                box.setText("Destination has content.")
+                replace_btn = box.addButton("Replace", QMessageBox.AcceptRole)
+                swap_btn = box.addButton("Swap", QMessageBox.ActionRole)
+                cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+                box.exec_()
+                clicked = box.clickedButton()
+                if clicked == cancel_btn or clicked is None:
+                    return False
+                if clicked == replace_btn:
+                    self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
+                    self.data[source_key[0]][source_key[1]][source_key[2]] = SoundButtonData()
+                elif clicked == swap_btn:
+                    dest_clone = self._clone_slot(dest_slot)
+                    self.data[dest_key[0]][dest_key[1]][dest_key[2]] = source_clone
+                    self.data[source_key[0]][source_key[1]][source_key[2]] = dest_clone
+                else:
+                    return False
 
-        self._set_dirty(True)
-        self._refresh_page_list()
-        self._refresh_sound_grid()
-        return True
+            self._set_dirty(True)
+            self._refresh_page_list()
+            self._refresh_sound_grid()
+            return True
+
+        return self._add_sound_files_to_slot(dest_slot_index, self._extract_dropped_sound_file_paths(mime_data))
 
     def _page_has_active_playing_slot(self, group: str, page_index: int) -> bool:
         for key in self._active_playing_keys:
@@ -1929,30 +1956,23 @@ class PagesSlotsMixin:
     def _available_add_slot_indices(self, page: List[SoundButtonData], start_index: int) -> List[int]:
         return [index for index in range(start_index, SLOTS_PER_PAGE) if self._slot_is_available_for_add(page[index])]
 
-    def _pick_sound(self, slot_index: int) -> None:
+    def _add_sound_files_to_slot(self, slot_index: int, file_paths: List[str]) -> bool:
         if not self.cue_mode and not self._is_page_created(self.current_group, self.current_page):
             self._show_info_notice_banner("Create the page first before adding sound buttons.")
-            return
+            return False
         page = self._current_page_slots()
         slot = page[slot_index]
         if slot.locked:
             self._show_info_notice_banner("This sound button is locked.")
-            return
-
-        start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            tr("Select Sound Files"),
-            start_dir,
-            self._audio_file_dialog_filter(),
-        )
+            return False
+        file_paths = [str(path or "").strip() for path in list(file_paths or []) if str(path or "").strip()]
         if not file_paths:
-            return
+            return False
         available_slots = self._available_add_slot_indices(page, slot_index)
         available_count = len(available_slots)
         if available_count <= 0:
             self._show_info_notice_banner("No available sound button slots from this position.")
-            return
+            return False
         if len(file_paths) > available_count:
             file_paths = file_paths[:available_count]
             self._show_info_notice_banner(
@@ -1975,7 +1995,7 @@ class PagesSlotsMixin:
                 f"Skipped {len(rejected_paths)} file(s) with unsafe path values.\n\n{preview}{suffix}",
             )
         if not safe_paths:
-            return
+            return False
         file_paths = safe_paths
         if self.verify_sound_file_on_add:
             matches = self._verify_audio_files_before_add(file_paths)
@@ -1984,7 +2004,7 @@ class PagesSlotsMixin:
         if self.search_lyric_on_add_sound_button:
             lyric_links = self._prompt_lyric_link_selection(file_paths)
             if lyric_links is None:
-                return
+                return False
         else:
             lyric_links = ["" for _ in file_paths]
         lyric_links = [lyric_links[index] if index < len(lyric_links) else "" for index in range(len(file_paths))]
@@ -2015,6 +2035,17 @@ class PagesSlotsMixin:
             self._set_dirty(True)
             self._refresh_page_list()
             self._refresh_sound_grid()
+        return changed
+
+    def _pick_sound(self, slot_index: int) -> None:
+        start_dir = self.settings.last_sound_dir or self.settings.last_open_dir or ""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            tr("Select Sound Files"),
+            start_dir,
+            self._audio_file_dialog_filter(),
+        )
+        self._add_sound_files_to_slot(slot_index, list(file_paths or []))
 
     def _scan_lyric_candidates_with_progress(
         self,

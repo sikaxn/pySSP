@@ -60,7 +60,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from pyssp.audio_format_support import build_audio_file_dialog_filter, normalize_supported_audio_extensions
+from pyssp.audio_format_support import (
+    build_audio_file_dialog_filter,
+    effective_audio_file_extensions,
+    normalize_supported_audio_extensions,
+)
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
     can_decode_with_ffmpeg,

@@ -109,14 +109,18 @@ class SoundButton(QPushButton):
         event.accept()
 
     def dragEnterEvent(self, event) -> None:
-        if self._host._can_accept_sound_button_drop(event.mimeData()):
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_sound_file_drop(
+            event.mimeData()
+        ):
             self._host._set_sound_button_drop_target(self.slot_index)
             event.acceptProposedAction()
             return
         event.ignore()
 
     def dragMoveEvent(self, event) -> None:
-        if self._host._can_accept_sound_button_drop(event.mimeData()):
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_sound_file_drop(
+            event.mimeData()
+        ):
             self._host._set_sound_button_drop_target(self.slot_index)
             event.acceptProposedAction()
             return
@@ -127,7 +131,10 @@ class SoundButton(QPushButton):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
-        if not self._host._can_accept_sound_button_drop(event.mimeData()):
+        if not (
+            self._host._can_accept_sound_button_drop(event.mimeData())
+            or self._host._can_accept_sound_file_drop(event.mimeData())
+        ):
             self._host._clear_sound_button_drop_target()
             event.ignore()
             return

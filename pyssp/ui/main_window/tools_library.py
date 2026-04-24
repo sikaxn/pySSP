@@ -910,7 +910,7 @@ class ToolsLibraryMixin:
             return
 
         refs: List[dict] = []
-        rows: List[tuple[str, str, str, bool]] = []
+        rows: List[tuple[str, str, str, str, bool]] = []
         for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
             slot = ref["slot_ref"]
             if not slot.assigned or slot.marker:
@@ -921,8 +921,9 @@ class ToolsLibraryMixin:
             if not source_path:
                 continue
             output_path = str(suggested_vocal_removed_output_path(source_path) or "").strip()
+            title = str(slot.title or "").strip() or os.path.splitext(os.path.basename(source_path))[0]
             refs.append(ref)
-            rows.append((source_path, output_path, str(ref["location"]), bool(output_path)))
+            rows.append((title, source_path, output_path, str(ref["location"]), bool(output_path)))
 
         if not rows:
             self._show_info_notice_banner("All assigned sound buttons already have vocal removed tracks linked.")
@@ -935,7 +936,7 @@ class ToolsLibraryMixin:
                 "audio file using the *_pyssp_vocal_removal* filename pattern. No save location prompt is shown."
             ),
             rows=rows,
-            target_header="Generated File",
+            target_header="Generated Name",
             action_header="Generate",
             parent=self,
         )
@@ -1062,7 +1063,7 @@ class ToolsLibraryMixin:
         QApplication.processEvents()
 
         refs: List[dict] = []
-        rows: List[tuple[str, str, str, bool]] = []
+        rows: List[tuple[str, str, str, str, bool]] = []
         found_any = False
         directory_cache: Dict[str, Dict[str, str]] = {}
         processed = 0
@@ -1092,8 +1093,9 @@ class ToolsLibraryMixin:
             candidate = self._find_generated_vocal_removed_file(source_path, directory_cache)
             if candidate:
                 found_any = True
+            title = str(slot.title or "").strip() or os.path.splitext(os.path.basename(source_path))[0]
             refs.append(ref)
-            rows.append((source_path, candidate, str(ref["location"]), bool(candidate)))
+            rows.append((title, source_path, candidate, str(ref["location"]), bool(candidate)))
             processed += 1
             progress.setValue(processed)
             QApplication.processEvents()
@@ -1118,7 +1120,7 @@ class ToolsLibraryMixin:
                 "pySSP looks beside each source audio file for names like *_pyssp_vocal_removal* with any extension."
             ),
             rows=rows,
-            target_header="Vocal Removed File Found",
+            target_header="Generated Name",
             action_header="Link",
             parent=self,
         )
@@ -1130,7 +1132,7 @@ class ToolsLibraryMixin:
         linked = 0
         changed_keys: List[Tuple[str, int, int]] = []
         for idx, ref in enumerate(refs):
-            candidate = rows[idx][1]
+            candidate = rows[idx][2]
             should_link = idx < len(flags) and bool(flags[idx]) and bool(candidate)
             next_value = candidate if should_link else ""
             slot = ref["slot_ref"]

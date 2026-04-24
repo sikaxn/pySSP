@@ -551,7 +551,7 @@ def test_drop_audio_files_on_sound_button_uses_add_sound_flow(qapp, monkeypatch,
 
 
 @pytest.mark.monkey
-def test_vocal_removed_indicator_uses_stripe_and_missing_track_warning(qapp, monkeypatch, tmp_path):
+def test_vocal_removed_indicator_uses_stripe_without_page_missing_track_warning(qapp, monkeypatch, tmp_path):
     audio_with_backtrack = tmp_path / "with_backtrack.wav"
     audio_without_backtrack = tmp_path / "without_backtrack.wav"
     backtrack_path = tmp_path / "with_backtrack_no_vocals.wav"
@@ -642,9 +642,8 @@ def test_vocal_removed_indicator_uses_stripe_and_missing_track_warning(qapp, mon
 
         window._toggle_global_vocal_removed_mode(True)
 
-        assert window.vocal_removed_warning_banner.isVisible() is True
-        assert "no vocal removed track" in window.vocal_removed_warning_banner.text().lower()
-        assert "1 sound button" in window.vocal_removed_warning_banner.text().lower()
+        assert window.vocal_removed_warning_banner.isVisible() is False
+        assert window.vocal_removed_warning_banner.text() == ""
     finally:
         for timer_name in [
             "meter_timer",

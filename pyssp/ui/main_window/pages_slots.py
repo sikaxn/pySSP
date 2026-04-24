@@ -633,21 +633,6 @@ class PagesSlotsMixin:
                 and (not str(current_slot.vocal_removed_file or "").strip())
             ):
                 message = f"{tr('VOCAL REMOVED ENABLED:')} {tr('The currently playing song has no vocal removed track.')}"
-            else:
-                missing_count = 0
-                for slot in self.data[self.current_group][self.current_page]:
-                    if (
-                        slot.assigned
-                        and (not slot.marker)
-                        and (not str(slot.vocal_removed_file or "").strip())
-                    ):
-                        missing_count += 1
-                if missing_count:
-                    noun = "sound button" if missing_count == 1 else "sound buttons"
-                    message = (
-                        f"{tr('VOCAL REMOVED ENABLED:')} "
-                        f"{missing_count} {noun} on this page have no vocal removed track."
-                    )
         self.vocal_removed_warning_banner.setText(message)
         self.vocal_removed_warning_banner.setVisible(bool(message))
 

@@ -1,14 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_data_files
-
-pedalboard_datas, pedalboard_binaries, pedalboard_hiddenimports = collect_all('pedalboard')
-pedalboard_native_datas, pedalboard_native_binaries, pedalboard_native_hiddenimports = collect_all('pedalboard_native')
+from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_all
 
 datas = [('pyssp\\assets', 'pyssp\\assets'), ('docs\\build\\html', 'docs\\build\\html'), ('.build_meta\\version.json', '.')]
+binaries = []
+hiddenimports = []
 datas += collect_data_files('imageio_ffmpeg')
-datas += pedalboard_datas + pedalboard_native_datas
-binaries = pedalboard_binaries + pedalboard_native_binaries
-hiddenimports = pedalboard_hiddenimports + pedalboard_native_hiddenimports
+tmp_ret = collect_all('pedalboard')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pedalboard_native')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(

@@ -9,6 +9,8 @@ set "APP_VERSION=0.0.0"
 set "APP_BUILD_ID="
 set "APP_BASENAME=pySSP-%APP_VERSION%"
 set "APP_EXE_NAME=pySSP"
+set "APP_DIST_DIR=%ROOT_DIR%dist\pySSP"
+set "APP_VERSIONED_DIR=%ROOT_DIR%dist\%APP_BASENAME%"
 set "SPLEETER_CLI_DIR=%ROOT_DIR%dist\spleeter-cli"
 set "SPLEETER_CLI_EXE=%SPLEETER_CLI_DIR%\spleeter-cli.exe"
 set "SPLEETER_CLI_STASH=%ROOT_DIR%.build_meta\spleeter-cli-stash"
@@ -166,10 +168,9 @@ if exist "%SPLEETER_CLI_EXE%" (
     echo [WARN] Build it first with spleeter-cli\build_pyinstaller.bat
 )
 
-if exist "%ROOT_DIR%dist\%APP_BASENAME%" rmdir /s /q "%ROOT_DIR%dist\%APP_BASENAME%"
-move "%ROOT_DIR%dist\pySSP" "%ROOT_DIR%dist\%APP_BASENAME%" >nul
+if exist "%APP_VERSIONED_DIR%" rmdir /s /q "%APP_VERSIONED_DIR%"
+call :rename_dist_with_retry "%APP_DIST_DIR%" "%APP_BASENAME%" 5 2
 if errorlevel 1 (
-    echo [ERROR] Failed to rename dist folder to versioned name.
     popd
     exit /b 1
 )
@@ -182,3 +183,33 @@ echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_debug.bat
 
 popd
 exit /b 0
+
+:rename_dist_with_retry
+setlocal
+set "SOURCE_DIR=%~1"
+set "TARGET_NAME=%~2"
+set "MAX_ATTEMPTS=%~3"
+set "WAIT_SECONDS=%~4"
+set /a ATTEMPT=1
+
+:rename_dist_retry
+move "%SOURCE_DIR%" "%ROOT_DIR%dist\%TARGET_NAME%" >nul
+if not errorlevel 1 (
+    endlocal
+    exit /b 0
+)
+
+echo [WARN] Failed to rename dist folder to versioned name on attempt %ATTEMPT% of %MAX_ATTEMPTS%.
+if exist "%ROOT_DIR%scripts\find_locking_processes.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%scripts\find_locking_processes.ps1" -Path "%SOURCE_DIR%"
+)
+if %ATTEMPT% GEQ %MAX_ATTEMPTS% (
+    echo [ERROR] Failed to rename dist folder to versioned name after %MAX_ATTEMPTS% attempts.
+    endlocal
+    exit /b 1
+)
+
+echo [INFO] Waiting %WAIT_SECONDS%s before retrying rename...
+powershell -NoProfile -Command "Start-Sleep -Seconds %WAIT_SECONDS%"
+set /a ATTEMPT+=1
+goto :rename_dist_retry

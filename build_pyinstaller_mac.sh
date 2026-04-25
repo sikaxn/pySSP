@@ -145,6 +145,8 @@ if ! run_pipenv run pyinstaller \
   --windowed \
   --name pySSP \
   "${ICON_ARG[@]}" \
+  --collect-all "pedalboard" \
+  --collect-all "pedalboard_native" \
   --collect-data "imageio_ffmpeg" \
   --add-data "pyssp/assets:pyssp/assets" \
   --add-data "docs/build/html:docs/build/html" \

@@ -27,10 +27,14 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+#  Generated one-off specs can stay ignored, but the repo's canonical
+#  PyInstaller specs should remain versioned.
 *.manifest
 *.spec
+!pySSP.spec
+!pySSP_debug.spec
+!pb_check.spec
+!pySSP-*.spec
 
 # Installer logs
 pip-log.txt

@@ -110,6 +110,8 @@ pipenv run pyinstaller ^
   --windowed ^
   --name %APP_EXE_NAME% ^
   --icon "pyssp\assets\app_icon.ico" ^
+  --collect-all "pedalboard" ^
+  --collect-all "pedalboard_native" ^
   --collect-data "imageio_ffmpeg" ^
   --add-data "pyssp\assets;pyssp\assets" ^
   --add-data "docs\build\html;docs\build\html" ^

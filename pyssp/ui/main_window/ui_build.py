@@ -108,6 +108,8 @@ class UiBuildMixin:
             localize_widget_tree(window, self.ui_language)
         if self._about_window is not None:
             localize_widget_tree(self._about_window, self.ui_language)
+        if self._getting_started_window is not None:
+            self._getting_started_window.set_language(self.ui_language)
         if self._tips_window is not None:
             self._tips_window.set_language(self.ui_language)
         if self._stage_display_window is not None:
@@ -411,6 +413,10 @@ class UiBuildMixin:
         help_action.triggered.connect(self._open_help_window)
         help_menu.addAction(help_action)
 
+        getting_started_action = QAction("Getting Started", self)
+        getting_started_action.triggered.connect(lambda _=False: self._open_getting_started_window(startup=False))
+        help_menu.addAction(getting_started_action)
+
         latest_version_action = QAction("Get the Latest Version", self)
         latest_version_action.triggered.connect(self._open_latest_version_page)
         help_menu.addAction(latest_version_action)
@@ -676,6 +682,18 @@ class UiBuildMixin:
                 f"Could not open help index with the default browser.\n\nPath:\n{help_index}",
             )
 
+    def _open_getting_started_docs_page(self) -> None:
+        target = self._help_doc_path("startup.html")
+        if os.path.exists(target):
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(target)):
+                QMessageBox.warning(
+                    self,
+                    "Help Open Failed",
+                    f"Could not open help page with the default browser.\n\nPath:\n{target}",
+                )
+            return
+        self._open_help_window()
+
     def _open_latest_version_page(self) -> None:
         releases_url = QUrl("https://github.com/sikaxn/pySSP/releases")
         if not QDesktopServices.openUrl(releases_url):
@@ -700,6 +718,53 @@ class UiBuildMixin:
                 "Help Open Failed",
                 f"Could not open URL with the default browser.\n\nURL:\n{website_url.toString()}",
             )
+
+    def _clear_getting_started_window_ref(self) -> None:
+        self._getting_started_window = None
+
+    def _open_audio_device_options(self) -> None:
+        self._open_options_dialog(initial_page="Audio Device & Timecode")
+
+    def _getting_started_image_path(self, *parts: str) -> str:
+        docs_source = os.path.join(self._project_root_path(), "docs", "source", "images", *parts)
+        if os.path.exists(docs_source):
+            return docs_source
+        docs_built = os.path.join(os.path.dirname(self._help_index_path()), "_images", *parts)
+        if os.path.exists(docs_built):
+            return docs_built
+        basename = os.path.basename(os.path.join(*parts))
+        docs_built_flat = os.path.join(os.path.dirname(self._help_index_path()), "_images", basename)
+        if os.path.exists(docs_built_flat):
+            return docs_built_flat
+        return docs_source
+
+    def _open_getting_started_window(self, startup: bool = False) -> None:
+        if self._getting_started_window is None:
+            self._getting_started_window = GettingStartedDialog(
+                language=self.ui_language,
+                version_text=self.app_version_text,
+                build_text=self.app_build_text,
+                beta_build=is_beta_version(self.app_version_text),
+                splash_image_path=self._asset_file_path("logo2.png"),
+                add_page_image_path=self._getting_started_image_path("getting_started", "add_page.png"),
+                drag_file_image_path=self._getting_started_image_path("getting_started", "drag_file_to_sound_button.png"),
+                open_audio_device_options=self._open_audio_device_options,
+                open_latest_version_page=self._open_latest_version_page,
+                open_docs_page=self._open_getting_started_docs_page,
+                open_options_page=self._open_options_dialog,
+                open_about_window=self._open_about_window,
+                parent=self,
+            )
+            self._getting_started_window.destroyed.connect(lambda _=None: self._clear_getting_started_window_ref())
+        if not startup:
+            self._getting_started_window.reset_to_first_page()
+        self._getting_started_window.show()
+        if startup:
+            self._getting_started_window.raise_()
+            self._getting_started_window.activateWindow()
+        else:
+            self._getting_started_window.raise_()
+            self._getting_started_window.activateWindow()
 
     def _open_web_lyric_display(self, view_name: str) -> None:
         target = str(view_name or "").strip().lower()
@@ -1354,4 +1419,3 @@ class UiBuildMixin:
                         event.acceptProposedAction()
                         return True
         return QMainWindow.eventFilter(self, obj, event)
-

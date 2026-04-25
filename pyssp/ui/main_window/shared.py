@@ -182,8 +182,9 @@ from pyssp.ui.stage_display import (
 )
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
+from pyssp.ui.getting_started_dialog import GettingStartedDialog
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions
 from pyssp.ui.tips_window import TipsWindow
 from pyssp.web_remote import WebRemoteServer
-from pyssp.version import get_app_title_base, get_display_build_id, get_display_version
+from pyssp.version import get_app_title_base, get_display_build_id, get_display_version, is_beta_version

@@ -54,9 +54,10 @@ class MainWindow(
     LockingMixin,
     QMainWindow,
 ):
-    def __init__(self) -> None:
+    def __init__(self, *, show_getting_started_on_startup: bool = False) -> None:
         super().__init__()
         self._suspend_settings_save = True
+        self._show_getting_started_on_startup = bool(show_getting_started_on_startup)
         self.app_version_text = get_display_version()
         self.app_build_text = get_display_build_id()
         self.app_title_base = get_app_title_base()
@@ -646,6 +647,7 @@ class MainWindow(
         self._about_window: Optional[AboutWindowDialog] = None
         self._audio_engine_insight_window: Optional[AudioEngineInsightDialog] = None
         self._system_info_window: Optional[SystemInformationDialog] = None
+        self._getting_started_window: Optional[GettingStartedDialog] = None
         self._tips_window: Optional[TipsWindow] = None
         self._dsp_config: DSPConfig = DSPConfig()
         self._flash_slot_key: Optional[Tuple[str, int, int]] = None
@@ -797,6 +799,8 @@ class MainWindow(
         if startup_audio_warning:
             QMessageBox.warning(self, "Audio Device", startup_audio_warning)
         self._suspend_settings_save = False
+        if self._show_getting_started_on_startup:
+            QTimer.singleShot(0, lambda: self._open_getting_started_window(startup=True))
         if self.tips_open_on_startup:
             QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
 

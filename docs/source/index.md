@@ -5,6 +5,7 @@
 :caption: Contents
 
 main_window
+startup
 group_page_sound_button
 edit_sound_button
 audio_device_timecode

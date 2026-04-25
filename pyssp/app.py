@@ -550,7 +550,8 @@ def main() -> int:
     icon_path = Path(__file__).resolve().parent / "assets" / "app_icon.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    win = MainWindow()
+    show_getting_started_on_startup = bool((not settings_existed_at_launch) or update_done)
+    win = MainWindow(show_getting_started_on_startup=show_getting_started_on_startup)
     if icon_path.exists():
         win.setWindowIcon(QIcon(str(icon_path)))
     win.show()

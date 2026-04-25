@@ -38,6 +38,12 @@ class SettingsArchiveMixin:
             return bundled
         return os.path.join(self._project_root_path(), "docs", "build", "html", "index.html")
 
+    def _help_doc_path(self, filename: str) -> str:
+        target = str(filename or "").strip() or "index.html"
+        index_path = self._help_index_path()
+        base_dir = os.path.dirname(index_path)
+        return os.path.join(base_dir, target)
+
     def _default_backup_dir(self) -> str:
         return self.settings.last_save_dir or self.settings.last_open_dir or os.path.expanduser("~")
 

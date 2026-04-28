@@ -52,6 +52,22 @@ def test_alert_route_accepts_json_payload():
     assert calls[-1][1]["seconds"] == 7
 
 
+def test_index_and_legacy_index_routes_serve_expected_assets():
+    calls = []
+    client = _make_client(calls)
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b'id="languageMode"' in response.data
+    assert b'id="tracksView"' in response.data
+    assert b"/legacy-index" in response.data
+
+    response = client.get("/legacy-index")
+    assert response.status_code == 200
+    assert b"Web Remote" in response.data
+    assert b"Open Legacy Layout" not in response.data
+
+
 def test_alert_clear_route_dispatches_clear_flag():
     calls = []
     client = _make_client(calls)

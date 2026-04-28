@@ -7,119 +7,205 @@
   <link rel="stylesheet" href="/webremote/style.css">
 </head>
 <body>
-<div class="shell">
-  <div class="card">
-    <h1>Web Remote</h1>
-    <div class="section links" style="margin-top:0;padding-top:0;border-top:0;">
-      <div><strong>Web Lyric Display</strong></div>
-      <div class="status" style="margin-top:6px;">Web lyric WebSocket uses Web Remote port + 1.</div>
-      <a href="#" onclick="openLyricDisplay('caption'); return false;">/lyric/caption/</a>
-      <a href="#" onclick="openLyricDisplay('overhead'); return false;">/lyric/overhead/</a>
-      <a href="#" onclick="openLyricDisplay('banner'); return false;">/lyric/banner/</a>
-      <a href="#" onclick="openLyricDisplay('vmixoverlay'); return false;">/lyric/vmixoverlay/</a>
-      <div style="margin-top:6px;"><strong>Lyric JSON API</strong></div>
-      <a href="/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/api/v2/controller/live-items</a>
-      <a href="/api/v2/service/items" target="_blank" rel="noopener noreferrer">/api/v2/service/items</a>
-      <a href="/lyric/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/controller/live-items</a>
-      <a href="/lyric/api/v2/service/items" target="_blank" rel="noopener noreferrer">/lyric/api/v2/service/items</a>
+<div class="app-shell">
+  <section class="status-strip">
+    <div class="transport-card">
+      <div class="top-control-row">
+        <label class="field compact-field">
+          <span>Language 语言</span>
+          <select id="languageMode">
+            <option value="auto">Auto 自动</option>
+            <option value="en">English 英文</option>
+            <option value="zh">Chinese 中文</option>
+          </select>
+        </label>
+        <label class="field compact-field">
+          <span data-i18n="transport">Transport</span>
+          <select id="transportMode">
+            <option value="ws">WebSocket</option>
+            <option value="http">HTTP</option>
+          </select>
+        </label>
+        <button class="primary touch" type="button" id="refreshButton" data-i18n="refresh">Refresh</button>
+      </div>
     </div>
-    <div class="row">
-      <button class="good" onclick="refreshAll()">Refresh</button>
-      <label>Transport
-        <select id="transportMode" style="height:30px;border:1px solid var(--line);border-radius:6px;padding:0 6px;">
-          <option value="http">HTTP</option>
-          <option value="ws">WebSocket</option>
-        </select>
-      </label>
-      <span id="lastStatus" class="status">Ready</span>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/pause')">Pause</button>
-      <button onclick="callApi('/api/resume')">Resume</button>
-      <button onclick="callApi('/api/stop')">Stop</button>
-      <button class="warn" onclick="callApi('/api/forcestop')">Force Stop</button>
-      <button onclick="callApi('/api/playnext')">Next</button>
-      <button onclick="callApi('/api/rapidfire')">Rapid Fire</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/talk/toggle')">Talk</button>
-      <button onclick="callApi('/api/vocal-removed/toggle')">Vocal Removed</button>
-      <button onclick="callApi('/api/playlist/toggle')">Playlist</button>
-      <button onclick="callApi('/api/playlist/shuffle/toggle')">Shuffle</button>
-      <button onclick="callApi('/api/multiplay/toggle')">Multi</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/fadein/toggle')">Fade In</button>
-      <button onclick="callApi('/api/fadeout/toggle')">Fade Out</button>
-      <button onclick="callApi('/api/crossfade/toggle')">Crossfade</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/lyric/show')">Lyric Show</button>
-      <button onclick="callApi('/api/lyric/blank')">Lyric Blank</button>
-      <button onclick="callApi('/api/lyric/toggle')">Lyric Toggle</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/resetpage/current')">Reset Page</button>
-      <button class="warn" onclick="callApi('/api/resetpage/all')">Reset All</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/mute')">Mute</button>
-      <label>Volume
-        <input type="number" id="volumeLevel" min="0" max="100" value="90" style="width:72px;">
-      </label>
-      <button onclick="setVolumeFromInput()">Set Volume</button>
-    </div>
-    <div class="row">
-      <button onclick="callApi('/api/lock')">Lock</button>
-      <button class="warn" onclick="callApi('/api/automation-lock')">Automation Lock</button>
-      <button class="good" onclick="unlockFromRemote()">Unlock</button>
-    </div>
-    <div id="automationWarning" class="warn-box" style="display:none;"></div>
+  </section>
 
-    <div class="section">
-      <div class="row"><strong>Hotkey-style Controls</strong></div>
-      <div class="row">
-        <button onclick="callApi('/api/group/prev')">Prev Group</button>
-        <button onclick="callApi('/api/group/next')">Next Group</button>
-        <button onclick="callApi('/api/page/prev')">Prev Page</button>
-        <button onclick="callApi('/api/page/next')">Next Page</button>
+  <main class="layout">
+    <section class="panel panel-main">
+      <div class="mini-card main-now-playing">
+        <div class="mini-card-title" data-i18n="nowPlaying">Now Playing</div>
+        <div id="tracksView" class="track-list"></div>
       </div>
-      <div class="row">
-        <button onclick="callApi('/api/soundbutton/prev')">Prev Button</button>
-        <button onclick="callApi('/api/soundbutton/next')">Next Button</button>
-        <button onclick="callApi('/api/playselected')">Play Selected</button>
-        <button onclick="callApi('/api/playselectedpause')">Play Sel/Pause</button>
-      </div>
-    </div>
-    <div class="alert-box">
-      <div class="row"><strong>Send Alert</strong></div>
-      <div class="row">
-        <textarea id="alertText" placeholder="Type alert text..."></textarea>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="alertKeep" checked> Keep on screen</label>
-        <label>Seconds <input type="number" id="alertSeconds" min="1" max="600" value="10" style="width:86px;"></label>
-      </div>
-      <div class="row">
-        <button class="primary" onclick="sendAlert()">Send Alert</button>
-        <button class="warn" onclick="clearAlert()">Clear Alert</button>
-      </div>
-    </div>
-    <div id="stateView" class="status mono"></div>
-    <div class="tracks">
-      <strong>Now Playing</strong>
-      <div id="tracksView" class="status"></div>
-    </div>
-  </div>
 
-  <div class="card">
-    <div class="row"><strong>Groups</strong></div>
-    <div id="groups" class="group-list"></div>
-    <div class="row" style="margin-top:8px;"><strong>Pages</strong></div>
-    <div id="pages" class="page-list"></div>
-    <div class="row" style="margin-top:8px;"><strong>Buttons</strong></div>
-    <div id="buttons" class="btn-grid"></div>
-  </div>
+      <div class="panel-header">
+        <div>
+          <h2 data-i18n="selectAndPlay">Select And Play</h2>
+          <p data-i18n="selectHelp">Choose a group, then a page, then tap a button to play.</p>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-title" data-i18n="groups">Groups</div>
+        <div id="groups" class="group-list"></div>
+      </div>
+
+      <div class="block">
+        <div class="block-title" data-i18n="pages">Pages</div>
+        <div id="pages" class="page-list"></div>
+      </div>
+
+      <div class="block">
+        <div class="block-title" data-i18n="buttons">Buttons</div>
+        <div id="buttons" class="btn-grid"></div>
+      </div>
+    </section>
+
+    <aside class="panel panel-side">
+      <section class="card-stack">
+        <div class="mini-card">
+          <div class="mini-card-title" data-i18n="quickControls">Quick Controls</div>
+          <div class="touch-grid two-up">
+            <button class="touch" type="button" data-api="/api/pause" data-i18n="pause">Pause</button>
+            <button class="touch" type="button" data-api="/api/resume" data-i18n="resume">Resume</button>
+            <button class="touch warn" type="button" data-api="/api/stop" data-i18n="stop">Stop</button>
+            <button class="touch danger" type="button" data-api="/api/forcestop" data-i18n="forceStop">Force Stop</button>
+            <button class="touch" type="button" data-api="/api/playnext" data-i18n="next">Next</button>
+            <button class="touch" type="button" data-api="/api/rapidfire" data-i18n="rapidFire">Rapid Fire</button>
+          </div>
+          <div class="jog-row">
+            <div class="mini-card-title" data-i18n="jog">Jog</div>
+            <div class="jog-slider-row">
+              <span class="jog-end" id="jogStart">00:00</span>
+              <input type="range" id="jogSlider" min="0" max="100" step="1" value="0">
+              <span class="jog-end" id="jogEnd">00:00</span>
+            </div>
+            <div id="jogValue" class="support-text" data-i18n="jogHint">Drag to seek the current track.</div>
+          </div>
+          <div class="volume-row quick-volume">
+            <div class="mini-card-title" data-i18n="volumeTitle">Volume</div>
+            <input type="range" id="volumeSlider" min="0" max="100" value="90">
+            <div class="volume-actions">
+              <input type="number" id="volumeLevel" min="0" max="100" value="90">
+            </div>
+          </div>
+        </div>
+
+        <div class="mini-card">
+          <div class="mini-card-title" data-i18n="modeToggles">Mode Toggles</div>
+          <div class="touch-grid two-up">
+            <button class="touch" type="button" data-api="/api/talk/toggle" data-i18n="talk" data-state-key="talk_active">Talk</button>
+            <button class="touch" type="button" data-api="/api/vocal-removed/toggle" data-i18n="vocalRemoved" data-state-key="vocal_removed_active">Vocal Removed</button>
+            <button class="touch" type="button" data-api="/api/playlist/toggle" data-i18n="playlist" data-state-key="playlist_enabled">Playlist</button>
+            <button class="touch" type="button" data-api="/api/playlist/shuffle/toggle" data-i18n="shuffle" data-state-key="shuffle_enabled">Shuffle</button>
+            <button class="touch" type="button" data-api="/api/multiplay/toggle" data-i18n="multiPlay" data-state-key="multi_play_enabled">Multi Play</button>
+            <button class="touch" type="button" data-api="/api/mute" data-i18n="mute" data-state-key="muted_like">Mute</button>
+          </div>
+        </div>
+
+        <details class="mini-card" open>
+          <summary class="summary-row">
+            <span data-i18n="playbackMore">Playback More</span>
+          </summary>
+          <div class="touch-grid two-up">
+            <button class="touch" type="button" data-api="/api/fadein/toggle" data-i18n="fadeIn" data-state-key="fade_in_enabled">Fade In</button>
+            <button class="touch" type="button" data-api="/api/fadeout/toggle" data-i18n="fadeOut" data-state-key="fade_out_enabled">Fade Out</button>
+            <button class="touch" type="button" data-api="/api/crossfade/toggle" data-i18n="crossfade" data-state-key="crossfade_enabled">Crossfade</button>
+            <button class="touch" type="button" data-api="/api/playselected" data-i18n="playSelected">Play Selected</button>
+            <button class="touch" type="button" data-api="/api/playselectedpause" data-i18n="playSelectedPause">Play Sel/Pause</button>
+            <button class="touch" type="button" data-api="/api/resetpage/current" data-i18n="resetPage">Reset Page</button>
+          </div>
+        </details>
+
+        <details class="mini-card">
+          <summary class="summary-row">
+            <span data-i18n="lyricAndStage">Lyric And Stage</span>
+          </summary>
+          <div class="link-grid">
+            <button class="touch" type="button" data-lyric-view="caption" data-i18n="lyricCaption">Caption View</button>
+            <button class="touch" type="button" data-lyric-view="overhead" data-i18n="lyricOverhead">Overhead View</button>
+            <button class="touch" type="button" data-lyric-view="banner" data-i18n="lyricBanner">Banner View</button>
+            <button class="touch" type="button" data-lyric-view="vmixoverlay" data-i18n="lyricOverlay">vMix Overlay</button>
+            <button class="touch" type="button" data-api="/api/lyric/show" data-i18n="lyricShow">Lyric Show</button>
+            <button class="touch" type="button" data-api="/api/lyric/blank" data-i18n="lyricBlank">Lyric Blank</button>
+            <button class="touch" type="button" data-api="/api/lyric/toggle" data-i18n="lyricToggle" data-state-key="lyric_display_visible">Lyric Toggle</button>
+          </div>
+          <div class="api-links">
+            <a href="/api/v2/controller/live-items" target="_blank" rel="noopener noreferrer">/api/v2/controller/live-items</a>
+            <a href="/api/v2/service/items" target="_blank" rel="noopener noreferrer">/api/v2/service/items</a>
+          </div>
+          <p class="support-text" data-i18n="lyricWsNote">Lyric WebSocket uses the Web Remote port plus 1.</p>
+        </details>
+
+        <details class="mini-card">
+          <summary class="summary-row">
+            <span data-i18n="navigationLock">Navigation And Lock</span>
+          </summary>
+          <div class="touch-grid two-up">
+            <button class="touch" type="button" data-api="/api/group/prev" data-i18n="prevGroup">Prev Group</button>
+            <button class="touch" type="button" data-api="/api/group/next" data-i18n="nextGroup">Next Group</button>
+            <button class="touch" type="button" data-api="/api/page/prev" data-i18n="prevPage">Prev Page</button>
+            <button class="touch" type="button" data-api="/api/page/next" data-i18n="nextPage">Next Page</button>
+            <button class="touch" type="button" data-api="/api/soundbutton/prev" data-i18n="prevButton">Prev Button</button>
+            <button class="touch" type="button" data-api="/api/soundbutton/next" data-i18n="nextButton">Next Button</button>
+            <button class="touch" type="button" data-api="/api/lock" data-i18n="lock">Lock</button>
+            <button class="touch danger" type="button" id="automationLockButton" data-i18n="automationLock">Automation Lock</button>
+            <button class="touch good" type="button" id="unlockButton" data-i18n="unlock">Unlock</button>
+            <button class="touch danger" type="button" data-api="/api/resetpage/all" data-i18n="resetAll">Reset All</button>
+          </div>
+          <div id="automationWarning" class="warn-box hidden"></div>
+        </details>
+
+        <details class="mini-card">
+          <summary class="summary-row">
+            <span data-i18n="alertTitle">Stage Alert</span>
+          </summary>
+          <label class="field wide">
+            <span data-i18n="alertMessage">Message</span>
+            <textarea id="alertText" data-i18n-placeholder="alertPlaceholder" placeholder="Type alert text..."></textarea>
+          </label>
+          <div class="touch-grid two-up">
+            <label class="toggle-field">
+              <input type="checkbox" id="alertKeep" checked>
+              <span data-i18n="keepOnScreen">Keep On Screen</span>
+            </label>
+            <label class="field">
+              <span data-i18n="seconds">Seconds</span>
+              <input type="number" id="alertSeconds" min="1" max="600" value="10">
+            </label>
+          </div>
+          <div class="touch-grid two-up">
+            <button class="touch primary" type="button" id="sendAlertButton" data-i18n="sendAlert">Send Alert</button>
+            <button class="touch danger" type="button" id="clearAlertButton" data-i18n="clearAlert">Clear Alert</button>
+          </div>
+        </details>
+
+        <details class="mini-card">
+          <summary class="summary-row">
+            <span data-i18n="remoteSummary">Remote Summary</span>
+          </summary>
+          <div id="summaryBox" class="summary-box"></div>
+        </details>
+
+        <div class="mini-card">
+          <div class="mini-card-title" data-i18n="status">Status</div>
+          <div class="status-copy side-status-copy">
+            <div id="lastStatus" class="status-value">Ready</div>
+          </div>
+        </div>
+
+        <details class="mini-card">
+          <summary class="summary-row">
+            <span data-i18n="diagnostics">Diagnostics</span>
+          </summary>
+          <div class="diagnostics-actions">
+            <a class="ghost-link touch" href="/legacy-index" data-i18n="legacyLink">Open Legacy Layout</a>
+          </div>
+          <pre id="stateView" class="state-view"></pre>
+        </details>
+      </section>
+    </aside>
+  </main>
 </div>
 
 <script src="/webremote/app.js"></script>

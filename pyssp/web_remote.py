@@ -505,6 +505,14 @@ class WebRemoteServer:
                 return jsonify({"ok": False, "error": {"code": "not_found", "message": "Web Remote index asset not found."}}), 404
             return send_from_directory(self._web_remote_assets_root, "index.html")
 
+        @app.get("/legacy-index")
+        @app.get("/legacy-index/")
+        def legacy_index():
+            index_path = self._web_remote_assets_root / "legacy-index.html"
+            if not index_path.exists() or not index_path.is_file():
+                return jsonify({"ok": False, "error": {"code": "not_found", "message": "Legacy Web Remote index asset not found."}}), 404
+            return send_from_directory(self._web_remote_assets_root, "legacy-index.html")
+
         @app.get("/webremote/<path:filename>")
         def webremote_asset(filename: str):
             try:

@@ -24,6 +24,18 @@ def qapp():
     return app
 
 
+def _cleanup_top_level_dialogs() -> None:
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        if not isinstance(widget, OptionsDialog):
+            continue
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+
+
 def _build_dialog(**overrides):
     defaults = dict(OptionsDialog._DEFAULTS)
     defaults.update(overrides)
@@ -176,6 +188,12 @@ def _build_dialog(**overrides):
         initial_page=overrides.get("initial_page"),
         parent=None,
     )
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_dialogs_after_test():
+    yield
+    _cleanup_top_level_dialogs()
 
 
 def test_playback_timeline_toggle_controls_jog_group(qapp):

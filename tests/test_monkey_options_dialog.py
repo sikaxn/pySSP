@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.test_options_dialog_ui import _build_dialog
+from tests.test_options_dialog_ui import _build_dialog, _cleanup_top_level_dialogs
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -21,6 +21,12 @@ def qapp():
     if app is None:
         app = QApplication([])
     return app
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_dialogs_after_test():
+    yield
+    _cleanup_top_level_dialogs()
 
 
 def _pick_existing_page(rng: random.Random):

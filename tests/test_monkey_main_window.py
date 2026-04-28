@@ -34,6 +34,30 @@ def _write_dummy_wav(path: Path, duration_sec: float = 0.20, sample_rate: int = 
         wav.writeframes(b"\x00\x00" * frame_count)
 
 
+def _cleanup_main_window(window, qapp: QApplication) -> None:
+    for timer_name in [
+        "meter_timer",
+        "timecode_mtc_timer",
+        "fade_timer",
+        "_preload_trim_timer",
+        "_preload_status_timer",
+        "talk_blink_timer",
+        "_midi_poll_timer",
+    ]:
+        timer = getattr(window, timer_name, None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+    try:
+        window.close()
+    except Exception:
+        window.hide()
+    window.deleteLater()
+    qapp.processEvents()
+
+
 def _pair_keys(case: dict[str, object], names: list[str]) -> set[tuple[str, object, str, object]]:
     out: set[tuple[str, object, str, object]] = set()
     for i, j in combinations(range(len(names)), 2):
@@ -271,24 +295,7 @@ def test_monkey_main_window_pairwise_settings_combo(qapp, monkeypatch, tmp_path)
             else:
                 assert calls["stop_playback"] == 0
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -397,24 +404,7 @@ def test_pick_sound_limits_verify_and_lyric_scan_to_available_slots(qapp, monkey
         assert window.data["A"][0][0].assigned is True
         assert window.data["A"][0][0].file_path == str(audio_paths[0])
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -530,24 +520,7 @@ def test_drop_audio_files_on_sound_button_uses_add_sound_flow(qapp, monkeypatch,
         assert calls["verify"] == 1
         assert calls["lyric"] == 1
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -645,24 +618,7 @@ def test_vocal_removed_indicator_uses_stripe_without_page_missing_track_warning(
         assert window.vocal_removed_warning_banner.isVisible() is False
         assert window.vocal_removed_warning_banner.text() == ""
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -753,24 +709,7 @@ def test_sound_button_text_wrap_and_status_legend(qapp, monkeypatch, tmp_path):
         assert "Button Legend:" in legend_labels
         assert "Vocal Removed Stripe" in legend_labels
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -850,24 +789,7 @@ def test_colour_legend_toggle_action_updates_visibility_and_setting(qapp, monkey
         assert window.button_legend_label.isVisible() is True
         assert window.settings.show_colour_legend is True
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -984,24 +906,7 @@ def test_pick_sound_skip_lyric_scan_keeps_add_and_uses_partial_results(qapp, mon
         assert second.lyric_file == ""
         assert any("partial scan results" in msg.lower() for msg in notices)
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)
 
 
 @pytest.mark.monkey
@@ -1102,21 +1007,4 @@ def test_preload_queue_respects_path_safety_toggle(qapp, monkeypatch, tmp_path):
         window._queue_current_page_audio_preload()
         assert str(unsafe_audio) in captured[-1]
     finally:
-        for timer_name in [
-            "meter_timer",
-            "timecode_mtc_timer",
-            "fade_timer",
-            "_preload_trim_timer",
-            "_preload_status_timer",
-            "talk_blink_timer",
-            "_midi_poll_timer",
-        ]:
-            timer = getattr(window, timer_name, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    pass
-        window.hide()
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_main_window(window, qapp)

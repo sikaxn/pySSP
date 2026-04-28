@@ -235,6 +235,8 @@ class RemoteApiMixin:
         return {
             "current_group": current_group,
             "current_page": current_page + 1,
+            "app_version": str(getattr(self, "app_version_text", "") or ""),
+            "app_build": str(getattr(self, "app_build_text", "") or ""),
             "cue_mode": self.cue_mode,
             "talk_active": self.talk_active,
             "vocal_removed_active": bool(self.play_vocal_removed_tracks),

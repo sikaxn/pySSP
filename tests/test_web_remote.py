@@ -192,6 +192,31 @@ def test_seek_routes_dispatch_payload():
     assert calls[-1][1]["percent"] == 25
 
 
+def test_query_route_can_return_about_metadata_fields():
+    def dispatch(command, params):
+        if command == "query_all":
+            return {
+                "ok": True,
+                "status": 200,
+                "result": {
+                    "current_group": "A",
+                    "current_page": 1,
+                    "app_version": "0.0.0 dev",
+                    "app_build": "dev",
+                },
+            }
+        return {"ok": True, "status": 200, "result": {"command": command, "params": params}}
+
+    server = WebRemoteServer(dispatch=dispatch, host="127.0.0.1", port=5050)
+    client = server._app.test_client()
+    response = client.get("/api/query")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["result"]["app_version"] == "0.0.0 dev"
+    assert payload["result"]["app_build"] == "dev"
+
+
 def test_lyric_stage_routes_and_openlp_api_dispatch():
     calls = []
     client = _make_client(calls)

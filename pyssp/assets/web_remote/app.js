@@ -77,6 +77,14 @@ const strings = {
     nowPlaying: 'Now Playing',
     remoteSummary: 'Remote Summary',
     diagnostics: 'Diagnostics',
+    aboutTitle: 'About',
+    versionLabel: 'Version',
+    buildLabel: 'Build',
+    aboutText: 'pySSP is open source soundboard software.',
+    websiteLink: 'Website',
+    latestLink: 'Get the Latest Version',
+    aboutLink: 'Find out more about pySSP',
+    registerNote: 'pySSP is free software. No registration is required.',
     connectedMode: 'Transport',
     selectedGroup: 'Group',
     selectedPage: 'Page',
@@ -173,6 +181,14 @@ const strings = {
     nowPlaying: '正在播放',
     remoteSummary: '遥控摘要',
     diagnostics: '诊断信息',
+    aboutTitle: '关于',
+    versionLabel: '版本',
+    buildLabel: '构建',
+    aboutText: 'pySSP 是开源音效板软件。',
+    websiteLink: '官网',
+    latestLink: '获取最新版本',
+    aboutLink: '了解更多 pySSP 信息',
+    registerNote: 'pySSP 是免费软件，不需要注册。',
     connectedMode: '传输方式',
     selectedGroup: '组别',
     selectedPage: '页面',
@@ -478,6 +494,19 @@ function renderSummaryBox(state){
   ).join('');
 }
 
+function renderAboutMeta(state){
+  const root = document.getElementById('aboutMeta');
+  if(!root){ return; }
+  const versionValue = String(state?.app_version || '').trim() || '-';
+  const buildValue = String(state?.app_build || '').trim() || '-';
+  root.innerHTML = [
+    [t('versionLabel'), versionValue],
+    [t('buildLabel'), buildValue],
+  ].map(([label, value]) =>
+    `<div class="about-meta-item"><span class="about-meta-label">${escapeHtml(label)}</span><span class="about-meta-value">${escapeHtml(value)}</span></div>`
+  ).join('');
+}
+
 function applyToggleStates(state){
   const payload = state || {};
   for(const button of document.querySelectorAll('[data-state-key]')){
@@ -715,6 +744,7 @@ async function refreshState(updateSelection){
   renderTracks(state.playing_tracks || []);
   applyToggleStates(state);
   renderSummaryBox(state);
+  renderAboutMeta(state);
   syncJogSliderFromState();
   renderGroups();
   renderPages();
@@ -870,6 +900,7 @@ applyStaticText();
 setStatus(t('ready'));
 applyToggleStates(null);
 renderSummaryBox(null);
+renderAboutMeta(null);
 syncJogSliderFromState();
 bindEvents();
 refreshAll(true);

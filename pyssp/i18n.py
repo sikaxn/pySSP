@@ -120,7 +120,7 @@ _TRANSLATIONS = {
         "Build:": "构建:",
         "Getting Started": "快速开始",
         "Welcome to pySSP": "欢迎使用 pySSP",
-        "Open Source Soundboard Software": "开源音频播放器",
+        "open source soundboard software": "开源音效板软件",
         "pySSP is an independent project. It is not affiliated with, endorsed by, or distributed by the original Sports Sounds Pro (SSP).": "pySSP 是一个独立项目，与原版 Sports Sounds Pro（SSP）没有隶属、背书或发行关系。",
         "Beta Build Warning": "测试版构建警告",
         "You are running a beta build.\n\nExpect unfinished features, behavior changes, and possible regressions.\nBack up your settings and verify playback before live use.": "你当前运行的是测试版构建。\n\n请预期仍有未完成功能、行为变化以及可能的回归问题。\n正式使用前请先备份设置，并确认播放工作正常。",

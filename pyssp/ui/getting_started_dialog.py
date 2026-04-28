@@ -321,7 +321,7 @@ class GettingStartedDialog(QDialog):
         self._language = normalize_language(language)
         self.setWindowTitle(tr("Getting Started", self._language))
         self._welcome_title.setText(tr("Welcome to pySSP", self._language))
-        self._welcome_subtitle.setText(tr("Python Sports Sounds Pro", self._language))
+        self._welcome_subtitle.setText(tr("open source soundboard software", self._language))
         self._version_label.setText(f"{tr('Version:', self._language)} {self._version_text or '-'}")
         self._build_label.setText(f"{tr('Build:', self._language)} {self._build_text or '-'}")
         self._welcome_notice.setText(

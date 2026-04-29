@@ -1394,6 +1394,8 @@ class ActionsInputMixin:
             show_file_notifications=self.show_file_notifications,
             now_playing_display_mode=self.now_playing_display_mode,
             main_ui_lyric_display_mode=self.main_ui_lyric_display_mode,
+            lyric_display_transparent_mode=self.lyric_display_transparent_mode,
+            lyric_display_show_not_playing_message=self.lyric_display_show_not_playing_message,
             lyric_display_font_family=self.lyric_display_font_family,
             lyric_display_font_size=self.lyric_display_font_size,
             lyric_display_previous_line_count=self.lyric_display_previous_line_count,
@@ -1628,6 +1630,8 @@ class ActionsInputMixin:
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.now_playing_display_mode = dialog.selected_now_playing_display_mode()
         self.main_ui_lyric_display_mode = dialog.selected_main_ui_lyric_display_mode()
+        self.lyric_display_transparent_mode = dialog.selected_lyric_display_transparent_mode()
+        self.lyric_display_show_not_playing_message = dialog.selected_lyric_display_show_not_playing_message()
         self.lyric_display_font_family = dialog.selected_lyric_display_font_family()
         self.lyric_display_font_size = dialog.selected_lyric_display_font_size()
         self.lyric_display_previous_line_count = dialog.selected_lyric_display_previous_line_count()
@@ -1644,6 +1648,7 @@ class ActionsInputMixin:
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
         self.disable_path_safety = dialog.selected_disable_path_safety()
+        self._sync_lyric_display_controls()
         self._refresh_lyric_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
@@ -1803,9 +1808,11 @@ class ActionsInputMixin:
             )
             self._refresh_stage_display()
         if self._lyric_display_window is not None:
+            self._lyric_display_window.set_transparent_mode_enabled(bool(self.lyric_display_transparent_mode))
             self._lyric_display_window.configure_display_settings(
                 font_family=self.lyric_display_font_family,
                 font_size=self.lyric_display_font_size,
+                show_not_playing_message=self.lyric_display_show_not_playing_message,
                 previous_line_count=self.lyric_display_previous_line_count,
                 next_line_count=self.lyric_display_next_line_count,
                 role_colors=self.lyric_display_role_colors,

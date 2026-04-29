@@ -8,6 +8,8 @@ class LyricsPageMixin:
     def _build_lyric_page(
         self,
         main_ui_lyric_display_mode: str,
+        lyric_display_transparent_mode: bool,
+        lyric_display_show_not_playing_message: bool,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
         lyric_display_font_family: str,
@@ -54,6 +56,10 @@ class LyricsPageMixin:
 
         display_font_group = QGroupBox("Lyric Display Window")
         display_font_layout = QFormLayout(display_font_group)
+        self.lyric_display_transparent_mode_checkbox = QCheckBox("Transparent mode")
+        self.lyric_display_transparent_mode_checkbox.setChecked(bool(lyric_display_transparent_mode))
+        self.lyric_display_show_not_playing_message_checkbox = QCheckBox("Show 'No sound is currently playing.' when idle")
+        self.lyric_display_show_not_playing_message_checkbox.setChecked(bool(lyric_display_show_not_playing_message))
         self.lyric_display_font_family_combo = QFontComboBox()
         self._populate_display_font_combo(self.lyric_display_font_family_combo, lyric_display_font_family)
         self.lyric_display_font_size_spin = QSpinBox()
@@ -118,6 +124,8 @@ class LyricsPageMixin:
         self.lyric_display_played_color_btn.clicked.connect(lambda: self._pick_lyric_role_color("lyric_display", "played"))
         self.lyric_display_current_color_btn.clicked.connect(lambda: self._pick_lyric_role_color("lyric_display", "current"))
         self.lyric_display_next_color_btn.clicked.connect(lambda: self._pick_lyric_role_color("lyric_display", "next"))
+        display_font_layout.addRow(self.lyric_display_transparent_mode_checkbox)
+        display_font_layout.addRow(self.lyric_display_show_not_playing_message_checkbox)
         display_font_layout.addRow("Font:", self.lyric_display_font_family_combo)
         display_font_layout.addRow("Text Size:", self.lyric_display_font_size_spin)
         display_font_layout.addRow("Played Lyric Lines:", self.lyric_display_previous_line_count_spin)

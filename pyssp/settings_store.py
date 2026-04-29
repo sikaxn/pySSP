@@ -473,6 +473,8 @@ class AppSettings:
     show_file_notifications: bool = True
     now_playing_display_mode: str = "caption"
     main_ui_lyric_display_mode: str = "always"
+    lyric_display_transparent_mode: bool = False
+    lyric_display_show_not_playing_message: bool = True
     lyric_display_font_family: str = ""
     lyric_display_font_size: int = 36
     lyric_display_previous_line_count: int = 0
@@ -660,6 +662,8 @@ class AppSettings:
     hotkey_lock_toggle_2: str = ""
     hotkey_open_hide_lyric_navigator_1: str = ""
     hotkey_open_hide_lyric_navigator_2: str = ""
+    hotkey_toggle_lyric_display_transparent_mode_1: str = ""
+    hotkey_toggle_lyric_display_transparent_mode_2: str = ""
     quick_action_enabled: bool = False
     quick_action_keys: list[str] = field(default_factory=default_quick_action_keys)
     sound_button_hotkey_enabled: bool = False
@@ -739,6 +743,8 @@ class AppSettings:
     midi_hotkey_lock_toggle_2: str = ""
     midi_hotkey_open_hide_lyric_navigator_1: str = ""
     midi_hotkey_open_hide_lyric_navigator_2: str = ""
+    midi_hotkey_toggle_lyric_display_transparent_mode_1: str = ""
+    midi_hotkey_toggle_lyric_display_transparent_mode_2: str = ""
     midi_quick_action_enabled: bool = False
     midi_quick_action_bindings: list[str] = field(default_factory=default_midi_quick_action_bindings)
     midi_sound_button_hotkey_enabled: bool = False
@@ -839,6 +845,8 @@ def save_settings(settings: AppSettings) -> None:
         "show_file_notifications": "1" if settings.show_file_notifications else "0",
         "now_playing_display_mode": settings.now_playing_display_mode,
         "main_ui_lyric_display_mode": settings.main_ui_lyric_display_mode,
+        "lyric_display_transparent_mode": "1" if settings.lyric_display_transparent_mode else "0",
+        "lyric_display_show_not_playing_message": "1" if settings.lyric_display_show_not_playing_message else "0",
         "lyric_display_font_family": settings.lyric_display_font_family,
         "lyric_display_font_size": str(settings.lyric_display_font_size),
         "lyric_display_previous_line_count": str(settings.lyric_display_previous_line_count),
@@ -1030,6 +1038,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkey_lock_toggle_2": settings.hotkey_lock_toggle_2,
         "hotkey_open_hide_lyric_navigator_1": settings.hotkey_open_hide_lyric_navigator_1,
         "hotkey_open_hide_lyric_navigator_2": settings.hotkey_open_hide_lyric_navigator_2,
+        "hotkey_toggle_lyric_display_transparent_mode_1": settings.hotkey_toggle_lyric_display_transparent_mode_1,
+        "hotkey_toggle_lyric_display_transparent_mode_2": settings.hotkey_toggle_lyric_display_transparent_mode_2,
         "quick_action_enabled": "1" if settings.quick_action_enabled else "0",
         "quick_action_keys": "\t".join(_normalize_quick_action_keys(settings.quick_action_keys)),
         "sound_button_hotkey_enabled": "1" if settings.sound_button_hotkey_enabled else "0",
@@ -1109,6 +1119,8 @@ def save_settings(settings: AppSettings) -> None:
         "midi_hotkey_lock_toggle_2": settings.midi_hotkey_lock_toggle_2,
         "midi_hotkey_open_hide_lyric_navigator_1": settings.midi_hotkey_open_hide_lyric_navigator_1,
         "midi_hotkey_open_hide_lyric_navigator_2": settings.midi_hotkey_open_hide_lyric_navigator_2,
+        "midi_hotkey_toggle_lyric_display_transparent_mode_1": settings.midi_hotkey_toggle_lyric_display_transparent_mode_1,
+        "midi_hotkey_toggle_lyric_display_transparent_mode_2": settings.midi_hotkey_toggle_lyric_display_transparent_mode_2,
         "midi_quick_action_enabled": "1" if settings.midi_quick_action_enabled else "0",
         "midi_quick_action_bindings": "\t".join(_normalize_midi_quick_action_bindings(settings.midi_quick_action_bindings)),
         "midi_sound_button_hotkey_enabled": "1" if settings.midi_sound_button_hotkey_enabled else "0",
@@ -1235,6 +1247,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     main_ui_lyric_display_mode = str(section.get("main_ui_lyric_display_mode", "always")).strip().lower()
     if main_ui_lyric_display_mode not in {"always", "when_available", "never"}:
         main_ui_lyric_display_mode = "always"
+    lyric_display_transparent_mode = _get_bool(section, "lyric_display_transparent_mode", False)
+    lyric_display_show_not_playing_message = _get_bool(section, "lyric_display_show_not_playing_message", True)
     lyric_display_font_family = str(section.get("lyric_display_font_family", "")).strip()
     lyric_display_font_size = _clamp_int(_get_int(section, "lyric_display_font_size", 36), 10, 240)
     lyric_display_previous_line_count = _clamp_int(_get_int(section, "lyric_display_previous_line_count", 0), 0, 20)
@@ -1556,6 +1570,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         show_file_notifications=_get_bool(section, "show_file_notifications", True),
         now_playing_display_mode=now_playing_display_mode,
         main_ui_lyric_display_mode=main_ui_lyric_display_mode,
+        lyric_display_transparent_mode=lyric_display_transparent_mode,
+        lyric_display_show_not_playing_message=lyric_display_show_not_playing_message,
         lyric_display_font_family=lyric_display_font_family,
         lyric_display_font_size=lyric_display_font_size,
         lyric_display_previous_line_count=lyric_display_previous_line_count,
@@ -1746,6 +1762,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         hotkey_lock_toggle_2=str(section.get("hotkey_lock_toggle_2", "")).strip(),
         hotkey_open_hide_lyric_navigator_1=str(section.get("hotkey_open_hide_lyric_navigator_1", "")).strip(),
         hotkey_open_hide_lyric_navigator_2=str(section.get("hotkey_open_hide_lyric_navigator_2", "")).strip(),
+        hotkey_toggle_lyric_display_transparent_mode_1=str(section.get("hotkey_toggle_lyric_display_transparent_mode_1", "")).strip(),
+        hotkey_toggle_lyric_display_transparent_mode_2=str(section.get("hotkey_toggle_lyric_display_transparent_mode_2", "")).strip(),
         quick_action_enabled=_get_bool(section, "quick_action_enabled", False),
         quick_action_keys=quick_action_keys,
         sound_button_hotkey_enabled=_get_bool(section, "sound_button_hotkey_enabled", False),
@@ -1825,6 +1843,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_hotkey_lock_toggle_2=str(section.get("midi_hotkey_lock_toggle_2", "")).strip(),
         midi_hotkey_open_hide_lyric_navigator_1=str(section.get("midi_hotkey_open_hide_lyric_navigator_1", "")).strip(),
         midi_hotkey_open_hide_lyric_navigator_2=str(section.get("midi_hotkey_open_hide_lyric_navigator_2", "")).strip(),
+        midi_hotkey_toggle_lyric_display_transparent_mode_1=str(section.get("midi_hotkey_toggle_lyric_display_transparent_mode_1", "")).strip(),
+        midi_hotkey_toggle_lyric_display_transparent_mode_2=str(section.get("midi_hotkey_toggle_lyric_display_transparent_mode_2", "")).strip(),
         midi_quick_action_enabled=_get_bool(section, "midi_quick_action_enabled", False),
         midi_quick_action_bindings=midi_quick_action_bindings,
         midi_sound_button_hotkey_enabled=_get_bool(section, "midi_sound_button_hotkey_enabled", False),

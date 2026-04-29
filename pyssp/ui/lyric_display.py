@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional
+from typing import Callable, List, Optional
 
-from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtCore import QEvent, QPoint, QTimer, Qt
+from PyQt5.QtWidgets import QAction, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
 from pyssp.lyrics import LyricLine, lyric_segments_around_position, lyric_segments_to_html, parse_lyric_file
@@ -12,23 +12,105 @@ from pyssp.ui.stage_display import StageDisplayLayoutEditor, normalize_stage_dis
 
 
 class LyricDisplayWindow(QWidget):
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        on_toggle_transparent_mode: Optional[Callable[[bool], None]] = None,
+        on_adjust_font_size: Optional[Callable[[int], None]] = None,
+        on_open_settings: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(parent, Qt.Window)
         self.setWindowTitle(tr("Lyric Display"))
         self.resize(980, 520)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setStyleSheet("background:#000000; color:#FFFFFF;")
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_NoSystemBackground, False)
+
+        self._transparent_mode_enabled = False
+        self._on_toggle_transparent_mode = on_toggle_transparent_mode
+        self._on_adjust_font_size = on_adjust_font_size
+        self._on_open_settings = on_open_settings
+
+        self._toolbar_hide_timer = QTimer(self)
+        self._toolbar_hide_timer.setSingleShot(True)
+        self._toolbar_hide_timer.setInterval(1000)
+        self._toolbar_hide_timer.timeout.connect(self._hide_hover_toolbar)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 10, 14, 10)
         root.setSpacing(6)
+        self._root_layout = root
+
+        self._toolbar_overlay = QWidget(self)
+        self._toolbar_overlay.setVisible(False)
+        self._toolbar_overlay.setAttribute(Qt.WA_StyledBackground, True)
+        self._toolbar_overlay.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._toolbar_overlay.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._toolbar_overlay.setStyleSheet("background:transparent;")
+        toolbar_row = QHBoxLayout(self._toolbar_overlay)
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_row.setSpacing(6)
+        toolbar_style = (
+            "QPushButton{background:rgba(20,20,20,220); color:#FFFFFF; border:1px solid rgba(255,255,255,120);"
+            "border-radius:4px; padding:4px 10px;}"
+            "QPushButton:hover{background:rgba(40,40,40,235);}"
+        )
+        self._toolbar_hint_label = QLabel(self._toolbar_overlay)
+        self._toolbar_hint_label.setVisible(False)
+        self._toolbar_hint_label.setStyleSheet(
+            "QLabel{background:rgba(20,20,20,220); color:#FFFFFF; border:1px solid rgba(255,255,255,120);"
+            "border-radius:4px; padding:4px 10px;}"
+        )
+        toolbar_row.addWidget(self._toolbar_hint_label, 0, Qt.AlignVCenter)
+        toolbar_row.addStretch(1)
+        self._font_size_down_button = QPushButton("-", self._toolbar_overlay)
+        self._font_size_down_button.setVisible(False)
+        self._font_size_down_button.setCursor(Qt.PointingHandCursor)
+        self._font_size_down_button.setStyleSheet(toolbar_style)
+        self._font_size_down_button.clicked.connect(lambda: self._handle_toolbar_font_adjust(-2))
+        toolbar_row.addWidget(self._font_size_down_button, 0, Qt.AlignTop)
+
+        self._font_size_up_button = QPushButton("+", self._toolbar_overlay)
+        self._font_size_up_button.setVisible(False)
+        self._font_size_up_button.setCursor(Qt.PointingHandCursor)
+        self._font_size_up_button.setStyleSheet(toolbar_style)
+        self._font_size_up_button.clicked.connect(lambda: self._handle_toolbar_font_adjust(2))
+        toolbar_row.addWidget(self._font_size_up_button, 0, Qt.AlignTop)
+
+        self._settings_button = QPushButton("", self._toolbar_overlay)
+        self._settings_button.setVisible(False)
+        self._settings_button.setCursor(Qt.PointingHandCursor)
+        self._settings_button.setStyleSheet(toolbar_style)
+        self._settings_button.clicked.connect(self._handle_toolbar_settings_clicked)
+        toolbar_row.addWidget(self._settings_button, 0, Qt.AlignTop)
+
+        self._fullscreen_button = QPushButton("", self._toolbar_overlay)
+        self._fullscreen_button.setVisible(False)
+        self._fullscreen_button.setCursor(Qt.PointingHandCursor)
+        self._fullscreen_button.setStyleSheet(toolbar_style)
+        self._fullscreen_button.clicked.connect(self._toggle_fullscreen)
+        toolbar_row.addWidget(self._fullscreen_button, 0, Qt.AlignTop)
+
+        self._transparent_toggle_button = QPushButton("", self._toolbar_overlay)
+        self._transparent_toggle_button.setVisible(False)
+        self._transparent_toggle_button.setCursor(Qt.PointingHandCursor)
+        self._transparent_toggle_button.setStyleSheet(toolbar_style)
+        self._transparent_toggle_button.clicked.connect(self._handle_toolbar_toggle_clicked)
+        toolbar_row.addWidget(self._transparent_toggle_button, 0, Qt.AlignTop)
 
         self._canvas = StageDisplayLayoutEditor(self)
         root.addWidget(self._canvas, 1)
+        self._canvas.setMouseTracking(True)
+        self._canvas.setAttribute(Qt.WA_StyledBackground, True)
         for widget in self._canvas._widgets.values():
             widget._draggable = False
             widget._resize_handle.setVisible(False)
             widget.set_selected(False)
+            widget.setMouseTracking(True)
+            widget.setAttribute(Qt.WA_StyledBackground, True)
+            widget.title_label.setMouseTracking(True)
+            widget.value_label.setMouseTracking(True)
 
         lyric_only = normalize_stage_display_gadgets({})
         for key, spec in lyric_only.items():
@@ -49,6 +131,8 @@ class LyricDisplayWindow(QWidget):
         self._lyric_widget = self._canvas._widgets.get("lyric")
         if self._lyric_widget is not None:
             self._lyric_widget.title_label.setText(tr("Lyric"))
+            self._lyric_widget.title_label.setVisible(False)
+
         self._install_fullscreen_toggle_filter(self)
 
         self._cache_path: str = ""
@@ -58,6 +142,7 @@ class LyricDisplayWindow(QWidget):
         self._last_text: str = ""
         self._font_family: str = ""
         self._font_size: int = 36
+        self._show_not_playing_message = True
         self._previous_line_count: int = 0
         self._next_line_count: int = 0
         self._role_colors = {
@@ -86,6 +171,7 @@ class LyricDisplayWindow(QWidget):
             "current": False,
             "next": False,
         }
+        self._apply_window_chrome()
         self._apply_font_settings()
 
     def set_lyric_text(self, text: str) -> None:
@@ -93,11 +179,21 @@ class LyricDisplayWindow(QWidget):
             return
         self._lyric_widget.value_label.setText(str(text or ""))
 
+    def set_transparent_mode_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._transparent_mode_enabled:
+            self._apply_window_chrome()
+            return
+        self._transparent_mode_enabled = enabled
+        self._hide_hover_toolbar()
+        self._apply_window_chrome()
+
     def configure_display_settings(
         self,
         *,
         font_family: str = "",
         font_size: int = 36,
+        show_not_playing_message: bool = True,
         previous_line_count: int = 0,
         next_line_count: int = 0,
         role_colors: Optional[dict[str, str]] = None,
@@ -109,6 +205,7 @@ class LyricDisplayWindow(QWidget):
     ) -> None:
         self._font_family = str(font_family or "").strip()
         self._font_size = max(10, int(font_size))
+        self._show_not_playing_message = bool(show_not_playing_message)
         self._previous_line_count = max(0, int(previous_line_count))
         self._next_line_count = max(0, int(next_line_count))
         if role_colors is not None:
@@ -157,11 +254,11 @@ class LyricDisplayWindow(QWidget):
         if force_blank:
             text = ""
         elif not has_active_track:
-            text = "No sound is currently playing."
+            text = "No sound is currently playing." if self._show_not_playing_message else ""
         else:
             path = str(lyric_path or "").strip()
             if not path:
-                text = "No lyric file assigned for this sound."
+                text = "No lyric file assigned for this sound." if self._show_not_playing_message else ""
             elif not os.path.exists(path):
                 text = f"Lyric file not found:\n{path}"
             else:
@@ -211,6 +308,8 @@ class LyricDisplayWindow(QWidget):
         self.setWindowTitle(tr("Lyric Display"))
         if self._lyric_widget is not None:
             self._lyric_widget.title_label.setText(tr("Lyric"))
+            self._lyric_widget.title_label.setVisible(False)
+        self._refresh_toolbar_text()
 
     def _apply_font_settings(self) -> None:
         self._canvas.set_font_settings(
@@ -219,6 +318,8 @@ class LyricDisplayWindow(QWidget):
             lyric_font_family=self._font_family,
             lyric_value_font_size=self._font_size,
         )
+        if self._transparent_mode_enabled:
+            self._refresh_transparent_visuals()
 
     def _resolved_role_styles(self) -> dict[str, dict[str, object]]:
         if self._auto_adjust_role_sizes:
@@ -241,23 +342,197 @@ class LyricDisplayWindow(QWidget):
     def _install_fullscreen_toggle_filter(self, root: QWidget) -> None:
         root.installEventFilter(self)
         for child in root.findChildren(QWidget):
+            child.setMouseTracking(True)
             child.installEventFilter(self)
+
+    def _is_toolbar_widget(self, watched) -> bool:
+        if watched is None:
+            return False
+        if watched is self._toolbar_overlay:
+            return True
+        if watched is self._toolbar_hint_label:
+            return True
+        if watched in {
+            self._font_size_down_button,
+            self._font_size_up_button,
+            self._settings_button,
+            self._fullscreen_button,
+            self._transparent_toggle_button,
+        }:
+            return True
+        try:
+            return watched.parentWidget() is self._toolbar_overlay
+        except Exception:
+            return False
+
+    def _refresh_toolbar_text(self) -> None:
+        self._settings_button.setText(tr("Settings"))
+        self._fullscreen_button.setText(tr("Windowed") if self.isFullScreen() else tr("Full Screen"))
+        self._transparent_toggle_button.setText(
+            tr("Turn Off Transparent Mode") if self._transparent_mode_enabled else tr("Turn On Transparent Mode")
+        )
+        self._toolbar_hint_label.setText(tr("Turn off transparent mode to move or resize this window."))
+
+    def _show_hover_toolbar(self) -> None:
+        self._refresh_toolbar_text()
+        self._toolbar_hint_label.setVisible(bool(self._transparent_mode_enabled))
+        self._font_size_down_button.setVisible(True)
+        self._font_size_up_button.setVisible(True)
+        self._settings_button.setVisible(True)
+        self._fullscreen_button.setVisible(True)
+        self._transparent_toggle_button.setVisible(True)
+        self._toolbar_overlay.setVisible(True)
+        self._font_size_down_button.raise_()
+        self._font_size_up_button.raise_()
+        self._settings_button.raise_()
+        self._fullscreen_button.raise_()
+        self._transparent_toggle_button.raise_()
+        self._reposition_overlays()
+        self._toolbar_hide_timer.start()
+        self._toolbar_overlay.update()
+        self.update(self._toolbar_overlay.geometry())
+
+    def _hide_hover_toolbar(self) -> None:
+        overlay_rect = self._toolbar_overlay.geometry()
+        self._toolbar_hide_timer.stop()
+        self._toolbar_hint_label.setVisible(False)
+        self._font_size_down_button.setVisible(False)
+        self._font_size_up_button.setVisible(False)
+        self._settings_button.setVisible(False)
+        self._fullscreen_button.setVisible(False)
+        self._transparent_toggle_button.setVisible(False)
+        self._toolbar_overlay.setVisible(False)
+        self.update(overlay_rect)
+        self._canvas.update()
+
+    def _handle_toolbar_toggle_clicked(self) -> None:
+        checked = not bool(self._transparent_mode_enabled)
+        if callable(self._on_toggle_transparent_mode):
+            self._on_toggle_transparent_mode(checked)
+        else:
+            self.set_transparent_mode_enabled(checked)
+        self._show_hover_toolbar()
+
+    def _handle_toolbar_font_adjust(self, delta: int) -> None:
+        if callable(self._on_adjust_font_size):
+            self._on_adjust_font_size(int(delta))
+        else:
+            self.configure_display_settings(font_size=max(10, self._font_size + int(delta)))
+        self._show_hover_toolbar()
+
+    def _handle_toolbar_settings_clicked(self) -> None:
+        if callable(self._on_open_settings):
+            self._on_open_settings()
+        self._show_hover_toolbar()
+
+    def _refresh_transparent_visuals(self) -> None:
+        self._canvas.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._canvas.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._canvas.setAutoFillBackground(False)
+        self._canvas.setStyleSheet("background:transparent; border:none;")
+        if self._lyric_widget is not None:
+            self._lyric_widget.setAttribute(Qt.WA_TranslucentBackground, True)
+            self._lyric_widget.setAttribute(Qt.WA_NoSystemBackground, True)
+            self._lyric_widget.setAutoFillBackground(False)
+            self._lyric_widget._base_background = "rgba(0,0,0,0)"
+            self._lyric_widget.apply_config(
+                orientation="vertical",
+                hide_text=True,
+                hide_border=True,
+                title_font_family=self._font_family,
+                title_font_size=max(8, int(round(self._font_size * 0.55))),
+                value_font_family=self._font_family,
+                value_font_size=self._font_size,
+            )
+            self._lyric_widget.title_label.setVisible(False)
+            self._lyric_widget.setStyleSheet(
+                "QFrame{background:transparent; border:none; border-radius:0px;}"
+                "QLabel{background:transparent; border:none; color:#FFFFFF;}"
+            )
+
+    def _apply_window_chrome(self) -> None:
+        if self._transparent_mode_enabled:
+            flags = Qt.Window | Qt.FramelessWindowHint
+            if hasattr(Qt, "NoDropShadowWindowHint"):
+                flags |= Qt.NoDropShadowWindowHint
+            if self.windowFlags() != flags:
+                was_visible = self.isVisible()
+                self.setWindowFlags(flags)
+                if was_visible:
+                    self.show()
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self.setAttribute(Qt.WA_NoSystemBackground, True)
+            self.setStyleSheet("background:transparent; color:#FFFFFF;")
+            self._refresh_transparent_visuals()
+        else:
+            flags = Qt.Window
+            if self.windowFlags() != flags:
+                was_visible = self.isVisible()
+                self.setWindowFlags(flags)
+                if was_visible:
+                    self.show()
+            self.setAttribute(Qt.WA_TranslucentBackground, False)
+            self.setAttribute(Qt.WA_NoSystemBackground, False)
+            self.setStyleSheet("background:#000000; color:#FFFFFF;")
+            self._canvas.setAttribute(Qt.WA_TranslucentBackground, False)
+            self._canvas.setAttribute(Qt.WA_NoSystemBackground, False)
+            self._canvas.setStyleSheet("background:#000000; border:0px solid transparent;")
+            if self._lyric_widget is not None:
+                self._lyric_widget.setAttribute(Qt.WA_TranslucentBackground, False)
+                self._lyric_widget.setAttribute(Qt.WA_NoSystemBackground, False)
+                self._lyric_widget._base_background = "#111111"
+                self._lyric_widget.apply_config(
+                    orientation="vertical",
+                    hide_text=True,
+                    hide_border=False,
+                    title_font_family=self._font_family,
+                    title_font_size=max(8, int(round(self._font_size * 0.55))),
+                    value_font_family=self._font_family,
+                    value_font_size=self._font_size,
+                )
+                self._lyric_widget.title_label.setVisible(False)
+                self._lyric_widget.setStyleSheet("")
+        self._refresh_toolbar_text()
+        self._reposition_overlays()
+        self.update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reposition_overlays()
+
+    def _reposition_overlays(self) -> None:
+        toolbar_width = max(240, self.width() - 28)
+        self._toolbar_overlay.setGeometry(14, 10, toolbar_width, 34)
+        if self._toolbar_overlay.isVisible():
+            self._toolbar_overlay.raise_()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self.showNormal()
         else:
             self.showFullScreen()
+        self._apply_window_chrome()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.MouseButtonDblClick:
+            if self._is_toolbar_widget(watched):
+                return False
             if getattr(event, "button", lambda: None)() == Qt.LeftButton:
                 self._toggle_fullscreen()
                 event.accept()
                 return True
+        if event.type() == QEvent.MouseMove:
+            self._show_hover_toolbar()
+        elif event.type() in {QEvent.Leave, QEvent.HoverLeave}:
+            self._toolbar_hide_timer.start()
         return super().eventFilter(watched, event)
 
     def mouseDoubleClickEvent(self, event) -> None:
+        if self._toolbar_overlay.isVisible():
+            local_pos = event.pos()
+            if self._toolbar_overlay.geometry().contains(local_pos):
+                event.ignore()
+                return
         if event.button() == Qt.LeftButton:
             self._toggle_fullscreen()
             event.accept()
@@ -267,6 +542,25 @@ class LyricDisplayWindow(QWidget):
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self.isFullScreen():
             self.showNormal()
+            self._apply_window_chrome()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        transparent_action = QAction(tr("Lyric Display Transparent Mode"), self)
+        transparent_action.setCheckable(True)
+        transparent_action.setChecked(bool(self._transparent_mode_enabled))
+        settings_action = QAction(tr("Lyric Display Setting"), self)
+        menu.addAction(transparent_action)
+        menu.addAction(settings_action)
+        chosen = menu.exec_(event.globalPos())
+        if chosen == transparent_action:
+            checked = bool(transparent_action.isChecked())
+            if callable(self._on_toggle_transparent_mode):
+                self._on_toggle_transparent_mode(checked)
+            else:
+                self.set_transparent_mode_enabled(checked)
+        elif chosen == settings_action and callable(self._on_open_settings):
+            self._on_open_settings()

@@ -777,6 +777,10 @@ class StateLogicMixin:
             self.main_ui_lyric_display_never_radio.setChecked(True)
         else:
             self.main_ui_lyric_display_always_radio.setChecked(True)
+        self.lyric_display_transparent_mode_checkbox.setChecked(bool(d.get("lyric_display_transparent_mode", False)))
+        self.lyric_display_show_not_playing_message_checkbox.setChecked(
+            bool(d.get("lyric_display_show_not_playing_message", True))
+        )
         self.search_lyric_on_add_sound_button_checkbox.setChecked(
             bool(d.get("search_lyric_on_add_sound_button", True))
         )

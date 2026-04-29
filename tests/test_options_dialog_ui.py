@@ -46,6 +46,15 @@ def _build_dialog(**overrides):
         show_file_notifications=defaults["show_file_notifications"],
         now_playing_display_mode=defaults["now_playing_display_mode"],
         main_ui_lyric_display_mode=defaults["main_ui_lyric_display_mode"],
+        lyric_display_transparent_mode=bool(
+            overrides.get("lyric_display_transparent_mode", defaults["lyric_display_transparent_mode"])
+        ),
+        lyric_display_show_not_playing_message=bool(
+            overrides.get(
+                "lyric_display_show_not_playing_message",
+                defaults["lyric_display_show_not_playing_message"],
+            )
+        ),
         lyric_display_font_family=str(
             overrides.get("lyric_display_font_family", defaults["lyric_display_font_family"])
         ),
@@ -583,6 +592,8 @@ def test_display_page_font_settings_round_trip(qapp):
 
 def test_lyric_page_font_settings_round_trip(qapp):
     dialog = _build_dialog(
+        lyric_display_transparent_mode=True,
+        lyric_display_show_not_playing_message=False,
         lyric_display_font_size=40,
         lyric_display_previous_line_count=1,
         lyric_display_next_line_count=4,
@@ -595,6 +606,8 @@ def test_lyric_page_font_settings_round_trip(qapp):
         lyric_display_next_italic=True,
         initial_page="Lyric",
     )
+    assert dialog.selected_lyric_display_transparent_mode() is True
+    assert dialog.selected_lyric_display_show_not_playing_message() is False
     assert dialog.selected_lyric_display_font_size() == 40
     assert dialog.selected_lyric_display_previous_line_count() == 1
     assert dialog.selected_lyric_display_next_line_count() == 4

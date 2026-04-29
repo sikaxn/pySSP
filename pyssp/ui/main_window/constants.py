@@ -70,6 +70,7 @@ HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {
     "volume_down": ("", ""),
     "lock_toggle": ("Ctrl+L", ""),
     "open_hide_lyric_navigator": ("", ""),
+    "toggle_lyric_display_transparent_mode": ("", ""),
 }
 
 MIDI_HOTKEY_DEFAULTS: Dict[str, tuple[str, str]] = {key: ("", "") for key in HOTKEY_DEFAULTS.keys()}
@@ -108,6 +109,7 @@ SYSTEM_HOTKEY_ORDER_DEFAULT: List[str] = [
     "volume_down",
     "lock_toggle",
     "open_hide_lyric_navigator",
+    "toggle_lyric_display_transparent_mode",
 ]
 
 

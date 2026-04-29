@@ -1074,6 +1074,7 @@ class SettingsArchiveMixin:
             "volume_down": self._volume_down_hotkey,
             "lock_toggle": self._hotkey_lock_toggle,
             "open_hide_lyric_navigator": self._hotkey_toggle_lyric_navigator,
+            "toggle_lyric_display_transparent_mode": self._hotkey_toggle_lyric_display_transparent_mode,
         }
 
     def _normalized_midi_pair(self, action_key: str) -> tuple[str, str]:
@@ -1358,6 +1359,14 @@ class SettingsArchiveMixin:
         self.settings.hotkey_lock_toggle_2 = self.hotkeys.get("lock_toggle", ("", ""))[1]
         self.settings.hotkey_open_hide_lyric_navigator_1 = self.hotkeys.get("open_hide_lyric_navigator", ("", ""))[0]
         self.settings.hotkey_open_hide_lyric_navigator_2 = self.hotkeys.get("open_hide_lyric_navigator", ("", ""))[1]
+        self.settings.hotkey_toggle_lyric_display_transparent_mode_1 = self.hotkeys.get(
+            "toggle_lyric_display_transparent_mode",
+            ("", ""),
+        )[0]
+        self.settings.hotkey_toggle_lyric_display_transparent_mode_2 = self.hotkeys.get(
+            "toggle_lyric_display_transparent_mode",
+            ("", ""),
+        )[1]
         self.settings.quick_action_enabled = bool(self.quick_action_enabled)
         self.settings.quick_action_keys = list(self.quick_action_keys[:48])
         self.settings.sound_button_hotkey_enabled = bool(self.sound_button_hotkey_enabled)
@@ -1438,6 +1447,14 @@ class SettingsArchiveMixin:
         self.settings.midi_hotkey_lock_toggle_2 = self.midi_hotkeys.get("lock_toggle", ("", ""))[1]
         self.settings.midi_hotkey_open_hide_lyric_navigator_1 = self.midi_hotkeys.get("open_hide_lyric_navigator", ("", ""))[0]
         self.settings.midi_hotkey_open_hide_lyric_navigator_2 = self.midi_hotkeys.get("open_hide_lyric_navigator", ("", ""))[1]
+        self.settings.midi_hotkey_toggle_lyric_display_transparent_mode_1 = self.midi_hotkeys.get(
+            "toggle_lyric_display_transparent_mode",
+            ("", ""),
+        )[0]
+        self.settings.midi_hotkey_toggle_lyric_display_transparent_mode_2 = self.midi_hotkeys.get(
+            "toggle_lyric_display_transparent_mode",
+            ("", ""),
+        )[1]
         self.settings.midi_quick_action_enabled = bool(self.midi_quick_action_enabled)
         self.settings.midi_quick_action_bindings = list(self.midi_quick_action_bindings[:48])
         self.settings.midi_sound_button_hotkey_enabled = bool(self.midi_sound_button_hotkey_enabled)
@@ -1501,6 +1518,8 @@ class SettingsArchiveMixin:
         self.settings.stage_display_lyric_next_italic = bool(self.stage_display_lyric_role_italic.get("next", False))
         self.settings.now_playing_display_mode = self.now_playing_display_mode
         self.settings.main_ui_lyric_display_mode = self.main_ui_lyric_display_mode
+        self.settings.lyric_display_transparent_mode = bool(self.lyric_display_transparent_mode)
+        self.settings.lyric_display_show_not_playing_message = bool(self.lyric_display_show_not_playing_message)
         self.settings.lyric_display_font_family = self.lyric_display_font_family
         self.settings.lyric_display_font_size = int(self.lyric_display_font_size)
         self.settings.lyric_display_previous_line_count = int(self.lyric_display_previous_line_count)

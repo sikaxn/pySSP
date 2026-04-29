@@ -352,6 +352,10 @@ class MainWindow(
             lyric_mode if lyric_mode in {"always", "when_available", "never"} else "always"
         )
         self.lyric_display_font_family = str(getattr(self.settings, "lyric_display_font_family", "")).strip()
+        self.lyric_display_transparent_mode = bool(getattr(self.settings, "lyric_display_transparent_mode", False))
+        self.lyric_display_show_not_playing_message = bool(
+            getattr(self.settings, "lyric_display_show_not_playing_message", True)
+        )
         self.lyric_display_font_size = max(10, int(getattr(self.settings, "lyric_display_font_size", 36)))
         self.lyric_display_previous_line_count = max(
             0,
@@ -468,6 +472,10 @@ class MainWindow(
                 self.settings.hotkey_open_hide_lyric_navigator_1,
                 self.settings.hotkey_open_hide_lyric_navigator_2,
             ),
+            "toggle_lyric_display_transparent_mode": (
+                self.settings.hotkey_toggle_lyric_display_transparent_mode_1,
+                self.settings.hotkey_toggle_lyric_display_transparent_mode_2,
+            ),
         }
         self.quick_action_enabled = bool(self.settings.quick_action_enabled)
         self.quick_action_keys = list(self.settings.quick_action_keys[:48])
@@ -535,6 +543,10 @@ class MainWindow(
             "open_hide_lyric_navigator": (
                 self.settings.midi_hotkey_open_hide_lyric_navigator_1,
                 self.settings.midi_hotkey_open_hide_lyric_navigator_2,
+            ),
+            "toggle_lyric_display_transparent_mode": (
+                self.settings.midi_hotkey_toggle_lyric_display_transparent_mode_1,
+                self.settings.midi_hotkey_toggle_lyric_display_transparent_mode_2,
             ),
         }
         self.midi_quick_action_enabled = bool(self.settings.midi_quick_action_enabled)

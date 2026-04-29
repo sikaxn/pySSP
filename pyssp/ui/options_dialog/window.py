@@ -81,6 +81,7 @@ class OptionsDialog(
         ("volume_down", "Volume Down"),
         ("lock_toggle", "Lock / Unlock"),
         ("open_hide_lyric_navigator", "Open / Hide Lyric Navigator"),
+        ("toggle_lyric_display_transparent_mode", "Toggle Lyric Display Transparent Mode"),
     ]
 
     _DEFAULTS = {
@@ -90,6 +91,8 @@ class OptionsDialog(
         "show_file_notifications": True,
         "now_playing_display_mode": "caption",
         "main_ui_lyric_display_mode": "always",
+        "lyric_display_transparent_mode": False,
+        "lyric_display_show_not_playing_message": True,
         "lyric_display_font_family": "",
         "lyric_display_font_size": 36,
         "lyric_display_previous_line_count": 0,
@@ -234,6 +237,7 @@ class OptionsDialog(
             "volume_down": ("", ""),
             "lock_toggle": ("Ctrl+L", ""),
             "open_hide_lyric_navigator": ("", ""),
+            "toggle_lyric_display_transparent_mode": ("", ""),
         },
         "sound_button_hotkey_enabled": False,
         "sound_button_hotkey_priority": "system_first",
@@ -348,6 +352,8 @@ class OptionsDialog(
         show_file_notifications: bool,
         now_playing_display_mode: str,
         main_ui_lyric_display_mode: str,
+        lyric_display_transparent_mode: bool,
+        lyric_display_show_not_playing_message: bool,
         lyric_display_font_family: str,
         lyric_display_font_size: int,
         lyric_display_previous_line_count: int,
@@ -620,6 +626,8 @@ class OptionsDialog(
             if str(main_ui_lyric_display_mode or "").strip().lower() in {"always", "when_available", "never"}
             else "always"
         )
+        self._lyric_display_transparent_mode = bool(lyric_display_transparent_mode)
+        self._lyric_display_show_not_playing_message = bool(lyric_display_show_not_playing_message)
         self._lyric_display_font_family = str(lyric_display_font_family or "").strip()
         self._lyric_display_font_size = max(10, int(lyric_display_font_size))
         self._lyric_display_previous_line_count = max(0, int(lyric_display_previous_line_count))
@@ -782,6 +790,8 @@ class OptionsDialog(
             self._mono_icon("lyric"),
             self._build_lyric_page(
                 main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
+                lyric_display_transparent_mode=self._lyric_display_transparent_mode,
+                lyric_display_show_not_playing_message=self._lyric_display_show_not_playing_message,
                 search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
                 new_lyric_file_format=self._new_lyric_file_format,
                 lyric_display_font_family=self._lyric_display_font_family,

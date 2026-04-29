@@ -54,6 +54,46 @@ class LyricsStageMixin:
             self._lyric_blank_toggle_action.blockSignals(True)
             self._lyric_blank_toggle_action.setChecked(blank)
             self._lyric_blank_toggle_action.blockSignals(False)
+        transparent_action = getattr(self, "_lyric_display_transparent_mode_action", None)
+        if transparent_action is not None:
+            transparent_action.blockSignals(True)
+            transparent_action.setChecked(bool(getattr(self, "lyric_display_transparent_mode", False)))
+            transparent_action.blockSignals(False)
+
+    def _set_lyric_display_transparent_mode(self, enabled: bool) -> None:
+        new_value = bool(enabled)
+        self.lyric_display_transparent_mode = new_value
+        if self._lyric_display_window is not None:
+            self._lyric_display_window.set_transparent_mode_enabled(new_value)
+        self._sync_lyric_display_controls()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _toggle_lyric_display_transparent_mode(self, checked: bool = False) -> None:
+        self._set_lyric_display_transparent_mode(bool(checked))
+
+    def _hotkey_toggle_lyric_display_transparent_mode(self) -> None:
+        self._set_lyric_display_transparent_mode(not bool(getattr(self, "lyric_display_transparent_mode", False)))
+
+    def _adjust_lyric_display_font_size(self, delta: int) -> None:
+        self.lyric_display_font_size = max(10, min(240, int(self.lyric_display_font_size) + int(delta)))
+        if self._lyric_display_window is not None:
+            self._lyric_display_window.configure_display_settings(
+                font_family=self.lyric_display_font_family,
+                font_size=self.lyric_display_font_size,
+                show_not_playing_message=self.lyric_display_show_not_playing_message,
+                previous_line_count=self.lyric_display_previous_line_count,
+                next_line_count=self.lyric_display_next_line_count,
+                role_colors=self.lyric_display_role_colors,
+                role_sizes=self.lyric_display_role_sizes,
+                auto_adjust_role_sizes=self.lyric_display_auto_adjust_role_sizes,
+                role_scale_percents=self.lyric_display_role_scale_percents,
+                role_bold=self.lyric_display_role_bold,
+                role_italic=self.lyric_display_role_italic,
+            )
+            self._refresh_lyric_display(force=True)
+        if not self._suspend_settings_save:
+            self._save_settings()
 
     def _main_ui_current_lyric_text(self) -> str:
         if self.current_playing is None:
@@ -134,12 +174,19 @@ class LyricsStageMixin:
 
     def _open_lyric_display(self) -> None:
         if self._lyric_display_window is None:
-            self._lyric_display_window = LyricDisplayWindow(self)
+            self._lyric_display_window = LyricDisplayWindow(
+                self,
+                on_toggle_transparent_mode=self._set_lyric_display_transparent_mode,
+                on_adjust_font_size=self._adjust_lyric_display_font_size,
+                on_open_settings=lambda: self._open_options_dialog(initial_page="Lyric"),
+            )
             self._lyric_display_window.destroyed.connect(self._on_lyric_display_destroyed)
         self._lyric_display_window.retranslate_ui()
+        self._lyric_display_window.set_transparent_mode_enabled(bool(self.lyric_display_transparent_mode))
         self._lyric_display_window.configure_display_settings(
             font_family=self.lyric_display_font_family,
             font_size=self.lyric_display_font_size,
+            show_not_playing_message=self.lyric_display_show_not_playing_message,
             previous_line_count=self.lyric_display_previous_line_count,
             next_line_count=self.lyric_display_next_line_count,
             role_colors=self.lyric_display_role_colors,
@@ -156,6 +203,7 @@ class LyricsStageMixin:
 
     def _on_lyric_display_destroyed(self, _obj=None) -> None:
         self._lyric_display_window = None
+        self._sync_lyric_display_controls()
 
     def _open_lyric_navigator(self) -> None:
         if self._lyric_navigator_window is None:

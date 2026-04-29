@@ -46,6 +46,12 @@ class SelectionMixin:
             return "never"
         return "always"
 
+    def selected_lyric_display_transparent_mode(self) -> bool:
+        return bool(self.lyric_display_transparent_mode_checkbox.isChecked())
+
+    def selected_lyric_display_show_not_playing_message(self) -> bool:
+        return bool(self.lyric_display_show_not_playing_message_checkbox.isChecked())
+
     def selected_lyric_display_font_family(self) -> str:
         if hasattr(self.lyric_display_font_family_combo, "currentFont"):
             return str(self.lyric_display_font_family_combo.currentFont().family() or "").strip()

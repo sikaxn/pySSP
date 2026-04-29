@@ -452,7 +452,7 @@ class LyricDisplayWindow(QWidget):
 
     def _apply_window_chrome(self) -> None:
         if self._transparent_mode_enabled:
-            flags = Qt.Window | Qt.FramelessWindowHint
+            flags = Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
             if hasattr(Qt, "NoDropShadowWindowHint"):
                 flags |= Qt.NoDropShadowWindowHint
             if self.windowFlags() != flags:

@@ -29,9 +29,14 @@ class DisplayPageMixin:
         source_form.addRow("Now/Next Text Source:", self.display_text_source_combo)
         layout.addLayout(source_form)
 
+        tabs = QTabWidget()
+        layout.addWidget(tabs, 1)
+
+        layout_tab = QWidget()
+        layout_tab_layout = QVBoxLayout(layout_tab)
         tip = QLabel("Drag and resize gadgets in the preview. Toggle visibility, then save to apply to Stage Display.")
         tip.setWordWrap(True)
-        layout.addWidget(tip)
+        layout_tab_layout.addWidget(tip)
 
         body = QHBoxLayout()
         toggles = QGroupBox("Gadgets")
@@ -138,18 +143,157 @@ class DisplayPageMixin:
         preview_layout = QVBoxLayout(preview_group)
         self.display_layout_editor = StageDisplayLayoutEditor()
         self.display_layout_editor.set_gadgets(self._stage_display_gadgets)
+        self.display_layout_editor.set_font_settings(
+            default_font_family=self._stage_display_font_family,
+            default_value_font_size=self._stage_display_font_size,
+            lyric_font_family=self._stage_display_lyric_font_family,
+            lyric_value_font_size=self._stage_display_lyric_font_size,
+        )
         self._refresh_display_layer_table()
         preview_layout.addWidget(self.display_layout_editor, 1)
         body.addWidget(preview_group, 1)
-        layout.addLayout(body, 1)
+        layout_tab_layout.addLayout(body, 1)
 
         note = QLabel("Next Song is shown when playlist mode is enabled on the active page.")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        layout_tab_layout.addWidget(note)
         alert_note = QLabel("Alert gadget is always hidden on live Stage Display until an alert is sent.")
         alert_note.setWordWrap(True)
         alert_note.setStyleSheet("color:#888888;")
-        layout.addWidget(alert_note)
+        layout_tab_layout.addWidget(alert_note)
+        tabs.addTab(layout_tab, "Layout")
+
+        font_tab = QWidget()
+        font_tab_layout = QVBoxLayout(font_tab)
+
+        stage_font_group = QGroupBox("Stage Display")
+        stage_font_layout = QFormLayout(stage_font_group)
+        self.stage_display_font_family_combo = QFontComboBox()
+        self._populate_display_font_combo(self.stage_display_font_family_combo, self._stage_display_font_family)
+        self.stage_display_font_size_spin = QSpinBox()
+        self.stage_display_font_size_spin.setRange(10, 240)
+        self.stage_display_font_size_spin.setValue(max(10, int(self._stage_display_font_size)))
+        self.stage_display_font_family_combo.currentIndexChanged.connect(lambda _=0: self._sync_display_font_preview())
+        self.stage_display_font_size_spin.valueChanged.connect(lambda _=0: self._sync_display_font_preview())
+        stage_font_layout.addRow("Font:", self.stage_display_font_family_combo)
+        stage_font_layout.addRow("Text Size:", self.stage_display_font_size_spin)
+        font_tab_layout.addWidget(stage_font_group)
+
+        lyric_font_group = QGroupBox("Stage Display Lyric")
+        lyric_font_layout = QFormLayout(lyric_font_group)
+        self.stage_display_lyric_font_family_combo = QFontComboBox()
+        self._populate_display_font_combo(self.stage_display_lyric_font_family_combo, self._stage_display_lyric_font_family)
+        self.stage_display_lyric_font_size_spin = QSpinBox()
+        self.stage_display_lyric_font_size_spin.setRange(10, 240)
+        self.stage_display_lyric_font_size_spin.setValue(max(10, int(self._stage_display_lyric_font_size)))
+        self.stage_display_lyric_previous_line_count_spin = QSpinBox()
+        self.stage_display_lyric_previous_line_count_spin.setRange(0, 20)
+        self.stage_display_lyric_previous_line_count_spin.setValue(max(0, int(self._stage_display_lyric_previous_line_count)))
+        self.stage_display_lyric_next_line_count_spin = QSpinBox()
+        self.stage_display_lyric_next_line_count_spin.setRange(0, 20)
+        self.stage_display_lyric_next_line_count_spin.setValue(max(0, int(self._stage_display_lyric_next_line_count)))
+        self.stage_display_lyric_played_text_size_spin = QSpinBox()
+        self.stage_display_lyric_played_text_size_spin.setRange(8, 240)
+        self.stage_display_lyric_played_text_size_spin.setValue(int(self._stage_display_lyric_role_sizes.get("played", 18)))
+        self.stage_display_lyric_current_text_size_spin = QSpinBox()
+        self.stage_display_lyric_current_text_size_spin.setRange(8, 240)
+        self.stage_display_lyric_current_text_size_spin.setValue(int(self._stage_display_lyric_role_sizes.get("current", 28)))
+        self.stage_display_lyric_next_text_size_spin = QSpinBox()
+        self.stage_display_lyric_next_text_size_spin.setRange(8, 240)
+        self.stage_display_lyric_next_text_size_spin.setValue(int(self._stage_display_lyric_role_sizes.get("next", 22)))
+        self.stage_display_lyric_auto_adjust_role_sizes_checkbox = QCheckBox("Auto adjust role sizes from lyric text size")
+        self.stage_display_lyric_auto_adjust_role_sizes_checkbox.setChecked(bool(self._stage_display_lyric_auto_adjust_role_sizes))
+        self.stage_display_lyric_played_scale_percent_spin = QSpinBox()
+        self.stage_display_lyric_played_scale_percent_spin.setRange(25, 300)
+        self.stage_display_lyric_played_scale_percent_spin.setSuffix("%")
+        self.stage_display_lyric_played_scale_percent_spin.setValue(int(self._stage_display_lyric_role_scale_percents.get("played", 70)))
+        self.stage_display_lyric_current_scale_percent_spin = QSpinBox()
+        self.stage_display_lyric_current_scale_percent_spin.setRange(25, 300)
+        self.stage_display_lyric_current_scale_percent_spin.setSuffix("%")
+        self.stage_display_lyric_current_scale_percent_spin.setValue(int(self._stage_display_lyric_role_scale_percents.get("current", 115)))
+        self.stage_display_lyric_next_scale_percent_spin = QSpinBox()
+        self.stage_display_lyric_next_scale_percent_spin.setRange(25, 300)
+        self.stage_display_lyric_next_scale_percent_spin.setSuffix("%")
+        self.stage_display_lyric_next_scale_percent_spin.setValue(int(self._stage_display_lyric_role_scale_percents.get("next", 90)))
+        self.stage_display_lyric_played_bold_checkbox = QCheckBox("Bold")
+        self.stage_display_lyric_played_bold_checkbox.setChecked(bool(self._stage_display_lyric_role_bold.get("played", True)))
+        self.stage_display_lyric_current_bold_checkbox = QCheckBox("Bold")
+        self.stage_display_lyric_current_bold_checkbox.setChecked(bool(self._stage_display_lyric_role_bold.get("current", True)))
+        self.stage_display_lyric_next_bold_checkbox = QCheckBox("Bold")
+        self.stage_display_lyric_next_bold_checkbox.setChecked(bool(self._stage_display_lyric_role_bold.get("next", True)))
+        self.stage_display_lyric_played_italic_checkbox = QCheckBox("Italic")
+        self.stage_display_lyric_played_italic_checkbox.setChecked(bool(self._stage_display_lyric_role_italic.get("played", False)))
+        self.stage_display_lyric_current_italic_checkbox = QCheckBox("Italic")
+        self.stage_display_lyric_current_italic_checkbox.setChecked(bool(self._stage_display_lyric_role_italic.get("current", False)))
+        self.stage_display_lyric_next_italic_checkbox = QCheckBox("Italic")
+        self.stage_display_lyric_next_italic_checkbox.setChecked(bool(self._stage_display_lyric_role_italic.get("next", False)))
+        self.stage_display_lyric_played_color_btn = QPushButton()
+        self.stage_display_lyric_current_color_btn = QPushButton()
+        self.stage_display_lyric_next_color_btn = QPushButton()
+        self._refresh_color_button(
+            self.stage_display_lyric_played_color_btn,
+            str(self._stage_display_lyric_role_colors.get("played", "#A0A0A0")),
+        )
+        self._refresh_color_button(
+            self.stage_display_lyric_current_color_btn,
+            str(self._stage_display_lyric_role_colors.get("current", "#FFD400")),
+        )
+        self._refresh_color_button(
+            self.stage_display_lyric_next_color_btn,
+            str(self._stage_display_lyric_role_colors.get("next", "#FFFFFF")),
+        )
+        self.stage_display_lyric_played_color_btn.clicked.connect(
+            lambda: self._pick_lyric_role_color("stage_display", "played")
+        )
+        self.stage_display_lyric_current_color_btn.clicked.connect(
+            lambda: self._pick_lyric_role_color("stage_display", "current")
+        )
+        self.stage_display_lyric_next_color_btn.clicked.connect(
+            lambda: self._pick_lyric_role_color("stage_display", "next")
+        )
+        self.stage_display_lyric_font_family_combo.currentIndexChanged.connect(lambda _=0: self._sync_display_font_preview())
+        self.stage_display_lyric_font_size_spin.valueChanged.connect(lambda _=0: self._sync_display_font_preview())
+        lyric_font_layout.addRow("Lyric Font:", self.stage_display_lyric_font_family_combo)
+        lyric_font_layout.addRow("Lyric Text Size:", self.stage_display_lyric_font_size_spin)
+        lyric_font_layout.addRow("Played Lyric Lines:", self.stage_display_lyric_previous_line_count_spin)
+        lyric_font_layout.addRow("Next Lyric Lines:", self.stage_display_lyric_next_line_count_spin)
+        lyric_font_layout.addRow(self.stage_display_lyric_auto_adjust_role_sizes_checkbox)
+        lyric_font_layout.addRow("Played Scale:", self.stage_display_lyric_played_scale_percent_spin)
+        lyric_font_layout.addRow("Current Scale:", self.stage_display_lyric_current_scale_percent_spin)
+        lyric_font_layout.addRow("Next Scale:", self.stage_display_lyric_next_scale_percent_spin)
+        lyric_font_layout.addRow("Played Text Size:", self.stage_display_lyric_played_text_size_spin)
+        lyric_font_layout.addRow("Current Text Size:", self.stage_display_lyric_current_text_size_spin)
+        lyric_font_layout.addRow("Next Text Size:", self.stage_display_lyric_next_text_size_spin)
+        lyric_font_layout.addRow(
+            "Played Style:",
+            self._build_role_style_row(
+                self.stage_display_lyric_played_bold_checkbox,
+                self.stage_display_lyric_played_italic_checkbox,
+            ),
+        )
+        lyric_font_layout.addRow(
+            "Current Style:",
+            self._build_role_style_row(
+                self.stage_display_lyric_current_bold_checkbox,
+                self.stage_display_lyric_current_italic_checkbox,
+            ),
+        )
+        lyric_font_layout.addRow(
+            "Next Style:",
+            self._build_role_style_row(
+                self.stage_display_lyric_next_bold_checkbox,
+                self.stage_display_lyric_next_italic_checkbox,
+            ),
+        )
+        lyric_font_layout.addRow("Played Color:", self.stage_display_lyric_played_color_btn)
+        lyric_font_layout.addRow("Current Color:", self.stage_display_lyric_current_color_btn)
+        lyric_font_layout.addRow("Next Color:", self.stage_display_lyric_next_color_btn)
+        self.stage_display_lyric_auto_adjust_role_sizes_checkbox.toggled.connect(self._sync_stage_display_lyric_role_size_mode)
+        font_tab_layout.addWidget(lyric_font_group)
+        font_tab_layout.addStretch(1)
+        tabs.addTab(font_tab, "Font")
+        self._sync_display_font_preview()
+        self._sync_stage_display_lyric_role_size_mode()
         return page
 
     def _refresh_display_layer_table(self) -> None:
@@ -217,4 +361,36 @@ class DisplayPageMixin:
         else:
             visible = bool(self._stage_display_gadgets.get("alert", {}).get("visible", False))
         self._display_alert_edit_visibility_button.setText("Hide for Edit" if visible else "Show for Edit")
+
+    def _sync_display_font_preview(self) -> None:
+        required = [
+            "display_layout_editor",
+            "stage_display_font_family_combo",
+            "stage_display_font_size_spin",
+            "stage_display_lyric_font_family_combo",
+            "stage_display_lyric_font_size_spin",
+        ]
+        if any(not hasattr(self, name) for name in required):
+            return
+        self.display_layout_editor.set_font_settings(
+            default_font_family=str(self.stage_display_font_family_combo.currentData() or ""),
+            default_value_font_size=int(self.stage_display_font_size_spin.value()),
+            lyric_font_family=str(self.stage_display_lyric_font_family_combo.currentData() or ""),
+            lyric_value_font_size=int(self.stage_display_lyric_font_size_spin.value()),
+        )
+
+    def _sync_stage_display_lyric_role_size_mode(self) -> None:
+        auto_mode = bool(self.stage_display_lyric_auto_adjust_role_sizes_checkbox.isChecked())
+        for widget in [
+            self.stage_display_lyric_played_scale_percent_spin,
+            self.stage_display_lyric_current_scale_percent_spin,
+            self.stage_display_lyric_next_scale_percent_spin,
+        ]:
+            widget.setEnabled(auto_mode)
+        for widget in [
+            self.stage_display_lyric_played_text_size_spin,
+            self.stage_display_lyric_current_text_size_spin,
+            self.stage_display_lyric_next_text_size_spin,
+        ]:
+            widget.setEnabled(not auto_mode)
 

@@ -115,6 +115,18 @@ class LyricsStageMixin:
             self._stage_display_window.destroyed.connect(self._on_stage_display_destroyed)
         self._stage_display_window.retranslate_ui()
         self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
+        self._stage_display_window.configure_font_settings(
+            default_font_family=self.stage_display_font_family,
+            default_font_size=self.stage_display_font_size,
+            lyric_font_family=self.stage_display_lyric_font_family,
+            lyric_font_size=self.stage_display_lyric_font_size,
+            lyric_role_colors=self.stage_display_lyric_role_colors,
+            lyric_role_sizes=self.stage_display_lyric_role_sizes,
+            lyric_auto_adjust_role_sizes=self.stage_display_lyric_auto_adjust_role_sizes,
+            lyric_role_scale_percents=self.stage_display_lyric_role_scale_percents,
+            lyric_role_bold=self.stage_display_lyric_role_bold,
+            lyric_role_italic=self.stage_display_lyric_role_italic,
+        )
         self._refresh_stage_display()
         self._stage_display_window.show()
         self._stage_display_window.raise_()
@@ -125,6 +137,18 @@ class LyricsStageMixin:
             self._lyric_display_window = LyricDisplayWindow(self)
             self._lyric_display_window.destroyed.connect(self._on_lyric_display_destroyed)
         self._lyric_display_window.retranslate_ui()
+        self._lyric_display_window.configure_display_settings(
+            font_family=self.lyric_display_font_family,
+            font_size=self.lyric_display_font_size,
+            previous_line_count=self.lyric_display_previous_line_count,
+            next_line_count=self.lyric_display_next_line_count,
+            role_colors=self.lyric_display_role_colors,
+            role_sizes=self.lyric_display_role_sizes,
+            auto_adjust_role_sizes=self.lyric_display_auto_adjust_role_sizes,
+            role_scale_percents=self.lyric_display_role_scale_percents,
+            role_bold=self.lyric_display_role_bold,
+            role_italic=self.lyric_display_role_italic,
+        )
         self._lyric_display_window.show()
         self._lyric_display_window.raise_()
         self._lyric_display_window.activateWindow()
@@ -382,8 +406,19 @@ class LyricsStageMixin:
         if error or not lines:
             return "-"
         position_ms = self._lyric_position_ms_for_key(self.current_playing)
-        text = line_for_position(lines, position_ms)
-        return text.strip() if text and text.strip() else ""
+        segments = lyric_segments_around_position(
+            lines,
+            position_ms,
+            self.stage_display_lyric_previous_line_count,
+            self.stage_display_lyric_next_line_count,
+        )
+        if not segments:
+            return ""
+        return lyric_segments_to_html(
+            segments,
+            font_family=self.stage_display_lyric_font_family,
+            role_styles=self._stage_display_lyric_role_styles(),
+        )
 
     def _load_stage_lyric_lines(self, lyric_path: str) -> tuple[List[LyricLine], str]:
         mtime = -1.0
@@ -404,4 +439,25 @@ class LyricsStageMixin:
         self._stage_lyric_cache_lines = lines
         self._stage_lyric_cache_error = error
         return lines, error
+
+    def _stage_display_lyric_role_styles(self) -> dict[str, dict[str, object]]:
+        if self.stage_display_lyric_auto_adjust_role_sizes:
+            sizes = {
+                key: max(
+                    8,
+                    int(round(self.stage_display_lyric_font_size * (self.stage_display_lyric_role_scale_percents.get(key, 100) / 100.0))),
+                )
+                for key in ("played", "current", "next")
+            }
+        else:
+            sizes = dict(self.stage_display_lyric_role_sizes)
+        return {
+            key: {
+                "size": int(sizes[key]),
+                "color": self.stage_display_lyric_role_colors[key],
+                "bold": self.stage_display_lyric_role_bold[key],
+                "italic": self.stage_display_lyric_role_italic[key],
+            }
+            for key in ("played", "current", "next")
+        }
 

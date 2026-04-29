@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import os
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QFontDatabase
 from PyQt5.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
@@ -22,6 +23,8 @@ STAGE_DISPLAY_GADGET_SPECS: List[Tuple[str, str]] = [
     ("next_song", "Next Song"),
 ]
 STAGE_DISPLAY_GADGET_KEYS = [key for key, _label in STAGE_DISPLAY_GADGET_SPECS]
+
+_BUNDLED_FONT_FAMILY_CACHE: Optional[str] = None
 
 
 def default_stage_display_gadgets() -> Dict[str, Dict[str, int | bool | str]]:
@@ -185,6 +188,42 @@ def gadgets_to_legacy_layout_visibility(gadgets: Dict[str, Dict[str, object]]) -
     return order, visibility
 
 
+def bundled_display_font_family() -> str:
+    global _BUNDLED_FONT_FAMILY_CACHE
+    if _BUNDLED_FONT_FAMILY_CACHE:
+        return _BUNDLED_FONT_FAMILY_CACHE
+    font_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "assets",
+            "lyric_stage",
+            "shared",
+            "NotoSansSC-VariableFont_wght.ttf",
+        )
+    )
+    font_id = QFontDatabase.addApplicationFont(font_path)
+    if font_id >= 0:
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        if families:
+            _BUNDLED_FONT_FAMILY_CACHE = str(families[0]).strip()
+            return _BUNDLED_FONT_FAMILY_CACHE
+    _BUNDLED_FONT_FAMILY_CACHE = ""
+    return ""
+
+
+def available_display_font_families() -> List[str]:
+    families: List[str] = []
+    bundled = bundled_display_font_family()
+    if bundled:
+        families.append(bundled)
+    for family in QFontDatabase().families():
+        token = str(family).strip()
+        if token and token not in families:
+            families.append(token)
+    return families
+
+
 class _GadgetFrame(QFrame):
     changed = pyqtSignal(str)
     selected = pyqtSignal(str)
@@ -201,6 +240,10 @@ class _GadgetFrame(QFrame):
         self._hide_text = False
         self._hide_border = False
         self._orientation = "vertical"
+        self._title_font_family = ""
+        self._title_font_size = 13
+        self._value_font_family = ""
+        self._value_font_size = 24
         self.setObjectName(f"stage_gadget_{key}")
         self.setFrameShape(QFrame.Box)
         self.setLineWidth(1)
@@ -232,22 +275,38 @@ class _GadgetFrame(QFrame):
         self._apply_fonts()
 
     def _apply_fonts(self) -> None:
-        area = max(1, self.width() * self.height())
-        scale = max(0.8, min(3.8, (area / 170000.0) ** 0.5))
         title_font = QFont(self.title_label.font())
-        title_font.setPointSize(max(11, int(13 * scale)))
+        if self._title_font_family:
+            title_font.setFamily(self._title_font_family)
+        title_font.setPointSize(max(8, int(self._title_font_size)))
         title_font.setBold(True)
         self.title_label.setFont(title_font)
         value_font = QFont(self.value_label.font())
-        value_font.setPointSize(max(16, int(24 * scale)))
+        if self._value_font_family:
+            value_font.setFamily(self._value_font_family)
+        value_font.setPointSize(max(10, int(self._value_font_size)))
         value_font.setBold(True)
         self.value_label.setFont(value_font)
 
-    def apply_config(self, orientation: str, hide_text: bool, hide_border: bool) -> None:
+    def apply_config(
+        self,
+        orientation: str,
+        hide_text: bool,
+        hide_border: bool,
+        *,
+        title_font_family: str = "",
+        title_font_size: int = 13,
+        value_font_family: str = "",
+        value_font_size: int = 24,
+    ) -> None:
         token = str(orientation or "").strip().lower()
         self._orientation = token if token in {"horizontal", "vertical"} else "vertical"
         self._hide_text = bool(hide_text)
         self._hide_border = bool(hide_border)
+        self._title_font_family = str(title_font_family or "").strip()
+        self._title_font_size = max(8, int(title_font_size))
+        self._value_font_family = str(value_font_family or "").strip()
+        self._value_font_size = max(10, int(value_font_size))
         self.title_label.setVisible(not self._hide_text)
         if self._orientation == "horizontal":
             self._layout.setDirection(QBoxLayout.LeftToRight)
@@ -331,6 +390,14 @@ class StageDisplayLayoutEditor(QWidget):
         self.setMinimumSize(520, 320)
         self.setStyleSheet("background:#000000;")
         self._gadgets = default_stage_display_gadgets()
+        self._default_title_font_family = ""
+        self._default_title_font_size = 13
+        self._default_value_font_family = ""
+        self._default_value_font_size = 24
+        self._lyric_title_font_family = ""
+        self._lyric_title_font_size = 13
+        self._lyric_value_font_family = ""
+        self._lyric_value_font_size = 24
         self._widgets: Dict[str, _GadgetFrame] = {}
         self._selected_key: Optional[str] = None
         labels = dict(STAGE_DISPLAY_GADGET_SPECS)
@@ -346,6 +413,24 @@ class StageDisplayLayoutEditor(QWidget):
 
     def gadgets(self) -> Dict[str, Dict[str, int | bool | str]]:
         return normalize_stage_display_gadgets(deepcopy(self._gadgets))
+
+    def set_font_settings(
+        self,
+        *,
+        default_font_family: str = "",
+        default_value_font_size: int = 24,
+        lyric_font_family: str = "",
+        lyric_value_font_size: int = 24,
+    ) -> None:
+        self._default_value_font_family = str(default_font_family or "").strip()
+        self._default_value_font_size = max(10, int(default_value_font_size))
+        self._default_title_font_family = self._default_value_font_family
+        self._default_title_font_size = max(8, int(round(self._default_value_font_size * 0.55)))
+        self._lyric_value_font_family = str(lyric_font_family or "").strip()
+        self._lyric_value_font_size = max(10, int(lyric_value_font_size))
+        self._lyric_title_font_family = self._lyric_value_font_family or self._default_title_font_family
+        self._lyric_title_font_size = max(8, int(round(self._lyric_value_font_size * 0.55)))
+        self._apply_geometry()
 
     def set_gadget_visible(self, key: str, visible: bool) -> None:
         if key not in self._gadgets:
@@ -400,10 +485,24 @@ class StageDisplayLayoutEditor(QWidget):
             rect = _norm_to_rect(spec, area)
             widget.setGeometry(rect)
             widget.setVisible(bool(spec["visible"]))
+            if key == "lyric":
+                title_font_family = self._lyric_title_font_family
+                title_font_size = self._lyric_title_font_size
+                value_font_family = self._lyric_value_font_family or self._default_value_font_family
+                value_font_size = self._lyric_value_font_size
+            else:
+                title_font_family = self._default_title_font_family
+                title_font_size = self._default_title_font_size
+                value_font_family = self._default_value_font_family
+                value_font_size = self._default_value_font_size
             widget.apply_config(
                 orientation=str(spec.get("orientation", "vertical")),
                 hide_text=bool(spec.get("hide_text", False)),
                 hide_border=bool(spec.get("hide_border", False)),
+                title_font_family=title_font_family,
+                title_font_size=title_font_size,
+                value_font_family=value_font_family,
+                value_font_size=value_font_size,
             )
             widget.raise_()
 
@@ -458,6 +557,36 @@ class StageDisplayWindow(QWidget):
         self._status_state = "not_playing"
         self._alert_text = ""
         self._alert_active = False
+        self._default_font_family = ""
+        self._default_font_size = 24
+        self._lyric_font_family = ""
+        self._lyric_font_size = 24
+        self._lyric_role_colors = {
+            "played": "#A0A0A0",
+            "current": "#FFD400",
+            "next": "#FFFFFF",
+        }
+        self._lyric_role_sizes = {
+            "played": 18,
+            "current": 28,
+            "next": 22,
+        }
+        self._lyric_auto_adjust_role_sizes = True
+        self._lyric_role_scale_percents = {
+            "played": 70,
+            "current": 115,
+            "next": 90,
+        }
+        self._lyric_role_bold = {
+            "played": True,
+            "current": True,
+            "next": True,
+        }
+        self._lyric_role_italic = {
+            "played": False,
+            "current": False,
+            "next": False,
+        }
         self._datetime_timer = QTimer(self)
         self._datetime_timer.timeout.connect(self._update_datetime)
         self._datetime_timer.start(1000)
@@ -499,10 +628,62 @@ class StageDisplayWindow(QWidget):
 
     def configure_gadgets(self, gadgets: Dict[str, Dict[str, object]]) -> None:
         self._canvas.set_gadgets(gadgets)
+        self._apply_font_settings()
         self._apply_alert_visibility()
 
     def configure_layout(self, order: List[str], visibility: Dict[str, bool]) -> None:
         self.configure_gadgets(normalize_stage_display_gadgets({}, order, visibility))
+
+    def configure_font_settings(
+        self,
+        *,
+        default_font_family: str = "",
+        default_font_size: int = 24,
+        lyric_font_family: str = "",
+        lyric_font_size: int = 24,
+        lyric_role_colors: Optional[Dict[str, str]] = None,
+        lyric_role_sizes: Optional[Dict[str, int]] = None,
+        lyric_auto_adjust_role_sizes: bool = True,
+        lyric_role_scale_percents: Optional[Dict[str, int]] = None,
+        lyric_role_bold: Optional[Dict[str, bool]] = None,
+        lyric_role_italic: Optional[Dict[str, bool]] = None,
+    ) -> None:
+        self._default_font_family = str(default_font_family or "").strip()
+        self._default_font_size = max(10, int(default_font_size))
+        self._lyric_font_family = str(lyric_font_family or "").strip()
+        self._lyric_font_size = max(10, int(lyric_font_size))
+        if lyric_role_colors is not None:
+            self._lyric_role_colors = {
+                "played": str(lyric_role_colors.get("played", "#A0A0A0") or "#A0A0A0").strip() or "#A0A0A0",
+                "current": str(lyric_role_colors.get("current", "#FFD400") or "#FFD400").strip() or "#FFD400",
+                "next": str(lyric_role_colors.get("next", "#FFFFFF") or "#FFFFFF").strip() or "#FFFFFF",
+            }
+        if lyric_role_sizes is not None:
+            self._lyric_role_sizes = {
+                "played": max(8, int(lyric_role_sizes.get("played", 18))),
+                "current": max(8, int(lyric_role_sizes.get("current", 28))),
+                "next": max(8, int(lyric_role_sizes.get("next", 22))),
+            }
+        self._lyric_auto_adjust_role_sizes = bool(lyric_auto_adjust_role_sizes)
+        if lyric_role_scale_percents is not None:
+            self._lyric_role_scale_percents = {
+                "played": max(25, min(300, int(lyric_role_scale_percents.get("played", 70)))),
+                "current": max(25, min(300, int(lyric_role_scale_percents.get("current", 115)))),
+                "next": max(25, min(300, int(lyric_role_scale_percents.get("next", 90)))),
+            }
+        if lyric_role_bold is not None:
+            self._lyric_role_bold = {
+                "played": bool(lyric_role_bold.get("played", True)),
+                "current": bool(lyric_role_bold.get("current", True)),
+                "next": bool(lyric_role_bold.get("next", True)),
+            }
+        if lyric_role_italic is not None:
+            self._lyric_role_italic = {
+                "played": bool(lyric_role_italic.get("played", False)),
+                "current": bool(lyric_role_italic.get("current", False)),
+                "next": bool(lyric_role_italic.get("next", False)),
+            }
+        self._apply_font_settings()
 
     def update_values(
         self,
@@ -583,6 +764,14 @@ class StageDisplayWindow(QWidget):
         alert_widget.setVisible(bool(self._alert_active))
         if self._alert_active:
             alert_widget.raise_()
+
+    def _apply_font_settings(self) -> None:
+        self._canvas.set_font_settings(
+            default_font_family=self._default_font_family,
+            default_value_font_size=self._default_font_size,
+            lyric_font_family=self._lyric_font_family,
+            lyric_value_font_size=self._lyric_font_size,
+        )
 
 
 def _coerce_int(value: object, fallback: int, minimum: int, maximum: int) -> int:

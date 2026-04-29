@@ -149,7 +149,14 @@ from pyssp.midi_control import (
 )
 from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.path_safety import unsafe_path_reason
-from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
+from pyssp.lyrics import (
+    LyricLine,
+    line_for_position,
+    lyric_segments_around_position,
+    lyric_segments_to_html,
+    lyric_text_around_position,
+    parse_lyric_file,
+)
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,

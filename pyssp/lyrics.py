@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import html
 from dataclasses import dataclass
 from typing import List
 
@@ -41,6 +42,80 @@ def line_for_position(lines: List[LyricLine], position_ms: int) -> str:
     return previous_text
 
 
+def lyric_lines_around_position(
+    lines: List[LyricLine],
+    position_ms: int,
+    previous_count: int,
+    next_count: int,
+) -> List[str]:
+    if not lines:
+        return []
+    pos = max(0, int(position_ms))
+    prev_limit = max(0, int(previous_count))
+    next_limit = max(0, int(next_count))
+    current_index = _line_index_for_position(lines, pos)
+    if current_index is None:
+        return [line.text for line in lines[:next_limit]]
+    start = max(0, current_index - prev_limit)
+    end = min(len(lines), current_index + next_limit + 1)
+    return [lines[index].text for index in range(start, end)]
+
+
+def lyric_segments_around_position(
+    lines: List[LyricLine],
+    position_ms: int,
+    previous_count: int,
+    next_count: int,
+) -> List[tuple[str, str]]:
+    if not lines:
+        return []
+    pos = max(0, int(position_ms))
+    prev_limit = max(0, int(previous_count))
+    next_limit = max(0, int(next_count))
+    current_index = _line_index_for_position(lines, pos)
+    if current_index is None:
+        return [("next", line.text) for line in lines[:next_limit]]
+    segments: List[tuple[str, str]] = []
+    for index in range(max(0, current_index - prev_limit), current_index):
+        segments.append(("played", lines[index].text))
+    segments.append(("current", lines[current_index].text))
+    for index in range(current_index + 1, min(len(lines), current_index + next_limit + 1)):
+        segments.append(("next", lines[index].text))
+    return segments
+
+
+def lyric_text_around_position(
+    lines: List[LyricLine],
+    position_ms: int,
+    previous_count: int,
+    next_count: int,
+) -> str:
+    return "\n".join(text for _role, text in lyric_segments_around_position(lines, position_ms, previous_count, next_count))
+
+
+def lyric_segments_to_html(
+    segments: List[tuple[str, str]],
+    *,
+    font_family: str = "",
+    role_styles: dict[str, dict[str, object]] | None = None,
+) -> str:
+    styles = dict(role_styles or {})
+    blocks: List[str] = []
+    family = str(font_family or "").strip()
+    family_css = f"font-family:'{family}';" if family else ""
+    for role, text in segments:
+        safe_text = html.escape(str(text or "")).replace("\n", "<br/>")
+        role_style = dict(styles.get(role, {}))
+        size = max(1, int(role_style.get("size", 24)))
+        color = str(role_style.get("color", "#FFFFFF") or "#FFFFFF").strip() or "#FFFFFF"
+        weight = "700" if bool(role_style.get("bold", True)) else "400"
+        italic = "italic" if bool(role_style.get("italic", False)) else "normal"
+        blocks.append(
+            f"<div style=\"margin:0; padding:0; {family_css} font-size:{size}pt; color:{color}; font-weight:{weight}; font-style:{italic};\">{safe_text}</div>"
+        )
+    return "".join(blocks)
+
+
 def _parse_lrc(text: str) -> List[LyricLine]:
     offset_ms = 0
     for raw_line in text.splitlines():
@@ -73,6 +148,16 @@ def _parse_lrc(text: str) -> List[LyricLine]:
             end_ms = start_ms + 4_000
         lines.append(LyricLine(start_ms=start_ms, end_ms=end_ms, text=content))
     return lines
+
+
+def _line_index_for_position(lines: List[LyricLine], position_ms: int) -> int | None:
+    previous_index: int | None = None
+    for index, line in enumerate(lines):
+        if line.start_ms <= position_ms <= line.end_ms:
+            return index
+        if line.start_ms <= position_ms:
+            previous_index = index
+    return previous_index
 
 
 def _parse_srt(text: str) -> List[LyricLine]:

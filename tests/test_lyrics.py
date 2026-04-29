@@ -1,4 +1,4 @@
-from pyssp.lyrics import line_for_position, parse_lyric_file
+from pyssp.lyrics import line_for_position, lyric_text_around_position, parse_lyric_file
 
 
 def test_parse_lrc_and_pick_line(tmp_path):
@@ -130,3 +130,40 @@ def test_empty_lrc_line_is_respected(tmp_path):
     assert line_for_position(lines, 1500) == "A"
     assert line_for_position(lines, 2500) == ""
     assert line_for_position(lines, 3500) == "B"
+
+
+def test_lyric_text_around_position_returns_played_current_and_next_lines(tmp_path):
+    path = tmp_path / "context.lrc"
+    path.write_text(
+        "\n".join(
+            [
+                "[00:01.00]Line 1",
+                "[00:02.00]Line 2",
+                "[00:03.00]Line 3",
+                "[00:04.00]Line 4",
+                "[00:05.00]Line 5",
+                "[00:06.00]Line 6",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    lines = parse_lyric_file(str(path))
+    assert lyric_text_around_position(lines, 3000, 2, 3) == "\n".join(
+        ["Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6"]
+    )
+
+
+def test_lyric_text_around_position_before_first_line_uses_upcoming_lines(tmp_path):
+    path = tmp_path / "upcoming.lrc"
+    path.write_text(
+        "\n".join(
+            [
+                "[00:01.00]First",
+                "[00:02.00]Second",
+                "[00:03.00]Third",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    lines = parse_lyric_file(str(path))
+    assert lyric_text_around_position(lines, 0, 2, 2) == "\n".join(["First", "Second"])

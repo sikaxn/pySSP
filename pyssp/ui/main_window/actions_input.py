@@ -1394,6 +1394,26 @@ class ActionsInputMixin:
             show_file_notifications=self.show_file_notifications,
             now_playing_display_mode=self.now_playing_display_mode,
             main_ui_lyric_display_mode=self.main_ui_lyric_display_mode,
+            lyric_display_font_family=self.lyric_display_font_family,
+            lyric_display_font_size=self.lyric_display_font_size,
+            lyric_display_previous_line_count=self.lyric_display_previous_line_count,
+            lyric_display_next_line_count=self.lyric_display_next_line_count,
+            lyric_display_played_color=self.lyric_display_role_colors["played"],
+            lyric_display_current_color=self.lyric_display_role_colors["current"],
+            lyric_display_next_color=self.lyric_display_role_colors["next"],
+            lyric_display_auto_adjust_role_sizes=self.lyric_display_auto_adjust_role_sizes,
+            lyric_display_played_scale_percent=self.lyric_display_role_scale_percents["played"],
+            lyric_display_current_scale_percent=self.lyric_display_role_scale_percents["current"],
+            lyric_display_next_scale_percent=self.lyric_display_role_scale_percents["next"],
+            lyric_display_played_text_size=self.lyric_display_role_sizes["played"],
+            lyric_display_current_text_size=self.lyric_display_role_sizes["current"],
+            lyric_display_next_text_size=self.lyric_display_role_sizes["next"],
+            lyric_display_played_bold=self.lyric_display_role_bold["played"],
+            lyric_display_current_bold=self.lyric_display_role_bold["current"],
+            lyric_display_next_bold=self.lyric_display_role_bold["next"],
+            lyric_display_played_italic=self.lyric_display_role_italic["played"],
+            lyric_display_current_italic=self.lyric_display_role_italic["current"],
+            lyric_display_next_italic=self.lyric_display_role_italic["next"],
             search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
             new_lyric_file_format=self.new_lyric_file_format,
             supported_audio_format_extensions=self.supported_audio_format_extensions,
@@ -1528,6 +1548,28 @@ class ActionsInputMixin:
             stage_display_layout=self.stage_display_layout,
             stage_display_visibility=self.stage_display_visibility,
             stage_display_text_source=self.stage_display_text_source,
+            stage_display_font_family=self.stage_display_font_family,
+            stage_display_font_size=self.stage_display_font_size,
+            stage_display_lyric_font_family=self.stage_display_lyric_font_family,
+            stage_display_lyric_font_size=self.stage_display_lyric_font_size,
+            stage_display_lyric_previous_line_count=self.stage_display_lyric_previous_line_count,
+            stage_display_lyric_next_line_count=self.stage_display_lyric_next_line_count,
+            stage_display_lyric_played_color=self.stage_display_lyric_role_colors["played"],
+            stage_display_lyric_current_color=self.stage_display_lyric_role_colors["current"],
+            stage_display_lyric_next_color=self.stage_display_lyric_role_colors["next"],
+            stage_display_lyric_auto_adjust_role_sizes=self.stage_display_lyric_auto_adjust_role_sizes,
+            stage_display_lyric_played_scale_percent=self.stage_display_lyric_role_scale_percents["played"],
+            stage_display_lyric_current_scale_percent=self.stage_display_lyric_role_scale_percents["current"],
+            stage_display_lyric_next_scale_percent=self.stage_display_lyric_role_scale_percents["next"],
+            stage_display_lyric_played_text_size=self.stage_display_lyric_role_sizes["played"],
+            stage_display_lyric_current_text_size=self.stage_display_lyric_role_sizes["current"],
+            stage_display_lyric_next_text_size=self.stage_display_lyric_role_sizes["next"],
+            stage_display_lyric_played_bold=self.stage_display_lyric_role_bold["played"],
+            stage_display_lyric_current_bold=self.stage_display_lyric_role_bold["current"],
+            stage_display_lyric_next_bold=self.stage_display_lyric_role_bold["next"],
+            stage_display_lyric_played_italic=self.stage_display_lyric_role_italic["played"],
+            stage_display_lyric_current_italic=self.stage_display_lyric_role_italic["current"],
+            stage_display_lyric_next_italic=self.stage_display_lyric_role_italic["next"],
             window_layout=self.window_layout,
             lock_unlock_method=self.lock_unlock_method,
             lock_require_password=self.lock_require_password,
@@ -1586,6 +1628,16 @@ class ActionsInputMixin:
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.now_playing_display_mode = dialog.selected_now_playing_display_mode()
         self.main_ui_lyric_display_mode = dialog.selected_main_ui_lyric_display_mode()
+        self.lyric_display_font_family = dialog.selected_lyric_display_font_family()
+        self.lyric_display_font_size = dialog.selected_lyric_display_font_size()
+        self.lyric_display_previous_line_count = dialog.selected_lyric_display_previous_line_count()
+        self.lyric_display_next_line_count = dialog.selected_lyric_display_next_line_count()
+        self.lyric_display_role_colors = dialog.selected_lyric_display_role_colors()
+        self.lyric_display_auto_adjust_role_sizes = dialog.selected_lyric_display_auto_adjust_role_sizes()
+        self.lyric_display_role_scale_percents = dialog.selected_lyric_display_role_scale_percents()
+        self.lyric_display_role_sizes = dialog.selected_lyric_display_role_sizes()
+        self.lyric_display_role_bold = dialog.selected_lyric_display_role_bold()
+        self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
@@ -1725,11 +1777,41 @@ class ActionsInputMixin:
             self.stage_display_gadgets
         )
         self.stage_display_text_source = dialog.selected_stage_display_text_source()
+        self.stage_display_font_family = dialog.selected_stage_display_font_family()
+        self.stage_display_font_size = dialog.selected_stage_display_font_size()
+        self.stage_display_lyric_font_family = dialog.selected_stage_display_lyric_font_family()
+        self.stage_display_lyric_font_size = dialog.selected_stage_display_lyric_font_size()
+        self.stage_display_lyric_previous_line_count = dialog.selected_stage_display_lyric_previous_line_count()
+        self.stage_display_lyric_next_line_count = dialog.selected_stage_display_lyric_next_line_count()
+        self.stage_display_lyric_role_colors = dialog.selected_stage_display_lyric_role_colors()
+        self.stage_display_lyric_auto_adjust_role_sizes = dialog.selected_stage_display_lyric_auto_adjust_role_sizes()
+        self.stage_display_lyric_role_scale_percents = dialog.selected_stage_display_lyric_role_scale_percents()
+        self.stage_display_lyric_role_sizes = dialog.selected_stage_display_lyric_role_sizes()
+        self.stage_display_lyric_role_bold = dialog.selected_stage_display_lyric_role_bold()
+        self.stage_display_lyric_role_italic = dialog.selected_stage_display_lyric_role_italic()
         self.window_layout = normalize_window_layout(dialog.selected_window_layout())
         self._apply_top_control_layout()
         if self._stage_display_window is not None:
             self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
+            self._stage_display_window.configure_font_settings(
+                default_font_family=self.stage_display_font_family,
+                default_font_size=self.stage_display_font_size,
+                lyric_font_family=self.stage_display_lyric_font_family,
+                lyric_font_size=self.stage_display_lyric_font_size,
+                lyric_role_colors=self.stage_display_lyric_role_colors,
+                lyric_role_sizes=self.stage_display_lyric_role_sizes,
+            )
             self._refresh_stage_display()
+        if self._lyric_display_window is not None:
+            self._lyric_display_window.configure_display_settings(
+                font_family=self.lyric_display_font_family,
+                font_size=self.lyric_display_font_size,
+                previous_line_count=self.lyric_display_previous_line_count,
+                next_line_count=self.lyric_display_next_line_count,
+                role_colors=self.lyric_display_role_colors,
+                role_sizes=self.lyric_display_role_sizes,
+            )
+            self._refresh_lyric_display(force=True)
         selected_ui_language = dialog.selected_ui_language()
         if selected_ui_language != self.ui_language:
             self.ui_language = selected_ui_language

@@ -46,6 +46,64 @@ def _build_dialog(**overrides):
         show_file_notifications=defaults["show_file_notifications"],
         now_playing_display_mode=defaults["now_playing_display_mode"],
         main_ui_lyric_display_mode=defaults["main_ui_lyric_display_mode"],
+        lyric_display_font_family=str(
+            overrides.get("lyric_display_font_family", defaults["lyric_display_font_family"])
+        ),
+        lyric_display_font_size=int(overrides.get("lyric_display_font_size", defaults["lyric_display_font_size"])),
+        lyric_display_previous_line_count=int(
+            overrides.get("lyric_display_previous_line_count", defaults["lyric_display_previous_line_count"])
+        ),
+        lyric_display_next_line_count=int(
+            overrides.get("lyric_display_next_line_count", defaults["lyric_display_next_line_count"])
+        ),
+        lyric_display_played_color=str(
+            overrides.get("lyric_display_played_color", defaults["lyric_display_played_color"])
+        ),
+        lyric_display_current_color=str(
+            overrides.get("lyric_display_current_color", defaults["lyric_display_current_color"])
+        ),
+        lyric_display_next_color=str(
+            overrides.get("lyric_display_next_color", defaults["lyric_display_next_color"])
+        ),
+        lyric_display_auto_adjust_role_sizes=bool(
+            overrides.get("lyric_display_auto_adjust_role_sizes", defaults["lyric_display_auto_adjust_role_sizes"])
+        ),
+        lyric_display_played_scale_percent=int(
+            overrides.get("lyric_display_played_scale_percent", defaults["lyric_display_played_scale_percent"])
+        ),
+        lyric_display_current_scale_percent=int(
+            overrides.get("lyric_display_current_scale_percent", defaults["lyric_display_current_scale_percent"])
+        ),
+        lyric_display_next_scale_percent=int(
+            overrides.get("lyric_display_next_scale_percent", defaults["lyric_display_next_scale_percent"])
+        ),
+        lyric_display_played_text_size=int(
+            overrides.get("lyric_display_played_text_size", defaults["lyric_display_played_text_size"])
+        ),
+        lyric_display_current_text_size=int(
+            overrides.get("lyric_display_current_text_size", defaults["lyric_display_current_text_size"])
+        ),
+        lyric_display_next_text_size=int(
+            overrides.get("lyric_display_next_text_size", defaults["lyric_display_next_text_size"])
+        ),
+        lyric_display_played_bold=bool(
+            overrides.get("lyric_display_played_bold", defaults["lyric_display_played_bold"])
+        ),
+        lyric_display_current_bold=bool(
+            overrides.get("lyric_display_current_bold", defaults["lyric_display_current_bold"])
+        ),
+        lyric_display_next_bold=bool(
+            overrides.get("lyric_display_next_bold", defaults["lyric_display_next_bold"])
+        ),
+        lyric_display_played_italic=bool(
+            overrides.get("lyric_display_played_italic", defaults["lyric_display_played_italic"])
+        ),
+        lyric_display_current_italic=bool(
+            overrides.get("lyric_display_current_italic", defaults["lyric_display_current_italic"])
+        ),
+        lyric_display_next_italic=bool(
+            overrides.get("lyric_display_next_italic", defaults["lyric_display_next_italic"])
+        ),
         search_lyric_on_add_sound_button=defaults["search_lyric_on_add_sound_button"],
         new_lyric_file_format=defaults["new_lyric_file_format"],
         supported_audio_format_extensions=overrides.get("supported_audio_format_extensions", []),
@@ -164,6 +222,115 @@ def _build_dialog(**overrides):
         stage_display_layout=overrides.get("stage_display_layout", defaults["stage_display_layout"]),
         stage_display_visibility=overrides.get("stage_display_visibility", defaults["stage_display_visibility"]),
         stage_display_text_source=str(overrides.get("stage_display_text_source", defaults["stage_display_text_source"])),
+        stage_display_font_family=str(
+            overrides.get("stage_display_font_family", defaults["stage_display_font_family"])
+        ),
+        stage_display_font_size=int(overrides.get("stage_display_font_size", defaults["stage_display_font_size"])),
+        stage_display_lyric_font_family=str(
+            overrides.get("stage_display_lyric_font_family", defaults["stage_display_lyric_font_family"])
+        ),
+        stage_display_lyric_font_size=int(
+            overrides.get("stage_display_lyric_font_size", defaults["stage_display_lyric_font_size"])
+        ),
+        stage_display_lyric_previous_line_count=int(
+            overrides.get(
+                "stage_display_lyric_previous_line_count",
+                defaults["stage_display_lyric_previous_line_count"],
+            )
+        ),
+        stage_display_lyric_next_line_count=int(
+            overrides.get(
+                "stage_display_lyric_next_line_count",
+                defaults["stage_display_lyric_next_line_count"],
+            )
+        ),
+        stage_display_lyric_played_color=str(
+            overrides.get("stage_display_lyric_played_color", defaults["stage_display_lyric_played_color"])
+        ),
+        stage_display_lyric_current_color=str(
+            overrides.get("stage_display_lyric_current_color", defaults["stage_display_lyric_current_color"])
+        ),
+        stage_display_lyric_next_color=str(
+            overrides.get("stage_display_lyric_next_color", defaults["stage_display_lyric_next_color"])
+        ),
+        stage_display_lyric_auto_adjust_role_sizes=bool(
+            overrides.get(
+                "stage_display_lyric_auto_adjust_role_sizes",
+                defaults["stage_display_lyric_auto_adjust_role_sizes"],
+            )
+        ),
+        stage_display_lyric_played_scale_percent=int(
+            overrides.get(
+                "stage_display_lyric_played_scale_percent",
+                defaults["stage_display_lyric_played_scale_percent"],
+            )
+        ),
+        stage_display_lyric_current_scale_percent=int(
+            overrides.get(
+                "stage_display_lyric_current_scale_percent",
+                defaults["stage_display_lyric_current_scale_percent"],
+            )
+        ),
+        stage_display_lyric_next_scale_percent=int(
+            overrides.get(
+                "stage_display_lyric_next_scale_percent",
+                defaults["stage_display_lyric_next_scale_percent"],
+            )
+        ),
+        stage_display_lyric_played_text_size=int(
+            overrides.get(
+                "stage_display_lyric_played_text_size",
+                defaults["stage_display_lyric_played_text_size"],
+            )
+        ),
+        stage_display_lyric_current_text_size=int(
+            overrides.get(
+                "stage_display_lyric_current_text_size",
+                defaults["stage_display_lyric_current_text_size"],
+            )
+        ),
+        stage_display_lyric_next_text_size=int(
+            overrides.get(
+                "stage_display_lyric_next_text_size",
+                defaults["stage_display_lyric_next_text_size"],
+            )
+        ),
+        stage_display_lyric_played_bold=bool(
+            overrides.get(
+                "stage_display_lyric_played_bold",
+                defaults["stage_display_lyric_played_bold"],
+            )
+        ),
+        stage_display_lyric_current_bold=bool(
+            overrides.get(
+                "stage_display_lyric_current_bold",
+                defaults["stage_display_lyric_current_bold"],
+            )
+        ),
+        stage_display_lyric_next_bold=bool(
+            overrides.get(
+                "stage_display_lyric_next_bold",
+                defaults["stage_display_lyric_next_bold"],
+            )
+        ),
+        stage_display_lyric_played_italic=bool(
+            overrides.get(
+                "stage_display_lyric_played_italic",
+                defaults["stage_display_lyric_played_italic"],
+            )
+        ),
+        stage_display_lyric_current_italic=bool(
+            overrides.get(
+                "stage_display_lyric_current_italic",
+                defaults["stage_display_lyric_current_italic"],
+            )
+        ),
+        stage_display_lyric_next_italic=bool(
+            overrides.get(
+                "stage_display_lyric_next_italic",
+                defaults["stage_display_lyric_next_italic"],
+            )
+        ),
         window_layout=overrides.get("window_layout", defaults["window_layout"]),
         ui_language=defaults["ui_language"],
         lock_allow_quit=bool(overrides.get("lock_allow_quit", defaults["lock_allow_quit"])),
@@ -384,6 +551,60 @@ def test_display_page_text_source_selection(qapp):
     assert dialog.selected_stage_display_text_source() == "note"
     dialog.display_text_source_combo.setCurrentIndex(dialog.display_text_source_combo.findData("filename"))
     assert dialog.selected_stage_display_text_source() == "filename"
+
+
+def test_display_page_font_settings_round_trip(qapp):
+    dialog = _build_dialog(
+        stage_display_font_size=28,
+        stage_display_lyric_font_size=44,
+        stage_display_lyric_previous_line_count=2,
+        stage_display_lyric_next_line_count=3,
+        stage_display_lyric_auto_adjust_role_sizes=True,
+        stage_display_lyric_current_scale_percent=130,
+        stage_display_lyric_current_color="#FFFF00",
+        stage_display_lyric_current_text_size=46,
+        stage_display_lyric_played_text_size=20,
+        stage_display_lyric_played_bold=False,
+        stage_display_lyric_next_italic=True,
+        initial_page="Stage Display",
+    )
+    assert dialog.selected_stage_display_font_size() == 28
+    assert dialog.selected_stage_display_lyric_font_size() == 44
+    assert dialog.selected_stage_display_lyric_previous_line_count() == 2
+    assert dialog.selected_stage_display_lyric_next_line_count() == 3
+    assert dialog.selected_stage_display_lyric_role_colors()["current"] == "#FFFF00"
+    assert dialog.selected_stage_display_lyric_auto_adjust_role_sizes() is True
+    assert dialog.selected_stage_display_lyric_role_scale_percents()["current"] == 130
+    assert dialog.selected_stage_display_lyric_role_sizes()["current"] == 46
+    assert dialog.selected_stage_display_lyric_role_sizes()["played"] == 20
+    assert dialog.selected_stage_display_lyric_role_bold()["played"] is False
+    assert dialog.selected_stage_display_lyric_role_italic()["next"] is True
+
+
+def test_lyric_page_font_settings_round_trip(qapp):
+    dialog = _build_dialog(
+        lyric_display_font_size=40,
+        lyric_display_previous_line_count=1,
+        lyric_display_next_line_count=4,
+        lyric_display_auto_adjust_role_sizes=True,
+        lyric_display_current_scale_percent=125,
+        lyric_display_current_color="#FFFF00",
+        lyric_display_current_text_size=42,
+        lyric_display_played_text_size=18,
+        lyric_display_played_bold=False,
+        lyric_display_next_italic=True,
+        initial_page="Lyric",
+    )
+    assert dialog.selected_lyric_display_font_size() == 40
+    assert dialog.selected_lyric_display_previous_line_count() == 1
+    assert dialog.selected_lyric_display_next_line_count() == 4
+    assert dialog.selected_lyric_display_role_colors()["current"] == "#FFFF00"
+    assert dialog.selected_lyric_display_auto_adjust_role_sizes() is True
+    assert dialog.selected_lyric_display_role_scale_percents()["current"] == 125
+    assert dialog.selected_lyric_display_role_sizes()["current"] == 42
+    assert dialog.selected_lyric_display_role_sizes()["played"] == 18
+    assert dialog.selected_lyric_display_role_bold()["played"] is False
+    assert dialog.selected_lyric_display_role_italic()["next"] is True
 
 
 def test_window_layout_round_trip(qapp):

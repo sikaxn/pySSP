@@ -7,7 +7,7 @@ from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
-from pyssp.lyrics import LyricLine, line_for_position, parse_lyric_file
+from pyssp.lyrics import LyricLine, lyric_segments_around_position, lyric_segments_to_html, parse_lyric_file
 from pyssp.ui.stage_display import StageDisplayLayoutEditor, normalize_stage_display_gadgets
 
 
@@ -56,11 +56,93 @@ class LyricDisplayWindow(QWidget):
         self._cache_lines: List[LyricLine] = []
         self._cache_error: str = ""
         self._last_text: str = ""
+        self._font_family: str = ""
+        self._font_size: int = 36
+        self._previous_line_count: int = 0
+        self._next_line_count: int = 0
+        self._role_colors = {
+            "played": "#A0A0A0",
+            "current": "#FFD400",
+            "next": "#FFFFFF",
+        }
+        self._role_sizes = {
+            "played": 24,
+            "current": 40,
+            "next": 32,
+        }
+        self._auto_adjust_role_sizes = True
+        self._role_scale_percents = {
+            "played": 70,
+            "current": 115,
+            "next": 90,
+        }
+        self._role_bold = {
+            "played": True,
+            "current": True,
+            "next": True,
+        }
+        self._role_italic = {
+            "played": False,
+            "current": False,
+            "next": False,
+        }
+        self._apply_font_settings()
 
     def set_lyric_text(self, text: str) -> None:
         if self._lyric_widget is None:
             return
         self._lyric_widget.value_label.setText(str(text or ""))
+
+    def configure_display_settings(
+        self,
+        *,
+        font_family: str = "",
+        font_size: int = 36,
+        previous_line_count: int = 0,
+        next_line_count: int = 0,
+        role_colors: Optional[dict[str, str]] = None,
+        role_sizes: Optional[dict[str, int]] = None,
+        auto_adjust_role_sizes: bool = True,
+        role_scale_percents: Optional[dict[str, int]] = None,
+        role_bold: Optional[dict[str, bool]] = None,
+        role_italic: Optional[dict[str, bool]] = None,
+    ) -> None:
+        self._font_family = str(font_family or "").strip()
+        self._font_size = max(10, int(font_size))
+        self._previous_line_count = max(0, int(previous_line_count))
+        self._next_line_count = max(0, int(next_line_count))
+        if role_colors is not None:
+            self._role_colors = {
+                "played": str(role_colors.get("played", "#A0A0A0") or "#A0A0A0").strip() or "#A0A0A0",
+                "current": str(role_colors.get("current", "#FFD400") or "#FFD400").strip() or "#FFD400",
+                "next": str(role_colors.get("next", "#FFFFFF") or "#FFFFFF").strip() or "#FFFFFF",
+            }
+        if role_sizes is not None:
+            self._role_sizes = {
+                "played": max(8, int(role_sizes.get("played", 24))),
+                "current": max(8, int(role_sizes.get("current", 40))),
+                "next": max(8, int(role_sizes.get("next", 32))),
+            }
+        self._auto_adjust_role_sizes = bool(auto_adjust_role_sizes)
+        if role_scale_percents is not None:
+            self._role_scale_percents = {
+                "played": max(25, min(300, int(role_scale_percents.get("played", 70)))),
+                "current": max(25, min(300, int(role_scale_percents.get("current", 115)))),
+                "next": max(25, min(300, int(role_scale_percents.get("next", 90)))),
+            }
+        if role_bold is not None:
+            self._role_bold = {
+                "played": bool(role_bold.get("played", True)),
+                "current": bool(role_bold.get("current", True)),
+                "next": bool(role_bold.get("next", True)),
+            }
+        if role_italic is not None:
+            self._role_italic = {
+                "played": bool(role_italic.get("played", False)),
+                "current": bool(role_italic.get("current", False)),
+                "next": bool(role_italic.get("next", False)),
+            }
+        self._apply_font_settings()
 
     def update_playback_state(
         self,
@@ -89,7 +171,17 @@ class LyricDisplayWindow(QWidget):
                 elif not lines:
                     text = "No lyrics were found in this file."
                 else:
-                    text = line_for_position(lines, max(0, int(position_ms))) or ""
+                    segments = lyric_segments_around_position(
+                        lines,
+                        max(0, int(position_ms)),
+                        self._previous_line_count,
+                        self._next_line_count,
+                    )
+                    text = lyric_segments_to_html(
+                        segments,
+                        font_family=self._font_family,
+                        role_styles=self._resolved_role_styles(),
+                    )
 
         if force or text != self._last_text:
             self._last_text = text
@@ -119,6 +211,32 @@ class LyricDisplayWindow(QWidget):
         self.setWindowTitle(tr("Lyric Display"))
         if self._lyric_widget is not None:
             self._lyric_widget.title_label.setText(tr("Lyric"))
+
+    def _apply_font_settings(self) -> None:
+        self._canvas.set_font_settings(
+            default_font_family=self._font_family,
+            default_value_font_size=self._font_size,
+            lyric_font_family=self._font_family,
+            lyric_value_font_size=self._font_size,
+        )
+
+    def _resolved_role_styles(self) -> dict[str, dict[str, object]]:
+        if self._auto_adjust_role_sizes:
+            sizes = {
+                key: max(8, int(round(self._font_size * (self._role_scale_percents.get(key, 100) / 100.0))))
+                for key in ("played", "current", "next")
+            }
+        else:
+            sizes = dict(self._role_sizes)
+        return {
+            key: {
+                "size": int(sizes[key]),
+                "color": self._role_colors[key],
+                "bold": self._role_bold[key],
+                "italic": self._role_italic[key],
+            }
+            for key in ("played", "current", "next")
+        }
 
     def _install_fullscreen_toggle_filter(self, root: QWidget) -> None:
         root.installEventFilter(self)

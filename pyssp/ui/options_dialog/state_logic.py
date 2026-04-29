@@ -41,6 +41,33 @@ class StateLogicMixin:
             self.sound_button_text_color = selected.name().upper()
             self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
 
+    def _pick_lyric_role_color(self, scope: str, role: str) -> None:
+        if scope == "stage_display":
+            colors = self._stage_display_lyric_role_colors
+            buttons = {
+                "played": self.stage_display_lyric_played_color_btn,
+                "current": self.stage_display_lyric_current_color_btn,
+                "next": self.stage_display_lyric_next_color_btn,
+            }
+            title = "Stage Display Lyric Color"
+        else:
+            colors = self._lyric_display_role_colors
+            buttons = {
+                "played": self.lyric_display_played_color_btn,
+                "current": self.lyric_display_current_color_btn,
+                "next": self.lyric_display_next_color_btn,
+            }
+            title = "Lyric Display Color"
+        current = str(colors.get(role, "#FFFFFF"))
+        selected = QColorDialog.getColor(QColor(current), self, tr(title))
+        if not selected.isValid():
+            return
+        value = selected.name().upper()
+        colors[role] = value
+        button = buttons.get(role)
+        if button is not None:
+            self._refresh_color_button(button, value)
+
     def _restore_defaults_current_page(self) -> None:
         idx = self.page_list.currentRow()
         if idx == 0:
@@ -186,6 +213,64 @@ class StateLogicMixin:
             str(d.get("stage_display_text_source", "caption")),
             "caption",
         )
+        self._populate_display_font_combo(
+            self.stage_display_font_family_combo,
+            str(d.get("stage_display_font_family", bundled_display_font_family())),
+        )
+        self.stage_display_font_size_spin.setValue(int(d.get("stage_display_font_size", 24)))
+        self._populate_display_font_combo(
+            self.stage_display_lyric_font_family_combo,
+            str(d.get("stage_display_lyric_font_family", bundled_display_font_family())),
+        )
+        self.stage_display_lyric_font_size_spin.setValue(int(d.get("stage_display_lyric_font_size", 24)))
+        self.stage_display_lyric_previous_line_count_spin.setValue(
+            int(d.get("stage_display_lyric_previous_line_count", 0))
+        )
+        self.stage_display_lyric_next_line_count_spin.setValue(
+            int(d.get("stage_display_lyric_next_line_count", 0))
+        )
+        self._stage_display_lyric_role_colors = {
+            "played": str(d.get("stage_display_lyric_played_color", "#A0A0A0")),
+            "current": str(d.get("stage_display_lyric_current_color", "#FFD400")),
+            "next": str(d.get("stage_display_lyric_next_color", "#FFFFFF")),
+        }
+        self._stage_display_lyric_auto_adjust_role_sizes = bool(d.get("stage_display_lyric_auto_adjust_role_sizes", True))
+        self._stage_display_lyric_role_scale_percents = {
+            "played": int(d.get("stage_display_lyric_played_scale_percent", 70)),
+            "current": int(d.get("stage_display_lyric_current_scale_percent", 115)),
+            "next": int(d.get("stage_display_lyric_next_scale_percent", 90)),
+        }
+        self._stage_display_lyric_role_sizes = {
+            "played": int(d.get("stage_display_lyric_played_text_size", 18)),
+            "current": int(d.get("stage_display_lyric_current_text_size", 28)),
+            "next": int(d.get("stage_display_lyric_next_text_size", 22)),
+        }
+        self._stage_display_lyric_role_bold = {
+            "played": bool(d.get("stage_display_lyric_played_bold", True)),
+            "current": bool(d.get("stage_display_lyric_current_bold", True)),
+            "next": bool(d.get("stage_display_lyric_next_bold", True)),
+        }
+        self._stage_display_lyric_role_italic = {
+            "played": bool(d.get("stage_display_lyric_played_italic", False)),
+            "current": bool(d.get("stage_display_lyric_current_italic", False)),
+            "next": bool(d.get("stage_display_lyric_next_italic", False)),
+        }
+        self.stage_display_lyric_auto_adjust_role_sizes_checkbox.setChecked(self._stage_display_lyric_auto_adjust_role_sizes)
+        self.stage_display_lyric_played_scale_percent_spin.setValue(self._stage_display_lyric_role_scale_percents["played"])
+        self.stage_display_lyric_current_scale_percent_spin.setValue(self._stage_display_lyric_role_scale_percents["current"])
+        self.stage_display_lyric_next_scale_percent_spin.setValue(self._stage_display_lyric_role_scale_percents["next"])
+        self.stage_display_lyric_played_text_size_spin.setValue(self._stage_display_lyric_role_sizes["played"])
+        self.stage_display_lyric_current_text_size_spin.setValue(self._stage_display_lyric_role_sizes["current"])
+        self.stage_display_lyric_next_text_size_spin.setValue(self._stage_display_lyric_role_sizes["next"])
+        self.stage_display_lyric_played_bold_checkbox.setChecked(self._stage_display_lyric_role_bold["played"])
+        self.stage_display_lyric_current_bold_checkbox.setChecked(self._stage_display_lyric_role_bold["current"])
+        self.stage_display_lyric_next_bold_checkbox.setChecked(self._stage_display_lyric_role_bold["next"])
+        self.stage_display_lyric_played_italic_checkbox.setChecked(self._stage_display_lyric_role_italic["played"])
+        self.stage_display_lyric_current_italic_checkbox.setChecked(self._stage_display_lyric_role_italic["current"])
+        self.stage_display_lyric_next_italic_checkbox.setChecked(self._stage_display_lyric_role_italic["next"])
+        self._refresh_color_button(self.stage_display_lyric_played_color_btn, self._stage_display_lyric_role_colors["played"])
+        self._refresh_color_button(self.stage_display_lyric_current_color_btn, self._stage_display_lyric_role_colors["current"])
+        self._refresh_color_button(self.stage_display_lyric_next_color_btn, self._stage_display_lyric_role_colors["next"])
         if hasattr(self, "display_layout_editor"):
             self.display_layout_editor.set_gadgets(self._stage_display_gadgets)
         if hasattr(self, "_display_gadget_checks"):
@@ -205,6 +290,8 @@ class StateLogicMixin:
                 combo.setCurrentIndex(max(0, combo.findData(token)))
         self._refresh_display_layer_table()
         self._sync_alert_edit_button_text()
+        self._sync_display_font_preview()
+        self._sync_stage_display_lyric_role_size_mode()
 
     def _restore_window_layout_defaults(self) -> None:
         d = self._DEFAULTS
@@ -698,6 +785,56 @@ class StateLogicMixin:
             str(d.get("new_lyric_file_format", "srt")),
             "srt",
         )
+        self._populate_display_font_combo(
+            self.lyric_display_font_family_combo,
+            str(d.get("lyric_display_font_family", bundled_display_font_family())),
+        )
+        self.lyric_display_font_size_spin.setValue(int(d.get("lyric_display_font_size", 36)))
+        self.lyric_display_previous_line_count_spin.setValue(int(d.get("lyric_display_previous_line_count", 0)))
+        self.lyric_display_next_line_count_spin.setValue(int(d.get("lyric_display_next_line_count", 0)))
+        self._lyric_display_role_colors = {
+            "played": str(d.get("lyric_display_played_color", "#A0A0A0")),
+            "current": str(d.get("lyric_display_current_color", "#FFD400")),
+            "next": str(d.get("lyric_display_next_color", "#FFFFFF")),
+        }
+        self._lyric_display_auto_adjust_role_sizes = bool(d.get("lyric_display_auto_adjust_role_sizes", True))
+        self._lyric_display_role_scale_percents = {
+            "played": int(d.get("lyric_display_played_scale_percent", 70)),
+            "current": int(d.get("lyric_display_current_scale_percent", 115)),
+            "next": int(d.get("lyric_display_next_scale_percent", 90)),
+        }
+        self._lyric_display_role_sizes = {
+            "played": int(d.get("lyric_display_played_text_size", 24)),
+            "current": int(d.get("lyric_display_current_text_size", 40)),
+            "next": int(d.get("lyric_display_next_text_size", 32)),
+        }
+        self._lyric_display_role_bold = {
+            "played": bool(d.get("lyric_display_played_bold", True)),
+            "current": bool(d.get("lyric_display_current_bold", True)),
+            "next": bool(d.get("lyric_display_next_bold", True)),
+        }
+        self._lyric_display_role_italic = {
+            "played": bool(d.get("lyric_display_played_italic", False)),
+            "current": bool(d.get("lyric_display_current_italic", False)),
+            "next": bool(d.get("lyric_display_next_italic", False)),
+        }
+        self.lyric_display_auto_adjust_role_sizes_checkbox.setChecked(self._lyric_display_auto_adjust_role_sizes)
+        self.lyric_display_played_scale_percent_spin.setValue(self._lyric_display_role_scale_percents["played"])
+        self.lyric_display_current_scale_percent_spin.setValue(self._lyric_display_role_scale_percents["current"])
+        self.lyric_display_next_scale_percent_spin.setValue(self._lyric_display_role_scale_percents["next"])
+        self.lyric_display_played_text_size_spin.setValue(self._lyric_display_role_sizes["played"])
+        self.lyric_display_current_text_size_spin.setValue(self._lyric_display_role_sizes["current"])
+        self.lyric_display_next_text_size_spin.setValue(self._lyric_display_role_sizes["next"])
+        self.lyric_display_played_bold_checkbox.setChecked(self._lyric_display_role_bold["played"])
+        self.lyric_display_current_bold_checkbox.setChecked(self._lyric_display_role_bold["current"])
+        self.lyric_display_next_bold_checkbox.setChecked(self._lyric_display_role_bold["next"])
+        self.lyric_display_played_italic_checkbox.setChecked(self._lyric_display_role_italic["played"])
+        self.lyric_display_current_italic_checkbox.setChecked(self._lyric_display_role_italic["current"])
+        self.lyric_display_next_italic_checkbox.setChecked(self._lyric_display_role_italic["next"])
+        self._refresh_color_button(self.lyric_display_played_color_btn, self._lyric_display_role_colors["played"])
+        self._refresh_color_button(self.lyric_display_current_color_btn, self._lyric_display_role_colors["current"])
+        self._refresh_color_button(self.lyric_display_next_color_btn, self._lyric_display_role_colors["next"])
+        self._sync_lyric_role_size_mode()
 
     def _restore_audio_format_defaults(self) -> None:
         d = self._DEFAULTS

@@ -90,6 +90,26 @@ class OptionsDialog(
         "show_file_notifications": True,
         "now_playing_display_mode": "caption",
         "main_ui_lyric_display_mode": "always",
+        "lyric_display_font_family": "",
+        "lyric_display_font_size": 36,
+        "lyric_display_previous_line_count": 0,
+        "lyric_display_next_line_count": 0,
+        "lyric_display_played_color": "#A0A0A0",
+        "lyric_display_current_color": "#FFD400",
+        "lyric_display_next_color": "#FFFFFF",
+        "lyric_display_auto_adjust_role_sizes": True,
+        "lyric_display_played_scale_percent": 70,
+        "lyric_display_current_scale_percent": 115,
+        "lyric_display_next_scale_percent": 90,
+        "lyric_display_played_text_size": 24,
+        "lyric_display_current_text_size": 40,
+        "lyric_display_next_text_size": 32,
+        "lyric_display_played_bold": True,
+        "lyric_display_current_bold": True,
+        "lyric_display_next_bold": True,
+        "lyric_display_played_italic": False,
+        "lyric_display_current_italic": False,
+        "lyric_display_next_italic": False,
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
         "supported_audio_format_extensions": [],
@@ -293,6 +313,28 @@ class OptionsDialog(
             "next_song": True,
         },
         "stage_display_text_source": "caption",
+        "stage_display_font_family": "",
+        "stage_display_font_size": 24,
+        "stage_display_lyric_font_family": "",
+        "stage_display_lyric_font_size": 24,
+        "stage_display_lyric_previous_line_count": 0,
+        "stage_display_lyric_next_line_count": 0,
+        "stage_display_lyric_played_color": "#A0A0A0",
+        "stage_display_lyric_current_color": "#FFD400",
+        "stage_display_lyric_next_color": "#FFFFFF",
+        "stage_display_lyric_auto_adjust_role_sizes": True,
+        "stage_display_lyric_played_scale_percent": 70,
+        "stage_display_lyric_current_scale_percent": 115,
+        "stage_display_lyric_next_scale_percent": 90,
+        "stage_display_lyric_played_text_size": 18,
+        "stage_display_lyric_current_text_size": 28,
+        "stage_display_lyric_next_text_size": 22,
+        "stage_display_lyric_played_bold": True,
+        "stage_display_lyric_current_bold": True,
+        "stage_display_lyric_next_bold": True,
+        "stage_display_lyric_played_italic": False,
+        "stage_display_lyric_current_italic": False,
+        "stage_display_lyric_next_italic": False,
         "stage_display_gadgets": normalize_stage_display_gadgets(None),
         "window_layout": default_window_layout(),
     }
@@ -306,6 +348,26 @@ class OptionsDialog(
         show_file_notifications: bool,
         now_playing_display_mode: str,
         main_ui_lyric_display_mode: str,
+        lyric_display_font_family: str,
+        lyric_display_font_size: int,
+        lyric_display_previous_line_count: int,
+        lyric_display_next_line_count: int,
+        lyric_display_played_color: str,
+        lyric_display_current_color: str,
+        lyric_display_next_color: str,
+        lyric_display_auto_adjust_role_sizes: bool,
+        lyric_display_played_scale_percent: int,
+        lyric_display_current_scale_percent: int,
+        lyric_display_next_scale_percent: int,
+        lyric_display_played_text_size: int,
+        lyric_display_current_text_size: int,
+        lyric_display_next_text_size: int,
+        lyric_display_played_bold: bool,
+        lyric_display_current_bold: bool,
+        lyric_display_next_bold: bool,
+        lyric_display_played_italic: bool,
+        lyric_display_current_italic: bool,
+        lyric_display_next_italic: bool,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
         supported_audio_format_extensions: List[str],
@@ -416,6 +478,28 @@ class OptionsDialog(
         stage_display_layout: List[str],
         stage_display_visibility: Dict[str, bool],
         stage_display_text_source: str,
+        stage_display_font_family: str,
+        stage_display_font_size: int,
+        stage_display_lyric_font_family: str,
+        stage_display_lyric_font_size: int,
+        stage_display_lyric_previous_line_count: int,
+        stage_display_lyric_next_line_count: int,
+        stage_display_lyric_played_color: str,
+        stage_display_lyric_current_color: str,
+        stage_display_lyric_next_color: str,
+        stage_display_lyric_auto_adjust_role_sizes: bool,
+        stage_display_lyric_played_scale_percent: int,
+        stage_display_lyric_current_scale_percent: int,
+        stage_display_lyric_next_scale_percent: int,
+        stage_display_lyric_played_text_size: int,
+        stage_display_lyric_current_text_size: int,
+        stage_display_lyric_next_text_size: int,
+        stage_display_lyric_played_bold: bool,
+        stage_display_lyric_current_bold: bool,
+        stage_display_lyric_next_bold: bool,
+        stage_display_lyric_played_italic: bool,
+        stage_display_lyric_current_italic: bool,
+        stage_display_lyric_next_italic: bool,
         window_layout: Optional[Dict[str, object]],
         ui_language: str,
         lock_allow_quit: bool,
@@ -536,12 +620,74 @@ class OptionsDialog(
             if str(main_ui_lyric_display_mode or "").strip().lower() in {"always", "when_available", "never"}
             else "always"
         )
+        self._lyric_display_font_family = str(lyric_display_font_family or "").strip()
+        self._lyric_display_font_size = max(10, int(lyric_display_font_size))
+        self._lyric_display_previous_line_count = max(0, int(lyric_display_previous_line_count))
+        self._lyric_display_next_line_count = max(0, int(lyric_display_next_line_count))
+        self._lyric_display_role_colors = {
+            "played": str(lyric_display_played_color or "#A0A0A0").strip() or "#A0A0A0",
+            "current": str(lyric_display_current_color or "#FFD400").strip() or "#FFD400",
+            "next": str(lyric_display_next_color or "#FFFFFF").strip() or "#FFFFFF",
+        }
+        self._lyric_display_auto_adjust_role_sizes = bool(lyric_display_auto_adjust_role_sizes)
+        self._lyric_display_role_scale_percents = {
+            "played": max(25, min(300, int(lyric_display_played_scale_percent))),
+            "current": max(25, min(300, int(lyric_display_current_scale_percent))),
+            "next": max(25, min(300, int(lyric_display_next_scale_percent))),
+        }
+        self._lyric_display_role_sizes = {
+            "played": max(8, int(lyric_display_played_text_size)),
+            "current": max(8, int(lyric_display_current_text_size)),
+            "next": max(8, int(lyric_display_next_text_size)),
+        }
+        self._lyric_display_role_bold = {
+            "played": bool(lyric_display_played_bold),
+            "current": bool(lyric_display_current_bold),
+            "next": bool(lyric_display_next_bold),
+        }
+        self._lyric_display_role_italic = {
+            "played": bool(lyric_display_played_italic),
+            "current": bool(lyric_display_current_italic),
+            "next": bool(lyric_display_next_italic),
+        }
         self._search_lyric_on_add_sound_button = bool(search_lyric_on_add_sound_button)
         self._new_lyric_file_format = (
             str(new_lyric_file_format or "").strip().lower()
             if str(new_lyric_file_format or "").strip().lower() in {"srt", "lrc"}
             else "srt"
         )
+        self._stage_display_font_family = str(stage_display_font_family or "").strip()
+        self._stage_display_font_size = max(10, int(stage_display_font_size))
+        self._stage_display_lyric_font_family = str(stage_display_lyric_font_family or "").strip()
+        self._stage_display_lyric_font_size = max(10, int(stage_display_lyric_font_size))
+        self._stage_display_lyric_previous_line_count = max(0, int(stage_display_lyric_previous_line_count))
+        self._stage_display_lyric_next_line_count = max(0, int(stage_display_lyric_next_line_count))
+        self._stage_display_lyric_role_colors = {
+            "played": str(stage_display_lyric_played_color or "#A0A0A0").strip() or "#A0A0A0",
+            "current": str(stage_display_lyric_current_color or "#FFD400").strip() or "#FFD400",
+            "next": str(stage_display_lyric_next_color or "#FFFFFF").strip() or "#FFFFFF",
+        }
+        self._stage_display_lyric_auto_adjust_role_sizes = bool(stage_display_lyric_auto_adjust_role_sizes)
+        self._stage_display_lyric_role_scale_percents = {
+            "played": max(25, min(300, int(stage_display_lyric_played_scale_percent))),
+            "current": max(25, min(300, int(stage_display_lyric_current_scale_percent))),
+            "next": max(25, min(300, int(stage_display_lyric_next_scale_percent))),
+        }
+        self._stage_display_lyric_role_sizes = {
+            "played": max(8, int(stage_display_lyric_played_text_size)),
+            "current": max(8, int(stage_display_lyric_current_text_size)),
+            "next": max(8, int(stage_display_lyric_next_text_size)),
+        }
+        self._stage_display_lyric_role_bold = {
+            "played": bool(stage_display_lyric_played_bold),
+            "current": bool(stage_display_lyric_current_bold),
+            "next": bool(stage_display_lyric_next_bold),
+        }
+        self._stage_display_lyric_role_italic = {
+            "played": bool(stage_display_lyric_played_italic),
+            "current": bool(stage_display_lyric_current_italic),
+            "next": bool(stage_display_lyric_next_italic),
+        }
         self._supported_audio_format_extensions = [
             str(token).strip().lower()
             for token in supported_audio_format_extensions
@@ -638,6 +784,10 @@ class OptionsDialog(
                 main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
                 search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
                 new_lyric_file_format=self._new_lyric_file_format,
+                lyric_display_font_family=self._lyric_display_font_family,
+                lyric_display_font_size=self._lyric_display_font_size,
+                lyric_display_previous_line_count=self._lyric_display_previous_line_count,
+                lyric_display_next_line_count=self._lyric_display_next_line_count,
             ),
         )
         self._add_page(

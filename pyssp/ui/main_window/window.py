@@ -296,6 +296,51 @@ class MainWindow(
         )
         source = str(getattr(self.settings, "stage_display_text_source", "caption")).strip().lower()
         self.stage_display_text_source = source if source in {"caption", "filename", "note"} else "caption"
+        self.stage_display_font_family = str(getattr(self.settings, "stage_display_font_family", "")).strip()
+        self.stage_display_font_size = max(10, int(getattr(self.settings, "stage_display_font_size", 24)))
+        self.stage_display_lyric_font_family = str(
+            getattr(self.settings, "stage_display_lyric_font_family", "")
+        ).strip()
+        self.stage_display_lyric_font_size = max(
+            10,
+            int(getattr(self.settings, "stage_display_lyric_font_size", 24)),
+        )
+        self.stage_display_lyric_previous_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "stage_display_lyric_previous_line_count", 0))),
+        )
+        self.stage_display_lyric_next_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "stage_display_lyric_next_line_count", 0))),
+        )
+        self.stage_display_lyric_role_colors = {
+            "played": str(getattr(self.settings, "stage_display_lyric_played_color", "#A0A0A0")).strip() or "#A0A0A0",
+            "current": str(getattr(self.settings, "stage_display_lyric_current_color", "#FFD400")).strip() or "#FFD400",
+            "next": str(getattr(self.settings, "stage_display_lyric_next_color", "#FFFFFF")).strip() or "#FFFFFF",
+        }
+        self.stage_display_lyric_auto_adjust_role_sizes = bool(
+            getattr(self.settings, "stage_display_lyric_auto_adjust_role_sizes", True)
+        )
+        self.stage_display_lyric_role_scale_percents = {
+            "played": max(25, min(300, int(getattr(self.settings, "stage_display_lyric_played_scale_percent", 70)))),
+            "current": max(25, min(300, int(getattr(self.settings, "stage_display_lyric_current_scale_percent", 115)))),
+            "next": max(25, min(300, int(getattr(self.settings, "stage_display_lyric_next_scale_percent", 90)))),
+        }
+        self.stage_display_lyric_role_sizes = {
+            "played": max(8, int(getattr(self.settings, "stage_display_lyric_played_text_size", 18))),
+            "current": max(8, int(getattr(self.settings, "stage_display_lyric_current_text_size", 28))),
+            "next": max(8, int(getattr(self.settings, "stage_display_lyric_next_text_size", 22))),
+        }
+        self.stage_display_lyric_role_bold = {
+            "played": bool(getattr(self.settings, "stage_display_lyric_played_bold", True)),
+            "current": bool(getattr(self.settings, "stage_display_lyric_current_bold", True)),
+            "next": bool(getattr(self.settings, "stage_display_lyric_next_bold", True)),
+        }
+        self.stage_display_lyric_role_italic = {
+            "played": bool(getattr(self.settings, "stage_display_lyric_played_italic", False)),
+            "current": bool(getattr(self.settings, "stage_display_lyric_current_italic", False)),
+            "next": bool(getattr(self.settings, "stage_display_lyric_next_italic", False)),
+        }
         now_playing_mode = str(getattr(self.settings, "now_playing_display_mode", "caption")).strip().lower()
         self.now_playing_display_mode = (
             now_playing_mode
@@ -306,6 +351,44 @@ class MainWindow(
         self.main_ui_lyric_display_mode = (
             lyric_mode if lyric_mode in {"always", "when_available", "never"} else "always"
         )
+        self.lyric_display_font_family = str(getattr(self.settings, "lyric_display_font_family", "")).strip()
+        self.lyric_display_font_size = max(10, int(getattr(self.settings, "lyric_display_font_size", 36)))
+        self.lyric_display_previous_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "lyric_display_previous_line_count", 0))),
+        )
+        self.lyric_display_next_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "lyric_display_next_line_count", 0))),
+        )
+        self.lyric_display_role_colors = {
+            "played": str(getattr(self.settings, "lyric_display_played_color", "#A0A0A0")).strip() or "#A0A0A0",
+            "current": str(getattr(self.settings, "lyric_display_current_color", "#FFD400")).strip() or "#FFD400",
+            "next": str(getattr(self.settings, "lyric_display_next_color", "#FFFFFF")).strip() or "#FFFFFF",
+        }
+        self.lyric_display_auto_adjust_role_sizes = bool(
+            getattr(self.settings, "lyric_display_auto_adjust_role_sizes", True)
+        )
+        self.lyric_display_role_scale_percents = {
+            "played": max(25, min(300, int(getattr(self.settings, "lyric_display_played_scale_percent", 70)))),
+            "current": max(25, min(300, int(getattr(self.settings, "lyric_display_current_scale_percent", 115)))),
+            "next": max(25, min(300, int(getattr(self.settings, "lyric_display_next_scale_percent", 90)))),
+        }
+        self.lyric_display_role_sizes = {
+            "played": max(8, int(getattr(self.settings, "lyric_display_played_text_size", 24))),
+            "current": max(8, int(getattr(self.settings, "lyric_display_current_text_size", 40))),
+            "next": max(8, int(getattr(self.settings, "lyric_display_next_text_size", 32))),
+        }
+        self.lyric_display_role_bold = {
+            "played": bool(getattr(self.settings, "lyric_display_played_bold", True)),
+            "current": bool(getattr(self.settings, "lyric_display_current_bold", True)),
+            "next": bool(getattr(self.settings, "lyric_display_next_bold", True)),
+        }
+        self.lyric_display_role_italic = {
+            "played": bool(getattr(self.settings, "lyric_display_played_italic", False)),
+            "current": bool(getattr(self.settings, "lyric_display_current_italic", False)),
+            "next": bool(getattr(self.settings, "lyric_display_next_italic", False)),
+        }
         self.search_lyric_on_add_sound_button = bool(
             getattr(self.settings, "search_lyric_on_add_sound_button", True)
         )

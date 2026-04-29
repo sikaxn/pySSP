@@ -46,6 +46,54 @@ class SelectionMixin:
             return "never"
         return "always"
 
+    def selected_lyric_display_font_family(self) -> str:
+        if hasattr(self.lyric_display_font_family_combo, "currentFont"):
+            return str(self.lyric_display_font_family_combo.currentFont().family() or "").strip()
+        return str(self.lyric_display_font_family_combo.currentData() or "").strip()
+
+    def selected_lyric_display_font_size(self) -> int:
+        return max(10, int(self.lyric_display_font_size_spin.value()))
+
+    def selected_lyric_display_previous_line_count(self) -> int:
+        return max(0, int(self.lyric_display_previous_line_count_spin.value()))
+
+    def selected_lyric_display_next_line_count(self) -> int:
+        return max(0, int(self.lyric_display_next_line_count_spin.value()))
+
+    def selected_lyric_display_role_colors(self) -> Dict[str, str]:
+        return dict(self._lyric_display_role_colors)
+
+    def selected_lyric_display_auto_adjust_role_sizes(self) -> bool:
+        return bool(self.lyric_display_auto_adjust_role_sizes_checkbox.isChecked())
+
+    def selected_lyric_display_role_scale_percents(self) -> Dict[str, int]:
+        return {
+            "played": max(25, min(300, int(self.lyric_display_played_scale_percent_spin.value()))),
+            "current": max(25, min(300, int(self.lyric_display_current_scale_percent_spin.value()))),
+            "next": max(25, min(300, int(self.lyric_display_next_scale_percent_spin.value()))),
+        }
+
+    def selected_lyric_display_role_sizes(self) -> Dict[str, int]:
+        return {
+            "played": max(8, int(self.lyric_display_played_text_size_spin.value())),
+            "current": max(8, int(self.lyric_display_current_text_size_spin.value())),
+            "next": max(8, int(self.lyric_display_next_text_size_spin.value())),
+        }
+
+    def selected_lyric_display_role_bold(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.lyric_display_played_bold_checkbox.isChecked()),
+            "current": bool(self.lyric_display_current_bold_checkbox.isChecked()),
+            "next": bool(self.lyric_display_next_bold_checkbox.isChecked()),
+        }
+
+    def selected_lyric_display_role_italic(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.lyric_display_played_italic_checkbox.isChecked()),
+            "current": bool(self.lyric_display_current_italic_checkbox.isChecked()),
+            "next": bool(self.lyric_display_next_italic_checkbox.isChecked()),
+        }
+
     def selected_search_lyric_on_add_sound_button(self) -> bool:
         return bool(self.search_lyric_on_add_sound_button_checkbox.isChecked())
 
@@ -237,6 +285,62 @@ class SelectionMixin:
         if token not in {"caption", "filename", "note"}:
             return "caption"
         return token
+
+    def selected_stage_display_font_family(self) -> str:
+        if hasattr(self.stage_display_font_family_combo, "currentFont"):
+            return str(self.stage_display_font_family_combo.currentFont().family() or "").strip()
+        return str(self.stage_display_font_family_combo.currentData() or "").strip()
+
+    def selected_stage_display_font_size(self) -> int:
+        return max(10, int(self.stage_display_font_size_spin.value()))
+
+    def selected_stage_display_lyric_font_family(self) -> str:
+        if hasattr(self.stage_display_lyric_font_family_combo, "currentFont"):
+            return str(self.stage_display_lyric_font_family_combo.currentFont().family() or "").strip()
+        return str(self.stage_display_lyric_font_family_combo.currentData() or "").strip()
+
+    def selected_stage_display_lyric_font_size(self) -> int:
+        return max(10, int(self.stage_display_lyric_font_size_spin.value()))
+
+    def selected_stage_display_lyric_previous_line_count(self) -> int:
+        return max(0, int(self.stage_display_lyric_previous_line_count_spin.value()))
+
+    def selected_stage_display_lyric_next_line_count(self) -> int:
+        return max(0, int(self.stage_display_lyric_next_line_count_spin.value()))
+
+    def selected_stage_display_lyric_role_colors(self) -> Dict[str, str]:
+        return dict(self._stage_display_lyric_role_colors)
+
+    def selected_stage_display_lyric_auto_adjust_role_sizes(self) -> bool:
+        return bool(self.stage_display_lyric_auto_adjust_role_sizes_checkbox.isChecked())
+
+    def selected_stage_display_lyric_role_scale_percents(self) -> Dict[str, int]:
+        return {
+            "played": max(25, min(300, int(self.stage_display_lyric_played_scale_percent_spin.value()))),
+            "current": max(25, min(300, int(self.stage_display_lyric_current_scale_percent_spin.value()))),
+            "next": max(25, min(300, int(self.stage_display_lyric_next_scale_percent_spin.value()))),
+        }
+
+    def selected_stage_display_lyric_role_sizes(self) -> Dict[str, int]:
+        return {
+            "played": max(8, int(self.stage_display_lyric_played_text_size_spin.value())),
+            "current": max(8, int(self.stage_display_lyric_current_text_size_spin.value())),
+            "next": max(8, int(self.stage_display_lyric_next_text_size_spin.value())),
+        }
+
+    def selected_stage_display_lyric_role_bold(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.stage_display_lyric_played_bold_checkbox.isChecked()),
+            "current": bool(self.stage_display_lyric_current_bold_checkbox.isChecked()),
+            "next": bool(self.stage_display_lyric_next_bold_checkbox.isChecked()),
+        }
+
+    def selected_stage_display_lyric_role_italic(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.stage_display_lyric_played_italic_checkbox.isChecked()),
+            "current": bool(self.stage_display_lyric_current_italic_checkbox.isChecked()),
+            "next": bool(self.stage_display_lyric_next_italic_checkbox.isChecked()),
+        }
 
     def selected_window_layout(self) -> Dict[str, object]:
         if (

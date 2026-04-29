@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
+from PyQt5.QtGui import QColor, QDrag, QFont, QFontDatabase, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QFontComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -87,6 +88,8 @@ from pyssp.ui.system_info_dialog import detect_supported_audio_format_extensions
 from pyssp.ui.stage_display import (
     STAGE_DISPLAY_GADGET_SPECS,
     StageDisplayLayoutEditor,
+    available_display_font_families,
+    bundled_display_font_family,
     gadgets_to_legacy_layout_visibility,
     normalize_stage_display_gadgets,
 )

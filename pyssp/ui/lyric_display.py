@@ -48,6 +48,7 @@ class LyricDisplayWindow(QWidget):
         self._toolbar_overlay.setAttribute(Qt.WA_TranslucentBackground, True)
         self._toolbar_overlay.setAttribute(Qt.WA_NoSystemBackground, True)
         self._toolbar_overlay.setStyleSheet("background:transparent;")
+        self._hover_surface = self._toolbar_overlay
         toolbar_row = QHBoxLayout(self._toolbar_overlay)
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(6)

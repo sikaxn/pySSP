@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -773,3 +773,21 @@ def test_launchpad_defaults_include_control_rows(qapp):
     selected = dialog.selected_launchpad_control_bindings()
     assert selected[0] == "prev_group"
     assert selected[15] == "reset_page"
+
+
+def test_options_pages_are_wrapped_in_scroll_areas(qapp):
+    dialog = _build_dialog()
+    for index in range(dialog.stack.count()):
+        page = dialog.stack.widget(index)
+        assert isinstance(page, QScrollArea)
+        assert page.widget() is not None
+        assert page.widgetResizable() is True
+
+
+def test_options_dialog_uses_responsive_size(qapp):
+    dialog = _build_dialog()
+    screen = dialog.screen() or qapp.primaryScreen()
+    assert screen is not None
+    available = screen.availableGeometry()
+    assert dialog.width() <= min(800, max(560, available.width() - 80))
+    assert dialog.height() <= min(500, max(380, available.height() - 80))

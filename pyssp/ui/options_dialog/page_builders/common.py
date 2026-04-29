@@ -6,7 +6,13 @@ from ..widgets import *
 
 class CommonPageBuilderMixin:
     def _add_page(self, title: str, icon, page: QWidget) -> None:
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        self.stack.addWidget(scroll)
         item = QListWidgetItem(icon, title)
         self.page_list.addItem(item)
 
@@ -135,4 +141,3 @@ class CommonPageBuilderMixin:
 
         p.end()
         return QIcon(pix)
-

@@ -530,7 +530,7 @@ class OptionsDialog(
         super().__init__(parent)
         self.setWindowTitle("Options")
         self.setModal(True)
-        self.resize(760, 520)
+        self._apply_responsive_dialog_size()
 
         self.active_group_color = active_group_color
         self.inactive_group_color = inactive_group_color
@@ -913,6 +913,22 @@ class OptionsDialog(
         self._validate_midi_conflicts()
         self._validate_lock_page()
         localize_widget_tree(self, self._ui_language)
+
+    def _apply_responsive_dialog_size(self) -> None:
+        default_width = 800
+        default_height = 500
+        min_width = 560
+        min_height = 380
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(default_width, default_height)
+            return
+
+        available = screen.availableGeometry()
+        width_limit = max(min_width, available.width() - 80)
+        height_limit = max(min_height, available.height() - 80)
+        self.resize(min(default_width, width_limit), min(default_height, height_limit))
 
 
 

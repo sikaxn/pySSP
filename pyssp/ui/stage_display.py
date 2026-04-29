@@ -322,6 +322,12 @@ class _GadgetFrame(QFrame):
         self._apply_fonts()
 
     def _apply_frame_style(self) -> None:
+        if self._hide_border:
+            self.setFrameShape(QFrame.NoFrame)
+            self.setLineWidth(0)
+        else:
+            self.setFrameShape(QFrame.Box)
+            self.setLineWidth(1)
         if self._selected:
             border = "2px solid #45A0FF"
         elif self._hide_border:

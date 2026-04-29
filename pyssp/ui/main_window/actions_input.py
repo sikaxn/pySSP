@@ -1630,6 +1630,7 @@ class ActionsInputMixin:
         self.search_double_click_action = dialog.selected_search_double_click_action()
         self.now_playing_display_mode = dialog.selected_now_playing_display_mode()
         self.main_ui_lyric_display_mode = dialog.selected_main_ui_lyric_display_mode()
+        previous_lyric_display_transparent_mode = bool(self.lyric_display_transparent_mode)
         self.lyric_display_transparent_mode = dialog.selected_lyric_display_transparent_mode()
         self.lyric_display_show_not_playing_message = dialog.selected_lyric_display_show_not_playing_message()
         self.lyric_display_font_family = dialog.selected_lyric_display_font_family()
@@ -1808,17 +1809,11 @@ class ActionsInputMixin:
             )
             self._refresh_stage_display()
         if self._lyric_display_window is not None:
-            self._lyric_display_window.set_transparent_mode_enabled(bool(self.lyric_display_transparent_mode))
-            self._lyric_display_window.configure_display_settings(
-                font_family=self.lyric_display_font_family,
-                font_size=self.lyric_display_font_size,
-                show_not_playing_message=self.lyric_display_show_not_playing_message,
-                previous_line_count=self.lyric_display_previous_line_count,
-                next_line_count=self.lyric_display_next_line_count,
-                role_colors=self.lyric_display_role_colors,
-                role_sizes=self.lyric_display_role_sizes,
-            )
-            self._refresh_lyric_display(force=True)
+            if previous_lyric_display_transparent_mode != bool(self.lyric_display_transparent_mode):
+                self._recreate_lyric_display_window()
+            else:
+                self._configure_lyric_display_window()
+                self._refresh_lyric_display(force=True)
         selected_ui_language = dialog.selected_ui_language()
         if selected_ui_language != self.ui_language:
             self.ui_language = selected_ui_language

@@ -60,11 +60,95 @@ class LyricsStageMixin:
             transparent_action.setChecked(bool(getattr(self, "lyric_display_transparent_mode", False)))
             transparent_action.blockSignals(False)
 
+    def _create_lyric_display_window(self) -> LyricDisplayWindow:
+        window = LyricDisplayWindow(
+            self,
+            on_toggle_transparent_mode=self._set_lyric_display_transparent_mode,
+            on_adjust_font_size=self._adjust_lyric_display_font_size,
+            on_open_settings=lambda: self._open_options_dialog(initial_page="Stage and Lyric Display"),
+        )
+        window.destroyed.connect(lambda _obj=None, closed_window=window: self._on_lyric_display_destroyed(closed_window))
+        return window
+
+    def _configure_lyric_display_window(self, window: Optional[LyricDisplayWindow] = None) -> None:
+        target = self._lyric_display_window if window is None else window
+        if target is None:
+            return
+        target.retranslate_ui()
+        target.set_transparent_mode_enabled(bool(self.lyric_display_transparent_mode))
+        target.configure_display_settings(
+            font_family=self.lyric_display_font_family,
+            font_size=self.lyric_display_font_size,
+            show_not_playing_message=self.lyric_display_show_not_playing_message,
+            previous_line_count=self.lyric_display_previous_line_count,
+            next_line_count=self.lyric_display_next_line_count,
+            role_colors=self.lyric_display_role_colors,
+            role_sizes=self.lyric_display_role_sizes,
+            auto_adjust_role_sizes=self.lyric_display_auto_adjust_role_sizes,
+            role_scale_percents=self.lyric_display_role_scale_percents,
+            role_bold=self.lyric_display_role_bold,
+            role_italic=self.lyric_display_role_italic,
+        )
+
+    def _capture_lyric_display_window_state(self) -> dict[str, object]:
+        window = self._lyric_display_window
+        if window is None:
+            return {
+                "visible": False,
+                "fullscreen": False,
+                "maximized": False,
+                "geometry": None,
+            }
+        was_fullscreen = window.isFullScreen()
+        was_maximized = window.isMaximized() and not was_fullscreen
+        geometry = window.normalGeometry() if (was_fullscreen or was_maximized) else window.geometry()
+        return {
+            "visible": bool(window.isVisible()),
+            "fullscreen": bool(was_fullscreen),
+            "maximized": bool(was_maximized),
+            "geometry": geometry if geometry.isValid() else None,
+        }
+
+    def _restore_lyric_display_window_state(self, window: LyricDisplayWindow, state: dict[str, object]) -> None:
+        if not bool(state.get("visible")):
+            return
+        geometry = state.get("geometry")
+        if geometry is not None:
+            try:
+                window.setGeometry(geometry)
+            except Exception:
+                pass
+        if bool(state.get("fullscreen")):
+            window.showFullScreen()
+        elif bool(state.get("maximized")):
+            window.showMaximized()
+        else:
+            window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _recreate_lyric_display_window(self) -> None:
+        previous_window = self._lyric_display_window
+        if previous_window is None:
+            return
+        state = self._capture_lyric_display_window_state()
+        self._lyric_display_window = None
+        previous_window.close()
+        new_window = self._create_lyric_display_window()
+        self._lyric_display_window = new_window
+        self._configure_lyric_display_window(new_window)
+        self._restore_lyric_display_window_state(new_window, state)
+        self._refresh_lyric_display(force=True)
+
     def _set_lyric_display_transparent_mode(self, enabled: bool) -> None:
         new_value = bool(enabled)
+        previous_value = bool(getattr(self, "lyric_display_transparent_mode", False))
         self.lyric_display_transparent_mode = new_value
         if self._lyric_display_window is not None:
-            self._lyric_display_window.set_transparent_mode_enabled(new_value)
+            if previous_value != new_value:
+                self._recreate_lyric_display_window()
+            else:
+                self._configure_lyric_display_window()
         self._sync_lyric_display_controls()
         if not self._suspend_settings_save:
             self._save_settings()
@@ -174,34 +258,16 @@ class LyricsStageMixin:
 
     def _open_lyric_display(self) -> None:
         if self._lyric_display_window is None:
-            self._lyric_display_window = LyricDisplayWindow(
-                self,
-                on_toggle_transparent_mode=self._set_lyric_display_transparent_mode,
-                on_adjust_font_size=self._adjust_lyric_display_font_size,
-                on_open_settings=lambda: self._open_options_dialog(initial_page="Stage and Lyric Display"),
-            )
-            self._lyric_display_window.destroyed.connect(self._on_lyric_display_destroyed)
-        self._lyric_display_window.retranslate_ui()
-        self._lyric_display_window.set_transparent_mode_enabled(bool(self.lyric_display_transparent_mode))
-        self._lyric_display_window.configure_display_settings(
-            font_family=self.lyric_display_font_family,
-            font_size=self.lyric_display_font_size,
-            show_not_playing_message=self.lyric_display_show_not_playing_message,
-            previous_line_count=self.lyric_display_previous_line_count,
-            next_line_count=self.lyric_display_next_line_count,
-            role_colors=self.lyric_display_role_colors,
-            role_sizes=self.lyric_display_role_sizes,
-            auto_adjust_role_sizes=self.lyric_display_auto_adjust_role_sizes,
-            role_scale_percents=self.lyric_display_role_scale_percents,
-            role_bold=self.lyric_display_role_bold,
-            role_italic=self.lyric_display_role_italic,
-        )
+            self._lyric_display_window = self._create_lyric_display_window()
+        self._configure_lyric_display_window()
         self._lyric_display_window.show()
         self._lyric_display_window.raise_()
         self._lyric_display_window.activateWindow()
         self._refresh_lyric_display(force=True)
 
-    def _on_lyric_display_destroyed(self, _obj=None) -> None:
+    def _on_lyric_display_destroyed(self, window=None) -> None:
+        if window is not None and self._lyric_display_window is not window:
+            return
         self._lyric_display_window = None
         self._sync_lyric_display_controls()
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtWidgets import QApplication, QFrame
+from PyQt5.QtWidgets import QApplication, QFrame, QWidget
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -194,30 +194,73 @@ def test_transparent_fullscreen_toggle_roundtrip(qapp):
         window.close()
 
 
-def test_main_window_toggle_forces_lyric_refresh():
-    class _WindowStub:
-        def __init__(self):
-            self.modes = []
-
-        def set_transparent_mode_enabled(self, enabled: bool) -> None:
-            self.modes.append(bool(enabled))
-
-    class _Host(LyricsStageMixin):
+def test_main_window_toggle_recreates_open_lyric_window(qapp):
+    class _Host(QWidget, LyricsStageMixin):
         pass
 
     host = _Host()
     host.lyric_display_transparent_mode = False
-    host._lyric_display_window = _WindowStub()
+    host.lyric_display_font_family = ""
+    host.lyric_display_font_size = 36
+    host.lyric_display_show_not_playing_message = True
+    host.lyric_display_previous_line_count = 0
+    host.lyric_display_next_line_count = 0
+    host.lyric_display_role_colors = {
+        "played": "#A0A0A0",
+        "current": "#FFD400",
+        "next": "#FFFFFF",
+    }
+    host.lyric_display_role_sizes = {
+        "played": 24,
+        "current": 40,
+        "next": 32,
+    }
+    host.lyric_display_auto_adjust_role_sizes = True
+    host.lyric_display_role_scale_percents = {
+        "played": 70,
+        "current": 115,
+        "next": 90,
+    }
+    host.lyric_display_role_bold = {
+        "played": True,
+        "current": True,
+        "next": True,
+    }
+    host.lyric_display_role_italic = {
+        "played": False,
+        "current": False,
+        "next": False,
+    }
+    host._lyric_display_window = None
     host._suspend_settings_save = True
     refresh_calls = []
     sync_calls = []
     host._refresh_lyric_display = lambda force=False: refresh_calls.append(bool(force))  # type: ignore[method-assign]
     host._sync_lyric_display_controls = lambda: sync_calls.append(True)  # type: ignore[method-assign]
     host._save_settings = lambda: None  # type: ignore[method-assign]
+    host._open_options_dialog = lambda initial_page=None: None  # type: ignore[method-assign]
 
-    host._set_lyric_display_transparent_mode(True)
+    try:
+        host._open_lyric_display()
+        qapp.processEvents()
+        original_window = host._lyric_display_window
+        original_window.setGeometry(40, 50, 700, 400)
+        qapp.processEvents()
+        refresh_calls.clear()
+        sync_calls.clear()
 
-    assert host.lyric_display_transparent_mode is True
-    assert host._lyric_display_window.modes == [True]
-    assert refresh_calls == []
-    assert sync_calls == [True]
+        host._set_lyric_display_transparent_mode(True)
+        qapp.processEvents()
+
+        assert host.lyric_display_transparent_mode is True
+        assert host._lyric_display_window is not None
+        assert host._lyric_display_window is not original_window
+        assert host._lyric_display_window.isVisible() is True
+        assert host._lyric_display_window.geometry() == QRect(40, 50, 700, 400)
+        assert host._lyric_display_window._transparent_mode_enabled is True
+        assert refresh_calls == [True]
+        assert sync_calls == [True]
+    finally:
+        if host._lyric_display_window is not None:
+            host._lyric_display_window.close()
+        host.close()

@@ -184,7 +184,6 @@ class LyricDisplayWindow(QWidget):
     def set_transparent_mode_enabled(self, enabled: bool) -> None:
         enabled = bool(enabled)
         if enabled == self._transparent_mode_enabled:
-            self._apply_window_chrome()
             return
         self._transparent_mode_enabled = enabled
         self._hide_hover_toolbar()
@@ -414,8 +413,8 @@ class LyricDisplayWindow(QWidget):
         checked = not bool(self._transparent_mode_enabled)
         if callable(self._on_toggle_transparent_mode):
             self._on_toggle_transparent_mode(checked)
-        else:
-            self.set_transparent_mode_enabled(checked)
+            return
+        self.set_transparent_mode_enabled(checked)
         self._show_hover_toolbar()
 
     def _handle_toolbar_font_adjust(self, delta: int) -> None:

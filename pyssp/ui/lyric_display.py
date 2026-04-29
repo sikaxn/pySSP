@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import QEvent, QPoint, QTimer, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer, Qt
 from PyQt5.QtWidgets import QAction, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
@@ -397,6 +397,7 @@ class LyricDisplayWindow(QWidget):
 
     def _hide_hover_toolbar(self) -> None:
         overlay_rect = self._toolbar_overlay.geometry()
+        exposed_canvas_rect = self._overlay_exposed_canvas_rect(overlay_rect)
         self._toolbar_hide_timer.stop()
         self._toolbar_hint_label.setVisible(False)
         self._font_size_down_button.setVisible(False)
@@ -406,7 +407,8 @@ class LyricDisplayWindow(QWidget):
         self._transparent_toggle_button.setVisible(False)
         self._toolbar_overlay.setVisible(False)
         self.update(overlay_rect)
-        self._canvas.update()
+        self._canvas.update(exposed_canvas_rect)
+        self._canvas.repaint(exposed_canvas_rect)
 
     def _handle_toolbar_toggle_clicked(self) -> None:
         checked = not bool(self._transparent_mode_enabled)
@@ -593,12 +595,28 @@ class LyricDisplayWindow(QWidget):
         if self._toolbar_overlay.isVisible():
             self._toolbar_overlay.raise_()
 
+    def _overlay_exposed_canvas_rect(self, overlay_rect: QRect) -> QRect:
+        if self._canvas is None:
+            return QRect()
+        translated = QRect(
+            overlay_rect.x() - self._canvas.x(),
+            overlay_rect.y() - self._canvas.y(),
+            overlay_rect.width(),
+            overlay_rect.height(),
+        )
+        return translated.intersected(self._canvas.rect())
+
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self.showNormal()
         else:
             self.showFullScreen()
-        self._apply_window_chrome()
+        self._refresh_toolbar_text()
+        self._reposition_overlays()
+        self.update()
+        self._canvas.update()
+        if self._lyric_widget is not None:
+            self._lyric_widget.update()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.MouseButtonDblClick:
@@ -629,7 +647,12 @@ class LyricDisplayWindow(QWidget):
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self.isFullScreen():
             self.showNormal()
-            self._apply_window_chrome()
+            self._refresh_toolbar_text()
+            self._reposition_overlays()
+            self.update()
+            self._canvas.update()
+            if self._lyric_widget is not None:
+                self._lyric_widget.update()
             event.accept()
             return
         super().keyPressEvent(event)

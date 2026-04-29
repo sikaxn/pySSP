@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtWidgets import QApplication, QFrame
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -97,6 +97,99 @@ def test_toggle_transparent_preserves_current_lyric_text_and_toolbar_size(qapp):
         assert window._toolbar_overlay.x() == 7
         assert window._toolbar_overlay.width() == window.width() - 14
         assert window._toolbar_overlay.height() >= window._toolbar_overlay.sizeHint().height()
+    finally:
+        window.close()
+
+
+def test_transparent_fullscreen_roundtrip_preserves_window_geometry(qapp):
+    window = LyricDisplayWindow()
+    try:
+        window.show()
+        qapp.processEvents()
+        window.set_transparent_mode_enabled(True)
+        qapp.processEvents()
+        original_geometry = window.geometry()
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+        assert window.isFullScreen() is True
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+
+        assert window.isFullScreen() is False
+        assert window.geometry() == original_geometry
+        assert window.testAttribute(Qt.WA_TranslucentBackground) is True
+        assert window.testAttribute(Qt.WA_NoSystemBackground) is True
+    finally:
+        window.close()
+
+
+def test_hide_hover_toolbar_repaints_exposed_canvas_region(qapp, monkeypatch):
+    window = LyricDisplayWindow()
+    try:
+        window.show()
+        qapp.processEvents()
+        window.set_transparent_mode_enabled(True)
+        window._show_hover_toolbar()
+        qapp.processEvents()
+
+        repaints = []
+        updates = []
+        expected_rect = QRect(1, 2, 3, 4)
+        monkeypatch.setattr(window, "_overlay_exposed_canvas_rect", lambda _rect: expected_rect)
+        monkeypatch.setattr(window._canvas, "update", lambda rect=None: updates.append(rect), raising=False)
+        monkeypatch.setattr(window._canvas, "repaint", lambda rect=None: repaints.append(rect), raising=False)
+
+        window._hide_hover_toolbar()
+
+        assert window._toolbar_overlay.isVisible() is False
+        assert updates == [expected_rect]
+        assert repaints == [expected_rect]
+    finally:
+        window.close()
+
+
+def test_windowed_fullscreen_toggle_roundtrip(qapp):
+    window = LyricDisplayWindow()
+    try:
+        window.show()
+        qapp.processEvents()
+        original_geometry = window.geometry()
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+
+        assert window.isFullScreen() is True
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+
+        assert window.isFullScreen() is False
+        assert window.geometry() == original_geometry
+    finally:
+        window.close()
+
+
+def test_transparent_fullscreen_toggle_roundtrip(qapp):
+    window = LyricDisplayWindow()
+    try:
+        window.show()
+        qapp.processEvents()
+        window.set_transparent_mode_enabled(True)
+        qapp.processEvents()
+        original_geometry = window.geometry()
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+
+        assert window.isFullScreen() is True
+
+        window._toggle_fullscreen()
+        qapp.processEvents()
+
+        assert window.isFullScreen() is False
+        assert window.geometry() == original_geometry
     finally:
         window.close()
 

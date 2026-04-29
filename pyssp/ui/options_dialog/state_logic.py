@@ -69,52 +69,57 @@ class StateLogicMixin:
             self._refresh_color_button(button, value)
 
     def _restore_defaults_current_page(self) -> None:
-        idx = self.page_list.currentRow()
-        if idx == 0:
-            self._restore_general_defaults()
-            return
-        if idx == 1:
-            self._restore_language_defaults()
-            return
-        if idx == 2:
-            self._restore_lock_defaults()
-            return
-        if idx == 3:
-            self._restore_hotkey_defaults()
-            return
-        if idx == 4:
-            self._restore_midi_defaults()
-            return
-        if idx == 5:
-            self._restore_color_defaults()
-            return
-        if idx == 6:
-            self._restore_display_defaults()
-            return
-        if idx == 7:
-            self._restore_lyric_defaults()
-            return
-        if idx == 8:
-            self._restore_window_layout_defaults()
-            return
-        if idx == 9:
-            self._restore_delay_defaults()
-            return
-        if idx == 10:
-            self._restore_playback_defaults()
-            return
-        if idx == 11:
-            self._restore_audio_device_defaults()
-            return
-        if idx == 12:
-            self._restore_preload_defaults()
-            return
-        if idx == 13:
-            self._restore_talk_defaults()
-            return
-        if idx == 14:
-            self._restore_web_remote_defaults()
-            return
+        item = self.page_list.currentItem()
+        source_title = ""
+        if item is not None:
+            source_title = str(item.data(SOURCE_TEXT_ROLE) or item.text() or "").strip().lower()
+        try:
+            if source_title == "general":
+                self._restore_general_defaults()
+                return
+            if source_title == "language":
+                self._restore_language_defaults()
+                return
+            if source_title == "lock screen":
+                self._restore_lock_defaults()
+                return
+            if source_title == "hotkey":
+                self._restore_hotkey_defaults()
+                return
+            if source_title == "midi control":
+                self._restore_midi_defaults()
+                return
+            if source_title == "colour":
+                self._restore_color_defaults()
+                return
+            if source_title == "stage and lyric display":
+                self._restore_display_defaults()
+                self._restore_lyric_defaults()
+                return
+            if source_title == "window layout":
+                self._restore_window_layout_defaults()
+                return
+            if source_title == "fade":
+                self._restore_delay_defaults()
+                return
+            if source_title == "playback":
+                self._restore_playback_defaults()
+                return
+            if source_title == "audio device & timecode":
+                self._restore_audio_device_defaults()
+                return
+            if source_title == "audio loading & format":
+                self._restore_preload_defaults()
+                return
+            if source_title == "talk":
+                self._restore_talk_defaults()
+                return
+            if source_title == "web remote":
+                self._restore_web_remote_defaults()
+                return
+        finally:
+            if hasattr(self, "_update_scroll_hint"):
+                self._update_scroll_hint()
 
     def _restore_language_defaults(self) -> None:
         d = self._DEFAULTS

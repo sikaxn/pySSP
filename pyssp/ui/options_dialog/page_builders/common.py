@@ -16,10 +16,22 @@ class CommonPageBuilderMixin:
         item = QListWidgetItem(icon, title)
         self.page_list.addItem(item)
 
+    def _build_stage_lyric_display_page(self, stage_page: QWidget, lyric_page: QWidget) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        tabs = QTabWidget()
+        tabs.addTab(stage_page, "Stage Display")
+        tabs.addTab(lyric_page, "Lyric Display")
+        layout.addWidget(tabs)
+        return page
+
     def select_page(self, title: Optional[str]) -> bool:
         needle = str(title or "").strip().lower()
         if needle == "display":
-            needle = "stage display"
+            needle = "stage and lyric display"
+        if needle in {"stage display", "lyric", "lyric display", "stage and lyric display setting"}:
+            needle = "stage and lyric display"
         if needle == "audio device / timecode":
             needle = "audio device & timecode"
         if needle in {"audio preload", "audio format"}:

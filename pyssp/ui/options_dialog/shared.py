@@ -9,6 +9,7 @@ from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, p
 from PyQt5.QtGui import QColor, QDrag, QFont, QFontDatabase, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -52,7 +53,7 @@ from pyssp.settings_store import (
     default_window_layout,
     normalize_window_layout,
 )
-from pyssp.i18n import localize_widget_tree, normalize_language, tr
+from pyssp.i18n import SOURCE_TEXT_ROLE, localize_widget_tree, normalize_language, tr
 from pyssp.launchpad import (
     LAUNCHPAD_ACTION_NONE,
     LAUNCHPAD_ACTION_SHIFT_LAYER,
@@ -96,5 +97,3 @@ from pyssp.ui.stage_display import (
 
 
 WINDOW_LAYOUT_DRAG_MIME = "application/x-pyssp-window-layout-item"
-
-

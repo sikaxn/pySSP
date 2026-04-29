@@ -553,7 +553,7 @@ class LyricDisplayWindow(QWidget):
         transparent_action = QAction(tr("Lyric Display Transparent Mode"), self)
         transparent_action.setCheckable(True)
         transparent_action.setChecked(bool(self._transparent_mode_enabled))
-        settings_action = QAction(tr("Lyric Display Setting"), self)
+        settings_action = QAction(tr("Stage and Lyric Display Setting"), self)
         menu.addAction(transparent_action)
         menu.addAction(settings_action)
         chosen = menu.exec_(event.globalPos())

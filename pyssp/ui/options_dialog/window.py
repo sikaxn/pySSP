@@ -780,15 +780,8 @@ class OptionsDialog(
             self._mono_icon("display"),
             self._build_color_page(),
         )
-        self._add_page(
-            "Stage Display",
-            self._mono_icon("projector"),
-            self._build_display_page(),
-        )
-        self._add_page(
-            "Lyric",
-            self._mono_icon("lyric"),
-            self._build_lyric_page(
+        stage_display_page = self._build_display_page()
+        lyric_display_page = self._build_lyric_page(
                 main_ui_lyric_display_mode=self._main_ui_lyric_display_mode,
                 lyric_display_transparent_mode=self._lyric_display_transparent_mode,
                 lyric_display_show_not_playing_message=self._lyric_display_show_not_playing_message,
@@ -798,7 +791,11 @@ class OptionsDialog(
                 lyric_display_font_size=self._lyric_display_font_size,
                 lyric_display_previous_line_count=self._lyric_display_previous_line_count,
                 lyric_display_next_line_count=self._lyric_display_next_line_count,
-            ),
+            )
+        self._add_page(
+            "Stage and Lyric Display",
+            self._mono_icon("projector"),
+            self._build_stage_lyric_display_page(stage_display_page, lyric_display_page),
         )
         self._add_page(
             "Window Layout",
@@ -899,6 +896,7 @@ class OptionsDialog(
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.page_list.currentRowChanged.connect(lambda _row: self._update_scroll_hint())
         if not self.select_page(initial_page):
             self.page_list.setCurrentRow(0)
 
@@ -909,10 +907,16 @@ class OptionsDialog(
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
+        self.options_scroll_hint_label = QLabel("If some options are cut off, enlarge this window to see more settings.")
+        self.options_scroll_hint_label.setWordWrap(True)
+        self.options_scroll_hint_label.setStyleSheet("color:#888888;")
+        self.options_scroll_hint_label.setVisible(False)
+        root_layout.addWidget(self.options_scroll_hint_label)
         self._validate_hotkey_conflicts()
         self._validate_midi_conflicts()
         self._validate_lock_page()
         localize_widget_tree(self, self._ui_language)
+        self._update_scroll_hint()
 
     def _apply_responsive_dialog_size(self) -> None:
         default_width = 800
@@ -929,6 +933,25 @@ class OptionsDialog(
         width_limit = max(min_width, available.width() - 80)
         height_limit = max(min_height, available.height() - 80)
         self.resize(min(default_width, width_limit), min(default_height, height_limit))
+
+    def _current_page_scroll_area(self) -> Optional[QScrollArea]:
+        widget = self.stack.currentWidget()
+        return widget if isinstance(widget, QScrollArea) else None
+
+    def _update_scroll_hint(self) -> None:
+        label = getattr(self, "options_scroll_hint_label", None)
+        if label is None:
+            return
+        scroll = self._current_page_scroll_area()
+        visible = False
+        if scroll is not None:
+            bar = scroll.horizontalScrollBar()
+            visible = bool(bar is not None and bar.maximum() > 0)
+        label.setVisible(visible)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_scroll_hint()
 
 
 

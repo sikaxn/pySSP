@@ -11,6 +11,10 @@ set "APP_BASENAME=pySSP-%APP_VERSION%"
 set "APP_EXE_NAME=pySSP"
 set "APP_DIST_DIR=%ROOT_DIR%dist\pySSP"
 set "APP_VERSIONED_DIR=%ROOT_DIR%dist\%APP_BASENAME%"
+set "REMOTE_APP_BASENAME=pySSP-RemoteClient-%APP_VERSION%"
+set "REMOTE_APP_EXE_NAME=pySSP Remote Client"
+set "REMOTE_APP_DIST_DIR=%ROOT_DIR%dist\%REMOTE_APP_EXE_NAME%"
+set "REMOTE_APP_VERSIONED_DIR=%ROOT_DIR%dist\%REMOTE_APP_BASENAME%"
 set "SPLEETER_CLI_DIR=%ROOT_DIR%dist\spleeter-cli"
 set "SPLEETER_CLI_EXE=%SPLEETER_CLI_DIR%\spleeter-cli.exe"
 set "SPLEETER_CLI_STASH=%ROOT_DIR%.build_meta\spleeter-cli-stash"
@@ -71,6 +75,7 @@ if exist "%VERSION_FILE%" (
     )
 )
 set "APP_BASENAME=pySSP-%APP_VERSION%"
+set "REMOTE_APP_BASENAME=pySSP-RemoteClient-%APP_VERSION%"
 echo [INFO] Build version: %APP_VERSION%
 if defined APP_BUILD_ID echo [INFO] Build id: %APP_BUILD_ID%
 
@@ -125,6 +130,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo [INFO] Building standalone remote lyric client with PyInstaller...
+pipenv run pyinstaller ^
+  --noconfirm ^
+  --clean ^
+  pySSP_remote_client.spec
+if errorlevel 1 (
+    echo [ERROR] PyInstaller remote client build failed.
+    popd
+    exit /b 1
+)
+
 echo [INFO] Adding cleanstart launcher...
 (
   echo @echo off
@@ -174,12 +190,19 @@ if errorlevel 1 (
     popd
     exit /b 1
 )
+if exist "%REMOTE_APP_VERSIONED_DIR%" rmdir /s /q "%REMOTE_APP_VERSIONED_DIR%"
+call :rename_dist_with_retry "%REMOTE_APP_DIST_DIR%" "%REMOTE_APP_BASENAME%" 5 2
+if errorlevel 1 (
+    popd
+    exit /b 1
+)
 
 echo.
 echo [SUCCESS] Build complete:
 echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP.exe
 echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_cleanstart.bat
 echo   %ROOT_DIR%dist\%APP_BASENAME%\pySSP_debug.bat
+echo   %ROOT_DIR%dist\%REMOTE_APP_BASENAME%\pySSP Remote Client.exe
 
 popd
 exit /b 0

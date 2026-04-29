@@ -275,6 +275,8 @@ class WebRemoteServer:
         m = re.fullmatch(r"/api/query/button/(.+)", endpoint)
         if m:
             return send("query_button", button_id=m.group(1))
+        if endpoint == "/api/query/lyric-openlp":
+            return send("query_lyric_openlp")
         m = re.fullmatch(r"/api/query/pagegroup/([^/]+)", endpoint)
         if m:
             return send("query_pagegroup", group_id=m.group(1))

@@ -285,6 +285,7 @@ def test_dispatch_api_path_matches_http_routes():
         ("/api/alert", "alert"),
         ("/api/alert/clear", "alert"),
         ("/api/query", "query_all"),
+        ("/api/query/lyric-openlp", "query_lyric_openlp"),
         ("/api/query/button/a-1-1", "query_button"),
         ("/api/query/pagegroup/a", "query_pagegroup"),
         ("/api/query/page/a-1", "query_page"),
@@ -333,6 +334,7 @@ def test_ws_api_request_dispatches_same_commands_as_http():
         ("/api/lyric/toggle", "lyric_display"),
         ("/api/vocal-removed/toggle", "vocal_removed"),
         ("/api/alert/clear", "alert"),
+        ("/api/query/lyric-openlp", "query_lyric_openlp"),
         ("/api/query/page/a-1", "query_page"),
     ]
 

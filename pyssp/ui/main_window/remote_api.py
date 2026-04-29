@@ -254,6 +254,8 @@ class RemoteApiMixin:
             "playing_tracks": playing_tracks,
             "web_remote_url": self._web_remote_open_url(),
             "lyric_display": "blank" if self._lyric_force_blank else "show",
+            "alert_active": self._stage_alert_active(),
+            "alert_message": str(getattr(self, "_stage_alert_message", "") or ""),
         }
 
     def _api_primary_playing_key(self) -> Optional[Tuple[str, int, int]]:

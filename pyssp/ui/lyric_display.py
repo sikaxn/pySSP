@@ -176,9 +176,10 @@ class LyricDisplayWindow(QWidget):
         self._apply_font_settings()
 
     def set_lyric_text(self, text: str) -> None:
+        self._last_text = str(text or "")
         if self._lyric_widget is None:
             return
-        self._lyric_widget.value_label.setText(str(text or ""))
+        self._lyric_widget.value_label.setText(self._last_text)
 
     def set_transparent_mode_enabled(self, enabled: bool) -> None:
         enabled = bool(enabled)
@@ -188,6 +189,8 @@ class LyricDisplayWindow(QWidget):
         self._transparent_mode_enabled = enabled
         self._hide_hover_toolbar()
         self._apply_window_chrome()
+        if self._last_text:
+            self.set_lyric_text(self._last_text)
 
     def configure_display_settings(
         self,
@@ -282,7 +285,6 @@ class LyricDisplayWindow(QWidget):
                     )
 
         if force or text != self._last_text:
-            self._last_text = text
             self.set_lyric_text(text)
 
     def _load_lyric_lines(self, lyric_path: str) -> tuple[List[LyricLine], str]:
@@ -431,6 +433,7 @@ class LyricDisplayWindow(QWidget):
         self._canvas.setAttribute(Qt.WA_NoSystemBackground, True)
         self._canvas.setAutoFillBackground(False)
         self._canvas.setStyleSheet("background:transparent; border:none;")
+        self._canvas.set_gadget_hide_border("lyric", True)
         if self._lyric_widget is not None:
             self._lyric_widget.setAttribute(Qt.WA_TranslucentBackground, True)
             self._lyric_widget.setAttribute(Qt.WA_NoSystemBackground, True)
@@ -451,59 +454,142 @@ class LyricDisplayWindow(QWidget):
                 "QLabel{background:transparent; border:none; color:#FFFFFF;}"
             )
 
+    def _refresh_windowed_visuals(self) -> None:
+        self._canvas.setAttribute(Qt.WA_TranslucentBackground, False)
+        self._canvas.setAttribute(Qt.WA_NoSystemBackground, False)
+        self._canvas.setAutoFillBackground(True)
+        self._canvas.setStyleSheet("background:#000000; border:0px solid transparent;")
+        self._canvas.set_gadget_hide_border("lyric", False)
+        if self._lyric_widget is not None:
+            self._lyric_widget.setAttribute(Qt.WA_TranslucentBackground, False)
+            self._lyric_widget.setAttribute(Qt.WA_NoSystemBackground, False)
+            self._lyric_widget.setAutoFillBackground(True)
+            self._lyric_widget._base_background = "#111111"
+            self._lyric_widget.apply_config(
+                orientation="vertical",
+                hide_text=True,
+                hide_border=False,
+                title_font_family=self._font_family,
+                title_font_size=max(8, int(round(self._font_size * 0.55))),
+                value_font_family=self._font_family,
+                value_font_size=self._font_size,
+            )
+            self._lyric_widget.title_label.setVisible(False)
+            self._lyric_widget.setStyleSheet("")
+
+    def _capture_window_state(self) -> dict[str, object]:
+        was_fullscreen = self.isFullScreen()
+        was_maximized = self.isMaximized() and not was_fullscreen
+        geometry = self.normalGeometry() if (was_fullscreen or was_maximized) else self.geometry()
+        return {
+            "visible": bool(self.isVisible()),
+            "fullscreen": bool(was_fullscreen),
+            "maximized": bool(was_maximized),
+            "geometry": geometry if geometry.isValid() else None,
+        }
+
+    def _restore_window_state(self, state: dict[str, object]) -> None:
+        if not bool(state.get("visible")):
+            return
+        geometry = state.get("geometry")
+        if bool(state.get("fullscreen")):
+            if geometry is not None:
+                try:
+                    self.setGeometry(geometry)
+                except Exception:
+                    pass
+            self.showFullScreen()
+            return
+        if bool(state.get("maximized")):
+            if geometry is not None:
+                try:
+                    self.setGeometry(geometry)
+                except Exception:
+                    pass
+            self.showMaximized()
+            return
+        self.showNormal()
+        if geometry is not None:
+            try:
+                self.setGeometry(geometry)
+            except Exception:
+                pass
+        self.show()
+
+    def _normalize_transparent_native_surface(self) -> None:
+        if not self._transparent_mode_enabled or not self.isVisible() or self.isFullScreen():
+            return
+        client = self.geometry()
+        native = self.frameGeometry()
+        delta_w = int(client.width()) - int(native.width())
+        delta_h = int(client.height()) - int(native.height())
+        if delta_w <= 0 and delta_h <= 0:
+            return
+        self.resize(client.width() + max(0, delta_w), client.height() + max(0, delta_h))
+
     def _apply_window_chrome(self) -> None:
+        state = self._capture_window_state()
         if self._transparent_mode_enabled:
             flags = Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
             if hasattr(Qt, "NoDropShadowWindowHint"):
                 flags |= Qt.NoDropShadowWindowHint
-            if self.windowFlags() != flags:
-                was_visible = self.isVisible()
-                self.setWindowFlags(flags)
-                if was_visible:
-                    self.show()
-            self.setAttribute(Qt.WA_TranslucentBackground, True)
-            self.setAttribute(Qt.WA_NoSystemBackground, True)
-            self.setStyleSheet("background:transparent; color:#FFFFFF;")
-            self._refresh_transparent_visuals()
+            flags_changed = self.windowFlags() != flags
+            self.setUpdatesEnabled(False)
+            try:
+                if flags_changed:
+                    self.hide()
+                    self.setWindowFlags(flags)
+                self.setAttribute(Qt.WA_TranslucentBackground, True)
+                self.setAttribute(Qt.WA_NoSystemBackground, True)
+                self.setAutoFillBackground(False)
+                self.setStyleSheet("background:transparent; color:#FFFFFF;")
+                self._root_layout.setContentsMargins(0, 0, 0, 0)
+                self._refresh_transparent_visuals()
+                if flags_changed:
+                    self._restore_window_state(state)
+                self._normalize_transparent_native_surface()
+            finally:
+                self.setUpdatesEnabled(True)
         else:
             flags = Qt.Window
-            if self.windowFlags() != flags:
-                was_visible = self.isVisible()
-                self.setWindowFlags(flags)
-                if was_visible:
-                    self.show()
-            self.setAttribute(Qt.WA_TranslucentBackground, False)
-            self.setAttribute(Qt.WA_NoSystemBackground, False)
-            self.setStyleSheet("background:#000000; color:#FFFFFF;")
-            self._canvas.setAttribute(Qt.WA_TranslucentBackground, False)
-            self._canvas.setAttribute(Qt.WA_NoSystemBackground, False)
-            self._canvas.setStyleSheet("background:#000000; border:0px solid transparent;")
-            if self._lyric_widget is not None:
-                self._lyric_widget.setAttribute(Qt.WA_TranslucentBackground, False)
-                self._lyric_widget.setAttribute(Qt.WA_NoSystemBackground, False)
-                self._lyric_widget._base_background = "#111111"
-                self._lyric_widget.apply_config(
-                    orientation="vertical",
-                    hide_text=True,
-                    hide_border=False,
-                    title_font_family=self._font_family,
-                    title_font_size=max(8, int(round(self._font_size * 0.55))),
-                    value_font_family=self._font_family,
-                    value_font_size=self._font_size,
-                )
-                self._lyric_widget.title_label.setVisible(False)
-                self._lyric_widget.setStyleSheet("")
+            flags_changed = self.windowFlags() != flags
+            self.setUpdatesEnabled(False)
+            try:
+                if flags_changed:
+                    self.hide()
+                    self.setWindowFlags(flags)
+                self.setAttribute(Qt.WA_TranslucentBackground, False)
+                self.setAttribute(Qt.WA_NoSystemBackground, False)
+                self.setAutoFillBackground(True)
+                self.setStyleSheet("background:#000000; color:#FFFFFF;")
+                self._root_layout.setContentsMargins(14, 10, 14, 10)
+                self._refresh_windowed_visuals()
+                if flags_changed:
+                    self._restore_window_state(state)
+            finally:
+                self.setUpdatesEnabled(True)
         self._refresh_toolbar_text()
         self._reposition_overlays()
+        if self._last_text:
+            self.set_lyric_text(self._last_text)
         self.update()
+        self._canvas.update()
+        if self._lyric_widget is not None:
+            self._lyric_widget.update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._reposition_overlays()
 
     def _reposition_overlays(self) -> None:
-        toolbar_width = max(240, self.width() - 28)
-        self._toolbar_overlay.setGeometry(14, 10, toolbar_width, 34)
+        margins = self._root_layout.contentsMargins()
+        safe_inset = 7 if self._transparent_mode_enabled else 0
+        left = max(safe_inset, int(margins.left()))
+        top = max(0, int(margins.top()))
+        right = max(safe_inset, int(margins.right()))
+        toolbar_width = max(240, self.width() - left - right)
+        toolbar_height = max(40, self._toolbar_overlay.sizeHint().height())
+        self._toolbar_overlay.setGeometry(left, top, toolbar_width, toolbar_height)
         if self._toolbar_overlay.isVisible():
             self._toolbar_overlay.raise_()
 

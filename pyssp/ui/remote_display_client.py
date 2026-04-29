@@ -6,6 +6,8 @@ import threading
 import time
 from queue import Empty, Queue
 from typing import Any, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -56,6 +58,8 @@ class RemoteWebSocketClient(QThread):
         self._outbound: Queue[tuple[str, Optional[dict[str, Any]]]] = Queue()
         self._pending_paths: dict[str, str] = {}
         self._request_counter = 0
+        self._latest_ws_state: dict[str, Any] = {}
+        self._lyric_query_supported: Optional[bool] = None
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -63,15 +67,23 @@ class RemoteWebSocketClient(QThread):
     def request_api(self, path: str, body: Optional[dict[str, Any]] = None) -> None:
         self._outbound.put((str(path or "").strip(), dict(body or {}) if body else None))
 
+    def request_lyric_bundle(self) -> None:
+        if self._lyric_query_supported is False:
+            self._outbound.put(("__legacy_http_lyric_bundle__", None))
+            return
+        self.request_api("/api/query/lyric-openlp")
+
     def run(self) -> None:
         ws_url = f"ws://{self._host}:{self._ws_port}/ws"
         while not self._stop_event.is_set():
             try:
                 self.status_changed.emit(False, tr("Connecting..."))
                 with connect(ws_url, open_timeout=3, close_timeout=1) as websocket:
+                    self._lyric_query_supported = None
+                    self._latest_ws_state = {}
                     self.status_changed.emit(True, tr("Connected"))
                     self.request_api("/api/query")
-                    self.request_api("/api/query/lyric-openlp")
+                    self.request_lyric_bundle()
                     last_query_at = 0.0
                     while not self._stop_event.is_set():
                         now = time.monotonic()
@@ -102,6 +114,11 @@ class RemoteWebSocketClient(QThread):
                 return
             if not path:
                 continue
+            if path == "__legacy_http_lyric_bundle__":
+                bundle = self._fetch_legacy_lyric_bundle_http()
+                if bundle is not None:
+                    self.lyric_bundle_received.emit(bundle)
+                continue
             self._request_counter += 1
             request_id = f"remote-client-{self._request_counter}"
             self._pending_paths[request_id] = path
@@ -125,6 +142,7 @@ class RemoteWebSocketClient(QThread):
         if not isinstance(payload, dict):
             return
         if isinstance(payload.get("results"), dict):
+            self._latest_ws_state = dict(payload["results"])
             self.ws_state_received.emit(dict(payload["results"]))
             return
         if str(payload.get("type", "")).strip().lower() != "api_response":
@@ -142,7 +160,44 @@ class RemoteWebSocketClient(QThread):
         if path == "/api/query/lyric-openlp":
             result = response_payload.get("result")
             if isinstance(result, dict):
+                self._lyric_query_supported = True
                 self.lyric_bundle_received.emit(dict(result))
+                return
+            if response_payload.get("ok") is False:
+                self._lyric_query_supported = False
+                bundle = self._fetch_legacy_lyric_bundle_http()
+                if bundle is not None:
+                    self.lyric_bundle_received.emit(bundle)
+                return
+
+    def _fetch_legacy_lyric_bundle_http(self) -> Optional[dict]:
+        base_url = f"http://{self._host}:{self._http_port}"
+        try:
+            live_items = self._http_get_json(f"{base_url}/lyric/api/v2/controller/live-items")
+            service_items = self._http_get_json(f"{base_url}/stage/api/v2/service/items")
+        except Exception:
+            return None
+        if not isinstance(live_items, dict):
+            return None
+        if not isinstance(service_items, list):
+            service_items = []
+        return {
+            "ws": dict(self._latest_ws_state),
+            "live_items": dict(live_items),
+            "service_items": list(service_items),
+        }
+
+    @staticmethod
+    def _http_get_json(url: str) -> Any:
+        try:
+            with urlopen(url, timeout=3.0) as response:
+                status = int(getattr(response, "status", 200))
+                if status >= 400:
+                    raise URLError(f"HTTP {status}")
+                payload = response.read().decode("utf-8")
+        except URLError:
+            raise
+        return json.loads(payload)
 
 
 class RemoteClientSettingsDialog(QDialog):
@@ -434,9 +489,12 @@ class RemoteClientSettingsDialog(QDialog):
         )
 
 
-class RemoteDisplayClientWindow(LyricDisplayWindow):
+class RemoteDisplayClientWindow(QWidget):
     def __init__(self) -> None:
+        super().__init__(None)
         self._settings = load_remote_client_settings()
+        self._confirm_close = True
+        self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._stage_display_window: Optional[StageDisplayWindow] = None
         self._connection: Optional[RemoteWebSocketClient] = None
         self._connection_status_text = tr("Disconnected")
@@ -447,23 +505,83 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
             "service_items": [],
         }
         self._api_state: dict[str, Any] = {}
-        super().__init__(
-            None,
-            on_toggle_transparent_mode=self._set_transparent_mode_from_ui,
-            on_adjust_font_size=self._adjust_font_size_from_ui,
-            on_open_settings=self._open_settings_dialog,
-        )
+        self.setWindowTitle(tr("pySSP Remote Display Client"))
+        self.resize(440, 260)
+        self._build_main_ui()
         self._apply_settings_to_windows()
         self._update_window_title()
         if self._settings.stage_display_open_on_startup:
             self._show_stage_display()
         self._start_connection()
 
+    def _build_main_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        title = QLabel(tr("Remote Display Client"), self)
+        title_font = QFont(title.font())
+        title_font.setPointSize(max(14, title_font.pointSize() + 3))
+        title_font.setBold(True)
+        title.setFont(title_font)
+        root.addWidget(title)
+
+        self._connection_status_label = QLabel("", self)
+        self._connection_status_label.setWordWrap(True)
+        root.addWidget(self._connection_status_label)
+
+        self._server_target_label = QLabel("", self)
+        self._server_target_label.setWordWrap(True)
+        root.addWidget(self._server_target_label)
+
+        self._transparent_checkbox = QCheckBox(tr("Lyric Display Transparent Mode"), self)
+        self._transparent_checkbox.setChecked(bool(self._settings.lyric_display_transparent_mode))
+        self._transparent_checkbox.toggled.connect(self._set_transparent_mode_from_ui)
+        root.addWidget(self._transparent_checkbox)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(8)
+        self._settings_button = QPushButton(tr("Open Settings"), self)
+        self._settings_button.clicked.connect(self._open_settings_dialog)
+        buttons_row.addWidget(self._settings_button)
+        self._lyric_button = QPushButton(tr("Open Lyric Display"), self)
+        self._lyric_button.clicked.connect(self._show_lyric_display)
+        buttons_row.addWidget(self._lyric_button)
+        self._stage_button = QPushButton(tr("Open Stage Display"), self)
+        self._stage_button.clicked.connect(self._show_stage_display)
+        buttons_row.addWidget(self._stage_button)
+        root.addLayout(buttons_row)
+
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+        self._reconnect_button = QPushButton(tr("Reconnect"), self)
+        self._reconnect_button.clicked.connect(self._start_connection)
+        actions_row.addWidget(self._reconnect_button)
+        self._close_lyric_button = QPushButton(tr("Close Lyric Display"), self)
+        self._close_lyric_button.clicked.connect(self._close_lyric_display)
+        actions_row.addWidget(self._close_lyric_button)
+        self._close_stage_button = QPushButton(tr("Close Stage Display"), self)
+        self._close_stage_button.clicked.connect(self._close_stage_display)
+        actions_row.addWidget(self._close_stage_button)
+        root.addLayout(actions_row)
+        root.addStretch(1)
+        self._refresh_window_buttons()
+
     def closeEvent(self, event) -> None:
+        if self._confirm_close:
+            answer = QMessageBox.question(
+                self,
+                tr("Quit Remote Display Client"),
+                tr("Closing the main window will quit the remote display client. Continue?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
         self._stop_connection()
-        if self._stage_display_window is not None:
-            self._stage_display_window.close()
-            self._stage_display_window = None
+        self._close_lyric_display()
+        self._close_stage_display()
         super().closeEvent(event)
 
     def contextMenuEvent(self, event) -> None:
@@ -471,16 +589,20 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
         transparent_action = QAction(tr("Lyric Display Transparent Mode"), self)
         transparent_action.setCheckable(True)
         transparent_action.setChecked(bool(self._settings.lyric_display_transparent_mode))
-        stage_action = QAction(tr("Show Stage Display"), self)
+        lyric_action = QAction(tr("Open Lyric Display"), self)
+        stage_action = QAction(tr("Open Stage Display"), self)
         reconnect_action = QAction(tr("Reconnect"), self)
         settings_action = QAction(tr("Remote Display Settings"), self)
         menu.addAction(transparent_action)
+        menu.addAction(lyric_action)
         menu.addAction(stage_action)
         menu.addAction(reconnect_action)
         menu.addAction(settings_action)
         chosen = menu.exec_(event.globalPos())
         if chosen == transparent_action:
             self._set_transparent_mode_from_ui(bool(transparent_action.isChecked()))
+        elif chosen == lyric_action:
+            self._show_lyric_display()
         elif chosen == stage_action:
             self._show_stage_display()
         elif chosen == reconnect_action:
@@ -488,9 +610,47 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
         elif chosen == settings_action:
             self._open_settings_dialog()
 
+    def _create_lyric_display_window(self) -> LyricDisplayWindow:
+        window = LyricDisplayWindow(
+            None,
+            on_toggle_transparent_mode=self._set_transparent_mode_from_ui,
+            on_adjust_font_size=self._adjust_font_size_from_ui,
+            on_open_settings=self._open_settings_dialog,
+        )
+        window.destroyed.connect(lambda _obj=None, closed_window=window: self._on_lyric_display_destroyed(closed_window))
+        return window
+
+    def _show_lyric_display(self) -> None:
+        if self._lyric_display_window is None:
+            self._lyric_display_window = self._create_lyric_display_window()
+        self._apply_settings_to_windows()
+        self._lyric_display_window.show()
+        self._lyric_display_window.raise_()
+        self._lyric_display_window.activateWindow()
+        self._render_lyric_display()
+        self._refresh_window_buttons()
+
+    def _close_lyric_display(self) -> None:
+        if self._lyric_display_window is None:
+            return
+        window = self._lyric_display_window
+        self._lyric_display_window = None
+        window.close()
+        self._refresh_window_buttons()
+
+    def _on_lyric_display_destroyed(self, window=None) -> None:
+        if window is not None and self._lyric_display_window is not window:
+            return
+        self._lyric_display_window = None
+        self._refresh_window_buttons()
+
     def _set_transparent_mode_from_ui(self, enabled: bool) -> None:
         self._settings.lyric_display_transparent_mode = bool(enabled)
-        self.set_transparent_mode_enabled(bool(enabled))
+        if self._transparent_checkbox.isChecked() != bool(enabled):
+            self._transparent_checkbox.blockSignals(True)
+            self._transparent_checkbox.setChecked(bool(enabled))
+            self._transparent_checkbox.blockSignals(False)
+        self._apply_settings_to_windows()
         save_remote_client_settings(self._settings)
 
     def _adjust_font_size_from_ui(self, delta: int) -> None:
@@ -510,47 +670,50 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
         self._apply_settings_to_windows()
         self._render_lyric_display()
         self._refresh_stage_display()
-        if (
-            self._settings.server_host != previous_host
-            or int(self._settings.server_http_port) != int(previous_http_port)
-        ):
+        self._refresh_window_buttons()
+        if self._settings.server_host != previous_host or int(self._settings.server_http_port) != int(previous_http_port):
             self._start_connection()
 
     def _apply_settings_to_windows(self) -> None:
-        self.set_transparent_mode_enabled(bool(self._settings.lyric_display_transparent_mode))
-        self.configure_display_settings(
-            font_family=self._settings.lyric_display_font_family,
-            font_size=self._settings.lyric_display_font_size,
-            show_not_playing_message=self._settings.lyric_display_show_not_playing_message,
-            previous_line_count=self._settings.lyric_display_previous_line_count,
-            next_line_count=self._settings.lyric_display_next_line_count,
-            role_colors={
-                "played": self._settings.lyric_display_played_color,
-                "current": self._settings.lyric_display_current_color,
-                "next": self._settings.lyric_display_next_color,
-            },
-            role_sizes={
-                "played": self._settings.lyric_display_played_text_size,
-                "current": self._settings.lyric_display_current_text_size,
-                "next": self._settings.lyric_display_next_text_size,
-            },
-            auto_adjust_role_sizes=self._settings.lyric_display_auto_adjust_role_sizes,
-            role_scale_percents={
-                "played": self._settings.lyric_display_played_scale_percent,
-                "current": self._settings.lyric_display_current_scale_percent,
-                "next": self._settings.lyric_display_next_scale_percent,
-            },
-            role_bold={
-                "played": self._settings.lyric_display_played_bold,
-                "current": self._settings.lyric_display_current_bold,
-                "next": self._settings.lyric_display_next_bold,
-            },
-            role_italic={
-                "played": self._settings.lyric_display_played_italic,
-                "current": self._settings.lyric_display_current_italic,
-                "next": self._settings.lyric_display_next_italic,
-            },
-        )
+        if self._transparent_checkbox.isChecked() != bool(self._settings.lyric_display_transparent_mode):
+            self._transparent_checkbox.blockSignals(True)
+            self._transparent_checkbox.setChecked(bool(self._settings.lyric_display_transparent_mode))
+            self._transparent_checkbox.blockSignals(False)
+        if self._lyric_display_window is not None:
+            self._lyric_display_window.set_transparent_mode_enabled(bool(self._settings.lyric_display_transparent_mode))
+            self._lyric_display_window.configure_display_settings(
+                font_family=self._settings.lyric_display_font_family,
+                font_size=self._settings.lyric_display_font_size,
+                show_not_playing_message=self._settings.lyric_display_show_not_playing_message,
+                previous_line_count=self._settings.lyric_display_previous_line_count,
+                next_line_count=self._settings.lyric_display_next_line_count,
+                role_colors={
+                    "played": self._settings.lyric_display_played_color,
+                    "current": self._settings.lyric_display_current_color,
+                    "next": self._settings.lyric_display_next_color,
+                },
+                role_sizes={
+                    "played": self._settings.lyric_display_played_text_size,
+                    "current": self._settings.lyric_display_current_text_size,
+                    "next": self._settings.lyric_display_next_text_size,
+                },
+                auto_adjust_role_sizes=self._settings.lyric_display_auto_adjust_role_sizes,
+                role_scale_percents={
+                    "played": self._settings.lyric_display_played_scale_percent,
+                    "current": self._settings.lyric_display_current_scale_percent,
+                    "next": self._settings.lyric_display_next_scale_percent,
+                },
+                role_bold={
+                    "played": self._settings.lyric_display_played_bold,
+                    "current": self._settings.lyric_display_current_bold,
+                    "next": self._settings.lyric_display_next_bold,
+                },
+                role_italic={
+                    "played": self._settings.lyric_display_played_italic,
+                    "current": self._settings.lyric_display_current_italic,
+                    "next": self._settings.lyric_display_next_italic,
+                },
+            )
         if self._stage_display_window is not None:
             self._stage_display_window.configure_gadgets(self._settings.stage_display_gadgets)
             self._stage_display_window.configure_font_settings(
@@ -605,8 +768,7 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
     def _on_connection_status_changed(self, connected: bool, text: str) -> None:
         self._connection_status_text = str(text or "").strip() or (tr("Connected") if connected else tr("Disconnected"))
         self._update_window_title()
-        if not connected and self._stage_display_window is not None:
-            self._refresh_stage_display()
+        self._refresh_stage_display()
 
     def _on_ws_state_received(self, state: dict) -> None:
         previous_item = str(self._ws_state.get("item", "") or "")
@@ -617,7 +779,7 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
             bundle_ws.update(self._ws_state)
         if previous_item != str(self._ws_state.get("item", "") or "") or previous_service != str(self._ws_state.get("service", "") or ""):
             if self._connection is not None:
-                self._connection.request_api("/api/query/lyric-openlp")
+                self._connection.request_lyric_bundle()
         self._render_lyric_display()
         self._refresh_stage_display()
 
@@ -640,7 +802,19 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
 
     def _update_window_title(self) -> None:
         host = str(self._settings.server_host or "127.0.0.1").strip() or "127.0.0.1"
-        self.setWindowTitle(f"{tr('Remote Lyric Display')} - {host}:{self._settings.server_http_port} - {self._connection_status_text}")
+        self.setWindowTitle(f"{tr('pySSP Remote Display Client')} - {host}:{self._settings.server_http_port} - {self._connection_status_text}")
+        self._connection_status_label.setText(f"{tr('Status')}: {self._connection_status_text}")
+        self._server_target_label.setText(
+            f"{tr('Target')}: {host}:{self._settings.server_http_port}  |  WS {self._settings.server_http_port + 1}"
+        )
+
+    def _refresh_window_buttons(self) -> None:
+        lyric_open = self._lyric_display_window is not None and self._lyric_display_window.isVisible()
+        stage_open = self._stage_display_window is not None and self._stage_display_window.isVisible()
+        self._lyric_button.setText(tr("Open Lyric Display") if not lyric_open else tr("Show Lyric Display"))
+        self._stage_button.setText(tr("Open Stage Display") if not stage_open else tr("Show Stage Display"))
+        self._close_lyric_button.setEnabled(lyric_open)
+        self._close_stage_button.setEnabled(stage_open)
 
     def _current_slide(self) -> dict[str, Any]:
         live_items = self._lyric_bundle.get("live_items")
@@ -659,18 +833,27 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
         if bool(self._ws_state.get("blank")) or str(self._ws_state.get("display", "")).strip().lower() == "blank":
             return ""
         slide = self._current_slide()
+        item_id = str(self._ws_state.get("item", "") or "").strip()
         html_value = str(slide.get("html", "") or "").strip()
+        if html_value in {"&#8203;", "&#x200b;"}:
+            html_value = ""
         if html_value:
             return html_value
         text_value = str(slide.get("text", "") or "").strip()
+        if text_value == "\u200b":
+            text_value = ""
         if text_value:
             return "<br />".join(html.escape(part) for part in text_value.splitlines())
+        if not item_id:
+            return ""
         if self._settings.lyric_display_show_not_playing_message:
             return html.escape(tr("No sound is currently playing."))
         return ""
 
     def _render_lyric_display(self) -> None:
-        self.set_lyric_text(self._resolved_lyric_html())
+        if self._lyric_display_window is None:
+            return
+        self._lyric_display_window.set_lyric_text(self._resolved_lyric_html())
 
     def _show_stage_display(self) -> None:
         if self._stage_display_window is None:
@@ -682,9 +865,19 @@ class RemoteDisplayClientWindow(LyricDisplayWindow):
         self._stage_display_window.raise_()
         self._stage_display_window.activateWindow()
         self._refresh_stage_display()
+        self._refresh_window_buttons()
+
+    def _close_stage_display(self) -> None:
+        if self._stage_display_window is None:
+            return
+        window = self._stage_display_window
+        self._stage_display_window = None
+        window.close()
+        self._refresh_window_buttons()
 
     def _on_stage_display_destroyed(self, _obj=None) -> None:
         self._stage_display_window = None
+        self._refresh_window_buttons()
 
     def _refresh_stage_display(self) -> None:
         if self._stage_display_window is None or not self._stage_display_window.isVisible():

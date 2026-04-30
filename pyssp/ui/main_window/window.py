@@ -106,8 +106,14 @@ class MainWindow(
         self.lock_allow_quick_action_hotkeys = bool(getattr(self.settings, "lock_allow_quick_action_hotkeys", False))
         self.lock_allow_sound_button_hotkeys = bool(getattr(self.settings, "lock_allow_sound_button_hotkeys", False))
         self.lock_allow_midi_control = bool(getattr(self.settings, "lock_allow_midi_control", False))
+        self.lock_allow_game_controller_control = bool(
+            getattr(self.settings, "lock_allow_game_controller_control", True)
+        )
         self.lock_auto_allow_quit = bool(getattr(self.settings, "lock_auto_allow_quit", True))
         self.lock_auto_allow_midi_control = bool(getattr(self.settings, "lock_auto_allow_midi_control", True))
+        self.lock_auto_allow_game_controller_control = bool(
+            getattr(self.settings, "lock_auto_allow_game_controller_control", True)
+        )
         self.lock_unlock_method = str(getattr(self.settings, "lock_unlock_method", "click_3_random_points")).strip().lower()
         if self.lock_unlock_method not in {"click_3_random_points", "click_one_button", "slide_to_unlock"}:
             self.lock_unlock_method = "click_3_random_points"
@@ -597,6 +603,48 @@ class MainWindow(
         self.midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
             getattr(self.settings, "midi_rotary_volume_relative_mode", "auto")
         )
+        raw_game_hotkeys = {}
+        try:
+            raw_game_hotkeys = json.loads(str(getattr(self.settings, "game_controller_hotkeys_json", "") or "") or "{}")
+        except Exception:
+            raw_game_hotkeys = {}
+        self.game_controller_hotkeys: Dict[str, tuple[str, str]] = {}
+        for key in HOTKEY_DEFAULTS.keys():
+            raw_pair = raw_game_hotkeys.get(key, ("", "")) if isinstance(raw_game_hotkeys, dict) else ("", "")
+            v1 = str(raw_pair[0]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 1 else ""
+            v2 = str(raw_pair[1]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 2 else ""
+            self.game_controller_hotkeys[key] = (
+                normalize_game_controller_binding(v1),
+                normalize_game_controller_binding(v2),
+            )
+        self.game_controller_device_selectors = [
+            str(v).strip() for v in list(getattr(self.settings, "game_controller_device_selectors", [])) if str(v).strip()
+        ]
+        self.game_controller_axis_threshold = max(
+            0.05,
+            min(0.99, float(getattr(self.settings, "game_controller_axis_threshold", 0.5))),
+        )
+        self.game_controller_quick_action_enabled = bool(
+            getattr(self.settings, "game_controller_quick_action_enabled", False)
+        )
+        self.game_controller_quick_action_bindings = [
+            normalize_game_controller_binding(v)
+            for v in list(getattr(self.settings, "game_controller_quick_action_bindings", []))[:48]
+        ]
+        if len(self.game_controller_quick_action_bindings) < 48:
+            self.game_controller_quick_action_bindings.extend(
+                ["" for _ in range(48 - len(self.game_controller_quick_action_bindings))]
+            )
+        self.game_controller_sound_button_hotkey_enabled = bool(
+            getattr(self.settings, "game_controller_sound_button_hotkey_enabled", False)
+        )
+        game_prio = str(getattr(self.settings, "game_controller_sound_button_hotkey_priority", "system_first")).strip()
+        self.game_controller_sound_button_hotkey_priority = (
+            game_prio if game_prio in {"system_first", "sound_button_first"} else "system_first"
+        )
+        self.game_controller_sound_button_hotkey_go_to_playing = bool(
+            getattr(self.settings, "game_controller_sound_button_hotkey_go_to_playing", False)
+        )
         mode = str(getattr(self.settings, "midi_rotary_volume_mode", "relative")).strip().lower()
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(getattr(self.settings, "midi_rotary_volume_step", 2))))
@@ -726,13 +774,22 @@ class MainWindow(
         self._midi_poll_thread.launchpad_event.connect(self._on_launchpad_binding_triggered)
         self._midi_poll_thread.status_changed.connect(self._on_midi_poll_status)
         self.destroyed.connect(lambda _=None, thread=self._midi_poll_thread: _stop_qthread_safely(thread))
+        self._game_controller_poll_thread = GameControllerPollingThread(self)
+        self._game_controller_poll_thread.controller_event.connect(self._on_game_controller_binding_triggered)
+        self._game_controller_poll_thread.status_changed.connect(self._on_game_controller_poll_status)
+        self.destroyed.connect(
+            lambda _=None, thread=self._game_controller_poll_thread: _stop_qthread_safely(thread)
+        )
         self._midi_action_handlers: Dict[str, Callable[[], None]] = {}
+        self._game_controller_action_handlers: Dict[str, Callable[[], None]] = {}
         self._launchpad_action_handlers: Dict[str, Callable[[], None]] = {}
         self._launchpad_last_trigger_t: Dict[str, float] = {}
         self._midi_last_trigger_t: Dict[str, float] = {}
+        self._game_controller_last_trigger_t: Dict[str, float] = {}
         self._midi_context_handler = None
         self._midi_context_block_actions = False
         self._midi_missing_selectors: set[str] = set()
+        self._game_controller_missing_selectors: set[str] = set()
         self._launchpad_missing_selectors: set[str] = set()
         self._launchpad_output_missing = False
         self._skip_save_on_close = False
@@ -808,6 +865,7 @@ class MainWindow(
         self._lock_screen_overlay = LockScreenOverlay(self)
         self._lock_screen_overlay.unlocked.connect(self._attempt_unlock_from_overlay)
         self._midi_poll_thread.start()
+        self._game_controller_poll_thread.start()
         self._apply_language()
         self._apply_launchpad_output_state()
         self._update_timecode_status_label()
@@ -917,6 +975,7 @@ class MainWindow(
         except Exception:
             pass
         _stop_qthread_safely(getattr(self, "_midi_poll_thread", None))
+        _stop_qthread_safely(getattr(self, "_game_controller_poll_thread", None))
         _shutdown_executor_safely(getattr(self, "_launchpad_feedback_executor", None))
 
     def close(self) -> bool:

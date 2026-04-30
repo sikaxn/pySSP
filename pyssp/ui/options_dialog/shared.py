@@ -64,6 +64,13 @@ from pyssp.launchpad import (
     launchpad_layout_options,
     normalize_launchpad_layout,
 )
+from pyssp.game_controller import (
+    game_controller_binding_to_display,
+    game_controller_name_selector,
+    game_controller_selector_parts,
+    list_game_controller_devices,
+    normalize_game_controller_binding,
+)
 from pyssp.midi_control import (
     list_midi_input_devices,
     midi_binding_to_display,

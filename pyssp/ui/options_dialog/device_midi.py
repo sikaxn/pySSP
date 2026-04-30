@@ -5,6 +5,89 @@ from .widgets import *
 
 
 class DeviceMidiMixin:
+    def _refresh_game_controller_devices(self, force_refresh: bool = False) -> None:
+        if not hasattr(self, "game_controller_device_list"):
+            return
+        current_selected = list(self._checked_game_controller_device_selectors() or self._game_controller_device_selectors)
+        listed = list_game_controller_devices(force_refresh=force_refresh)
+        by_selector = {device.selector: device for device in listed}
+        ordered_selectors: List[str] = []
+        seen: set[str] = set()
+        for selector in current_selected:
+            token = str(selector or "").strip()
+            if token and token not in seen:
+                seen.add(token)
+                ordered_selectors.append(token)
+        for device in listed:
+            if device.selector not in seen:
+                seen.add(device.selector)
+                ordered_selectors.append(device.selector)
+        self.game_controller_device_list.blockSignals(True)
+        try:
+            self.game_controller_device_list.itemChanged.disconnect(self._on_game_controller_selection_changed)
+        except Exception:
+            pass
+        self.game_controller_device_list.clear()
+        active_selector = str(getattr(self, "_last_active_game_controller_selector", "") or "").strip()
+        for selector in ordered_selectors:
+            device = by_selector.get(selector)
+            if device is not None:
+                name = device.name
+            else:
+                name_part, ordinal = game_controller_selector_parts(selector)
+                suffix = f" #{ordinal + 1}" if ordinal >= 0 else ""
+                name = f"{name_part or selector}{suffix} (Disconnected)"
+            label = f"** {name}" if selector == active_selector else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, selector)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+            item.setCheckState(Qt.Checked if selector in current_selected else Qt.Unchecked)
+            if selector == active_selector:
+                item.setForeground(QColor("#1E8E3E"))
+            elif device is None:
+                item.setForeground(QColor("#7A7A7A"))
+            self.game_controller_device_list.addItem(item)
+        self.game_controller_device_list.itemChanged.connect(self._on_game_controller_selection_changed)
+        self.game_controller_device_list.blockSignals(False)
+        self._on_game_controller_selection_changed()
+
+    def _checked_game_controller_device_selectors(self) -> List[str]:
+        selected: List[str] = []
+        seen: set[str] = set()
+        if not hasattr(self, "game_controller_device_list"):
+            return selected
+        for i in range(self.game_controller_device_list.count()):
+            item = self.game_controller_device_list.item(i)
+            if item is None or item.checkState() != Qt.Checked:
+                continue
+            selector = str(item.data(Qt.UserRole) or "").strip()
+            if selector and selector not in seen:
+                seen.add(selector)
+                selected.append(selector)
+        return selected
+
+    def _on_game_controller_selection_changed(self, _item=None) -> None:
+        self._game_controller_device_selectors = self._checked_game_controller_device_selectors()
+
+    def _move_game_controller_item(self, delta: int) -> None:
+        if not hasattr(self, "game_controller_device_list"):
+            return
+        current_row = int(self.game_controller_device_list.currentRow())
+        if current_row < 0:
+            return
+        next_row = max(0, min(self.game_controller_device_list.count() - 1, current_row + int(delta)))
+        if next_row == current_row:
+            return
+        item = self.game_controller_device_list.takeItem(current_row)
+        self.game_controller_device_list.insertItem(next_row, item)
+        self.game_controller_device_list.setCurrentRow(next_row)
+        self._on_game_controller_selection_changed()
+
+    def _mark_game_controller_activity(self, selector: str) -> None:
+        self._last_active_game_controller_selector = str(selector or "").strip()
+        if hasattr(self, "game_controller_device_list"):
+            self._refresh_game_controller_devices(force_refresh=False)
+
     def _populate_launchpad_device_combo(self) -> None:
         if not hasattr(self, "launchpad_device_combo"):
             return

@@ -38,6 +38,17 @@ def _normalize_midi_quick_action_bindings(values: list[str]) -> list[str]:
     return output[:48]
 
 
+def default_game_controller_quick_action_bindings() -> list[str]:
+    return ["" for _ in range(48)]
+
+
+def _normalize_game_controller_quick_action_bindings(values: list[str]) -> list[str]:
+    output = [str(v or "").strip() for v in values[:48]]
+    if len(output) < 48:
+        output.extend(["" for _ in range(48 - len(output))])
+    return output[:48]
+
+
 def _encode_ascii_setting(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=True)
 
@@ -506,8 +517,10 @@ class AppSettings:
     lock_allow_quick_action_hotkeys: bool = False
     lock_allow_sound_button_hotkeys: bool = False
     lock_allow_midi_control: bool = True
+    lock_allow_game_controller_control: bool = True
     lock_auto_allow_quit: bool = True
     lock_auto_allow_midi_control: bool = True
+    lock_auto_allow_game_controller_control: bool = True
     lock_unlock_method: str = "click_3_random_points"
     lock_require_password: bool = False
     lock_password: str = ""
@@ -671,6 +684,14 @@ class AppSettings:
     sound_button_hotkey_go_to_playing: bool = False
     sound_button_hotkey_system_order: list[str] = field(default_factory=list)
     midi_input_device_ids: list[str] = field(default_factory=list)
+    game_controller_device_selectors: list[str] = field(default_factory=list)
+    game_controller_axis_threshold: float = 0.5
+    game_controller_hotkeys_json: str = ""
+    game_controller_quick_action_enabled: bool = False
+    game_controller_quick_action_bindings: list[str] = field(default_factory=default_game_controller_quick_action_bindings)
+    game_controller_sound_button_hotkey_enabled: bool = False
+    game_controller_sound_button_hotkey_priority: str = "system_first"
+    game_controller_sound_button_hotkey_go_to_playing: bool = False
     launchpad_enabled: bool = False
     launchpad_device_selector: str = ""
     launchpad_output_device_id: str = ""
@@ -880,8 +901,10 @@ def save_settings(settings: AppSettings) -> None:
         "lock_allow_quick_action_hotkeys": "1" if settings.lock_allow_quick_action_hotkeys else "0",
         "lock_allow_sound_button_hotkeys": "1" if settings.lock_allow_sound_button_hotkeys else "0",
         "lock_allow_midi_control": "1" if settings.lock_allow_midi_control else "0",
+        "lock_allow_game_controller_control": "1" if settings.lock_allow_game_controller_control else "0",
         "lock_auto_allow_quit": "1" if settings.lock_auto_allow_quit else "0",
         "lock_auto_allow_midi_control": "1" if settings.lock_auto_allow_midi_control else "0",
+        "lock_auto_allow_game_controller_control": "1" if settings.lock_auto_allow_game_controller_control else "0",
         "lock_unlock_method": settings.lock_unlock_method,
         "lock_require_password": "1" if settings.lock_require_password else "0",
         "lock_password": _encode_ascii_setting(settings.lock_password),
@@ -1047,6 +1070,18 @@ def save_settings(settings: AppSettings) -> None:
         "sound_button_hotkey_go_to_playing": "1" if settings.sound_button_hotkey_go_to_playing else "0",
         "sound_button_hotkey_system_order": "\t".join(settings.sound_button_hotkey_system_order),
         "midi_input_device_ids": "\t".join(settings.midi_input_device_ids),
+        "game_controller_device_selectors": "\t".join(settings.game_controller_device_selectors),
+        "game_controller_axis_threshold": str(max(0.05, min(0.99, float(settings.game_controller_axis_threshold)))),
+        "game_controller_hotkeys_json": str(settings.game_controller_hotkeys_json or ""),
+        "game_controller_quick_action_enabled": "1" if settings.game_controller_quick_action_enabled else "0",
+        "game_controller_quick_action_bindings": "\t".join(
+            _normalize_game_controller_quick_action_bindings(settings.game_controller_quick_action_bindings)
+        ),
+        "game_controller_sound_button_hotkey_enabled": "1" if settings.game_controller_sound_button_hotkey_enabled else "0",
+        "game_controller_sound_button_hotkey_priority": str(settings.game_controller_sound_button_hotkey_priority or "system_first"),
+        "game_controller_sound_button_hotkey_go_to_playing": (
+            "1" if settings.game_controller_sound_button_hotkey_go_to_playing else "0"
+        ),
         "launchpad_enabled": "1" if settings.launchpad_enabled else "0",
         "launchpad_device_selector": settings.launchpad_device_selector,
         "launchpad_output_device_id": settings.launchpad_output_device_id,
@@ -1373,6 +1408,15 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     else:
         quick_action_keys = default_quick_action_keys()
     midi_input_device_ids = [item.strip() for item in str(section.get("midi_input_device_ids", "")).split("\t") if item.strip()]
+    game_controller_device_selectors = [
+        item.strip() for item in str(section.get("game_controller_device_selectors", "")).split("\t") if item.strip()
+    ]
+    game_controller_axis_threshold = _clamp_float(
+        _get_float(section, "game_controller_axis_threshold", 0.5),
+        0.05,
+        0.99,
+    )
+    game_controller_hotkeys_json = str(section.get("game_controller_hotkeys_json", "")).strip()
     launchpad_enabled = _get_bool(section, "launchpad_enabled", False)
     launchpad_device_selector = str(section.get("launchpad_device_selector", "")).strip()
     launchpad_output_device_id = str(section.get("launchpad_output_device_id", "")).strip()
@@ -1407,6 +1451,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         midi_quick_action_bindings = _normalize_midi_quick_action_bindings(midi_quick_action_raw.split("\t"))
     else:
         midi_quick_action_bindings = default_midi_quick_action_bindings()
+    game_controller_quick_action_raw = str(section.get("game_controller_quick_action_bindings", "")).strip()
+    if game_controller_quick_action_raw:
+        game_controller_quick_action_bindings = _normalize_game_controller_quick_action_bindings(
+            game_controller_quick_action_raw.split("\t")
+        )
+    else:
+        game_controller_quick_action_bindings = default_game_controller_quick_action_bindings()
     midi_sound_button_hotkey_priority = str(section.get("midi_sound_button_hotkey_priority", "system_first")).strip().lower()
     if midi_sound_button_hotkey_priority not in {"system_first", "sound_button_first"}:
         midi_sound_button_hotkey_priority = "system_first"
@@ -1603,8 +1654,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         lock_allow_quick_action_hotkeys=_get_bool(section, "lock_allow_quick_action_hotkeys", False),
         lock_allow_sound_button_hotkeys=_get_bool(section, "lock_allow_sound_button_hotkeys", False),
         lock_allow_midi_control=_get_bool(section, "lock_allow_midi_control", True),
+        lock_allow_game_controller_control=_get_bool(section, "lock_allow_game_controller_control", True),
         lock_auto_allow_quit=_get_bool(section, "lock_auto_allow_quit", True),
         lock_auto_allow_midi_control=_get_bool(section, "lock_auto_allow_midi_control", True),
+        lock_auto_allow_game_controller_control=_get_bool(section, "lock_auto_allow_game_controller_control", True),
         lock_unlock_method=lock_unlock_method,
         lock_require_password=lock_require_password,
         lock_password=lock_password,
@@ -1771,6 +1824,24 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         sound_button_hotkey_go_to_playing=_get_bool(section, "sound_button_hotkey_go_to_playing", False),
         sound_button_hotkey_system_order=sound_button_hotkey_system_order,
         midi_input_device_ids=midi_input_device_ids,
+        game_controller_device_selectors=game_controller_device_selectors,
+        game_controller_axis_threshold=game_controller_axis_threshold,
+        game_controller_hotkeys_json=game_controller_hotkeys_json,
+        game_controller_quick_action_enabled=_get_bool(section, "game_controller_quick_action_enabled", False),
+        game_controller_quick_action_bindings=game_controller_quick_action_bindings,
+        game_controller_sound_button_hotkey_enabled=_get_bool(
+            section,
+            "game_controller_sound_button_hotkey_enabled",
+            False,
+        ),
+        game_controller_sound_button_hotkey_priority=str(
+            section.get("game_controller_sound_button_hotkey_priority", "system_first")
+        ).strip(),
+        game_controller_sound_button_hotkey_go_to_playing=_get_bool(
+            section,
+            "game_controller_sound_button_hotkey_go_to_playing",
+            False,
+        ),
         launchpad_enabled=launchpad_enabled,
         launchpad_device_selector=launchpad_device_selector,
         launchpad_output_device_id=launchpad_output_device_id,

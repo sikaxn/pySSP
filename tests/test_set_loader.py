@@ -245,3 +245,28 @@ def test_load_set_lyric_file_field(tmp_path):
     result = load_set_file(str(set_path))
     slot = result.pages["A"][0][0]
     assert slot.lyric_file == "C:\\Lyrics\\song1.lrc"
+
+
+def test_load_set_game_controller_hotkey_field(tmp_path):
+    set_path = tmp_path / "game_controller.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "pysspgamecontroller1=GC0:BTN3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.sound_game_controller_hotkey == "GC0:BTN3"

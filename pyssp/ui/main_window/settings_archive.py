@@ -1042,6 +1042,7 @@ class SettingsArchiveMixin:
                 )
                 self._runtime_hotkey_shortcuts.append(shortcut)
         self._apply_midi_bindings()
+        self._apply_game_controller_bindings()
         self._apply_launchpad_bindings()
         self._sync_lock_ui_state()
 
@@ -1080,6 +1081,10 @@ class SettingsArchiveMixin:
     def _normalized_midi_pair(self, action_key: str) -> tuple[str, str]:
         raw1, raw2 = self.midi_hotkeys.get(action_key, MIDI_HOTKEY_DEFAULTS.get(action_key, ("", "")))
         return normalize_midi_binding(raw1), normalize_midi_binding(raw2)
+
+    def _normalized_game_controller_pair(self, action_key: str) -> tuple[str, str]:
+        raw1, raw2 = self.game_controller_hotkeys.get(action_key, ("", ""))
+        return normalize_game_controller_binding(raw1), normalize_game_controller_binding(raw2)
 
     def _normalize_midi_input_selectors(self, selectors: List[str]) -> List[str]:
         wanted: List[str] = []
@@ -1136,6 +1141,56 @@ class SettingsArchiveMixin:
                 if self.midi_sound_button_hotkey_priority == "system_first" and token in registered_tokens:
                     continue
                 self._midi_action_handlers[token] = (lambda sk=slot_key: self._sound_button_midi_hotkey_trigger(sk))
+
+    def _apply_game_controller_bindings(self) -> None:
+        self._game_controller_action_handlers = {}
+        self._game_controller_last_trigger_t = {}
+        self._sync_game_controller_polling_state()
+        runtime_handlers = self._runtime_action_handlers()
+        ordered_system_keys: List[str] = [k for k in SYSTEM_HOTKEY_ORDER_DEFAULT if k in runtime_handlers]
+        sound_bindings = (
+            self._collect_sound_button_game_controller_bindings()
+            if self.game_controller_sound_button_hotkey_enabled
+            else {}
+        )
+        registered_tokens: set[str] = set()
+        for key in ordered_system_keys:
+            handler = runtime_handlers[key]
+            source_name = "lock_toggle" if key == "lock_toggle" else "game_controller"
+            b1, b2 = self._normalized_game_controller_pair(key)
+            for token in [b1, b2]:
+                if not token:
+                    continue
+                if (
+                    self.game_controller_sound_button_hotkey_enabled
+                    and self.game_controller_sound_button_hotkey_priority == "sound_button_first"
+                    and token in sound_bindings
+                ):
+                    continue
+                self._game_controller_action_handlers[token] = (
+                    lambda fn=handler, source=source_name: self._run_locked_input(source, fn)
+                )
+                registered_tokens.add(token)
+        if self.game_controller_quick_action_enabled:
+            for idx, raw in enumerate(self.game_controller_quick_action_bindings[:48]):
+                token = normalize_game_controller_binding(raw)
+                if not token:
+                    continue
+                if (
+                    self.game_controller_sound_button_hotkey_enabled
+                    and self.game_controller_sound_button_hotkey_priority == "sound_button_first"
+                    and token in sound_bindings
+                ):
+                    continue
+                self._game_controller_action_handlers[token] = (lambda slot=idx: self._quick_action_trigger(slot))
+                registered_tokens.add(token)
+        if self.game_controller_sound_button_hotkey_enabled:
+            for token, slot_key in sound_bindings.items():
+                if self.game_controller_sound_button_hotkey_priority == "system_first" and token in registered_tokens:
+                    continue
+                self._game_controller_action_handlers[token] = (
+                    lambda sk=slot_key: self._sound_button_game_controller_hotkey_trigger(sk)
+                )
 
     def _apply_launchpad_bindings(self) -> None:
         self._launchpad_action_handlers = {}
@@ -1201,8 +1256,10 @@ class SettingsArchiveMixin:
         self.settings.lock_allow_quick_action_hotkeys = bool(self.lock_allow_quick_action_hotkeys)
         self.settings.lock_allow_sound_button_hotkeys = bool(self.lock_allow_sound_button_hotkeys)
         self.settings.lock_allow_midi_control = bool(self.lock_allow_midi_control)
+        self.settings.lock_allow_game_controller_control = bool(self.lock_allow_game_controller_control)
         self.settings.lock_auto_allow_quit = bool(self.lock_auto_allow_quit)
         self.settings.lock_auto_allow_midi_control = bool(self.lock_auto_allow_midi_control)
+        self.settings.lock_auto_allow_game_controller_control = bool(self.lock_auto_allow_game_controller_control)
         self.settings.lock_unlock_method = self.lock_unlock_method
         self.settings.lock_require_password = bool(self.lock_require_password)
         self.settings.lock_password = self.lock_password
@@ -1373,6 +1430,18 @@ class SettingsArchiveMixin:
         self.settings.sound_button_hotkey_priority = self.sound_button_hotkey_priority
         self.settings.sound_button_hotkey_go_to_playing = bool(self.sound_button_hotkey_go_to_playing)
         self.settings.midi_input_device_ids = list(self.midi_input_device_ids)
+        self.settings.game_controller_device_selectors = list(self.game_controller_device_selectors)
+        self.settings.game_controller_axis_threshold = float(self.game_controller_axis_threshold)
+        self.settings.game_controller_hotkeys_json = json.dumps(self.game_controller_hotkeys)
+        self.settings.game_controller_quick_action_enabled = bool(self.game_controller_quick_action_enabled)
+        self.settings.game_controller_quick_action_bindings = list(self.game_controller_quick_action_bindings[:48])
+        self.settings.game_controller_sound_button_hotkey_enabled = bool(
+            self.game_controller_sound_button_hotkey_enabled
+        )
+        self.settings.game_controller_sound_button_hotkey_priority = self.game_controller_sound_button_hotkey_priority
+        self.settings.game_controller_sound_button_hotkey_go_to_playing = bool(
+            self.game_controller_sound_button_hotkey_go_to_playing
+        )
         self.settings.launchpad_enabled = bool(self.launchpad_enabled)
         self.settings.launchpad_device_selector = self.launchpad_device_selector
         self.settings.launchpad_output_device_id = self.launchpad_output_device_id

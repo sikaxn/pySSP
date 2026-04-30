@@ -12,8 +12,10 @@ class LockScreenPageMixin:
         lock_allow_quick_action_hotkeys: bool,
         lock_allow_sound_button_hotkeys: bool,
         lock_allow_midi_control: bool,
+        lock_allow_game_controller_control: bool,
         lock_auto_allow_quit: bool,
         lock_auto_allow_midi_control: bool,
+        lock_auto_allow_game_controller_control: bool,
         lock_unlock_method: str,
         lock_require_password: bool,
         lock_password: str,
@@ -59,6 +61,9 @@ class LockScreenPageMixin:
         self.lock_allow_midi_control_checkbox = QCheckBox("Allow MIDI control while locked")
         self.lock_allow_midi_control_checkbox.setChecked(lock_allow_midi_control)
         access_layout.addWidget(self.lock_allow_midi_control_checkbox)
+        self.lock_allow_game_controller_control_checkbox = QCheckBox("Allow game controller control while locked")
+        self.lock_allow_game_controller_control_checkbox.setChecked(lock_allow_game_controller_control)
+        access_layout.addWidget(self.lock_allow_game_controller_control_checkbox)
         locked_note = QLabel("These settings apply to the regular lock screen.")
         locked_note.setWordWrap(True)
         access_layout.addWidget(locked_note)
@@ -72,6 +77,11 @@ class LockScreenPageMixin:
         self.lock_auto_allow_midi_control_checkbox = QCheckBox("Allow MIDI control while auto locked")
         self.lock_auto_allow_midi_control_checkbox.setChecked(lock_auto_allow_midi_control)
         auto_access_layout.addWidget(self.lock_auto_allow_midi_control_checkbox)
+        self.lock_auto_allow_game_controller_control_checkbox = QCheckBox(
+            "Allow game controller control while auto locked"
+        )
+        self.lock_auto_allow_game_controller_control_checkbox.setChecked(lock_auto_allow_game_controller_control)
+        auto_access_layout.addWidget(self.lock_auto_allow_game_controller_control_checkbox)
         auto_note = QLabel("Keyboard shortcuts except Unlock are all disabled while automation lock is active.")
         auto_note.setWordWrap(True)
         auto_access_layout.addWidget(auto_note)

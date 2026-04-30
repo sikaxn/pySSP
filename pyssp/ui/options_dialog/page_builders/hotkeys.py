@@ -80,6 +80,22 @@ class HotkeysPageMixin:
         layout.addWidget(self._midi_warning_label)
         return page
 
+    def _build_game_controller_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        tabs = QTabWidget()
+        tabs.addTab(self._build_game_controller_settings_tab(), "Controller Setting")
+        tabs.addTab(self._build_game_controller_system_hotkey_tab(), "System Hotkey")
+        tabs.addTab(self._build_game_controller_quick_action_tab(), "Quick Action Key")
+        tabs.addTab(self._build_game_controller_sound_button_hotkey_tab(), "Sound Button Hot Key")
+        layout.addWidget(tabs, 1)
+        self._game_controller_warning_label = QLabel("")
+        self._game_controller_warning_label.setWordWrap(True)
+        self._game_controller_warning_label.setStyleSheet("color:#1E4FAF; font-weight:bold;")
+        self._game_controller_warning_label.setVisible(False)
+        layout.addWidget(self._game_controller_warning_label)
+        return page
+
     def _build_midi_settings_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -138,6 +154,45 @@ class HotkeysPageMixin:
         layout.addWidget(mtc_group)
         self._refresh_midi_input_devices()
         self._sync_launchpad_controls()
+        return page
+
+    def _build_game_controller_settings_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        hint = QLabel(
+            "Order the controllers you want pySSP to use. Learned bindings use that order, so Controller 0 is the first checked item."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.game_controller_device_list = QListWidget()
+        self.game_controller_device_list.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self.game_controller_device_list, 1)
+        button_row = QHBoxLayout()
+        self.game_controller_move_up_btn = QPushButton("Move Up")
+        self.game_controller_move_down_btn = QPushButton("Move Down")
+        self.game_controller_refresh_btn = QPushButton("Refresh")
+        self.game_controller_move_up_btn.clicked.connect(lambda _=False: self._move_game_controller_item(-1))
+        self.game_controller_move_down_btn.clicked.connect(lambda _=False: self._move_game_controller_item(1))
+        self.game_controller_refresh_btn.clicked.connect(lambda _=False: self._refresh_game_controller_devices(force_refresh=True))
+        button_row.addWidget(self.game_controller_move_up_btn)
+        button_row.addWidget(self.game_controller_move_down_btn)
+        button_row.addWidget(self.game_controller_refresh_btn)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+        threshold_form = QFormLayout()
+        self.game_controller_axis_threshold_spin = QDoubleSpinBox()
+        self.game_controller_axis_threshold_spin.setRange(0.05, 0.99)
+        self.game_controller_axis_threshold_spin.setSingleStep(0.05)
+        self.game_controller_axis_threshold_spin.setDecimals(2)
+        self.game_controller_axis_threshold_spin.setValue(float(self._game_controller_axis_threshold))
+        threshold_form.addRow("Axis trigger threshold:", self.game_controller_axis_threshold_spin)
+        layout.addLayout(threshold_form)
+        note = QLabel(
+            "When an axis goes past the threshold, pySSP treats it like a button press. Pressing a control highlights that controller in green."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self._refresh_game_controller_devices(force_refresh=False)
         return page
 
     def _build_launchpad_hotkey_tab(self) -> QWidget:
@@ -232,6 +287,19 @@ class HotkeysPageMixin:
         form = QFormLayout(container)
         for key, label in self._HOTKEY_ROWS:
             self._add_midi_row(form, key, label)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_game_controller_system_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for key, label in self._HOTKEY_ROWS:
+            self._add_game_controller_row(form, key, label)
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
@@ -394,6 +462,37 @@ class HotkeysPageMixin:
         layout.addWidget(scroll, 1)
         return page
 
+    def _build_game_controller_quick_action_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.game_controller_quick_action_enabled_checkbox = QCheckBox("Enable Game Controller Quick Action")
+        self.game_controller_quick_action_enabled_checkbox.setChecked(self._game_controller_quick_action_enabled)
+        layout.addWidget(self.game_controller_quick_action_enabled_checkbox)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        for i in range(48):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            edit = GameControllerCaptureEdit()
+            edit.setBinding(self._game_controller_quick_action_bindings[i])
+            learn_btn = QPushButton("Learn")
+            clear_btn = QPushButton("Clear")
+            learn_btn.setFixedWidth(62)
+            clear_btn.setFixedWidth(56)
+            learn_btn.clicked.connect(lambda _=False, e=edit: self._start_game_controller_learning(e))
+            clear_btn.clicked.connect(lambda _=False, e=edit: e.setBinding(""))
+            row_layout.addWidget(edit, 1)
+            row_layout.addWidget(learn_btn)
+            row_layout.addWidget(clear_btn)
+            self._game_controller_quick_action_edits.append(edit)
+            form.addRow(f"{tr('Button ')}{i + 1}:", row)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
     def _build_midi_sound_button_hotkey_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -419,6 +518,42 @@ class HotkeysPageMixin:
         self.midi_sound_button_go_to_playing_checkbox.setChecked(self._midi_sound_button_hotkey_go_to_playing)
         layout.addWidget(self.midi_sound_button_go_to_playing_checkbox)
         note = QLabel("Assign per-button MIDI hotkeys in Edit Sound Button.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _build_game_controller_sound_button_hotkey_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.game_controller_sound_button_hotkey_enabled_checkbox = QCheckBox(
+            "Enable Sound Button Game Controller Hot Key"
+        )
+        self.game_controller_sound_button_hotkey_enabled_checkbox.setChecked(
+            self._game_controller_sound_button_hotkey_enabled
+        )
+        layout.addWidget(self.game_controller_sound_button_hotkey_enabled_checkbox)
+        prio_group = QGroupBox("Priority")
+        prio_layout = QVBoxLayout(prio_group)
+        self.game_controller_sound_hotkey_priority_sound_first_radio = QRadioButton(
+            "Sound Button game controller hotkey has highest priority"
+        )
+        self.game_controller_sound_hotkey_priority_system_first_radio = QRadioButton(
+            "System game controller hotkey and Quick Action have highest priority"
+        )
+        if self._game_controller_sound_button_hotkey_priority == "sound_button_first":
+            self.game_controller_sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.game_controller_sound_hotkey_priority_system_first_radio.setChecked(True)
+        prio_layout.addWidget(self.game_controller_sound_hotkey_priority_sound_first_radio)
+        prio_layout.addWidget(self.game_controller_sound_hotkey_priority_system_first_radio)
+        layout.addWidget(prio_group)
+        self.game_controller_sound_button_go_to_playing_checkbox = QCheckBox("Go To Playing after trigger")
+        self.game_controller_sound_button_go_to_playing_checkbox.setChecked(
+            self._game_controller_sound_button_hotkey_go_to_playing
+        )
+        layout.addWidget(self.game_controller_sound_button_go_to_playing_checkbox)
+        note = QLabel("Assign per-button game controller hotkeys in Edit Sound Button.")
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch(1)
@@ -452,6 +587,34 @@ class HotkeysPageMixin:
         row_layout.addWidget(learn2)
         row_layout.addWidget(clear2)
         self._midi_hotkey_edits[key] = (edit1, edit2)
+        form.addRow(f"{tr(label)}:", row)
+
+    def _add_game_controller_row(self, form: QFormLayout, key: str, label: str) -> None:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        edit1 = GameControllerCaptureEdit()
+        edit2 = GameControllerCaptureEdit()
+        v1, v2 = self._game_controller_hotkeys.get(key, ("", ""))
+        edit1.setBinding(v1)
+        edit2.setBinding(v2)
+        learn1 = QPushButton("Learn")
+        clear1 = QPushButton("Clear")
+        learn2 = QPushButton("Learn")
+        clear2 = QPushButton("Clear")
+        for btn in (learn1, clear1, learn2, clear2):
+            btn.setFixedWidth(56 if btn.text() == "Clear" else 62)
+        learn1.clicked.connect(lambda _=False, e=edit1: self._start_game_controller_learning(e))
+        clear1.clicked.connect(lambda _=False, e=edit1: e.setBinding(""))
+        learn2.clicked.connect(lambda _=False, e=edit2: self._start_game_controller_learning(e))
+        clear2.clicked.connect(lambda _=False, e=edit2: e.setBinding(""))
+        row_layout.addWidget(edit1, 1)
+        row_layout.addWidget(learn1)
+        row_layout.addWidget(clear1)
+        row_layout.addWidget(edit2, 1)
+        row_layout.addWidget(learn2)
+        row_layout.addWidget(clear2)
+        self._game_controller_hotkey_edits[key] = (edit1, edit2)
         form.addRow(f"{tr(label)}:", row)
 
     def _build_system_hotkey_tab(self) -> QWidget:

@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from pyssp.game_controller import normalize_game_controller_binding
 from pyssp.midi_control import normalize_midi_binding
 
 GROUPS = list("ABCDEFGHIJ")
@@ -36,6 +37,7 @@ class SetSlotData:
     timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""
     sound_midi_hotkey: str = ""
+    sound_game_controller_hotkey: str = ""
 
 
 @dataclass
@@ -104,6 +106,9 @@ def load_set_file(file_path: str) -> SetLoadResult:
             migrated_legacy_cues = migrated_legacy_cues or migrated_slot_cue
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
+            sound_game_controller_hotkey = _parse_sound_game_controller_hotkey(
+                section.get(f"pysspgamecontroller{i}", "").strip()
+            )
             lyric_file = _normalize_set_path_string(section.get(f"pyssplyric{i}", "").strip())
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
@@ -146,6 +151,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=sound_midi_hotkey,
+                sound_game_controller_hotkey=sound_game_controller_hotkey,
             )
             loaded_slots += 1
 
@@ -382,6 +388,10 @@ def _parse_sound_hotkey(value: str) -> str:
 
 def _parse_sound_midi_hotkey(value: str) -> str:
     return normalize_midi_binding(value)
+
+
+def _parse_sound_game_controller_hotkey(value: str) -> str:
+    return normalize_game_controller_binding(value)
 
 
 def parse_timecode_offset_ms(value: str) -> Optional[int]:

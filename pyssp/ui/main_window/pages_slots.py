@@ -268,6 +268,7 @@ class PagesSlotsMixin:
                     timecode_timeline_mode=slot.timecode_timeline_mode,
                     sound_hotkey=slot.sound_hotkey,
                     sound_midi_hotkey=slot.sound_midi_hotkey,
+                    sound_game_controller_hotkey=slot.sound_game_controller_hotkey,
                 )
                 for slot in source_page
             ],
@@ -303,6 +304,7 @@ class PagesSlotsMixin:
                 timecode_timeline_mode=slot.timecode_timeline_mode,
                 sound_hotkey=slot.sound_hotkey,
                 sound_midi_hotkey=slot.sound_midi_hotkey,
+                sound_game_controller_hotkey=slot.sound_game_controller_hotkey,
             )
             for slot in self._copied_page_buffer["slots"]
         ]
@@ -422,6 +424,9 @@ class PagesSlotsMixin:
             midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
             if midi_hotkey_code:
                 lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+            game_controller_hotkey_code = self._encode_sound_game_controller_hotkey(slot.sound_game_controller_hotkey)
+            if game_controller_hotkey_code:
+                lines.append(f"pysspgamecontroller{slot_index}={game_controller_hotkey_code}")
             lyric_file = clean_set_value(slot.lyric_file)
             if lyric_file:
                 lines.append(f"pyssplyric{slot_index}={lyric_file}")
@@ -533,6 +538,9 @@ class PagesSlotsMixin:
                 timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip()),
+                sound_game_controller_hotkey=self._parse_sound_game_controller_hotkey(
+                    section.get(f"pysspgamecontroller{i}", "").strip()
+                ),
             )
         return {
             "page_name": page_name,
@@ -1335,6 +1343,7 @@ class PagesSlotsMixin:
             timecode_timeline_mode=slot.timecode_timeline_mode,
             sound_hotkey=slot.sound_hotkey,
             sound_midi_hotkey=slot.sound_midi_hotkey,
+            sound_game_controller_hotkey=slot.sound_game_controller_hotkey,
         )
 
     def _edit_sound_button(self, slot_index: int) -> None:
@@ -1353,6 +1362,7 @@ class PagesSlotsMixin:
         volume_override_pct = slot.volume_override_pct
         sound_hotkey = slot.sound_hotkey
         sound_midi_hotkey = slot.sound_midi_hotkey
+        sound_game_controller_hotkey = slot.sound_game_controller_hotkey
         while True:
             dialog = EditSoundButtonDialog(
                 file_path=file_path,
@@ -1363,8 +1373,10 @@ class PagesSlotsMixin:
                 volume_override_pct=volume_override_pct,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=sound_midi_hotkey,
+                sound_game_controller_hotkey=sound_game_controller_hotkey,
                 available_midi_input_devices=list_midi_input_devices(),
                 selected_midi_input_device_ids=self.midi_input_device_ids,
+                selected_game_controller_device_selectors=self.game_controller_device_selectors,
                 start_dir=start_dir,
                 language=self.ui_language,
                 parent=self,
@@ -1383,6 +1395,7 @@ class PagesSlotsMixin:
                 volume_override_pct,
                 sound_hotkey,
                 sound_midi_hotkey,
+                sound_game_controller_hotkey,
             ) = dialog.values()
             if result_code == EditSoundButtonDialog.REGENERATE_RESULT:
                 generated_path = self._generate_vocal_removed_file_for_slot(file_path, vocal_removed_file)
@@ -1426,6 +1439,20 @@ class PagesSlotsMixin:
                 f"MIDI key {sound_midi_hotkey} is already assigned to {self._format_button_key(midi_conflict)}.",
             )
             return
+        game_controller_conflict = self._find_sound_game_controller_hotkey_conflict(
+            sound_game_controller_hotkey,
+            (self._view_group_key(), self.current_page, slot_index),
+        )
+        if game_controller_conflict is not None:
+            QMessageBox.warning(
+                self,
+                "Sound Button Game Controller Hot Key",
+                (
+                    f"Game controller key {sound_game_controller_hotkey} is already assigned to "
+                    f"{self._format_button_key(game_controller_conflict)}."
+                ),
+            )
+            return
         previous_file_path = slot.file_path
         self.settings.last_sound_dir = os.path.dirname(file_path)
         self._save_settings()
@@ -1441,6 +1468,7 @@ class PagesSlotsMixin:
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        slot.sound_game_controller_hotkey = self._parse_sound_game_controller_hotkey(sound_game_controller_hotkey)
         if previous_file_path != file_path:
             slot.cue_start_ms = None
             slot.cue_end_ms = None
@@ -1756,6 +1784,31 @@ class PagesSlotsMixin:
             if not slot.assigned or slot.marker:
                 continue
             if _matches(self._parse_sound_midi_hotkey(slot.sound_midi_hotkey)):
+                return key
+        return None
+
+    def _find_sound_game_controller_hotkey_conflict(
+        self, sound_hotkey: str, ignore_slot_key: Optional[Tuple[str, int, int]] = None
+    ) -> Optional[Tuple[str, int, int]]:
+        token = self._parse_sound_game_controller_hotkey(sound_hotkey)
+        if not token:
+            return None
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if ignore_slot_key == (group, page_index, slot_index):
+                        continue
+                    if not slot.assigned or slot.marker:
+                        continue
+                    if self._parse_sound_game_controller_hotkey(slot.sound_game_controller_hotkey) == token:
+                        return (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            key = ("Q", 0, slot_index)
+            if ignore_slot_key == key:
+                continue
+            if not slot.assigned or slot.marker:
+                continue
+            if self._parse_sound_game_controller_hotkey(slot.sound_game_controller_hotkey) == token:
                 return key
         return None
 
@@ -2190,6 +2243,12 @@ class PagesSlotsMixin:
 
     def _encode_sound_midi_hotkey(self, value: str) -> str:
         return self._parse_sound_midi_hotkey(value)
+
+    def _parse_sound_game_controller_hotkey(self, value: str) -> str:
+        return normalize_game_controller_binding(value)
+
+    def _encode_sound_game_controller_hotkey(self, value: str) -> str:
+        return self._parse_sound_game_controller_hotkey(value)
 
     def _parse_cue_points(self, start_value: str, end_value: str, duration_ms: int) -> tuple[Optional[int], Optional[int]]:
         fallback_units_per_ms = 176.4

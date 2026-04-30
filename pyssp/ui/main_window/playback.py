@@ -1518,6 +1518,7 @@ class PlaybackMixin:
                     timecode_timeline_mode=slot.timecode_timeline_mode,
                     sound_hotkey=slot.sound_hotkey,
                     sound_midi_hotkey=slot.sound_midi_hotkey,
+                    sound_game_controller_hotkey=slot.sound_game_controller_hotkey,
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)

@@ -89,6 +89,9 @@ class StateLogicMixin:
             if source_title == "midi control":
                 self._restore_midi_defaults()
                 return
+            if source_title == "game controller":
+                self._restore_game_controller_defaults()
+                return
             if source_title == "colour":
                 self._restore_color_defaults()
                 return
@@ -169,8 +172,14 @@ class StateLogicMixin:
         self.lock_allow_quick_action_hotkeys_checkbox.setChecked(bool(d.get("lock_allow_quick_action_hotkeys", False)))
         self.lock_allow_sound_button_hotkeys_checkbox.setChecked(bool(d.get("lock_allow_sound_button_hotkeys", False)))
         self.lock_allow_midi_control_checkbox.setChecked(bool(d.get("lock_allow_midi_control", False)))
+        self.lock_allow_game_controller_control_checkbox.setChecked(
+            bool(d.get("lock_allow_game_controller_control", False))
+        )
         self.lock_auto_allow_quit_checkbox.setChecked(bool(d.get("lock_auto_allow_quit", False)))
         self.lock_auto_allow_midi_control_checkbox.setChecked(bool(d.get("lock_auto_allow_midi_control", False)))
+        self.lock_auto_allow_game_controller_control_checkbox.setChecked(
+            bool(d.get("lock_auto_allow_game_controller_control", False))
+        )
         method = str(d.get("lock_unlock_method", "click_3_random_points")).strip().lower()
         if method == "click_one_button":
             self.lock_method_fixed_button_radio.setChecked(True)
@@ -394,6 +403,34 @@ class StateLogicMixin:
         )
         self._midi_rotary_volume_relative_mode = self._normalize_midi_relative_mode(
             str(d.get("midi_rotary_volume_relative_mode", "auto"))
+        )
+
+    def _restore_game_controller_defaults(self) -> None:
+        d = self._DEFAULTS
+        self._game_controller_device_selectors = list(d.get("game_controller_device_selectors", []))
+        self._last_active_game_controller_selector = ""
+        self._refresh_game_controller_devices(force_refresh=False)
+        self.game_controller_axis_threshold_spin.setValue(float(d.get("game_controller_axis_threshold", 0.5)))
+        defaults = dict(d.get("game_controller_hotkeys", {}))
+        for key, (edit1, edit2) in self._game_controller_hotkey_edits.items():
+            v1, v2 = defaults.get(key, ("", ""))
+            edit1.setBinding(v1)
+            edit2.setBinding(v2)
+        self.game_controller_quick_action_enabled_checkbox.setChecked(
+            bool(d.get("game_controller_quick_action_enabled", False))
+        )
+        quick_defaults = list(d.get("game_controller_quick_action_bindings", [""] * 48))
+        for i, edit in enumerate(self._game_controller_quick_action_edits):
+            edit.setBinding(quick_defaults[i] if i < len(quick_defaults) else "")
+        self.game_controller_sound_button_hotkey_enabled_checkbox.setChecked(
+            bool(d.get("game_controller_sound_button_hotkey_enabled", False))
+        )
+        if str(d.get("game_controller_sound_button_hotkey_priority", "system_first")) == "sound_button_first":
+            self.game_controller_sound_hotkey_priority_sound_first_radio.setChecked(True)
+        else:
+            self.game_controller_sound_hotkey_priority_system_first_radio.setChecked(True)
+        self.game_controller_sound_button_go_to_playing_checkbox.setChecked(
+            bool(d.get("game_controller_sound_button_hotkey_go_to_playing", False))
         )
         self._set_combo_data_or_default(self.midi_rotary_volume_mode_combo, str(d.get("midi_rotary_volume_mode", "relative")), "relative")
         self.midi_rotary_volume_step_spin.setValue(int(d.get("midi_rotary_volume_step", 2)))

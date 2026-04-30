@@ -69,8 +69,10 @@ def test_lock_screen_settings_default_false_and_load_true():
     assert settings.lock_allow_quick_action_hotkeys is False
     assert settings.lock_allow_sound_button_hotkeys is False
     assert settings.lock_allow_midi_control is True
+    assert settings.lock_allow_game_controller_control is True
     assert settings.lock_auto_allow_quit is True
     assert settings.lock_auto_allow_midi_control is True
+    assert settings.lock_auto_allow_game_controller_control is True
     assert settings.lock_unlock_method == "click_3_random_points"
     assert settings.lock_require_password is False
     assert settings.lock_password == ""
@@ -85,8 +87,10 @@ def test_lock_screen_settings_default_false_and_load_true():
         "lock_allow_quick_action_hotkeys": "1",
         "lock_allow_sound_button_hotkeys": "1",
         "lock_allow_midi_control": "1",
+        "lock_allow_game_controller_control": "0",
         "lock_auto_allow_quit": "0",
         "lock_auto_allow_midi_control": "0",
+        "lock_auto_allow_game_controller_control": "0",
         "lock_unlock_method": "slide_to_unlock",
         "lock_require_password": "1",
         "lock_password": "secret",
@@ -99,8 +103,10 @@ def test_lock_screen_settings_default_false_and_load_true():
     assert settings.lock_allow_quick_action_hotkeys is True
     assert settings.lock_allow_sound_button_hotkeys is True
     assert settings.lock_allow_midi_control is True
+    assert settings.lock_allow_game_controller_control is False
     assert settings.lock_auto_allow_quit is False
     assert settings.lock_auto_allow_midi_control is False
+    assert settings.lock_auto_allow_game_controller_control is False
     assert settings.lock_unlock_method == "slide_to_unlock"
     assert settings.lock_require_password is True
     assert settings.lock_password == "secret"
@@ -123,3 +129,26 @@ def test_ascii_password_encoding_preserves_space_only_password():
     encoded = _encode_ascii_setting("    ")
     assert encoded.startswith('"')
     assert _decode_ascii_setting(encoded) == "    "
+
+
+def test_game_controller_settings_load_from_parser():
+    parser = configparser.ConfigParser()
+    parser["main"] = {
+        "game_controller_device_selectors": "name::Controller A::0\tname::Controller B::0",
+        "game_controller_axis_threshold": "0.65",
+        "game_controller_hotkeys_json": '{"stop_playback":["GC0:BTN3",""]}',
+        "game_controller_quick_action_enabled": "1",
+        "game_controller_quick_action_bindings": "GC0:BTN1\tGC0:BTN2",
+        "game_controller_sound_button_hotkey_enabled": "1",
+        "game_controller_sound_button_hotkey_priority": "sound_button_first",
+        "game_controller_sound_button_hotkey_go_to_playing": "1",
+    }
+    settings = _from_parser(parser)
+    assert settings.game_controller_device_selectors == ["name::Controller A::0", "name::Controller B::0"]
+    assert settings.game_controller_axis_threshold == 0.65
+    assert settings.game_controller_hotkeys_json == '{"stop_playback":["GC0:BTN3",""]}'
+    assert settings.game_controller_quick_action_enabled is True
+    assert settings.game_controller_quick_action_bindings[:2] == ["GC0:BTN1", "GC0:BTN2"]
+    assert settings.game_controller_sound_button_hotkey_enabled is True
+    assert settings.game_controller_sound_button_hotkey_priority == "sound_button_first"
+    assert settings.game_controller_sound_button_hotkey_go_to_playing is True

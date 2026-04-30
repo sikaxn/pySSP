@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyssp.i18n import localize_widget_tree, tr
+from pyssp.game_controller import game_controller_binding_to_display, normalize_game_controller_binding
 from pyssp.midi_control import (
     midi_binding_to_display,
     midi_input_name_selector,
@@ -81,8 +82,10 @@ class EditSoundButtonDialog(QDialog):
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         sound_midi_hotkey: str = "",
+        sound_game_controller_hotkey: str = "",
         available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
         selected_midi_input_device_ids: Optional[list[str]] = None,
+        selected_game_controller_device_selectors: Optional[list[str]] = None,
         start_dir: str = "",
         language: str = "en",
         parent: Optional[QWidget] = None,
@@ -178,6 +181,26 @@ class EditSoundButtonDialog(QDialog):
                 allowed.add(midi_input_name_selector(available_by_id[value]))
         self._allowed_midi_selectors = allowed
 
+        gc_hk_row = QWidget()
+        gc_hk_layout = QHBoxLayout(gc_hk_row)
+        gc_hk_layout.setContentsMargins(0, 0, 0, 0)
+        self.sound_game_controller_hotkey_edit = QLineEdit()
+        self.sound_game_controller_hotkey_edit.setReadOnly(True)
+        self._set_game_controller_binding(sound_game_controller_hotkey)
+        learn_gc_btn = QPushButton(tr("Learn"))
+        clear_gc_btn = QPushButton(tr("Clear"))
+        learn_gc_btn.clicked.connect(self._start_game_controller_learn)
+        clear_gc_btn.clicked.connect(lambda _=False: self._set_game_controller_binding(""))
+        gc_hk_layout.addWidget(self.sound_game_controller_hotkey_edit, 1)
+        gc_hk_layout.addWidget(learn_gc_btn)
+        gc_hk_layout.addWidget(clear_gc_btn)
+        form.addRow(tr("Sound Button Game Controller Hot Key"), gc_hk_row)
+        self._game_controller_binding = normalize_game_controller_binding(sound_game_controller_hotkey)
+        self._game_controller_learning = False
+        self._selected_game_controller_device_selectors = [
+            str(v).strip() for v in list(selected_game_controller_device_selectors or []) if str(v).strip()
+        ]
+
         vol_row = QWidget()
         vol_layout = QVBoxLayout(vol_row)
         vol_layout.setContentsMargins(0, 0, 0, 0)
@@ -228,7 +251,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, str, str, Optional[int], str, str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -241,6 +264,7 @@ class EditSoundButtonDialog(QDialog):
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
             self._midi_binding,
+            self._game_controller_binding,
         )
 
     def _browse_lyric_file(self) -> None:
@@ -285,6 +309,17 @@ class EditSoundButtonDialog(QDialog):
         self._midi_learning = True
         self.sound_midi_hotkey_edit.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
 
+    def _set_game_controller_binding(self, token: str) -> None:
+        normalized = normalize_game_controller_binding(token)
+        self._game_controller_binding = normalized
+        self.sound_game_controller_hotkey_edit.setText(
+            game_controller_binding_to_display(normalized) if normalized else ""
+        )
+
+    def _start_game_controller_learn(self) -> None:
+        self._game_controller_learning = True
+        self.sound_game_controller_hotkey_edit.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+
     def _on_midi_binding(self, token: str, source_selector: str = "") -> None:
         if not self._midi_learning:
             return
@@ -312,4 +347,21 @@ class EditSoundButtonDialog(QDialog):
             if source_selector not in self._allowed_midi_selectors:
                 return False
         self._on_midi_binding(token, source_selector)
+        return True
+
+    def handle_game_controller_event(
+        self,
+        token: str,
+        controller_index: int = 0,
+        source_selector: str = "",
+    ) -> bool:
+        _ = controller_index
+        if not self._game_controller_learning:
+            return False
+        if self._selected_game_controller_device_selectors:
+            if not source_selector or source_selector not in self._selected_game_controller_device_selectors:
+                return False
+        self._set_game_controller_binding(token)
+        self._game_controller_learning = False
+        self.sound_game_controller_hotkey_edit.setStyleSheet("")
         return True

@@ -132,8 +132,10 @@ class OptionsDialog(
         "lock_allow_quick_action_hotkeys": False,
         "lock_allow_sound_button_hotkeys": False,
         "lock_allow_midi_control": True,
+        "lock_allow_game_controller_control": True,
         "lock_auto_allow_quit": True,
         "lock_auto_allow_midi_control": True,
+        "lock_auto_allow_game_controller_control": True,
         "lock_unlock_method": "click_3_random_points",
         "lock_require_password": False,
         "lock_password": "",
@@ -243,6 +245,14 @@ class OptionsDialog(
         "sound_button_hotkey_priority": "system_first",
         "sound_button_hotkey_go_to_playing": False,
         "midi_input_device_ids": [],
+        "game_controller_device_selectors": [],
+        "game_controller_axis_threshold": 0.5,
+        "game_controller_hotkeys": {},
+        "game_controller_quick_action_enabled": False,
+        "game_controller_quick_action_bindings": ["" for _ in range(48)],
+        "game_controller_sound_button_hotkey_enabled": False,
+        "game_controller_sound_button_hotkey_priority": "system_first",
+        "game_controller_sound_button_hotkey_go_to_playing": False,
         "launchpad_enabled": False,
         "launchpad_device_selector": "",
         "launchpad_output_device_id": "",
@@ -519,6 +529,16 @@ class OptionsDialog(
         lock_require_password: bool,
         lock_password: str,
         lock_restart_state: str,
+        game_controller_device_selectors: Optional[List[str]] = None,
+        game_controller_axis_threshold: float = 0.5,
+        game_controller_hotkeys: Optional[Dict[str, tuple[str, str]]] = None,
+        game_controller_quick_action_enabled: bool = False,
+        game_controller_quick_action_bindings: Optional[List[str]] = None,
+        game_controller_sound_button_hotkey_enabled: bool = False,
+        game_controller_sound_button_hotkey_priority: str = "system_first",
+        game_controller_sound_button_hotkey_go_to_playing: bool = False,
+        lock_allow_game_controller_control: bool = True,
+        lock_auto_allow_game_controller_control: bool = True,
         preload_use_ffmpeg: bool = True,
         waveform_cache_limit_mb: int = 1024,
         waveform_cache_clear_on_launch: bool = True,
@@ -549,6 +569,10 @@ class OptionsDialog(
         )
         self._sound_button_hotkey_go_to_playing = bool(sound_button_hotkey_go_to_playing)
         self._midi_input_device_ids = [str(v).strip() for v in midi_input_device_ids if str(v).strip()]
+        self._game_controller_device_selectors = [
+            str(v).strip() for v in list(game_controller_device_selectors or []) if str(v).strip()
+        ]
+        self._game_controller_axis_threshold = max(0.05, min(0.99, float(game_controller_axis_threshold)))
         self._launchpad_enabled = bool(launchpad_enabled)
         self._launchpad_device_selector = str(launchpad_device_selector or "").strip()
         self._launchpad_output_device_id = str(launchpad_output_device_id or "").strip()
@@ -604,6 +628,40 @@ class OptionsDialog(
         self._midi_warning_label: Optional[QLabel] = None
         self._midi_has_conflict = False
         self._learning_midi_target: Optional[MidiCaptureEdit] = None
+        raw_game_hotkeys = dict(game_controller_hotkeys or {})
+        self._game_controller_hotkeys: Dict[str, tuple[str, str]] = {}
+        for key, _label in self._HOTKEY_ROWS:
+            raw_pair = raw_game_hotkeys.get(key, ("", ""))
+            v1 = str(raw_pair[0]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 1 else ""
+            v2 = str(raw_pair[1]).strip() if isinstance(raw_pair, (list, tuple)) and len(raw_pair) >= 2 else ""
+            self._game_controller_hotkeys[key] = (
+                normalize_game_controller_binding(v1),
+                normalize_game_controller_binding(v2),
+            )
+        self._game_controller_hotkey_edits: Dict[
+            str, tuple[GameControllerCaptureEdit, GameControllerCaptureEdit]
+        ] = {}
+        self._game_controller_quick_action_enabled = bool(game_controller_quick_action_enabled)
+        self._game_controller_quick_action_edits: List[GameControllerCaptureEdit] = []
+        self._game_controller_quick_action_bindings = [
+            normalize_game_controller_binding(v) for v in list(game_controller_quick_action_bindings or [])[:48]
+        ]
+        if len(self._game_controller_quick_action_bindings) < 48:
+            self._game_controller_quick_action_bindings.extend(
+                ["" for _ in range(48 - len(self._game_controller_quick_action_bindings))]
+            )
+        self._game_controller_sound_button_hotkey_enabled = bool(game_controller_sound_button_hotkey_enabled)
+        self._game_controller_sound_button_hotkey_priority = (
+            str(game_controller_sound_button_hotkey_priority).strip().lower()
+            if str(game_controller_sound_button_hotkey_priority).strip().lower() in {"system_first", "sound_button_first"}
+            else "system_first"
+        )
+        self._game_controller_sound_button_hotkey_go_to_playing = bool(
+            game_controller_sound_button_hotkey_go_to_playing
+        )
+        self._learning_game_controller_target: Optional[GameControllerCaptureEdit] = None
+        self._game_controller_warning_label: Optional[QLabel] = None
+        self._last_active_game_controller_selector = ""
         self._ui_language = normalize_language(ui_language)
         self._lock_existing_password = str(lock_password or "")
         self._stage_display_layout = self._normalize_stage_display_layout(stage_display_layout)
@@ -757,8 +815,10 @@ class OptionsDialog(
                 lock_allow_quick_action_hotkeys=lock_allow_quick_action_hotkeys,
                 lock_allow_sound_button_hotkeys=lock_allow_sound_button_hotkeys,
                 lock_allow_midi_control=lock_allow_midi_control,
+                lock_allow_game_controller_control=lock_allow_game_controller_control,
                 lock_auto_allow_quit=lock_auto_allow_quit,
                 lock_auto_allow_midi_control=lock_auto_allow_midi_control,
+                lock_auto_allow_game_controller_control=lock_auto_allow_game_controller_control,
                 lock_unlock_method=lock_unlock_method,
                 lock_require_password=lock_require_password,
                 lock_password=lock_password,
@@ -774,6 +834,11 @@ class OptionsDialog(
             "Midi Control",
             self._mono_icon("piano"),
             self._build_midi_control_page(),
+        )
+        self._add_page(
+            "Game Controller",
+            self._mono_icon("controller"),
+            self._build_game_controller_page(),
         )
         self._add_page(
             "Colour",
@@ -948,6 +1013,33 @@ class OptionsDialog(
             bar = scroll.horizontalScrollBar()
             visible = bool(bar is not None and bar.maximum() > 0)
         label.setVisible(visible)
+
+    def _start_game_controller_learning(self, target: GameControllerCaptureEdit) -> None:
+        if self._learning_game_controller_target is not None and self._learning_game_controller_target is not target:
+            self._learning_game_controller_target.setStyleSheet("")
+        self._learning_game_controller_target = target
+        target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+        if self._game_controller_warning_label is not None:
+            self._game_controller_warning_label.setText(
+                "Game controller learn is active. Press a button or move an axis past the threshold."
+            )
+            self._game_controller_warning_label.setVisible(True)
+
+    def handle_game_controller_event(self, token: str, controller_index: int = 0, source_selector: str = "") -> bool:
+        if source_selector:
+            self._mark_game_controller_activity(source_selector)
+        if self._learning_game_controller_target is None:
+            return False
+        normalized = normalize_game_controller_binding(token)
+        if not normalized:
+            return False
+        self._learning_game_controller_target.setBinding(normalized)
+        self._learning_game_controller_target.setStyleSheet("")
+        self._learning_game_controller_target = None
+        if self._game_controller_warning_label is not None:
+            self._game_controller_warning_label.setVisible(False)
+            self._game_controller_warning_label.setText("")
+        return True
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

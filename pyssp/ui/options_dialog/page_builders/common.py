@@ -147,6 +147,12 @@ class CommonPageBuilderMixin:
             p.drawRect(QRectF(5, 4, 2, 7))
             p.drawRect(QRectF(9, 4, 2, 7))
             p.drawRect(QRectF(13, 4, 2, 7))
+        elif kind == "controller":
+            p.drawRoundedRect(QRectF(3, 7, 16, 8), 4, 4)
+            p.drawLine(7, 9, 7, 13)
+            p.drawLine(5, 11, 9, 11)
+            p.drawEllipse(QRectF(13, 9, 2, 2))
+            p.drawEllipse(QRectF(15, 11, 2, 2))
         elif kind == "lock":
             p.drawRoundedRect(QRectF(6, 10, 10, 8), 1.5, 1.5)
             p.drawArc(QRectF(7, 4, 8, 9), 0, 180 * 16)

@@ -1260,6 +1260,11 @@ class ActionsInputMixin:
                         midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
                         if midi_hotkey_code:
                             lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+                        game_controller_hotkey_code = self._encode_sound_game_controller_hotkey(
+                            slot.sound_game_controller_hotkey
+                        )
+                        if game_controller_hotkey_code:
+                            lines.append(f"pysspgamecontroller{slot_index}={game_controller_hotkey_code}")
                         lyric_file = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                         if lyric_file:
                             lines.append(f"pyssplyric{slot_index}={lyric_file}")
@@ -1340,6 +1345,7 @@ class ActionsInputMixin:
                         timecode_timeline_mode=src.timecode_timeline_mode,
                         sound_hotkey=src.sound_hotkey,
                         sound_midi_hotkey=src.sound_midi_hotkey,
+                        sound_game_controller_hotkey=src.sound_game_controller_hotkey,
                     )
 
         self.current_set_path = file_path
@@ -1427,8 +1433,10 @@ class ActionsInputMixin:
             lock_allow_quick_action_hotkeys=self.lock_allow_quick_action_hotkeys,
             lock_allow_sound_button_hotkeys=self.lock_allow_sound_button_hotkeys,
             lock_allow_midi_control=self.lock_allow_midi_control,
+            lock_allow_game_controller_control=self.lock_allow_game_controller_control,
             lock_auto_allow_quit=self.lock_auto_allow_quit,
             lock_auto_allow_midi_control=self.lock_auto_allow_midi_control,
+            lock_auto_allow_game_controller_control=self.lock_auto_allow_game_controller_control,
             fade_in_sec=self.fade_in_sec,
             cross_fade_sec=self.cross_fade_sec,
             fade_out_sec=self.fade_out_sec,
@@ -1513,6 +1521,8 @@ class ActionsInputMixin:
             sound_button_hotkey_priority=self.sound_button_hotkey_priority,
             sound_button_hotkey_go_to_playing=self.sound_button_hotkey_go_to_playing,
             midi_input_device_ids=self.midi_input_device_ids,
+            game_controller_device_selectors=self.game_controller_device_selectors,
+            game_controller_axis_threshold=self.game_controller_axis_threshold,
             launchpad_enabled=self.launchpad_enabled,
             launchpad_device_selector=self.launchpad_device_selector,
             launchpad_output_device_id=self.launchpad_output_device_id,
@@ -1547,6 +1557,12 @@ class ActionsInputMixin:
             midi_rotary_volume_mode=self.midi_rotary_volume_mode,
             midi_rotary_volume_step=self.midi_rotary_volume_step,
             midi_rotary_jog_step_ms=self.midi_rotary_jog_step_ms,
+            game_controller_hotkeys=self.game_controller_hotkeys,
+            game_controller_quick_action_enabled=self.game_controller_quick_action_enabled,
+            game_controller_quick_action_bindings=self.game_controller_quick_action_bindings,
+            game_controller_sound_button_hotkey_enabled=self.game_controller_sound_button_hotkey_enabled,
+            game_controller_sound_button_hotkey_priority=self.game_controller_sound_button_hotkey_priority,
+            game_controller_sound_button_hotkey_go_to_playing=self.game_controller_sound_button_hotkey_go_to_playing,
             stage_display_layout=self.stage_display_layout,
             stage_display_visibility=self.stage_display_visibility,
             stage_display_text_source=self.stage_display_text_source,
@@ -1601,8 +1617,10 @@ class ActionsInputMixin:
         self.lock_allow_quick_action_hotkeys = dialog.selected_lock_allow_quick_action_hotkeys()
         self.lock_allow_sound_button_hotkeys = dialog.selected_lock_allow_sound_button_hotkeys()
         self.lock_allow_midi_control = dialog.selected_lock_allow_midi_control()
+        self.lock_allow_game_controller_control = dialog.selected_lock_allow_game_controller_control()
         self.lock_auto_allow_quit = dialog.selected_lock_auto_allow_quit()
         self.lock_auto_allow_midi_control = dialog.selected_lock_auto_allow_midi_control()
+        self.lock_auto_allow_game_controller_control = dialog.selected_lock_auto_allow_game_controller_control()
         self.lock_unlock_method = dialog.selected_lock_unlock_method()
         self.lock_require_password = dialog.selected_lock_require_password()
         self.lock_password = dialog.selected_lock_password()
@@ -1725,6 +1743,8 @@ class ActionsInputMixin:
         self.sound_button_hotkey_priority = dialog.selected_sound_button_hotkey_priority()
         self.sound_button_hotkey_go_to_playing = dialog.selected_sound_button_hotkey_go_to_playing()
         self.midi_input_device_ids = dialog.selected_midi_input_devices()
+        self.game_controller_device_selectors = dialog.selected_game_controller_device_selectors()
+        self.game_controller_axis_threshold = dialog.selected_game_controller_axis_threshold()
         self.launchpad_enabled = dialog.selected_launchpad_enabled()
         self.launchpad_device_selector = dialog.selected_launchpad_device_selector()
         self.launchpad_output_device_id = dialog.selected_launchpad_output_device_id()
@@ -1778,6 +1798,22 @@ class ActionsInputMixin:
         self.midi_rotary_volume_mode = mode if mode in {"absolute", "relative"} else "relative"
         self.midi_rotary_volume_step = max(1, min(20, int(dialog.selected_midi_rotary_volume_step())))
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(dialog.selected_midi_rotary_jog_step_ms())))
+        self.game_controller_hotkeys = dialog.selected_game_controller_hotkeys()
+        self.game_controller_quick_action_enabled = dialog.selected_game_controller_quick_action_enabled()
+        self.game_controller_quick_action_bindings = dialog.selected_game_controller_quick_action_bindings()[:48]
+        if len(self.game_controller_quick_action_bindings) < 48:
+            self.game_controller_quick_action_bindings.extend(
+                ["" for _ in range(48 - len(self.game_controller_quick_action_bindings))]
+            )
+        self.game_controller_sound_button_hotkey_enabled = (
+            dialog.selected_game_controller_sound_button_hotkey_enabled()
+        )
+        self.game_controller_sound_button_hotkey_priority = (
+            dialog.selected_game_controller_sound_button_hotkey_priority()
+        )
+        self.game_controller_sound_button_hotkey_go_to_playing = (
+            dialog.selected_game_controller_sound_button_hotkey_go_to_playing()
+        )
         self.stage_display_gadgets = normalize_stage_display_gadgets(dialog.selected_stage_display_gadgets())
         self.stage_display_layout, self.stage_display_visibility = gadgets_to_legacy_layout_visibility(
             self.stage_display_gadgets
@@ -2108,6 +2144,26 @@ class ActionsInputMixin:
             bindings[token] = ("Q", 0, slot_index)
         return bindings
 
+    def _collect_sound_button_game_controller_bindings(self) -> Dict[str, Tuple[str, int, int]]:
+        bindings: Dict[str, Tuple[str, int, int]] = {}
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    token = normalize_game_controller_binding(slot.sound_game_controller_hotkey)
+                    if not token or token in bindings:
+                        continue
+                    bindings[token] = (group, page_index, slot_index)
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            token = normalize_game_controller_binding(slot.sound_game_controller_hotkey)
+            if not token or token in bindings:
+                continue
+            bindings[token] = ("Q", 0, slot_index)
+        return bindings
+
     def _sound_button_hotkey_trigger(self, slot_key: Tuple[str, int, int]) -> None:
         if self._is_button_drag_enabled():
             return
@@ -2145,6 +2201,20 @@ class ActionsInputMixin:
         if self.midi_sound_button_hotkey_go_to_playing:
             self._go_to_current_playing_page()
 
+    def _sound_button_game_controller_hotkey_trigger(self, slot_key: Tuple[str, int, int]) -> None:
+        self._sound_button_hotkey_trigger(slot_key)
+        if self.game_controller_sound_button_hotkey_go_to_playing:
+            self._go_to_current_playing_page()
+
+    def _sync_game_controller_polling_state(self) -> None:
+        try:
+            self._game_controller_poll_thread.update_config(
+                list(self.game_controller_device_selectors),
+                float(self.game_controller_axis_threshold),
+            )
+        except Exception:
+            pass
+
     def _sync_midi_polling_state(self) -> None:
         midi_selectors = list(self.midi_input_device_ids)
         launchpad_selectors = [self._resolved_launchpad_selector()] if self.launchpad_enabled and self._resolved_launchpad_selector() else []
@@ -2180,6 +2250,9 @@ class ActionsInputMixin:
     def _poll_launchpad_inputs(self) -> None:
         # Launchpad input now runs through MidiPollingThread; keep the old hook harmless.
         self._sync_midi_polling_state()
+
+    def _on_game_controller_poll_status(self, missing) -> None:
+        self._game_controller_missing_selectors = {str(v).strip() for v in list(missing or []) if str(v).strip()}
 
     def _on_midi_poll_status(self, midi_missing, launchpad_missing) -> None:
         self._midi_missing_selectors = {str(v).strip() for v in list(midi_missing or []) if str(v).strip()}
@@ -2788,6 +2861,35 @@ class ActionsInputMixin:
         self._midi_last_trigger_t[dedupe_key] = now
         handler()
 
+    def _on_game_controller_binding_triggered(
+        self,
+        token: str,
+        controller_index: int = 0,
+        source_selector: str = "",
+    ) -> None:
+        context_handler = self._midi_context_handler
+        if context_handler is not None:
+            try:
+                handle = getattr(context_handler, "handle_game_controller_event", None)
+                if callable(handle) and bool(handle(token, controller_index, source_selector)):
+                    return
+            except Exception:
+                pass
+        if self._midi_context_block_actions:
+            return
+        normalized_token = normalize_game_controller_binding(token)
+        if not normalized_token:
+            return
+        handler = self._game_controller_action_handlers.get(normalized_token)
+        if handler is None:
+            return
+        now = time.perf_counter()
+        last = self._game_controller_last_trigger_t.get(normalized_token, 0.0)
+        if (now - last) < 0.06:
+            return
+        self._game_controller_last_trigger_t[normalized_token] = now
+        handler()
+
     def _toggle_mute_hotkey(self) -> None:
         current = int(self.volume_slider.value())
         if current > 0:
@@ -2870,6 +2972,14 @@ class ActionsInputMixin:
             pass
         try:
             self._midi_poll_thread.wait(1500)
+        except Exception:
+            pass
+        try:
+            self._game_controller_poll_thread.stop()
+        except Exception:
+            pass
+        try:
+            self._game_controller_poll_thread.wait(1500)
         except Exception:
             pass
         try:

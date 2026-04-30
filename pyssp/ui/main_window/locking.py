@@ -32,6 +32,8 @@ class LockingMixin:
         if self._automation_locked:
             if token == "midi":
                 return bool(self.lock_auto_allow_midi_control)
+            if token == "game_controller":
+                return bool(self.lock_auto_allow_game_controller_control)
             return False
         if token == "system":
             return bool(self.lock_allow_system_hotkeys)
@@ -41,6 +43,8 @@ class LockingMixin:
             return bool(self.lock_allow_sound_button_hotkeys and self.sound_button_hotkey_enabled)
         if token == "midi":
             return bool(self.lock_allow_midi_control)
+        if token == "game_controller":
+            return bool(self.lock_allow_game_controller_control)
         return False
 
     def _run_locked_input(self, source: str, handler: Callable[[], None]) -> None:

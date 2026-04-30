@@ -393,11 +393,17 @@ class SelectionMixin:
     def selected_lock_allow_midi_control(self) -> bool:
         return bool(self.lock_allow_midi_control_checkbox.isChecked())
 
+    def selected_lock_allow_game_controller_control(self) -> bool:
+        return bool(self.lock_allow_game_controller_control_checkbox.isChecked())
+
     def selected_lock_auto_allow_quit(self) -> bool:
         return bool(self.lock_auto_allow_quit_checkbox.isChecked())
 
     def selected_lock_auto_allow_midi_control(self) -> bool:
         return bool(self.lock_auto_allow_midi_control_checkbox.isChecked())
+
+    def selected_lock_auto_allow_game_controller_control(self) -> bool:
+        return bool(self.lock_auto_allow_game_controller_control_checkbox.isChecked())
 
     def selected_lock_unlock_method(self) -> str:
         if self.lock_method_fixed_button_radio.isChecked():
@@ -545,6 +551,35 @@ class SelectionMixin:
 
     def selected_midi_rotary_jog_step_ms(self) -> int:
         return int(self.midi_rotary_jog_step_spin.value())
+
+    def selected_game_controller_device_selectors(self) -> List[str]:
+        return list(self._checked_game_controller_device_selectors())
+
+    def selected_game_controller_axis_threshold(self) -> float:
+        return float(self.game_controller_axis_threshold_spin.value())
+
+    def selected_game_controller_hotkeys(self) -> Dict[str, tuple[str, str]]:
+        result: Dict[str, tuple[str, str]] = {}
+        for key, (edit1, edit2) in self._game_controller_hotkey_edits.items():
+            result[key] = (edit1.binding(), edit2.binding())
+        return result
+
+    def selected_game_controller_quick_action_enabled(self) -> bool:
+        return bool(self.game_controller_quick_action_enabled_checkbox.isChecked())
+
+    def selected_game_controller_quick_action_bindings(self) -> List[str]:
+        return [edit.binding() for edit in self._game_controller_quick_action_edits]
+
+    def selected_game_controller_sound_button_hotkey_enabled(self) -> bool:
+        return bool(self.game_controller_sound_button_hotkey_enabled_checkbox.isChecked())
+
+    def selected_game_controller_sound_button_hotkey_priority(self) -> str:
+        if self.game_controller_sound_hotkey_priority_sound_first_radio.isChecked():
+            return "sound_button_first"
+        return "system_first"
+
+    def selected_game_controller_sound_button_hotkey_go_to_playing(self) -> bool:
+        return bool(self.game_controller_sound_button_go_to_playing_checkbox.isChecked())
 
     def selected_quick_action_enabled(self) -> bool:
         return bool(self.quick_action_enabled_checkbox.isChecked())

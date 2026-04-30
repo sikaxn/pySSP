@@ -44,6 +44,7 @@ class SoundButtonData:
     timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""
     sound_midi_hotkey: str = ""
+    sound_game_controller_hotkey: str = ""
 
     @property
     def assigned(self) -> bool:

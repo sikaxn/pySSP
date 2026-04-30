@@ -9,6 +9,7 @@ __all__ = [
     "_GridLayoutCanvas",
     "HotkeyCaptureEdit",
     "MidiCaptureEdit",
+    "GameControllerCaptureEdit",
 ]
 
 class _GridLayoutButton(QFrame):
@@ -615,4 +616,20 @@ class MidiCaptureEdit(QLineEdit):
         token = normalize_midi_binding(value)
         self._binding = token
         self.setText(midi_binding_to_display(token) if token else "")
+
+
+class GameControllerCaptureEdit(QLineEdit):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("Unassigned")
+        self.setReadOnly(True)
+        self._binding = ""
+
+    def binding(self) -> str:
+        return self._binding
+
+    def setBinding(self, value: str) -> None:
+        token = normalize_game_controller_binding(value)
+        self._binding = token
+        self.setText(game_controller_binding_to_display(token) if token else "")
 

@@ -122,6 +122,14 @@ from pyssp.launchpad import (
     launchpad_programmer_toggle_sysex,
     normalize_launchpad_layout,
 )
+from pyssp.game_controller import (
+    GameControllerPollingThread,
+    game_controller_binding_to_display,
+    game_controller_name_selector,
+    game_controller_selector_parts,
+    list_game_controller_devices,
+    normalize_game_controller_binding,
+)
 from pyssp.library_archive import (
     ArchiveOperationCancelled,
     PackAudioLibraryDialog,

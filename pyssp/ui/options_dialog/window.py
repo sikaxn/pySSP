@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from .shared import *
 from .widgets import *
 from .device_midi import DeviceMidiMixin
@@ -660,6 +662,11 @@ class OptionsDialog(
             game_controller_sound_button_hotkey_go_to_playing
         )
         self._learning_game_controller_target: Optional[GameControllerCaptureEdit] = None
+        self._game_controller_learn_last_states: Dict[tuple[int, str], int] = {}
+        self._game_controller_learn_timer = QTimer(self)
+        self._game_controller_learn_timer.setInterval(10)
+        self._game_controller_learn_timer.timeout.connect(self._poll_game_controller_learning)
+        self._game_controller_learn_started_t = 0.0
         self._game_controller_warning_label: Optional[QLabel] = None
         self._last_active_game_controller_selector = ""
         self._ui_language = normalize_language(ui_language)
@@ -1018,12 +1025,29 @@ class OptionsDialog(
         if self._learning_game_controller_target is not None and self._learning_game_controller_target is not target:
             self._learning_game_controller_target.setStyleSheet("")
         self._learning_game_controller_target = target
+        selected = self.selected_game_controller_device_selectors()
+        threshold = self.selected_game_controller_axis_threshold()
+        self._game_controller_learn_last_states = prime_game_controller_states(selected, threshold)
+        self._game_controller_learn_debug_flags: Dict[str, bool] = {}
+        self._game_controller_learn_started_t = time.perf_counter()
         target.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+        print(
+            "[GameControllerLearn:Options] started",
+            {
+                "selected": selected,
+                "threshold": threshold,
+                "primed_states": len(self._game_controller_learn_last_states),
+            },
+        )
         if self._game_controller_warning_label is not None:
             self._game_controller_warning_label.setText(
-                "Game controller learn is active. Press a button or move an axis past the threshold."
+                "Game controller learn is active. Press a button or hat direction."
             )
             self._game_controller_warning_label.setVisible(True)
+        self._game_controller_learn_timer.stop()
+
+    def _poll_game_controller_learning(self) -> None:
+        self._game_controller_learn_timer.stop()
 
     def handle_game_controller_event(self, token: str, controller_index: int = 0, source_selector: str = "") -> bool:
         if source_selector:
@@ -1032,10 +1056,19 @@ class OptionsDialog(
             return False
         normalized = normalize_game_controller_binding(token)
         if not normalized:
+            print(f"[GameControllerLearn:Options] ignored unrecognized token={token!r}")
             return False
+        if ":AXIS" in normalized:
+            print(f"[GameControllerLearn:Options] ignored axis token={normalized}")
+            return False
+        print(
+            "[GameControllerLearn:Options] captured",
+            {"token": normalized, "controller_index": controller_index, "selector": source_selector},
+        )
         self._learning_game_controller_target.setBinding(normalized)
         self._learning_game_controller_target.setStyleSheet("")
         self._learning_game_controller_target = None
+        self._game_controller_learn_timer.stop()
         if self._game_controller_warning_label is not None:
             self._game_controller_warning_label.setVisible(False)
             self._game_controller_warning_label.setText("")

@@ -5,7 +5,7 @@ import json
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QDrag, QFont, QFontDatabase, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -70,6 +70,8 @@ from pyssp.game_controller import (
     game_controller_selector_parts,
     list_game_controller_devices,
     normalize_game_controller_binding,
+    poll_game_controller_binding,
+    prime_game_controller_states,
 )
 from pyssp.midi_control import (
     list_midi_input_devices,

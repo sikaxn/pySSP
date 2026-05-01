@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -20,7 +21,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyssp.i18n import localize_widget_tree, tr
-from pyssp.game_controller import game_controller_binding_to_display, normalize_game_controller_binding
+from pyssp.game_controller import (
+    game_controller_binding_to_display,
+    normalize_game_controller_binding,
+    poll_game_controller_binding,
+    prime_game_controller_states,
+)
 from pyssp.midi_control import (
     midi_binding_to_display,
     midi_input_name_selector,
@@ -200,6 +206,11 @@ class EditSoundButtonDialog(QDialog):
         self._selected_game_controller_device_selectors = [
             str(v).strip() for v in list(selected_game_controller_device_selectors or []) if str(v).strip()
         ]
+        self._game_controller_learn_last_states: dict[tuple[int, str], int] = {}
+        self._game_controller_learn_timer = QTimer(self)
+        self._game_controller_learn_timer.setInterval(10)
+        self._game_controller_learn_timer.timeout.connect(self._poll_game_controller_learning)
+        self._game_controller_learn_started_t = 0.0
 
         vol_row = QWidget()
         vol_layout = QVBoxLayout(vol_row)
@@ -318,7 +329,25 @@ class EditSoundButtonDialog(QDialog):
 
     def _start_game_controller_learn(self) -> None:
         self._game_controller_learning = True
+        self._game_controller_learn_last_states = prime_game_controller_states(
+            self._selected_game_controller_device_selectors,
+            0.5,
+        )
+        self._game_controller_learn_debug_flags: dict[str, bool] = {}
+        self._game_controller_learn_started_t = time.perf_counter()
         self.sound_game_controller_hotkey_edit.setStyleSheet("QLineEdit{border:2px solid #2E65FF;}")
+        print(
+            "[GameControllerLearn:SoundButton] started",
+            {
+                "selected": list(self._selected_game_controller_device_selectors),
+                "threshold": 0.5,
+                "primed_states": len(self._game_controller_learn_last_states),
+            },
+        )
+        self._game_controller_learn_timer.stop()
+
+    def _poll_game_controller_learning(self) -> None:
+        self._game_controller_learn_timer.stop()
 
     def _on_midi_binding(self, token: str, source_selector: str = "") -> None:
         if not self._midi_learning:
@@ -360,8 +389,21 @@ class EditSoundButtonDialog(QDialog):
             return False
         if self._selected_game_controller_device_selectors:
             if not source_selector or source_selector not in self._selected_game_controller_device_selectors:
+                print(
+                    "[GameControllerLearn:SoundButton] ignored selector",
+                    {"token": token, "selector": source_selector},
+                )
                 return False
-        self._set_game_controller_binding(token)
+        normalized = normalize_game_controller_binding(token)
+        if ":AXIS" in normalized:
+            print(f"[GameControllerLearn:SoundButton] ignored axis token={normalized}")
+            return False
+        print(
+            "[GameControllerLearn:SoundButton] captured",
+            {"token": normalized or token, "controller_index": controller_index, "selector": source_selector},
+        )
+        self._set_game_controller_binding(normalized or token)
         self._game_controller_learning = False
+        self._game_controller_learn_timer.stop()
         self.sound_game_controller_hotkey_edit.setStyleSheet("")
         return True

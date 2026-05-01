@@ -1601,11 +1601,36 @@ class ActionsInputMixin:
             initial_page=initial_page,
             parent=self,
         )
+        def _sync_game_controller_polling_from_dialog(*_args) -> None:
+            try:
+                self._game_controller_poll_thread.update_config(
+                    list(dialog.selected_game_controller_device_selectors()),
+                    float(dialog.selected_game_controller_axis_threshold()),
+                )
+            except Exception:
+                pass
+
+        try:
+            dialog.game_controller_device_list.itemChanged.connect(_sync_game_controller_polling_from_dialog)
+        except Exception:
+            pass
+        try:
+            dialog.game_controller_move_up_btn.clicked.connect(_sync_game_controller_polling_from_dialog)
+            dialog.game_controller_move_down_btn.clicked.connect(_sync_game_controller_polling_from_dialog)
+            dialog.game_controller_refresh_btn.clicked.connect(_sync_game_controller_polling_from_dialog)
+        except Exception:
+            pass
+        try:
+            dialog.game_controller_axis_threshold_spin.valueChanged.connect(_sync_game_controller_polling_from_dialog)
+        except Exception:
+            pass
+        _sync_game_controller_polling_from_dialog()
         self._midi_context_handler = dialog
         self._midi_context_block_actions = True
         if dialog.exec_() != QDialog.Accepted:
             self._midi_context_handler = None
             self._midi_context_block_actions = False
+            self._sync_game_controller_polling_state()
             return
         self._midi_context_handler = None
         self._midi_context_block_actions = False
@@ -2868,6 +2893,11 @@ class ActionsInputMixin:
         source_selector: str = "",
     ) -> None:
         context_handler = self._midi_context_handler
+        if context_handler is not None:
+            print(
+                "[GameControllerAsync]",
+                {"token": token, "controller_index": controller_index, "selector": source_selector},
+            )
         if context_handler is not None:
             try:
                 handle = getattr(context_handler, "handle_game_controller_event", None)

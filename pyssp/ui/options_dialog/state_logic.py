@@ -117,6 +117,9 @@ class StateLogicMixin:
             if source_title == "web remote":
                 self._restore_web_remote_defaults()
                 return
+            if source_title == "companion satellite":
+                self._restore_companion_satellite_defaults()
+                return
         finally:
             if hasattr(self, "_update_scroll_hint"):
                 self._update_scroll_hint()
@@ -772,6 +775,18 @@ class StateLogicMixin:
         self.web_remote_enabled_checkbox.setChecked(bool(d["web_remote_enabled"]))
         self.web_remote_port_spin.setValue(int(d["web_remote_port"]))
         self._update_web_remote_page_labels(int(self.web_remote_port_spin.value()))
+
+    def _restore_companion_satellite_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.companion_satellite_host_edit.setText(str(d.get("companion_satellite_host", "127.0.0.1")))
+        self.companion_satellite_port_spin.setValue(int(d.get("companion_satellite_port", 16622)))
+        self._set_combo_data_or_default(
+            self.companion_satellite_start_mode_combo,
+            str(d.get("companion_satellite_start_mode", "manual")),
+            "manual",
+        )
+        self.companion_satellite_columns_spin.setValue(int(d.get("companion_satellite_columns", 5)))
+        self.companion_satellite_rows_spin.setValue(int(d.get("companion_satellite_rows", 3)))
 
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS

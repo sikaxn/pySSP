@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .audio_devices import AudioDevicesPageMixin
 from .audio_loading_format import AudioLoadingFormatPageMixin
+from .companion_satellite import CompanionSatellitePageMixin
 from .colors import ColorsPageMixin
 from .common import CommonPageBuilderMixin
 from .display import DisplayPageMixin
@@ -28,6 +29,7 @@ class PageBuilderMixin(
     PlaybackPageMixin,
     AudioDevicesPageMixin,
     AudioLoadingFormatPageMixin,
+    CompanionSatellitePageMixin,
     TalkPageMixin,
     WebRemotePageMixin,
     LyricsPageMixin,

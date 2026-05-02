@@ -15,6 +15,7 @@ _IMPL_MODULES = [
     "constants",
     "helpers",
     "widgets",
+    "companion_satellite",
     "timecode",
     "ui_build",
     "settings_archive",

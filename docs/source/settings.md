@@ -319,3 +319,22 @@ The screenshot above includes the Timecode timeline mode options (`Cue Set Point
 Runtime behavior details:
 
 - If HTTP or WS port is already occupied by another process, startup is blocked and warning banner is shown.
+
+## Companion Satellite
+
+- `Companion IP / Hostname`
+  - Target Companion host for the Satellite API connection.
+- `Companion Port`
+  - Satellite API TCP port. Default is `16622`.
+- `Startup Behavior`
+  - `Manual start`: only connects when started from the Virtual Satellite window.
+  - `Auto when enabled`: connects automatically at app startup and reconnects after changes.
+  - `Connect on open`: connects when the Virtual Satellite window is opened.
+- `Grid Columns`
+- `Grid Rows`
+  - Define the visible virtual surface size. Default is `5 x 3`.
+
+Runtime behavior details:
+
+- pySSP registers one virtual Companion surface named `pySSP Virtual Satellite`.
+- Changing host, port, or grid size rebuilds the surface definition on the next connection, or after reconnect if already active.

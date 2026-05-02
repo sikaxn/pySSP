@@ -5,6 +5,7 @@ from .constants import *
 from .helpers import *
 from .widgets import *
 from .actions_input import ActionsInputMixin
+from .companion_satellite import CompanionSatelliteMixin, _CompanionSatelliteBridge
 from .locking import LockingMixin
 from .lyrics_stage import LyricsStageMixin
 from .pages_slots import PagesSlotsMixin
@@ -14,6 +15,8 @@ from .settings_archive import SettingsArchiveMixin
 from .timecode import TimecodeMixin
 from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
+from pyssp.companion_satellite import CompanionSatelliteClient
+from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
 
 
 def _stop_qthread_safely(thread: Optional[QThread], timeout_ms: int = 1500) -> None:
@@ -49,6 +52,7 @@ class MainWindow(
     PagesSlotsMixin,
     PlaybackMixin,
     LyricsStageMixin,
+    CompanionSatelliteMixin,
     RemoteApiMixin,
     ActionsInputMixin,
     LockingMixin,
@@ -214,6 +218,24 @@ class MainWindow(
         self.web_remote_host = "0.0.0.0"
         self.web_remote_port = max(1, min(65534, int(self.settings.web_remote_port or 5050)))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.companion_satellite_host = str(
+            getattr(self.settings, "companion_satellite_host", "127.0.0.1") or "127.0.0.1"
+        ).strip() or "127.0.0.1"
+        self.companion_satellite_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_satellite_port", 16622) or 16622)),
+        )
+        self.companion_satellite_start_mode = self._normalize_companion_satellite_start_mode(
+            getattr(self.settings, "companion_satellite_start_mode", "manual")
+        )
+        self.companion_satellite_columns = max(
+            1,
+            min(12, int(getattr(self.settings, "companion_satellite_columns", 5) or 5)),
+        )
+        self.companion_satellite_rows = max(
+            1,
+            min(8, int(getattr(self.settings, "companion_satellite_rows", 3) or 3)),
+        )
         self._local_ip_cache = "127.0.0.1"
         self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
@@ -602,6 +624,17 @@ class MainWindow(
         self.midi_rotary_volume_step = max(1, min(20, int(getattr(self.settings, "midi_rotary_volume_step", 2))))
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(getattr(self.settings, "midi_rotary_jog_step_ms", 250))))
         self._web_remote_server: Optional[WebRemoteServer] = None
+        self._companion_satellite_client: Optional[CompanionSatelliteClient] = None
+        self._companion_satellite_window: Optional[CompanionSatelliteWindow] = None
+        self._companion_satellite_bridge = _CompanionSatelliteBridge(self)
+        self._companion_satellite_bridge.statusChanged.connect(self._on_companion_satellite_status_changed)
+        self._companion_satellite_bridge.helloReceived.connect(self._on_companion_satellite_hello_received)
+        self._companion_satellite_bridge.capsReceived.connect(self._on_companion_satellite_caps_received)
+        self._companion_satellite_bridge.keyStateReceived.connect(self._on_companion_satellite_key_state_received)
+        self._companion_satellite_bridge.keysCleared.connect(self._on_companion_satellite_keys_cleared)
+        self._companion_satellite_last_status: tuple[str, str] = ("stopped", "")
+        self._companion_satellite_api_version = ""
+        self._companion_satellite_caps: Dict[str, bool] = {}
         self._main_thread_executor = MainThreadExecutor(self)
         self._audio_service = AudioServiceController(self)
 
@@ -891,6 +924,7 @@ class MainWindow(
             self._reset_all_played_state()
             self._refresh_sound_grid()
         self._apply_web_remote_state()
+        self._apply_companion_satellite_state()
         if startup_audio_warning:
             QMessageBox.warning(self, "Audio Device", startup_audio_warning)
         self._suspend_settings_save = False

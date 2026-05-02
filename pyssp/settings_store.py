@@ -564,6 +564,11 @@ class AppSettings:
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
     web_remote_ws_port: int = 5051
+    companion_satellite_host: str = "127.0.0.1"
+    companion_satellite_port: int = 16622
+    companion_satellite_start_mode: str = "manual"
+    companion_satellite_columns: int = 5
+    companion_satellite_rows: int = 3
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
     timecode_mode: str = "follow_media"
@@ -938,6 +943,11 @@ def save_settings(settings: AppSettings) -> None:
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
         "web_remote_ws_port": str(settings.web_remote_ws_port),
+        "companion_satellite_host": settings.companion_satellite_host,
+        "companion_satellite_port": str(settings.companion_satellite_port),
+        "companion_satellite_start_mode": settings.companion_satellite_start_mode,
+        "companion_satellite_columns": str(settings.companion_satellite_columns),
+        "companion_satellite_rows": str(settings.companion_satellite_rows),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
         "timecode_midi_output_device": settings.timecode_midi_output_device,
         "timecode_mode": settings.timecode_mode,
@@ -1309,6 +1319,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         candidate_error_action = "stop_playback"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
     web_remote_ws_port = _clamp_int(_get_int(section, "web_remote_ws_port", web_remote_port + 1), 1, 65535)
+    companion_satellite_host = str(section.get("companion_satellite_host", "127.0.0.1")).strip() or "127.0.0.1"
+    companion_satellite_port = _clamp_int(_get_int(section, "companion_satellite_port", 16622), 1, 65535)
+    companion_satellite_start_mode = str(section.get("companion_satellite_start_mode", "manual")).strip().lower()
+    if companion_satellite_start_mode not in {"manual", "auto", "open"}:
+        companion_satellite_start_mode = "manual"
+    companion_satellite_columns = _clamp_int(_get_int(section, "companion_satellite_columns", 5), 1, 12)
+    companion_satellite_rows = _clamp_int(_get_int(section, "companion_satellite_rows", 3), 1, 8)
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
     timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
@@ -1661,6 +1678,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
         web_remote_ws_port=web_remote_ws_port,
+        companion_satellite_host=companion_satellite_host,
+        companion_satellite_port=companion_satellite_port,
+        companion_satellite_start_mode=companion_satellite_start_mode,
+        companion_satellite_columns=companion_satellite_columns,
+        companion_satellite_rows=companion_satellite_rows,
         timecode_audio_output_device=timecode_audio_output_device,
         timecode_midi_output_device=timecode_midi_output_device,
         timecode_mode=timecode_mode,

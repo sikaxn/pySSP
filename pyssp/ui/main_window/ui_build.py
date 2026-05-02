@@ -388,6 +388,16 @@ class UiBuildMixin:
         launchpad_cheatsheet_action.triggered.connect(self._show_launchpad_cheatsheet)
         tools_menu.addAction(launchpad_cheatsheet_action)
 
+        companion_menu = self.menuBar().addMenu("Companion")
+        open_virtual_satellite_action = QAction("Open Virtual Satellite", self)
+        open_virtual_satellite_action.triggered.connect(self._open_virtual_satellite)
+        companion_menu.addAction(open_virtual_satellite_action)
+        self._menu_actions["open_virtual_satellite"] = open_virtual_satellite_action
+        open_companion_satellite_options_action = QAction("Open Companion Satellite Options", self)
+        open_companion_satellite_options_action.triggered.connect(self._open_companion_satellite_options)
+        companion_menu.addAction(open_companion_satellite_options_action)
+        self._menu_actions["open_companion_satellite_options"] = open_companion_satellite_options_action
+
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)

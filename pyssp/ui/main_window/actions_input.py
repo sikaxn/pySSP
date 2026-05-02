@@ -1487,6 +1487,11 @@ class ActionsInputMixin:
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
             web_remote_url=self._web_remote_open_url(),
+            companion_satellite_host=self.companion_satellite_host,
+            companion_satellite_port=self.companion_satellite_port,
+            companion_satellite_start_mode=self.companion_satellite_start_mode,
+            companion_satellite_columns=self.companion_satellite_columns,
+            companion_satellite_rows=self.companion_satellite_rows,
             main_transport_timeline_mode=self.main_transport_timeline_mode,
             main_jog_outside_cue_action=self.main_jog_outside_cue_action,
             state_colors={
@@ -1823,6 +1828,11 @@ class ActionsInputMixin:
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65534, int(dialog.web_remote_port_spin.value())))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.companion_satellite_host = dialog.selected_companion_satellite_host()
+        self.companion_satellite_port = dialog.selected_companion_satellite_port()
+        self.companion_satellite_start_mode = dialog.selected_companion_satellite_start_mode()
+        self.companion_satellite_columns = dialog.selected_companion_satellite_columns()
+        self.companion_satellite_rows = dialog.selected_companion_satellite_rows()
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
@@ -1853,6 +1863,7 @@ class ActionsInputMixin:
             slot = self._slot_for_key(self.current_playing)
             self._update_now_playing_label(self._build_now_playing_text(slot) if slot is not None else "")
         self._apply_web_remote_state()
+        self._apply_companion_satellite_state()
         self._sync_lock_ui_state()
         self._save_settings()
 
@@ -2892,7 +2903,13 @@ class ActionsInputMixin:
                 self._lyric_navigator_window.close()
         except Exception:
             pass
+        try:
+            if self._companion_satellite_window is not None:
+                self._companion_satellite_window.close()
+        except Exception:
+            pass
         self._stop_web_remote_service()
+        self._stop_companion_satellite_client()
         if not self._skip_save_on_close:
             self._save_settings()
         QMainWindow.closeEvent(self, event)

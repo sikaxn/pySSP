@@ -175,6 +175,11 @@ class OptionsDialog(
         "web_remote_enabled": False,
         "web_remote_port": 5050,
         "web_remote_ws_port": 5051,
+        "companion_satellite_host": "127.0.0.1",
+        "companion_satellite_port": 16622,
+        "companion_satellite_start_mode": "manual",
+        "companion_satellite_columns": 5,
+        "companion_satellite_rows": 3,
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
         "timecode_mode": TIMECODE_MODE_FOLLOW,
@@ -436,6 +441,11 @@ class OptionsDialog(
         web_remote_enabled: bool,
         web_remote_port: int,
         web_remote_url: str,
+        companion_satellite_host: str,
+        companion_satellite_port: int,
+        companion_satellite_start_mode: str,
+        companion_satellite_columns: int,
+        companion_satellite_rows: int,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
         state_colors: Dict[str, str],
@@ -712,6 +722,13 @@ class OptionsDialog(
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
         self._available_midi_devices = list(available_midi_devices)
+        self._companion_satellite_host = str(companion_satellite_host or "").strip() or "127.0.0.1"
+        self._companion_satellite_port = max(1, min(65535, int(companion_satellite_port)))
+        self._companion_satellite_start_mode = str(companion_satellite_start_mode or "manual").strip().lower()
+        if self._companion_satellite_start_mode not in {"manual", "auto", "open"}:
+            self._companion_satellite_start_mode = "manual"
+        self._companion_satellite_columns = max(1, min(12, int(companion_satellite_columns)))
+        self._companion_satellite_rows = max(1, min(8, int(companion_satellite_rows)))
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -893,6 +910,17 @@ class OptionsDialog(
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
                 web_remote_url=web_remote_url,
+            ),
+        )
+        self._add_page(
+            "Companion Satellite",
+            self._mono_icon("wireless"),
+            self._build_companion_satellite_page(
+                host=self._companion_satellite_host,
+                port=self._companion_satellite_port,
+                start_mode=self._companion_satellite_start_mode,
+                columns=self._companion_satellite_columns,
+                rows=self._companion_satellite_rows,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

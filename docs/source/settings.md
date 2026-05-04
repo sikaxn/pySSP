@@ -326,15 +326,16 @@ Runtime behavior details:
   - Target Companion host for the Satellite API connection.
 - `Companion Port`
   - Satellite API TCP port. Default is `16622`.
-- `Startup Behavior`
-  - `Manual start`: only connects when started from the Virtual Satellite window.
-  - `Auto when enabled`: connects automatically at app startup and reconnects after changes.
-  - `Connect on open`: connects when the Virtual Satellite window is opened.
+- `Companion Satellite`
+  - Enable or disable automatic startup of the Companion Satellite client when pySSP launches.
 - `Grid Columns`
 - `Grid Rows`
-  - Define the visible virtual surface size. Default is `5 x 3`.
+  - Define the visible virtual surface size. Default is `8 x 4`.
+- `Serial Suffix`
+  - The effective serial is always `pyssp:<suffix>`. By default, pySSP uses a machine-specific value derived from the computer MAC address.
 
 Runtime behavior details:
 
 - pySSP registers one virtual Companion surface named `pySSP Virtual Satellite`.
-- Changing host, port, or grid size rebuilds the surface definition on the next connection, or after reconnect if already active.
+- If Companion Satellite is enabled, pySSP starts the client automatically at startup.
+- Changing host, port, serial suffix, or grid size rebuilds the surface definition on the next connection, or after reconnect if already active.

@@ -23,3 +23,39 @@
 - Simpler fullscreen fix for the current original-path run: `_toggle_fullscreen()` and `Esc` should not call `_apply_window_chrome()` at all. `showFullScreen()` / `showNormal()` already preserve the correct geometry in both windowed and transparent modes; the extra chrome reapply is what breaks fullscreen. After the fix, only refresh toolbar text/overlay positions after the state change.
 - Toolbar hide follow-up: in transparent mode the overlay can disappear logically but leave stale pixels behind. Fix the hide path by computing the overlay rectangle in canvas coordinates and explicitly `update()` + `repaint()` that exposed canvas region after hiding the toolbar.
 - New direction after repeated `UpdateLayeredWindowIndirect` growth logs (`980x523 -> 994x530 -> 1008x537`): stop mutating an already-open lyric window between windowed and transparent modes. The main window should recreate `LyricDisplayWindow` in the target mode before showing it, because opening directly in transparent mode is already clean while the live in-place switch keeps accumulating the wrong native surface size.
+
+## 2026-05-04
+
+- Added phase-1 Companion Satellite support to pySSP.
+- Main UI integration:
+  - top-level `Companion` menu after `Tools`
+  - `Open Virtual Satellite`
+  - `Open Companion Satellite Options`
+- Companion Satellite runtime must stay on its own worker thread so socket I/O, keepalive, and reconnect logic do not burden the UI thread.
+- Companion Satellite options currently include:
+  - host
+  - port
+  - enabled-at-startup checkbox
+  - grid columns / rows
+  - render mode
+  - serial suffix
+- Startup model was simplified from multiple behavior modes to one checkbox:
+  - `companion_satellite_enabled = True` means start satellite automatically on pySSP startup
+  - no separate connect-on-open/manual/open mode remains in the UI
+- Default Companion Satellite layout is `8 columns x 4 rows`.
+- Default serial suffix should be machine-specific from MAC address; effective serial remains `pyssp:<suffix>`.
+- If serial suffix is blank or defaults are restored, fall back to the MAC-derived suffix.
+- Companion Satellite options page includes a warning that duplicate serial numbers across clients can cause Companion-side issues.
+- Main window has a bottom status-bar Companion indicator placed immediately after the RAM indicator.
+- The bottom indicator always shows `SAT`; only the color changes by connection state. Tooltip carries detailed state text.
+- Virtual Satellite window should be a separate top-level window, not embedded over the main pySSP window.
+- Virtual Satellite window was intentionally simplified:
+  - removed visible grid-size label
+  - removed visible connection status text
+  - removed start / stop / reconnect buttons
+  - kept the surface itself plus an options shortcut
+- Companion Satellite render modes:
+  - `bitmap`: use Companion-provided bitmap and size each virtual key to the bitmap size
+  - `styled`: pySSP renders its own button appearance
+- In `styled` mode, each button should show its axis/coordinate label as `X<col> Y<row>`.
+- `styled` is the clearer user-facing name for pySSP-rendered buttons; avoid vague labels like `custom`.

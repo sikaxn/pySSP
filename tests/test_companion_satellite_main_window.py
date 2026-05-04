@@ -55,7 +55,7 @@ def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):
     settings.tips_open_on_startup = False
     settings.reset_all_on_startup = False
     settings.web_remote_enabled = False
-    settings.companion_satellite_start_mode = "manual"
+    settings.companion_satellite_enabled = False
     monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
     monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
     monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)

@@ -252,15 +252,25 @@ class SelectionMixin:
     def selected_companion_satellite_port(self) -> int:
         return max(1, min(65535, int(self.companion_satellite_port_spin.value())))
 
-    def selected_companion_satellite_start_mode(self) -> str:
-        token = str(self.companion_satellite_start_mode_combo.currentData() or "manual").strip().lower()
-        return token if token in {"manual", "auto", "open"} else "manual"
+    def selected_companion_satellite_enabled(self) -> bool:
+        return bool(self.companion_satellite_enabled_checkbox.isChecked())
 
     def selected_companion_satellite_columns(self) -> int:
         return max(1, min(12, int(self.companion_satellite_columns_spin.value())))
 
     def selected_companion_satellite_rows(self) -> int:
         return max(1, min(8, int(self.companion_satellite_rows_spin.value())))
+
+    def selected_companion_satellite_render_mode(self) -> str:
+        token = str(self.companion_satellite_render_mode_combo.currentData() or "bitmap").strip().lower()
+        return token if token in {"bitmap", "styled"} else "bitmap"
+
+    def selected_companion_satellite_serial_suffix(self) -> str:
+        text = str(self.companion_satellite_serial_suffix_edit.text() or "").strip().lower()
+        if text.startswith("pyssp:"):
+            text = text.partition(":")[2].strip().lower()
+        cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
+        return cleaned or default_companion_satellite_serial_suffix()
 
     def selected_main_transport_timeline_mode(self) -> str:
         if self.cue_timeline_audio_file_radio.isChecked():

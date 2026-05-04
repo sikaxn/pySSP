@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,24 @@ def _decode_ascii_setting(value: str) -> str:
     except Exception:
         return raw
     return decoded if isinstance(decoded, str) else raw
+
+
+def default_companion_satellite_serial_suffix() -> str:
+    node = int(uuid.getnode())
+    return f"{node:012x}"
+
+
+def _normalize_companion_satellite_serial_suffix(raw: object) -> str:
+    text = str(raw or "").strip().lower()
+    if text.startswith("pyssp:"):
+        text = text.partition(":")[2].strip().lower()
+    cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
+    return cleaned or default_companion_satellite_serial_suffix()
+
+
+def _normalize_companion_satellite_render_mode(raw: object) -> str:
+    token = str(raw or "").strip().lower()
+    return token if token in {"bitmap", "styled"} else "bitmap"
 
 
 def default_stage_display_layout() -> list[str]:
@@ -566,9 +585,11 @@ class AppSettings:
     web_remote_ws_port: int = 5051
     companion_satellite_host: str = "127.0.0.1"
     companion_satellite_port: int = 16622
-    companion_satellite_start_mode: str = "manual"
-    companion_satellite_columns: int = 5
-    companion_satellite_rows: int = 3
+    companion_satellite_enabled: bool = False
+    companion_satellite_columns: int = 8
+    companion_satellite_rows: int = 4
+    companion_satellite_render_mode: str = "bitmap"
+    companion_satellite_serial_suffix: str = field(default_factory=default_companion_satellite_serial_suffix)
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
     timecode_mode: str = "follow_media"
@@ -945,9 +966,15 @@ def save_settings(settings: AppSettings) -> None:
         "web_remote_ws_port": str(settings.web_remote_ws_port),
         "companion_satellite_host": settings.companion_satellite_host,
         "companion_satellite_port": str(settings.companion_satellite_port),
-        "companion_satellite_start_mode": settings.companion_satellite_start_mode,
+        "companion_satellite_enabled": "1" if settings.companion_satellite_enabled else "0",
         "companion_satellite_columns": str(settings.companion_satellite_columns),
         "companion_satellite_rows": str(settings.companion_satellite_rows),
+        "companion_satellite_render_mode": _normalize_companion_satellite_render_mode(
+            settings.companion_satellite_render_mode
+        ),
+        "companion_satellite_serial_suffix": _normalize_companion_satellite_serial_suffix(
+            settings.companion_satellite_serial_suffix
+        ),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
         "timecode_midi_output_device": settings.timecode_midi_output_device,
         "timecode_mode": settings.timecode_mode,
@@ -1321,11 +1348,20 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     web_remote_ws_port = _clamp_int(_get_int(section, "web_remote_ws_port", web_remote_port + 1), 1, 65535)
     companion_satellite_host = str(section.get("companion_satellite_host", "127.0.0.1")).strip() or "127.0.0.1"
     companion_satellite_port = _clamp_int(_get_int(section, "companion_satellite_port", 16622), 1, 65535)
-    companion_satellite_start_mode = str(section.get("companion_satellite_start_mode", "manual")).strip().lower()
-    if companion_satellite_start_mode not in {"manual", "auto", "open"}:
-        companion_satellite_start_mode = "manual"
-    companion_satellite_columns = _clamp_int(_get_int(section, "companion_satellite_columns", 5), 1, 12)
-    companion_satellite_rows = _clamp_int(_get_int(section, "companion_satellite_rows", 3), 1, 8)
+    legacy_companion_satellite_start_mode = str(section.get("companion_satellite_start_mode", "manual")).strip().lower()
+    companion_satellite_enabled = _get_bool(
+        section,
+        "companion_satellite_enabled",
+        legacy_companion_satellite_start_mode == "auto",
+    )
+    companion_satellite_columns = _clamp_int(_get_int(section, "companion_satellite_columns", 8), 1, 12)
+    companion_satellite_rows = _clamp_int(_get_int(section, "companion_satellite_rows", 4), 1, 8)
+    companion_satellite_render_mode = _normalize_companion_satellite_render_mode(
+        section.get("companion_satellite_render_mode", "bitmap")
+    )
+    companion_satellite_serial_suffix = _normalize_companion_satellite_serial_suffix(
+        section.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix())
+    )
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
     timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
@@ -1680,9 +1716,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         web_remote_ws_port=web_remote_ws_port,
         companion_satellite_host=companion_satellite_host,
         companion_satellite_port=companion_satellite_port,
-        companion_satellite_start_mode=companion_satellite_start_mode,
+        companion_satellite_enabled=companion_satellite_enabled,
         companion_satellite_columns=companion_satellite_columns,
         companion_satellite_rows=companion_satellite_rows,
+        companion_satellite_render_mode=companion_satellite_render_mode,
+        companion_satellite_serial_suffix=companion_satellite_serial_suffix,
         timecode_audio_output_device=timecode_audio_output_device,
         timecode_midi_output_device=timecode_midi_output_device,
         timecode_mode=timecode_mode,

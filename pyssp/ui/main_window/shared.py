@@ -102,6 +102,7 @@ from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
     AppSettings,
+    default_companion_satellite_serial_suffix,
     get_settings_path,
     load_settings,
     normalize_window_layout,

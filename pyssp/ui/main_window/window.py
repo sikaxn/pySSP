@@ -225,17 +225,28 @@ class MainWindow(
             1,
             min(65535, int(getattr(self.settings, "companion_satellite_port", 16622) or 16622)),
         )
-        self.companion_satellite_start_mode = self._normalize_companion_satellite_start_mode(
-            getattr(self.settings, "companion_satellite_start_mode", "manual")
-        )
+        self.companion_satellite_enabled = bool(getattr(self.settings, "companion_satellite_enabled", False))
         self.companion_satellite_columns = max(
             1,
-            min(12, int(getattr(self.settings, "companion_satellite_columns", 5) or 5)),
+            min(12, int(getattr(self.settings, "companion_satellite_columns", 8) or 8)),
         )
         self.companion_satellite_rows = max(
             1,
-            min(8, int(getattr(self.settings, "companion_satellite_rows", 3) or 3)),
+            min(8, int(getattr(self.settings, "companion_satellite_rows", 4) or 4)),
         )
+        self.companion_satellite_render_mode = str(
+            getattr(self.settings, "companion_satellite_render_mode", "bitmap") or "bitmap"
+        ).strip().lower()
+        if self.companion_satellite_render_mode not in {"bitmap", "styled"}:
+            self.companion_satellite_render_mode = "bitmap"
+        self.companion_satellite_serial_suffix = str(
+            getattr(
+                self.settings,
+                "companion_satellite_serial_suffix",
+                default_companion_satellite_serial_suffix(),
+            )
+            or default_companion_satellite_serial_suffix()
+        ).strip() or default_companion_satellite_serial_suffix()
         self._local_ip_cache = "127.0.0.1"
         self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
@@ -705,6 +716,7 @@ class MainWindow(
         self.status_now_playing_label = QLabel("Now Playing: -")
         self.timecode_status_label = QLabel("")
         self.web_remote_status_label = QLabel("")
+        self.companion_satellite_status_icon = QLabel("")
         self.total_time = QLabel("00:00:00")
         self.preload_status_icon = QLabel("RAM")
         self.elapsed_time = QLabel("00:00:00")
@@ -845,6 +857,7 @@ class MainWindow(
         self._apply_launchpad_output_state()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
+        self._update_companion_satellite_status_indicator()
         self._sync_lock_ui_state()
         if self.lock_restart_state == "lock_on_restart" and bool(getattr(self.settings, "lock_was_locked_on_exit", False)):
             self._engage_lock_screen()
@@ -852,6 +865,9 @@ class MainWindow(
         self.statusBar().addWidget(self.status_now_playing_label, 1)
         self.statusBar().addPermanentWidget(self.timecode_status_label)
         self.statusBar().addPermanentWidget(self.web_remote_status_label)
+        self.companion_satellite_status_icon.setAlignment(Qt.AlignCenter)
+        self.companion_satellite_status_icon.setMinimumWidth(36)
+        self.companion_satellite_status_icon.setFixedHeight(18)
         self.statusBar().addPermanentWidget(self.status_totals_label)
         self.preload_status_icon.setAlignment(Qt.AlignCenter)
         self.preload_status_icon.setFixedSize(34, 18)
@@ -860,6 +876,7 @@ class MainWindow(
         )
         self.preload_status_icon.setToolTip("RAM preload idle")
         self.statusBar().addPermanentWidget(self.preload_status_icon)
+        self.statusBar().addPermanentWidget(self.companion_satellite_status_icon)
         if sys.platform == "darwin":
             self.lock_screen_button = self._create_lock_screen_button(self.statusBar(), auto_raise=False)
             self.lock_screen_button.setMinimumSize(28, 20)

@@ -6,6 +6,7 @@ import shlex
 import socket
 import threading
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 
@@ -51,7 +52,11 @@ def _parse_line(raw_line: str) -> tuple[str, dict[str, str], str]:
 class CompanionSatelliteClient:
     DEVICE_ID = "pyssp-main"
     PRODUCT_NAME = "pySSP Virtual Satellite"
-    SERIAL = "pyssp:virtual-satellite"
+    SERIAL_PREFIX = "pyssp:"
+
+    @staticmethod
+    def default_serial_suffix() -> str:
+        return f"{int(uuid.getnode()):012x}"
 
     def __init__(
         self,
@@ -60,12 +65,14 @@ class CompanionSatelliteClient:
         port: int,
         columns: int,
         rows: int,
+        serial_suffix: str,
         on_event: SatelliteEventFn,
     ) -> None:
         self.host = str(host or "127.0.0.1").strip() or "127.0.0.1"
         self.port = max(1, int(port))
         self.columns = max(1, int(columns))
         self.rows = max(1, int(rows))
+        self.serial_suffix = self._normalize_serial_suffix(serial_suffix)
         self._on_event = on_event
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -262,7 +269,15 @@ class CompanionSatelliteClient:
         total_keys = max(1, int(self.columns) * int(self.rows))
         command = (
             f'ADD-DEVICE DEVICEID={self.DEVICE_ID} PRODUCT_NAME="{self.PRODUCT_NAME}" '
-            f'SERIAL="{self.SERIAL}" KEYS_TOTAL={total_keys} KEYS_PER_ROW={int(self.columns)} '
+            f'SERIAL="{self.SERIAL_PREFIX}{self.serial_suffix}" KEYS_TOTAL={total_keys} KEYS_PER_ROW={int(self.columns)} '
             "BITMAPS=72 COLORS=hex TEXT=true TEXT_STYLE=true BRIGHTNESS=false"
         )
         self._send_line(command)
+
+    @staticmethod
+    def _normalize_serial_suffix(raw: object) -> str:
+        text = str(raw or "").strip().lower()
+        if text.startswith("pyssp:"):
+            text = text.partition(":")[2].strip().lower()
+        cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
+        return cleaned or CompanionSatelliteClient.default_serial_suffix()

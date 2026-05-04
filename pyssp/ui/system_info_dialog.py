@@ -422,9 +422,11 @@ def _get_current_running_config_report() -> List[str]:
         lines.append(f"web_remote_ws_port: {cfg.web_remote_ws_port}")
         lines.append(f"companion_satellite_host: {cfg.companion_satellite_host}")
         lines.append(f"companion_satellite_port: {cfg.companion_satellite_port}")
-        lines.append(f"companion_satellite_start_mode: {cfg.companion_satellite_start_mode}")
+        lines.append(f"companion_satellite_enabled: {cfg.companion_satellite_enabled}")
         lines.append(f"companion_satellite_columns: {cfg.companion_satellite_columns}")
         lines.append(f"companion_satellite_rows: {cfg.companion_satellite_rows}")
+        lines.append(f"companion_satellite_render_mode: {cfg.companion_satellite_render_mode}")
+        lines.append(f"companion_satellite_serial_suffix: {cfg.companion_satellite_serial_suffix}")
         lines.append("normalized_runtime_snapshot_end")
     except Exception as exc:
         lines.append(f"load_settings_error: {exc}")

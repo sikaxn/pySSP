@@ -7,7 +7,12 @@ import threading
 from pathlib import Path
 
 from pyssp.companion_satellite import CompanionSatelliteClient
-from pyssp.settings_store import AppSettings, load_settings, save_settings
+from pyssp.settings_store import (
+    AppSettings,
+    default_companion_satellite_serial_suffix,
+    load_settings,
+    save_settings,
+)
 
 
 class _FakeCompanionServer:
@@ -82,16 +87,28 @@ def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
     settings = AppSettings()
     settings.companion_satellite_host = "companion.local"
     settings.companion_satellite_port = 17777
-    settings.companion_satellite_start_mode = "open"
+    settings.companion_satellite_enabled = True
     settings.companion_satellite_columns = 7
     settings.companion_satellite_rows = 4
+    settings.companion_satellite_render_mode = "styled"
+    settings.companion_satellite_serial_suffix = "my-surface"
     save_settings(settings)
     loaded = load_settings()
     assert loaded.companion_satellite_host == "companion.local"
     assert loaded.companion_satellite_port == 17777
-    assert loaded.companion_satellite_start_mode == "open"
+    assert loaded.companion_satellite_enabled is True
     assert loaded.companion_satellite_columns == 7
     assert loaded.companion_satellite_rows == 4
+    assert loaded.companion_satellite_render_mode == "styled"
+    assert loaded.companion_satellite_serial_suffix == "my-surface"
+
+
+def test_companion_satellite_defaults_use_machine_serial_and_8x4_layout():
+    settings = AppSettings()
+    assert settings.companion_satellite_columns == 8
+    assert settings.companion_satellite_rows == 4
+    assert settings.companion_satellite_render_mode == "bitmap"
+    assert settings.companion_satellite_serial_suffix == default_companion_satellite_serial_suffix()
 
 
 def test_companion_satellite_client_registers_surface_and_sends_key_presses():
@@ -103,6 +120,7 @@ def test_companion_satellite_client_registers_surface_and_sends_key_presses():
         port=server.port,
         columns=5,
         rows=4,
+        serial_suffix="my-surface",
         on_event=lambda event_type, payload: events.put((event_type, payload)),
     )
     try:
@@ -110,6 +128,7 @@ def test_companion_satellite_client_registers_surface_and_sends_key_presses():
         add_device_line = server.add_device_lines.get(timeout=5.0)
         assert "KEYS_TOTAL=20" in add_device_line
         assert "KEYS_PER_ROW=5" in add_device_line
+        assert 'SERIAL="pyssp:my-surface"' in add_device_line
         seen_key_state = None
         for _ in range(10):
             event_type, payload = events.get(timeout=5.0)

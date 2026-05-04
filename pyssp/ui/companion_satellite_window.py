@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -25,7 +24,7 @@ class _SatelliteButton(QToolButton):
     def __init__(self, index: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.index = int(index)
-        self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(96, 96)
         self.setAutoRaise(False)
@@ -44,9 +43,6 @@ class _SatelliteButton(QToolButton):
 
 
 class CompanionSatelliteWindow(QWidget):
-    startRequested = pyqtSignal()
-    stopRequested = pyqtSignal()
-    reconnectRequested = pyqtSignal()
     openOptionsRequested = pyqtSignal()
     buttonPressed = pyqtSignal(int, bool)
     windowClosed = pyqtSignal()
@@ -59,6 +55,7 @@ class CompanionSatelliteWindow(QWidget):
         self.resize(760, 520)
         self._columns = 5
         self._rows = 3
+        self._render_mode = "bitmap"
         self._buttons: list[_SatelliteButton] = []
         self._button_states: dict[int, dict[str, object]] = {}
 
@@ -66,30 +63,14 @@ class CompanionSatelliteWindow(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
+        header_layout = QHBoxLayout()
         self.target_label = QLabel("")
-        self.grid_label = QLabel("")
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
-        root.addWidget(self.target_label)
-        root.addWidget(self.grid_label)
-        root.addWidget(self.status_label)
-
-        actions_layout = QHBoxLayout()
-        self.start_button = QPushButton(tr("Start"))
-        self.stop_button = QPushButton(tr("Stop"))
-        self.reconnect_button = QPushButton(tr("Reconnect"))
-        self.options_button = QPushButton(tr("Open Companion Satellite Options"))
-        self.start_button.clicked.connect(self.startRequested.emit)
-        self.stop_button.clicked.connect(self.stopRequested.emit)
-        self.reconnect_button.clicked.connect(self.reconnectRequested.emit)
+        header_layout.addWidget(self.target_label, 1)
+        self.options_button = QToolButton(self)
+        self.options_button.setText(tr("Options"))
         self.options_button.clicked.connect(self.openOptionsRequested.emit)
-        actions_layout.addWidget(self.start_button)
-        actions_layout.addWidget(self.stop_button)
-        actions_layout.addWidget(self.reconnect_button)
-        actions_layout.addStretch(1)
-        actions_layout.addWidget(self.options_button)
-        root.addLayout(actions_layout)
+        header_layout.addWidget(self.options_button)
+        root.addLayout(header_layout)
 
         self.grid_widget = QWidget(self)
         self.grid_layout = QGridLayout(self.grid_widget)
@@ -100,7 +81,7 @@ class CompanionSatelliteWindow(QWidget):
 
         self.set_target("127.0.0.1", 16622)
         self.set_grid_size(5, 3)
-        self.set_connection_state("stopped", "")
+        self.set_render_mode("bitmap")
 
     def closeEvent(self, event) -> None:
         super().closeEvent(event)
@@ -113,11 +94,9 @@ class CompanionSatelliteWindow(QWidget):
         columns = max(1, int(columns))
         rows = max(1, int(rows))
         if columns == self._columns and rows == self._rows and self._buttons:
-            self.grid_label.setText(f"{tr('Grid Size:')} {columns} x {rows}")
             return
         self._columns = columns
         self._rows = rows
-        self.grid_label.setText(f"{tr('Grid Size:')} {columns} x {rows}")
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             widget = item.widget()
@@ -134,25 +113,14 @@ class CompanionSatelliteWindow(QWidget):
             self._buttons.append(button)
             self._apply_button_state(index, self._button_states.get(index, {}))
 
+    def set_render_mode(self, mode: str) -> None:
+        token = str(mode or "").strip().lower()
+        self._render_mode = token if token in {"bitmap", "styled"} else "bitmap"
+        for index in range(len(self._buttons)):
+            self._apply_button_state(index, self._button_states.get(index, {}))
+
     def set_connection_state(self, state: str, message: str) -> None:
-        state_text = str(state or "").strip().lower()
-        labels = {
-            "connected": tr("Connected"),
-            "connecting": tr("Connecting"),
-            "reconnecting": tr("Reconnecting"),
-            "disconnected": tr("Disconnected"),
-            "error": tr("Error"),
-            "stopped": tr("Stopped"),
-        }
-        label = labels.get(state_text, tr("Unknown"))
-        text = f"{tr('Connection Status:')} {label}"
-        if message:
-            text = f"{text} ({message})"
-        self.status_label.setText(text)
-        active = state_text in {"connected", "connecting", "reconnecting"}
-        self.start_button.setEnabled(not active)
-        self.stop_button.setEnabled(active)
-        self.reconnect_button.setEnabled(active)
+        return
 
     def clear_buttons(self) -> None:
         self._button_states.clear()
@@ -170,7 +138,6 @@ class CompanionSatelliteWindow(QWidget):
             return
         button = self._buttons[index]
         text = str(state.get("text", "") or "").strip()
-        button.setText(text)
         style_parts = [
             "QToolButton{border:1px solid #6C6C6C;border-radius:6px;padding:4px;}",
             "QToolButton:pressed{border:2px solid #F59E0B;}",
@@ -188,16 +155,38 @@ class CompanionSatelliteWindow(QWidget):
             font.setPointSize(max(6, min(36, int(round(font_size / 6.0)))))
         button.setFont(font)
         bitmap = state.get("bitmap", b"")
-        if isinstance(bitmap, bytes) and bitmap:
-            button.setIcon(self._pixmap_icon(bitmap))
+        if self._render_mode == "bitmap" and isinstance(bitmap, bytes) and bitmap:
+            pixmap = self._pixmap(bitmap)
+            if not pixmap.isNull():
+                padding = 12
+                button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+                button.setText("")
+                button.setIcon(QIcon(pixmap))
+                button.setIconSize(pixmap.size())
+                button.setMinimumSize(pixmap.width() + padding, pixmap.height() + padding)
+                button.setMaximumSize(pixmap.width() + padding, pixmap.height() + padding)
+                button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            else:
+                self._apply_styled_button(button, index, text)
         else:
-            button.setIcon(QIcon())
+            self._apply_styled_button(button, index, text)
         button.setToolTip(text or f"Key {index + 1}")
 
-    def _pixmap_icon(self, bitmap: bytes) -> QIcon:
+    def _apply_styled_button(self, button: _SatelliteButton, index: int, text: str) -> None:
+        row = (int(index) // max(1, self._columns)) + 1
+        col = (int(index) % max(1, self._columns)) + 1
+        axis_text = f"X{col} Y{row}"
+        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        button.setIcon(QIcon())
+        button.setText(f"{axis_text}\n{text}" if text else axis_text)
+        button.setMinimumSize(96, 96)
+        button.setMaximumSize(16777215, 16777215)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def _pixmap(self, bitmap: bytes) -> QPixmap:
         pixel_count = max(1, len(bitmap) // 3)
         size = int(round(math.sqrt(pixel_count)))
         if size * size * 3 != len(bitmap):
-            return QIcon()
+            return QPixmap()
         image = QImage(bitmap, size, size, size * 3, QImage.Format_RGB888).copy()
-        return QIcon(QPixmap.fromImage(image))
+        return QPixmap.fromImage(image)

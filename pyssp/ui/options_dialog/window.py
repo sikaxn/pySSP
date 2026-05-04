@@ -177,9 +177,11 @@ class OptionsDialog(
         "web_remote_ws_port": 5051,
         "companion_satellite_host": "127.0.0.1",
         "companion_satellite_port": 16622,
-        "companion_satellite_start_mode": "manual",
-        "companion_satellite_columns": 5,
-        "companion_satellite_rows": 3,
+        "companion_satellite_enabled": False,
+        "companion_satellite_columns": 8,
+        "companion_satellite_rows": 4,
+        "companion_satellite_render_mode": "bitmap",
+        "companion_satellite_serial_suffix": default_companion_satellite_serial_suffix(),
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
         "timecode_mode": TIMECODE_MODE_FOLLOW,
@@ -443,9 +445,11 @@ class OptionsDialog(
         web_remote_url: str,
         companion_satellite_host: str,
         companion_satellite_port: int,
-        companion_satellite_start_mode: str,
+        companion_satellite_enabled: bool,
         companion_satellite_columns: int,
         companion_satellite_rows: int,
+        companion_satellite_render_mode: str,
+        companion_satellite_serial_suffix: str,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
         state_colors: Dict[str, str],
@@ -724,11 +728,17 @@ class OptionsDialog(
         self._available_midi_devices = list(available_midi_devices)
         self._companion_satellite_host = str(companion_satellite_host or "").strip() or "127.0.0.1"
         self._companion_satellite_port = max(1, min(65535, int(companion_satellite_port)))
-        self._companion_satellite_start_mode = str(companion_satellite_start_mode or "manual").strip().lower()
-        if self._companion_satellite_start_mode not in {"manual", "auto", "open"}:
-            self._companion_satellite_start_mode = "manual"
+        self._companion_satellite_enabled = bool(companion_satellite_enabled)
         self._companion_satellite_columns = max(1, min(12, int(companion_satellite_columns)))
         self._companion_satellite_rows = max(1, min(8, int(companion_satellite_rows)))
+        self._companion_satellite_render_mode = (
+            str(companion_satellite_render_mode or "").strip().lower()
+            if str(companion_satellite_render_mode or "").strip().lower() in {"bitmap", "styled"}
+            else "bitmap"
+        )
+        self._companion_satellite_serial_suffix = (
+            str(companion_satellite_serial_suffix or "").strip() or default_companion_satellite_serial_suffix()
+        )
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -918,9 +928,11 @@ class OptionsDialog(
             self._build_companion_satellite_page(
                 host=self._companion_satellite_host,
                 port=self._companion_satellite_port,
-                start_mode=self._companion_satellite_start_mode,
+                enabled=self._companion_satellite_enabled,
                 columns=self._companion_satellite_columns,
                 rows=self._companion_satellite_rows,
+                render_mode=self._companion_satellite_render_mode,
+                serial_suffix=self._companion_satellite_serial_suffix,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

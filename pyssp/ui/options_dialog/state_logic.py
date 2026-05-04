@@ -780,13 +780,15 @@ class StateLogicMixin:
         d = self._DEFAULTS
         self.companion_satellite_host_edit.setText(str(d.get("companion_satellite_host", "127.0.0.1")))
         self.companion_satellite_port_spin.setValue(int(d.get("companion_satellite_port", 16622)))
-        self._set_combo_data_or_default(
-            self.companion_satellite_start_mode_combo,
-            str(d.get("companion_satellite_start_mode", "manual")),
-            "manual",
+        self.companion_satellite_enabled_checkbox.setChecked(bool(d.get("companion_satellite_enabled", False)))
+        self.companion_satellite_columns_spin.setValue(int(d.get("companion_satellite_columns", 8)))
+        self.companion_satellite_rows_spin.setValue(int(d.get("companion_satellite_rows", 4)))
+        render_mode = str(d.get("companion_satellite_render_mode", "bitmap")).strip().lower()
+        index = self.companion_satellite_render_mode_combo.findData(render_mode if render_mode in {"bitmap", "styled"} else "bitmap")
+        self.companion_satellite_render_mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.companion_satellite_serial_suffix_edit.setText(
+            str(d.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix()))
         )
-        self.companion_satellite_columns_spin.setValue(int(d.get("companion_satellite_columns", 5)))
-        self.companion_satellite_rows_spin.setValue(int(d.get("companion_satellite_rows", 3)))
 
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS

@@ -1261,9 +1261,11 @@ class SettingsArchiveMixin:
         self.settings.web_remote_ws_port = self.web_remote_ws_port
         self.settings.companion_satellite_host = self.companion_satellite_host
         self.settings.companion_satellite_port = self.companion_satellite_port
-        self.settings.companion_satellite_start_mode = self.companion_satellite_start_mode
+        self.settings.companion_satellite_enabled = self.companion_satellite_enabled
         self.settings.companion_satellite_columns = self.companion_satellite_columns
         self.settings.companion_satellite_rows = self.companion_satellite_rows
+        self.settings.companion_satellite_render_mode = self.companion_satellite_render_mode
+        self.settings.companion_satellite_serial_suffix = self.companion_satellite_serial_suffix
         self.settings.timecode_audio_output_device = self.timecode_audio_output_device
         self.settings.timecode_midi_output_device = self.timecode_midi_output_device
         self.settings.timecode_mode = self.timecode_mode

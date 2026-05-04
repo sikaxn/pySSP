@@ -15,10 +15,6 @@ class _CompanionSatelliteBridge(QObject):
 
 
 class CompanionSatelliteMixin:
-    def _normalize_companion_satellite_start_mode(self, raw: str) -> str:
-        token = str(raw or "manual").strip().lower()
-        return token if token in {"manual", "auto", "open"} else "manual"
-
     def _companion_satellite_event(self, event_type: str, payload: dict) -> None:
         if event_type == "status":
             self._companion_satellite_bridge.statusChanged.emit(
@@ -38,12 +34,7 @@ class CompanionSatelliteMixin:
             self._companion_satellite_bridge.keysCleared.emit()
 
     def _companion_satellite_should_run(self) -> bool:
-        mode = self._normalize_companion_satellite_start_mode(self.companion_satellite_start_mode)
-        if mode == "auto":
-            return True
-        if mode == "open":
-            return self._companion_satellite_window is not None and self._companion_satellite_window.isVisible()
-        return False
+        return bool(self.companion_satellite_enabled)
 
     def _companion_satellite_client_matches_settings(self) -> bool:
         client = self._companion_satellite_client
@@ -54,6 +45,9 @@ class CompanionSatelliteMixin:
             and int(client.port) == int(self.companion_satellite_port)
             and int(client.columns) == int(self.companion_satellite_columns)
             and int(client.rows) == int(self.companion_satellite_rows)
+            and client.serial_suffix == CompanionSatelliteClient._normalize_serial_suffix(
+                self.companion_satellite_serial_suffix
+            )
         )
 
     def _apply_companion_satellite_state(self) -> None:
@@ -73,6 +67,7 @@ class CompanionSatelliteMixin:
                 port=self.companion_satellite_port,
                 columns=self.companion_satellite_columns,
                 rows=self.companion_satellite_rows,
+                serial_suffix=self.companion_satellite_serial_suffix,
                 on_event=self._companion_satellite_event,
             )
         if not self._companion_satellite_client.is_running:
@@ -99,17 +94,12 @@ class CompanionSatelliteMixin:
         window.raise_()
         window.activateWindow()
         self._refresh_companion_satellite_window()
-        if self._normalize_companion_satellite_start_mode(self.companion_satellite_start_mode) == "open":
-            self._apply_companion_satellite_state()
 
     def _ensure_companion_satellite_window(self) -> CompanionSatelliteWindow:
         window = self._companion_satellite_window
         if window is not None:
             return window
         window = CompanionSatelliteWindow(None)
-        window.startRequested.connect(self._start_companion_satellite_client)
-        window.stopRequested.connect(self._stop_companion_satellite_client)
-        window.reconnectRequested.connect(self._reconnect_companion_satellite_client)
         window.openOptionsRequested.connect(self._open_companion_satellite_options)
         window.buttonPressed.connect(self._on_companion_satellite_button_pressed)
         window.windowClosed.connect(self._on_companion_satellite_window_closed)
@@ -118,8 +108,7 @@ class CompanionSatelliteMixin:
         return window
 
     def _on_companion_satellite_window_closed(self) -> None:
-        if self._normalize_companion_satellite_start_mode(self.companion_satellite_start_mode) == "open":
-            self._apply_companion_satellite_state()
+        return
 
     def _refresh_companion_satellite_window(self) -> None:
         window = self._companion_satellite_window
@@ -127,14 +116,36 @@ class CompanionSatelliteMixin:
             return
         window.set_target(self.companion_satellite_host, self.companion_satellite_port)
         window.set_grid_size(self.companion_satellite_columns, self.companion_satellite_rows)
+        window.set_render_mode(self.companion_satellite_render_mode)
         state, message = self._companion_satellite_last_status
         window.set_connection_state(state, message)
 
     def _on_companion_satellite_status_changed(self, state: str, message: str) -> None:
         self._companion_satellite_last_status = (str(state or ""), str(message or ""))
+        self._update_companion_satellite_status_indicator()
         window = self._companion_satellite_window
         if window is not None:
             window.set_connection_state(state, message)
+
+    def _update_companion_satellite_status_indicator(self) -> None:
+        label = getattr(self, "companion_satellite_status_icon", None)
+        if label is None:
+            return
+        state = str(self._companion_satellite_last_status[0] or "").strip().lower()
+        text = "SAT"
+        if state == "connected":
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#165A20;background:#CFF3D6;border:1px solid #2E9B47;border-radius:8px;padding:0 6px;}"
+        elif state in {"connecting", "reconnecting"}:
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#5F4200;background:#FFF0A6;border:1px solid #CFAE2A;border-radius:8px;padding:0 6px;}"
+        else:
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#4A4F55;background:#D6D9DE;border:1px solid #8C939D;border-radius:8px;padding:0 6px;}"
+        label.setText(text)
+        label.setStyleSheet(style)
+        message = str(self._companion_satellite_last_status[1] or "").strip()
+        tooltip = message or (
+            tr("Connected") if state == "connected" else tr("Connecting") if state in {"connecting", "reconnecting"} else tr("Not Connected")
+        )
+        label.setToolTip(tooltip)
 
     def _on_companion_satellite_hello_received(self, version: str) -> None:
         self._companion_satellite_api_version = str(version or "").strip()

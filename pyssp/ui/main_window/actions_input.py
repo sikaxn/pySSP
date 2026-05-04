@@ -1489,9 +1489,11 @@ class ActionsInputMixin:
             web_remote_url=self._web_remote_open_url(),
             companion_satellite_host=self.companion_satellite_host,
             companion_satellite_port=self.companion_satellite_port,
-            companion_satellite_start_mode=self.companion_satellite_start_mode,
+            companion_satellite_enabled=self.companion_satellite_enabled,
             companion_satellite_columns=self.companion_satellite_columns,
             companion_satellite_rows=self.companion_satellite_rows,
+            companion_satellite_render_mode=self.companion_satellite_render_mode,
+            companion_satellite_serial_suffix=self.companion_satellite_serial_suffix,
             main_transport_timeline_mode=self.main_transport_timeline_mode,
             main_jog_outside_cue_action=self.main_jog_outside_cue_action,
             state_colors={
@@ -1830,9 +1832,11 @@ class ActionsInputMixin:
         self.web_remote_ws_port = int(self.web_remote_port) + 1
         self.companion_satellite_host = dialog.selected_companion_satellite_host()
         self.companion_satellite_port = dialog.selected_companion_satellite_port()
-        self.companion_satellite_start_mode = dialog.selected_companion_satellite_start_mode()
+        self.companion_satellite_enabled = dialog.selected_companion_satellite_enabled()
         self.companion_satellite_columns = dialog.selected_companion_satellite_columns()
         self.companion_satellite_rows = dialog.selected_companion_satellite_rows()
+        self.companion_satellite_render_mode = dialog.selected_companion_satellite_render_mode()
+        self.companion_satellite_serial_suffix = dialog.selected_companion_satellite_serial_suffix()
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()

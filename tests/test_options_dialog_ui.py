@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pyssp.settings_store import default_quick_action_keys
+from pyssp.settings_store import default_companion_satellite_serial_suffix, default_quick_action_keys
 from pyssp.timecode import MIDI_OUTPUT_DEVICE_NONE, TIMECODE_MODE_FOLLOW
 from pyssp.ui.options_dialog import OptionsDialog
 
@@ -187,14 +187,20 @@ def _build_dialog(**overrides):
         companion_satellite_port=int(
             overrides.get("companion_satellite_port", defaults["companion_satellite_port"])
         ),
-        companion_satellite_start_mode=str(
-            overrides.get("companion_satellite_start_mode", defaults["companion_satellite_start_mode"])
+        companion_satellite_enabled=bool(
+            overrides.get("companion_satellite_enabled", defaults["companion_satellite_enabled"])
         ),
         companion_satellite_columns=int(
             overrides.get("companion_satellite_columns", defaults["companion_satellite_columns"])
         ),
         companion_satellite_rows=int(
             overrides.get("companion_satellite_rows", defaults["companion_satellite_rows"])
+        ),
+        companion_satellite_render_mode=str(
+            overrides.get("companion_satellite_render_mode", defaults["companion_satellite_render_mode"])
+        ),
+        companion_satellite_serial_suffix=str(
+            overrides.get("companion_satellite_serial_suffix", defaults["companion_satellite_serial_suffix"])
         ),
         main_transport_timeline_mode=defaults["main_transport_timeline_mode"],
         main_jog_outside_cue_action=defaults["main_jog_outside_cue_action"],
@@ -794,28 +800,44 @@ def test_companion_satellite_options_round_trip(qapp):
     dialog = _build_dialog(
         companion_satellite_host="10.0.0.8",
         companion_satellite_port=17777,
-        companion_satellite_start_mode="open",
+        companion_satellite_enabled=True,
         companion_satellite_columns=7,
         companion_satellite_rows=4,
+        companion_satellite_render_mode="styled",
+        companion_satellite_serial_suffix="my-surface",
         initial_page="Companion Satellite",
     )
     assert dialog.selected_companion_satellite_host() == "10.0.0.8"
     assert dialog.selected_companion_satellite_port() == 17777
-    assert dialog.selected_companion_satellite_start_mode() == "open"
+    assert dialog.selected_companion_satellite_enabled() is True
     assert dialog.selected_companion_satellite_columns() == 7
     assert dialog.selected_companion_satellite_rows() == 4
+    assert dialog.selected_companion_satellite_render_mode() == "styled"
+    assert dialog.selected_companion_satellite_serial_suffix() == "my-surface"
     dialog.companion_satellite_host_edit.setText("companion.local")
     dialog.companion_satellite_port_spin.setValue(16622)
-    dialog.companion_satellite_start_mode_combo.setCurrentIndex(
-        dialog.companion_satellite_start_mode_combo.findData("auto")
-    )
+    dialog.companion_satellite_enabled_checkbox.setChecked(False)
     dialog.companion_satellite_columns_spin.setValue(5)
     dialog.companion_satellite_rows_spin.setValue(3)
+    dialog.companion_satellite_render_mode_combo.setCurrentIndex(
+        dialog.companion_satellite_render_mode_combo.findData("bitmap")
+    )
+    dialog.companion_satellite_serial_suffix_edit.setText("pyssp:custom_suffix")
     assert dialog.selected_companion_satellite_host() == "companion.local"
     assert dialog.selected_companion_satellite_port() == 16622
-    assert dialog.selected_companion_satellite_start_mode() == "auto"
+    assert dialog.selected_companion_satellite_enabled() is False
     assert dialog.selected_companion_satellite_columns() == 5
     assert dialog.selected_companion_satellite_rows() == 3
+    assert dialog.selected_companion_satellite_render_mode() == "bitmap"
+    assert dialog.selected_companion_satellite_serial_suffix() == "custom_suffix"
+
+
+def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
+    dialog = _build_dialog(initial_page="Companion Satellite")
+    assert dialog.companion_satellite_columns_spin.value() == 8
+    assert dialog.companion_satellite_rows_spin.value() == 4
+    assert dialog.selected_companion_satellite_render_mode() == "bitmap"
+    assert dialog.selected_companion_satellite_serial_suffix() == default_companion_satellite_serial_suffix()
 
 
 def test_options_pages_are_wrapped_in_scroll_areas(qapp):

@@ -24,6 +24,7 @@ class _FakeCompanionServer:
         self._stop_event = threading.Event()
         self.add_device_lines: queue.Queue[str] = queue.Queue()
         self.key_press_lines: queue.Queue[str] = queue.Queue()
+        self.change_page_lines: queue.Queue[str] = queue.Queue()
         self._thread = threading.Thread(target=self._run, name="fake-companion-satellite", daemon=True)
         self._conn: socket.socket | None = None
 
@@ -73,12 +74,14 @@ class _FakeCompanionServer:
                         self.add_device_lines.put(line)
                         conn.sendall(
                             (
-                                f"KEY-STATE DEVICEID=pyssp-main KEY=0 PRESSED=0 COLOR=#112233 "
+                                f"KEY-STATE DEVICEID=pyssp:my-surface KEY=0 PRESSED=0 COLOR=#112233 "
                                 f'TEXT="{text_payload}" FONT_SIZE=18\n'
                             ).encode("utf-8")
                         )
                     elif line.startswith("KEY-PRESS "):
                         self.key_press_lines.put(line)
+                    elif line.startswith("CHANGE-PAGE "):
+                        self.change_page_lines.put(line)
 
 
 def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
@@ -129,6 +132,7 @@ def test_companion_satellite_client_registers_surface_and_sends_key_presses():
         assert "KEYS_TOTAL=20" in add_device_line
         assert "KEYS_PER_ROW=5" in add_device_line
         assert 'SERIAL="pyssp:my-surface"' in add_device_line
+        assert 'CAN_CHANGE_PAGE="Page buttons"' in add_device_line
         seen_key_state = None
         for _ in range(10):
             event_type, payload = events.get(timeout=5.0)
@@ -141,7 +145,11 @@ def test_companion_satellite_client_registers_surface_and_sends_key_presses():
         assert seen_key_state["state"]["color"] == "#112233"
         assert client.send_key_press(0, True) is True
         key_press_line = server.key_press_lines.get(timeout=5.0)
-        assert "KEY-PRESS DEVICEID=pyssp-main KEY=0 PRESSED=true" in key_press_line
+        assert "KEY-PRESS DEVICEID=pyssp:my-surface KEY=0 PRESSED=true" in key_press_line
+        assert client.send_change_page(True) is True
+        assert "CHANGE-PAGE DEVICEID=pyssp:my-surface DIRECTION=1" in server.change_page_lines.get(timeout=5.0)
+        assert client.send_change_page(False) is True
+        assert "CHANGE-PAGE DEVICEID=pyssp:my-surface DIRECTION=0" in server.change_page_lines.get(timeout=5.0)
     finally:
         client.stop()
         server.stop()

@@ -1,4 +1,5 @@
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
+from pyssp.utility_audio import UTILITY_SOURCE_TYPE
 
 
 def test_parse_time_mm_ss():
@@ -245,3 +246,86 @@ def test_load_set_lyric_file_field(tmp_path):
     result = load_set_file(str(set_path))
     slot = result.pages["A"][0][0]
     assert slot.lyric_file == "C:\\Lyrics\\song1.lrc"
+
+
+def test_load_set_utility_sound_button_reconstructs_source_from_pyssp_fields(tmp_path):
+    set_path = tmp_path / "utility.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Unsupported utility sound button. A newer version of pySSP is required.%%",
+                "n1=Unsupported utility sound button. A newer version of pySSP is required.",
+                "t1= ",
+                "activity1=7",
+                "co1=clBtnFace",
+                "pysspsourcetype1=utility",
+                "pyssputilitymode1=metronome",
+                "pyssputilityduration1=00:00:10:250",
+                "pyssputilitytitle1=Count In",
+                "pyssputilitynotes1=Utility note",
+                "pyssputilitylyric1=C:\\\\Lyrics\\\\countin.lrc",
+                "pyssputilitytempo1=123",
+                "pyssputilitytimesig1=3/4",
+                "pyssputilityplayed1=1",
+                "v1=66",
+                "pysspcuestart1=00:01:00",
+                "pysspcueend1=00:04:00",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.source_type == UTILITY_SOURCE_TYPE
+    assert slot.marker is False
+    assert slot.file_path == ""
+    assert slot.title == "Count In"
+    assert slot.notes == "Utility note"
+    assert slot.lyric_file == "C:\\Lyrics\\countin.lrc"
+    assert slot.duration_ms == 10250
+    assert slot.utility_spec is not None
+    assert slot.utility_spec.mode == "metronome"
+    assert slot.utility_spec.tempo_bpm == 123.0
+    assert slot.utility_spec.time_signature_num == 3
+    assert slot.utility_spec.time_signature_den == 4
+    assert slot.played is True
+    assert slot.volume_override_pct == 66
+    assert slot.cue_start_ms == 1000
+    assert slot.cue_end_ms == 4000
+
+
+def test_load_set_marker_fallback_without_utility_source_type_stays_marker(tmp_path):
+    set_path = tmp_path / "utility_legacy_marker.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Unsupported utility sound button. A newer version of pySSP is required.%%",
+                "n1=Unsupported utility sound button. A newer version of pySSP is required.",
+                "t1= ",
+                "activity1=7",
+                "co1=clBtnFace",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.marker is True
+    assert slot.source_type == "file"
+    assert slot.utility_spec is None

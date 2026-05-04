@@ -21,6 +21,13 @@ from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
 from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, has_active_processing, normalize_config
 from pyssp.ffmpeg_support import FFmpegPCMStream, ffmpeg_available, probe_media_duration_ms
+from pyssp.utility_audio import (
+    FILE_SOURCE_TYPE,
+    UTILITY_SOURCE_TYPE,
+    UtilitySoundSpec,
+    is_utility_source_payload,
+    normalize_utility_spec,
+)
 
 _DECODER_READY = False
 _NEXT_STREAM_ID = 0
@@ -53,6 +60,88 @@ _WAVEFORM_PRELOAD_SAMPLE_COUNTS: Tuple[int, ...] = (1800, 1024)
 _WAVEFORM_CACHE_LIMIT_MB_MIN = 128
 _WAVEFORM_CACHE_LIMIT_MB_MAX = 16 * 1024
 _WAVEFORM_CACHE_LIMIT_BYTES = 1024 * 1024 * 1024
+
+
+def _utility_duration_frames(spec: UtilitySoundSpec, sample_rate: int) -> int:
+    return max(1, int(round((max(1, int(spec.duration_ms)) / 1000.0) * float(sample_rate))))
+
+
+def _hash_noise_values(values: np.ndarray, seed: int) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.uint64) + np.uint64(seed)
+    arr ^= (arr >> np.uint64(12))
+    arr *= np.uint64(0x9E3779B185EBCA87)
+    arr ^= (arr >> np.uint64(25))
+    arr *= np.uint64(0xC2B2AE3D27D4EB4F)
+    arr ^= (arr >> np.uint64(27))
+    normalized = ((arr & np.uint64(0xFFFFFFFF)).astype(np.float64) / 2147483647.5) - 1.0
+    return normalized.astype(np.float32)
+
+
+def _generate_utility_samples(
+    spec: UtilitySoundSpec,
+    sample_positions: np.ndarray,
+    sample_rate: int,
+    channels: int,
+) -> np.ndarray:
+    positions = np.asarray(sample_positions, dtype=np.float64).reshape(-1)
+    if len(positions) <= 0:
+        return np.zeros((0, max(1, int(channels))), dtype=np.float32)
+    mode = spec.mode
+    if mode == "blank":
+        mono = np.zeros((len(positions),), dtype=np.float32)
+    elif mode == "waveform":
+        phase = (positions * (float(spec.frequency_hz) / float(sample_rate))) % 1.0
+        if spec.waveform_type == "square":
+            mono = np.where(phase < 0.5, 1.0, -1.0).astype(np.float32)
+        elif spec.waveform_type == "triangle":
+            mono = (2.0 * np.abs((2.0 * phase) - 1.0) - 1.0).astype(np.float32)
+        elif spec.waveform_type == "sawtooth":
+            mono = ((2.0 * phase) - 1.0).astype(np.float32)
+        else:
+            mono = np.sin(2.0 * np.pi * phase).astype(np.float32)
+    elif mode == "metronome":
+        beat_samples = max(
+            1.0,
+            (60.0 / max(1.0, float(spec.tempo_bpm))) * float(sample_rate) * (4.0 / float(spec.time_signature_den)),
+        )
+        click_len = max(1.0, min(float(sample_rate) * 0.03, beat_samples * 0.45))
+        beat_index = np.floor(positions / beat_samples).astype(np.int64)
+        in_click = np.mod(positions, beat_samples)
+        active = in_click < click_len
+        envelope = np.exp(-5.5 * (in_click / click_len)).astype(np.float32)
+        accent = (np.mod(beat_index, max(1, int(spec.time_signature_num))) == 0).astype(np.float32)
+        freq = np.where(accent > 0, 2200.0, 1600.0)
+        phase = 2.0 * np.pi * (in_click / float(sample_rate)) * freq
+        mono = (np.sin(phase).astype(np.float32) * envelope * np.where(accent > 0, 0.95, 0.60) * active.astype(np.float32))
+    else:
+        sample_idx = np.floor(positions).astype(np.int64)
+        accum = np.zeros((len(sample_idx),), dtype=np.float32)
+        octave_count = 8
+        for octave in range(octave_count):
+            buckets = np.right_shift(sample_idx, octave)
+            accum += _hash_noise_values(buckets, seed=0x13579BDF + (octave * 0x10203))
+        accum += 0.25 * _hash_noise_values(sample_idx, seed=0x2468ACE)
+        mono = np.clip(accum / float(octave_count + 0.25), -1.0, 1.0).astype(np.float32)
+    if channels <= 1:
+        return mono.reshape(-1, 1)
+    return np.repeat(mono.reshape(-1, 1), max(1, int(channels)), axis=1).astype(np.float32, copy=False)
+
+
+def _compute_waveform_peaks_from_utility(
+    spec: UtilitySoundSpec,
+    sample_count: int = 1024,
+    sample_rate: int = 44100,
+    channels: int = 2,
+) -> List[float]:
+    points = max(1, int(sample_count))
+    duration_frames = _utility_duration_frames(spec, sample_rate)
+    preview_samples = max(points * 64, 4096)
+    if duration_frames <= preview_samples:
+        positions = np.arange(duration_frames, dtype=np.float64)
+    else:
+        positions = np.linspace(0.0, max(0.0, float(duration_frames - 1)), num=preview_samples, dtype=np.float64)
+    frames = _generate_utility_samples(spec, positions, sample_rate, channels)
+    return _compute_waveform_peaks_from_frames(frames, points)
 
 
 def _shutdown_preload_executor() -> None:
@@ -910,6 +999,25 @@ def _prepare_media_source(
     return frames, int(duration_ms), bool(use_streaming), decoder
 
 
+def _prepare_audio_source(
+    source: object,
+    sample_rate: int,
+    channels: int,
+    dsp_config: Optional[DSPConfig] = None,
+) -> Tuple[Optional[np.ndarray], int, bool, Optional[FFmpegPCMStream], str, Optional[UtilitySoundSpec]]:
+    if is_utility_source_payload(source):
+        spec = normalize_utility_spec(dict(source).get("utility_spec"))
+        return None, int(spec.duration_ms), False, None, "", spec
+    file_path = str(source or "").strip()
+    frames, duration_ms, use_streaming, decoder = _prepare_media_source(
+        file_path,
+        sample_rate,
+        channels,
+        dsp_config=dsp_config,
+    )
+    return frames, duration_ms, use_streaming, decoder, file_path, None
+
+
 def _load_sound_with_fallback(file_path: str):
     try:
         return pygame.mixer.Sound(file_path)
@@ -1054,6 +1162,7 @@ class ExternalMediaPlayer(QObject):
         _ensure_decoder()
 
         self._stream_id = _allocate_stream_id()
+        self._media_source_type = FILE_SOURCE_TYPE
         self._media_path = ""
         self._state = self.StoppedState
         self._duration_ms = 0
@@ -1068,6 +1177,7 @@ class ExternalMediaPlayer(QObject):
         self._channels = int(mixer_info[2])
 
         self._source_frames: Optional[np.ndarray] = None
+        self._utility_spec: Optional[UtilitySoundSpec] = None
         self._stream_decoder: Optional[FFmpegPCMStream] = None
         self._pending_media_request_id = 0
         self._streaming_mode = False
@@ -1106,21 +1216,30 @@ class ExternalMediaPlayer(QObject):
     def setNotifyInterval(self, interval_ms: int) -> None:
         self._poll_timer.setInterval(max(20, int(interval_ms)))
 
-    def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
+    def setMedia(self, source: object, dsp_config: Optional[DSPConfig] = None) -> None:
         self.stop()
         with self._lock:
             self._discard_declick_history_locked()
-        frames, duration_ms, use_streaming, new_decoder = _prepare_media_source(
-            file_path,
+        frames, duration_ms, use_streaming, new_decoder, media_path, utility_spec = _prepare_audio_source(
+            source,
             self._sample_rate,
             self._channels,
             dsp_config=dsp_config,
         )
-        self._install_prepared_media(file_path, frames, duration_ms, use_streaming, new_decoder, dsp_config)
+        self._install_prepared_media(
+            source,
+            media_path,
+            frames,
+            duration_ms,
+            use_streaming,
+            new_decoder,
+            utility_spec,
+            dsp_config,
+        )
 
     def setMediaAsync(
         self,
-        file_path: str,
+        source: object,
         dsp_config: Optional[DSPConfig] = None,
         request_id: Optional[int] = None,
     ) -> int:
@@ -1136,8 +1255,8 @@ class ExternalMediaPlayer(QObject):
 
         def _worker() -> None:
             try:
-                frames, duration_ms, use_streaming, decoder = _prepare_media_source(
-                    file_path,
+                frames, duration_ms, use_streaming, decoder, media_path, utility_spec = _prepare_audio_source(
+                    source,
                     self._sample_rate,
                     self._channels,
                     dsp_config=dsp_config,
@@ -1145,18 +1264,21 @@ class ExternalMediaPlayer(QObject):
                 payload = {
                     "request_id": request_id,
                     "ok": True,
-                    "file_path": file_path,
+                    "source": source,
+                    "file_path": media_path,
                     "frames": frames,
                     "duration_ms": duration_ms,
                     "use_streaming": use_streaming,
                     "decoder": decoder,
+                    "utility_spec": utility_spec,
                     "dsp_config": dsp_config,
                 }
             except Exception as exc:
                 payload = {
                     "request_id": request_id,
                     "ok": False,
-                    "file_path": file_path,
+                    "source": source,
+                    "file_path": "" if isinstance(source, dict) else str(source or ""),
                     "error": str(exc),
                 }
             self._applyPreparedMedia.emit(payload)
@@ -1173,7 +1295,8 @@ class ExternalMediaPlayer(QObject):
         target = 0
         with self._lock:
             if (self._source_frames is None) and (not self._streaming_mode):
-                return
+                if self._utility_spec is None:
+                    return
             if self._state == self.PlayingState:
                 return
             if self._streaming_mode:
@@ -1264,6 +1387,14 @@ class ExternalMediaPlayer(QObject):
                 self._source_pos_anchor_t = time.perf_counter()
                 self._source_pos_anchor_tempo = self._tempo_ratio_locked()
                 self._ended = False
+            elif self._utility_spec is not None:
+                total_frames = float(_utility_duration_frames(self._utility_spec, self._sample_rate))
+                self._source_pos = (target / 1000.0) * self._sample_rate
+                self._source_pos = max(0.0, min(self._source_pos, total_frames))
+                self._source_pos_anchor = self._source_pos
+                self._source_pos_anchor_t = time.perf_counter()
+                self._source_pos_anchor_tempo = self._tempo_ratio_locked()
+                self._ended = False
             elif self._streaming_mode:
                 self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
                 self._source_pos = (target / 1000.0) * self._sample_rate
@@ -1296,14 +1427,17 @@ class ExternalMediaPlayer(QObject):
     def enginePositionMs(self) -> int:
         with self._lock:
             if self._duration_ms <= 0:
-                if self._streaming_mode:
+                if self._streaming_mode or self._utility_spec is not None:
                     return max(0, int((self._source_pos / float(self._sample_rate)) * 1000.0))
                 return 0
             pos_samples = self._source_pos
-            if self._state == self.PlayingState and self._source_frames is not None:
+            if self._state == self.PlayingState and (self._source_frames is not None or self._utility_spec is not None):
                 elapsed = max(0.0, time.perf_counter() - self._source_pos_anchor_t)
                 pos_samples = self._source_pos_anchor + (elapsed * self._sample_rate * self._source_pos_anchor_tempo)
-                pos_samples = max(0.0, min(float(len(self._source_frames)), pos_samples))
+                if self._source_frames is not None:
+                    pos_samples = max(0.0, min(float(len(self._source_frames)), pos_samples))
+                elif self._utility_spec is not None:
+                    pos_samples = max(0.0, min(float(_utility_duration_frames(self._utility_spec, self._sample_rate)), pos_samples))
             pos_ms = int((pos_samples / float(self._sample_rate)) * 1000.0)
             return max(0, min(pos_ms, self._duration_ms))
 
@@ -1327,7 +1461,10 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             frames = self._source_frames
             media_path = str(self._media_path or "").strip()
+            utility_spec = self._utility_spec
         points = max(1, int(sample_count))
+        if utility_spec is not None:
+            return _compute_waveform_peaks_from_utility(utility_spec, points, self._sample_rate, self._channels)
         if frames is not None:
             if media_path:
                 cached_peaks = _load_waveform_peaks_from_disk(media_path, points)
@@ -1343,7 +1480,16 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             frames = self._source_frames
             media_path = str(self._media_path or "").strip()
+            utility_spec = self._utility_spec
         points = max(1, int(sample_count))
+        if utility_spec is not None:
+            return _WAVEFORM_EXECUTOR.submit(
+                _compute_waveform_peaks_from_utility,
+                utility_spec,
+                points,
+                self._sample_rate,
+                self._channels,
+            )
         if frames is not None:
             return _WAVEFORM_EXECUTOR.submit(self._waveform_from_frames_with_cache, media_path, frames, points)
         return _WAVEFORM_EXECUTOR.submit(_compute_waveform_peaks_from_path, media_path, points)
@@ -1557,22 +1703,26 @@ class ExternalMediaPlayer(QObject):
             self.mediaLoadFinished.emit(request_id, False, str(payload.get("error", "Unknown audio load failure")))
             return
         self._install_prepared_media(
+            payload.get("source"),
             str(payload.get("file_path", "")),
             payload.get("frames"),
             int(payload.get("duration_ms", 0)),
             bool(payload.get("use_streaming", False)),
             payload.get("decoder"),
+            payload.get("utility_spec"),
             payload.get("dsp_config"),
         )
         self.mediaLoadFinished.emit(request_id, True, "")
 
     def _install_prepared_media(
         self,
-        file_path: str,
+        source: object,
+        media_path: str,
         frames: Optional[np.ndarray],
         duration_ms: int,
         use_streaming: bool,
         new_decoder: Optional[FFmpegPCMStream],
+        utility_spec: Optional[UtilitySoundSpec],
         dsp_config: Optional[DSPConfig],
     ) -> None:
         with self._lock:
@@ -1582,8 +1732,12 @@ class ExternalMediaPlayer(QObject):
             self._streaming_mode = False
             self._stream_seek_in_progress = False
             self._stream_pending = np.zeros((0, self._channels), dtype=np.float32)
-            self._media_path = file_path
+            self._media_path = str(media_path or "").strip()
+            self._media_source_type = (
+                UTILITY_SOURCE_TYPE if utility_spec is not None else FILE_SOURCE_TYPE
+            )
             self._source_frames = frames
+            self._utility_spec = utility_spec
             if use_streaming and new_decoder is not None:
                 self._stream_decoder = new_decoder
                 self._streaming_mode = True
@@ -1595,7 +1749,7 @@ class ExternalMediaPlayer(QObject):
             self._position_ms = 0
             self._ended = False
             self._fresh_media_start_pending = True
-            self._fresh_media_fade_frames = self._fresh_start_fade_frames_for_media_locked(file_path)
+            self._fresh_media_fade_frames = self._fresh_start_fade_frames_for_media_locked(self._media_path)
             self._dsp_processor.reset()
             if dsp_config is not None:
                 self._dsp_config = normalize_config(dsp_config)
@@ -1631,7 +1785,7 @@ class ExternalMediaPlayer(QObject):
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
                 _update_engine_output_meter(self._stream_id, 0.0, 0.0)
                 return
-            if (self._source_frames is None) and (not self._streaming_mode):
+            if (self._source_frames is None) and (not self._streaming_mode) and self._utility_spec is None:
                 self._meter_levels = (0.0, 0.0)
                 self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
@@ -1654,6 +1808,13 @@ class ExternalMediaPlayer(QObject):
                 tempo_ratio = 1.0
                 user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
                 effective_pitch_ratio = user_pitch_ratio
+            elif self._utility_spec is not None:
+                block = self._read_utility_block_locked(frames)
+                consumed_frames = len(block) if block is not None else 0
+                stream_eof = False
+                tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+                effective_pitch_ratio = user_pitch_ratio / tempo_ratio
             else:
                 block = self._read_source_block_locked(frames)
                 consumed_frames = len(block) if block is not None else 0
@@ -1703,7 +1864,12 @@ class ExternalMediaPlayer(QObject):
                     self._ended = bool(stream_eof)
                 else:
                     self._ended = True
-                    self._source_pos = float(len(self._source_frames)) if self._source_frames is not None else 0.0
+                    if self._source_frames is not None:
+                        self._source_pos = float(len(self._source_frames))
+                    elif self._utility_spec is not None:
+                        self._source_pos = float(_utility_duration_frames(self._utility_spec, self._sample_rate))
+                    else:
+                        self._source_pos = 0.0
 
             if self._streaming_mode:
                 self._source_pos += float(consumed_frames)
@@ -1761,6 +1927,28 @@ class ExternalMediaPlayer(QObject):
         self._source_pos += float(frames) * tempo_ratio
         if self._source_pos >= float(n_src - 1):
             self._source_pos = float(n_src)
+        return block.astype(np.float32, copy=False)
+
+    def _read_utility_block_locked(self, frames: int) -> Optional[np.ndarray]:
+        spec = self._utility_spec
+        if spec is None:
+            return None
+        duration_frames = _utility_duration_frames(spec, self._sample_rate)
+        if duration_frames <= 0:
+            return None
+        tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+        idx = self._source_pos + (np.arange(frames, dtype=np.float64) * tempo_ratio)
+        valid = idx < float(duration_frames)
+        if not np.any(valid):
+            return None
+        valid_count = int(np.count_nonzero(valid))
+        block = _generate_utility_samples(spec, idx[:valid_count], self._sample_rate, self._channels)
+        if valid_count < frames:
+            pad = np.zeros((frames - valid_count, self._channels), dtype=np.float32)
+            block = np.vstack((block, pad))
+        self._source_pos += float(frames) * tempo_ratio
+        if self._source_pos >= float(duration_frames):
+            self._source_pos = float(duration_frames)
         return block.astype(np.float32, copy=False)
 
     def _read_stream_block_locked(self, frames: int) -> Tuple[Optional[np.ndarray], int, bool]:

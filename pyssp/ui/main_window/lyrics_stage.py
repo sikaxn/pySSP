@@ -221,6 +221,8 @@ class LyricsStageMixin:
         path = str(slot.file_path or "").strip()
         base_name = os.path.basename(path) if path else ""
         stem = os.path.splitext(base_name)[0] if base_name else ""
+        if not stem and slot.source_type == "utility":
+            stem = self._slot_display_name(slot)
         if mode == "filepath":
             return path or caption or notes or stem
         if mode == "filename":

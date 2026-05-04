@@ -4,6 +4,7 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec
 
 
 class PlaybackMixin:
@@ -347,9 +348,10 @@ class PlaybackMixin:
         on_success: Optional[Callable[[], None]] = None,
     ) -> Optional[bool]:
         self._cancel_pending_player_media_load(player)
+        source_payload = self._slot_audio_source_payload(slot)
         target_file_path = self._effective_slot_file_path(slot)
-        reason = self._path_safety_reason(target_file_path)
-        if reason:
+        reason = self._path_safety_reason(target_file_path) if target_file_path else None
+        if reason and slot.source_type == FILE_SOURCE_TYPE:
             slot.load_failed = True
             self._stop_player_internal(player)
             title = slot.title.strip() or os.path.basename(target_file_path) or "(unknown)"
@@ -358,7 +360,13 @@ class PlaybackMixin:
             return False
         normalized_path = str(target_file_path or "").strip()
         can_stream_now = can_stream_without_preload(normalized_path)
-        if allow_deferred and normalized_path and (not is_audio_preloaded(normalized_path)) and (not can_stream_now):
+        if (
+            slot.source_type == FILE_SOURCE_TYPE
+            and allow_deferred
+            and normalized_path
+            and (not is_audio_preloaded(normalized_path))
+            and (not can_stream_now)
+        ):
             try:
                 request_audio_preload([normalized_path], prioritize=True, force=True)
             except Exception:
@@ -375,7 +383,7 @@ class PlaybackMixin:
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
             if isinstance(player, AudioPlayerProxy) or sys.platform == "darwin":
-                request_id = player.setMediaAsync(target_file_path, dsp_config=self._dsp_config)
+                request_id = player.setMediaAsync(source_payload, dsp_config=self._dsp_config)
                 self._pending_player_media_loads[id(player)] = {
                     "request_id": int(request_id),
                     "player": player,
@@ -385,7 +393,7 @@ class PlaybackMixin:
                 }
                 self._schedule_player_media_load_status(player, slot)
                 return None
-            player.setMedia(target_file_path, dsp_config=self._dsp_config)
+            player.setMedia(source_payload, dsp_config=self._dsp_config)
             slot.load_failed = False
             self._hide_playback_warning_banner()
             return True
@@ -399,7 +407,7 @@ class PlaybackMixin:
 
     def _schedule_player_media_load_status(self, player: ExternalMediaPlayer, slot: SoundButtonData) -> None:
         path = self._effective_slot_file_path(slot)
-        name = slot.title.strip() or os.path.basename(path) or "(unknown)"
+        name = self._slot_display_name(slot) or os.path.basename(path) or "(unknown)"
         self.statusBar().showMessage(f"{tr('Reading audio file...')} {name}")
         if player is self.player:
             self._set_now_playing_loading(name, 0)
@@ -545,9 +553,9 @@ class PlaybackMixin:
         if not ok:
             slot.load_failed = True
             self._stop_player_internal(player)
-            title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+            title = self._slot_display_name(slot) or "(unknown)"
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {error}")
-            print(f"[pySSP] Audio load failed: {slot.file_path} | {error}", flush=True)
+            print(f"[pySSP] Audio load failed: {self._effective_slot_file_path(slot)} | {error}", flush=True)
             if player is self.player:
                 self.current_playing = None
                 self._update_now_playing_label("")
@@ -567,9 +575,9 @@ class PlaybackMixin:
             except Exception as exc:
                 slot.load_failed = True
                 self._stop_player_internal(player)
-                title = slot.title.strip() or os.path.basename(slot.file_path) or "(unknown)"
+                title = self._slot_display_name(slot) or "(unknown)"
                 self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} Could not play '{title}'. Reason: {exc}")
-                print(f"[pySSP] Audio start failed after async load: {slot.file_path} | {exc}", flush=True)
+                print(f"[pySSP] Audio start failed after async load: {self._effective_slot_file_path(slot)} | {exc}", flush=True)
                 if player is not self.player and player is not self.player_b:
                     try:
                         player.deleteLater()
@@ -1376,6 +1384,8 @@ class PlaybackMixin:
             if not slot.assigned or slot.marker:
                 continue
             path = str(slot.file_path or "").strip()
+            if slot.source_type != FILE_SOURCE_TYPE:
+                continue
             if not path or not os.path.exists(path):
                 continue
             if self._path_safety_reason(path):
@@ -1408,7 +1418,7 @@ class PlaybackMixin:
                 button.set_ram_loaded(False)
                 continue
             slot = page[i]
-            if slot.assigned and not slot.marker:
+            if slot.assigned and not slot.marker and slot.source_type == FILE_SOURCE_TYPE:
                 button.set_ram_loaded(is_audio_preloaded(slot.file_path))
             else:
                 button.set_ram_loaded(False)
@@ -1501,12 +1511,14 @@ class PlaybackMixin:
         for i, cue_slot in enumerate(self.cue_page):
             if not cue_slot.assigned:
                 self.cue_page[i] = SoundButtonData(
+                    source_type=slot.source_type,
                     file_path=slot.file_path,
                     vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
                     duration_ms=slot.duration_ms,
+                    utility_spec=None if slot.utility_spec is None else normalize_utility_spec(slot.utility_spec),
                     custom_color=slot.custom_color,
                     played=slot.played,
                     activity_code=slot.activity_code,

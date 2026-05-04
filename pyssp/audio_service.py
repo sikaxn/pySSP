@@ -4,7 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import itertools
 import queue
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
@@ -165,13 +165,15 @@ class AudioService(QObject):
             player.setNotifyInterval(int(payload.get("interval_ms", 90)))
             return True
         if command == "setMedia":
-            player.setMedia(str(payload.get("file_path", "")), dsp_config=payload.get("dsp_config"))
+            source = _payload_source(payload)
+            player.setMedia(source, dsp_config=payload.get("dsp_config"))
             return True
         if command == "setMediaAsync":
-            return int(player.setMediaAsync(str(payload.get("file_path", "")), dsp_config=payload.get("dsp_config")))
+            source = _payload_source(payload)
+            return int(player.setMediaAsync(source, dsp_config=payload.get("dsp_config")))
         if command == "setMediaAsyncRequest":
             player.setMediaAsync(
-                str(payload.get("file_path", "")),
+                _payload_source(payload),
                 dsp_config=payload.get("dsp_config"),
                 request_id=int(payload.get("request_id", 0)),
             )
@@ -336,10 +338,10 @@ class AudioPlayerProxy(QObject):
     def setNotifyInterval(self, interval_ms: int) -> None:
         self._post("setNotifyInterval", {"interval_ms": int(interval_ms)})
 
-    def setMedia(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> None:
-        self.setMediaAsync(file_path, dsp_config=dsp_config)
+    def setMedia(self, source: Any, dsp_config: Optional[DSPConfig] = None) -> None:
+        self.setMediaAsync(source, dsp_config=dsp_config)
 
-    def setMediaAsync(self, file_path: str, dsp_config: Optional[DSPConfig] = None) -> int:
+    def setMediaAsync(self, source: Any, dsp_config: Optional[DSPConfig] = None) -> int:
         request_id = int(next(self._media_request_counter))
         self._state = self.StoppedState
         self._position_ms = 0
@@ -349,7 +351,7 @@ class AudioPlayerProxy(QObject):
         self._controller.state_cache.update_duration(self._player_id, self._duration_ms)
         self._post(
             "setMediaAsyncRequest",
-            {"file_path": file_path, "dsp_config": dsp_config, "request_id": request_id},
+            _build_media_payload(source, dsp_config, request_id),
         )
         return request_id
 
@@ -467,3 +469,20 @@ class AudioPlayerProxy(QObject):
         if str(player_id) != self._player_id:
             return
         self.mediaLoadFinished.emit(int(request_id), bool(ok), str(error))
+
+
+def _build_media_payload(source: Any, dsp_config: Optional[DSPConfig], request_id: int) -> dict:
+    payload = {"dsp_config": dsp_config, "request_id": int(request_id)}
+    if isinstance(source, dict):
+        payload["source"] = dict(source)
+        payload["file_path"] = ""
+    else:
+        payload["file_path"] = str(source or "")
+    return payload
+
+
+def _payload_source(payload: dict) -> Any:
+    source = payload.get("source")
+    if isinstance(source, dict):
+        return dict(source)
+    return str(payload.get("file_path", ""))

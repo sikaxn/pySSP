@@ -102,6 +102,7 @@ class CompanionSatelliteMixin:
         window = CompanionSatelliteWindow(None)
         window.openOptionsRequested.connect(self._open_companion_satellite_options)
         window.buttonPressed.connect(self._on_companion_satellite_button_pressed)
+        window.navigationRequested.connect(self._on_companion_satellite_navigation_requested)
         window.windowClosed.connect(self._on_companion_satellite_window_closed)
         self._companion_satellite_window = window
         self._refresh_companion_satellite_window()
@@ -167,3 +168,21 @@ class CompanionSatelliteMixin:
         if client is None:
             return
         client.send_key_press(int(key), bool(pressed))
+
+    def _on_companion_satellite_navigation_requested(self, direction: str) -> None:
+        client = self._companion_satellite_client
+        window = self._companion_satellite_window
+        if client is None or window is None:
+            return
+        token = str(direction or "").strip().upper()
+        if token == "PAGEUP":
+            client.send_change_page(True)
+        elif token == "PAGEDOWN":
+            client.send_change_page(False)
+        elif token == "HOME":
+            current_page = window.current_page()
+            if current_page is None or current_page <= 1:
+                return
+            for _ in range(max(0, min(255, int(current_page) - 1))):
+                if not client.send_change_page(False):
+                    break

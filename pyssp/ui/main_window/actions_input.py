@@ -4,6 +4,13 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.utility_audio import (
+    UTILITY_SOURCE_TYPE,
+    UTILITY_UNSUPPORTED_MARKER_TEXT,
+    normalize_utility_spec,
+    utility_display_name,
+    utility_duration_hhmmssmmm,
+)
 
 
 class ActionsInputMixin:
@@ -1238,6 +1245,62 @@ class ActionsInputMixin:
                             lines.append(f"activity{slot_index}=7")
                             lines.append(f"co{slot_index}=clBtnFace")
                             continue
+                        if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
+                            title = clean_set_value(slot.title or utility_display_name(slot.utility_spec))
+                            notes = clean_set_value(slot.notes or "")
+                            lines.append(f"c{slot_index}={UTILITY_UNSUPPORTED_MARKER_TEXT}%%")
+                            lines.append(f"n{slot_index}={UTILITY_UNSUPPORTED_MARKER_TEXT}")
+                            lines.append(f"t{slot_index}= ")
+                            lines.append(f"activity{slot_index}=7")
+                            lines.append(f"co{slot_index}=clBtnFace")
+                            lines.append(f"pysspsourcetype{slot_index}={UTILITY_SOURCE_TYPE}")
+                            lines.append(f"pyssputilitymode{slot_index}={slot.utility_spec.mode}")
+                            lines.append(
+                                f"pyssputilityduration{slot_index}={utility_duration_hhmmssmmm(slot.utility_spec.duration_ms)}"
+                            )
+                            lines.append(f"pyssputilitytitle{slot_index}={title}")
+                            lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
+                            if notes:
+                                lines.append(f"pyssputilitynotes{slot_index}={notes}")
+                            if slot.lyric_file:
+                                lines.append(
+                                    f"pyssputilitylyric{slot_index}="
+                                    f"{clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))}"
+                                )
+                            if slot.utility_spec.mode == "waveform":
+                                lines.append(f"pyssputilitywaveform{slot_index}={slot.utility_spec.waveform_type}")
+                                lines.append(f"pyssputilityfreq{slot_index}={slot.utility_spec.frequency_hz:g}")
+                            elif slot.utility_spec.mode == "metronome":
+                                lines.append(f"pyssputilitytempo{slot_index}={slot.utility_spec.tempo_bpm:g}")
+                                lines.append(
+                                    f"pyssputilitytimesig{slot_index}="
+                                    f"{int(slot.utility_spec.time_signature_num)}/{int(slot.utility_spec.time_signature_den)}"
+                                )
+                            if slot.volume_override_pct is not None:
+                                lines.append(f"v{slot_index}={max(0, min(100, int(slot.volume_override_pct)))}")
+                            if slot.copied_to_cue:
+                                lines.append(f"ci{slot_index}=Y")
+                            hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                            if hotkey_code:
+                                lines.append(f"h{slot_index}={hotkey_code}")
+                            midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                            if midi_hotkey_code:
+                                lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+                            cue_start, cue_end = self._cue_time_fields_for_set(slot)
+                            if cue_start is not None:
+                                lines.append(f"pysspcuestart{slot_index}={cue_start}")
+                            if cue_end is not None:
+                                lines.append(f"pysspcueend{slot_index}={cue_end}")
+                            timecode_offset = format_timecode_offset_hhmmss(
+                                slot.timecode_offset_ms,
+                                nominal_fps(self.timecode_fps),
+                            )
+                            if timecode_offset is not None:
+                                lines.append(f"pyssptimecodeoffset{slot_index}={timecode_offset}")
+                            timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+                            if timecode_timeline != "global":
+                                lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
+                            continue
                         effective_file_path = overrides.get(slot_key, slot.file_path)
                         title = clean_set_value(slot.title or os.path.splitext(os.path.basename(slot.file_path))[0])
                         notes = clean_set_value(slot.notes or title)
@@ -1322,12 +1385,14 @@ class ActionsInputMixin:
                 for slot_index in range(SLOTS_PER_PAGE):
                     src = result.pages[group][page_index][slot_index]
                     self.data[group][page_index][slot_index] = SoundButtonData(
+                        source_type=src.source_type,
                         file_path=src.file_path,
                         vocal_removed_file=src.vocal_removed_file,
                         title=src.title,
                         notes=src.notes,
                         lyric_file=src.lyric_file,
                         duration_ms=src.duration_ms,
+                        utility_spec=None if src.utility_spec is None else normalize_utility_spec(src.utility_spec),
                         custom_color=src.custom_color,
                         played=src.played,
                         activity_code=src.activity_code,

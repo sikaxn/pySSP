@@ -573,3 +573,73 @@ def test_mp3_media_load_uses_longer_fresh_start_fade_on_macos(monkeypatch):
         assert frames >= int(44100 * 0.08)
     finally:
         player.deleteLater()
+
+
+def test_prepare_audio_source_supports_utility_payload():
+    source = {
+        "source_type": "utility",
+        "utility_spec": {
+            "mode": "waveform",
+            "duration_ms": 2500,
+            "waveform_type": "square",
+            "frequency_hz": 880,
+        },
+    }
+
+    frames, duration_ms, use_streaming, decoder, media_path, utility_spec = audio_engine._prepare_audio_source(
+        source,
+        44100,
+        2,
+    )
+
+    assert frames is None
+    assert duration_ms == 2500
+    assert use_streaming is False
+    assert decoder is None
+    assert media_path == ""
+    assert utility_spec is not None
+    assert utility_spec.mode == "waveform"
+    assert utility_spec.waveform_type == "square"
+    assert utility_spec.frequency_hz == 880.0
+
+
+def test_set_media_async_supports_utility_payload(monkeypatch):
+    monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))
+    monkeypatch.setattr(audio_engine.ExternalMediaPlayer, "_create_stream", lambda self: _DummyStream())
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    player = audio_engine.ExternalMediaPlayer()
+    request_id = 0
+    seen = {}
+
+    def _on_finished(req_id, ok, error):
+        seen["request_id"] = int(req_id)
+        seen["ok"] = bool(ok)
+        seen["error"] = str(error)
+
+    player.mediaLoadFinished.connect(_on_finished)
+    try:
+        request_id = player.setMediaAsync(
+            {
+                "source_type": "utility",
+                "utility_spec": {
+                    "mode": "metronome",
+                    "duration_ms": 3000,
+                    "tempo_bpm": 140,
+                    "time_signature_num": 5,
+                    "time_signature_den": 4,
+                },
+            }
+        )
+        assert _wait_for(lambda: seen.get("request_id") == request_id, app, timeout=2.0)
+        assert seen == {"request_id": request_id, "ok": True, "error": ""}
+        assert player.duration() == 3000
+        peaks = player.waveformPeaks(64)
+        assert len(peaks) == 64
+        assert max(peaks) > 0.0
+        player.setPosition(1500)
+        assert player.position() == 1500
+    finally:
+        player.deleteLater()

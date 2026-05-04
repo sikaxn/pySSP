@@ -45,6 +45,7 @@ class _SatelliteButton(QToolButton):
 class CompanionSatelliteWindow(QWidget):
     openOptionsRequested = pyqtSignal()
     buttonPressed = pyqtSignal(int, bool)
+    navigationRequested = pyqtSignal(str)
     windowClosed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -71,6 +72,27 @@ class CompanionSatelliteWindow(QWidget):
         self.options_button.clicked.connect(self.openOptionsRequested.emit)
         header_layout.addWidget(self.options_button)
         root.addLayout(header_layout)
+
+        self.navigation_widget = QWidget(self)
+        self.navigation_layout = QHBoxLayout(self.navigation_widget)
+        self.navigation_layout.setContentsMargins(0, 0, 0, 0)
+        self.navigation_layout.setSpacing(8)
+        self.page_up_button = QToolButton(self.navigation_widget)
+        self.page_up_button.setText("Page Up")
+        self.page_up_button.clicked.connect(lambda: self.navigationRequested.emit("PAGEUP"))
+        self.navigation_layout.addWidget(self.page_up_button)
+        self.page_down_button = QToolButton(self.navigation_widget)
+        self.page_down_button.setText("Page Down")
+        self.page_down_button.clicked.connect(lambda: self.navigationRequested.emit("PAGEDOWN"))
+        self.navigation_layout.addWidget(self.page_down_button)
+        self.home_button = QToolButton(self.navigation_widget)
+        self.home_button.setText("Home")
+        self.home_button.clicked.connect(lambda: self.navigationRequested.emit("HOME"))
+        self.navigation_layout.addWidget(self.home_button)
+        self.navigation_layout.addStretch(1)
+        self.current_page_label = QLabel("Page -")
+        self.navigation_layout.addWidget(self.current_page_label)
+        root.addWidget(self.navigation_widget)
 
         self.grid_widget = QWidget(self)
         self.grid_layout = QGridLayout(self.grid_widget)
@@ -116,6 +138,8 @@ class CompanionSatelliteWindow(QWidget):
     def set_render_mode(self, mode: str) -> None:
         token = str(mode or "").strip().lower()
         self._render_mode = token if token in {"bitmap", "styled"} else "bitmap"
+        self.navigation_widget.setVisible(self._render_mode == "styled")
+        self._refresh_current_page_label()
         for index in range(len(self._buttons)):
             self._apply_button_state(index, self._button_states.get(index, {}))
 
@@ -124,6 +148,7 @@ class CompanionSatelliteWindow(QWidget):
 
     def clear_buttons(self) -> None:
         self._button_states.clear()
+        self._refresh_current_page_label()
         for index, _button in enumerate(self._buttons):
             self._apply_button_state(index, {})
 
@@ -131,7 +156,24 @@ class CompanionSatelliteWindow(QWidget):
         if index < 0:
             return
         self._button_states[int(index)] = dict(state or {})
+        self._refresh_current_page_label()
         self._apply_button_state(int(index), self._button_states[int(index)])
+
+    def current_page(self) -> Optional[int]:
+        for state in self._button_states.values():
+            location = str(state.get("location", "") or "").strip()
+            if not location:
+                continue
+            parts = location.split("/")
+            if not parts:
+                continue
+            try:
+                page = int(parts[0])
+            except Exception:
+                continue
+            if page >= 1:
+                return page
+        return None
 
     def _apply_button_state(self, index: int, state: dict[str, object]) -> None:
         if index < 0 or index >= len(self._buttons):
@@ -173,15 +215,18 @@ class CompanionSatelliteWindow(QWidget):
         button.setToolTip(text or f"Key {index + 1}")
 
     def _apply_styled_button(self, button: _SatelliteButton, index: int, text: str) -> None:
-        row = (int(index) // max(1, self._columns)) + 1
-        col = (int(index) % max(1, self._columns)) + 1
-        axis_text = f"X{col} Y{row}"
+        location = str(self._button_states.get(int(index), {}).get("location", "") or "").strip()
+        axis_text = location or f"-/{(int(index) // max(1, self._columns)) + 1}/{(int(index) % max(1, self._columns)) + 1}"
         button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         button.setIcon(QIcon())
         button.setText(f"{axis_text}\n{text}" if text else axis_text)
         button.setMinimumSize(96, 96)
         button.setMaximumSize(16777215, 16777215)
         button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def _refresh_current_page_label(self) -> None:
+        page = self.current_page()
+        self.current_page_label.setText(f"Page {page}" if page is not None else "Page -")
 
     def _pixmap(self, bitmap: bytes) -> QPixmap:
         pixel_count = max(1, len(bitmap) // 3)

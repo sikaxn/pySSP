@@ -56,3 +56,22 @@ def test_proxy_hot_state_reads_use_cache_without_blocking_call() -> None:
     assert player.enginePositionMs() == 1234
     assert player.meterLevels() == (0.0, 0.0)
     assert controller.calls == []
+
+
+def test_proxy_set_media_async_supports_structured_utility_source() -> None:
+    _app()
+    controller = _FakeAudioController()
+    player = AudioPlayerProxy(controller, "player-test")
+
+    source = {
+        "source_type": "utility",
+        "utility_spec": {"mode": "blank", "duration_ms": 5000},
+    }
+    request_id = player.setMediaAsync(source)
+
+    assert controller.calls == []
+    assert controller.posts[-1] == (
+        "player-test",
+        "setMediaAsyncRequest",
+        {"source": source, "file_path": "", "dsp_config": None, "request_id": request_id},
+    )

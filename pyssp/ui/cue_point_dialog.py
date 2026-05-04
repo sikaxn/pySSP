@@ -30,6 +30,7 @@ class CuePointDialog(QDialog):
     def __init__(
         self,
         file_path: str,
+        audio_source: object,
         title: str,
         cue_start_ms: Optional[int],
         cue_end_ms: Optional[int],
@@ -61,6 +62,7 @@ class CuePointDialog(QDialog):
         self._load_error: Optional[str] = None
         self._is_loading_media = False
         self._file_path = file_path
+        self._audio_source = audio_source
         self._load_wait_started = 0.0
         self._load_wait_timeout_sec = 120.0
         self._media_load_request_id = 0
@@ -232,6 +234,9 @@ class CuePointDialog(QDialog):
         self.cue_indicator.set_waveform([])
         self._set_loading_state(True)
         self._load_wait_started = time.perf_counter()
+        if not self._file_path:
+            self._finalize_media_load()
+            return
         try:
             request_audio_preload([self._file_path], prioritize=True, force=True)
         except Exception:
@@ -261,7 +266,7 @@ class CuePointDialog(QDialog):
         elapsed = max(0.0, time.perf_counter() - self._load_wait_started)
         dot_count = int(elapsed * 3.0) % 4
         self.cue_indicator.set_loading(True, "Loading audio waveform" + ("." * dot_count))
-        if is_audio_preloaded(self._file_path):
+        if self._file_path and is_audio_preloaded(self._file_path):
             self._stop_async_load_watch()
             self._finalize_media_load()
             return
@@ -272,7 +277,7 @@ class CuePointDialog(QDialog):
 
     def _finalize_media_load(self) -> None:
         try:
-            self._media_load_request_id = int(self._player.setMediaAsync(self._file_path))
+            self._media_load_request_id = int(self._player.setMediaAsync(self._audio_source))
         except Exception as exc:
             self._load_error = str(exc)
             self.error_label.setText(f"Could not load audio preview: {exc}")

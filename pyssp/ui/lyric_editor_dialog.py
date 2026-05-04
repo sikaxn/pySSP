@@ -40,6 +40,7 @@ class LyricEditorDialog(QDialog):
         *,
         lyric_path: str,
         audio_path: str,
+        audio_source: object,
         title: str,
         language: str = "en",
         preferred_mode: str = "srt",
@@ -54,6 +55,7 @@ class LyricEditorDialog(QDialog):
 
         self._lyric_path = str(lyric_path or "").strip()
         self._audio_path = str(audio_path or "").strip()
+        self._audio_source = audio_source
         self._duration_ms = 0
         self._is_scrubbing = False
         self._is_loading_media = False
@@ -264,13 +266,14 @@ class LyricEditorDialog(QDialog):
         self._save_btn.setEnabled(ready)
 
     def _load_preview_media(self) -> None:
-        if not self._audio_path or not os.path.exists(self._audio_path):
-            return
         if self._waveform_refresh is not None:
             self._waveform_refresh.stop()
         self._cue_indicator.set_waveform([])
         self._set_loading_state(True)
         self._load_wait_started = time.perf_counter()
+        if not self._audio_path or not os.path.exists(self._audio_path):
+            self._finalize_media_load()
+            return
         try:
             request_audio_preload([self._audio_path], prioritize=True, force=True)
         except Exception:
@@ -287,7 +290,7 @@ class LyricEditorDialog(QDialog):
         elapsed = max(0.0, time.perf_counter() - self._load_wait_started)
         dot_count = int(elapsed * 3.0) % 4
         self._cue_indicator.set_loading(True, "Loading audio waveform" + ("." * dot_count))
-        if is_audio_preloaded(self._audio_path):
+        if self._audio_path and is_audio_preloaded(self._audio_path):
             self._load_poll_timer.stop()
             self._finalize_media_load()
             return
@@ -298,7 +301,7 @@ class LyricEditorDialog(QDialog):
 
     def _finalize_media_load(self) -> None:
         try:
-            self._media_load_request_id = int(self._player.setMediaAsync(self._audio_path))
+            self._media_load_request_id = int(self._player.setMediaAsync(self._audio_source))
         except Exception:
             self._set_loading_state(False)
 

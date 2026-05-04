@@ -50,7 +50,6 @@ def _parse_line(raw_line: str) -> tuple[str, dict[str, str], str]:
 
 
 class CompanionSatelliteClient:
-    DEVICE_ID = "pyssp-main"
     PRODUCT_NAME = "pySSP Virtual Satellite"
     SERIAL_PREFIX = "pyssp:"
 
@@ -73,6 +72,7 @@ class CompanionSatelliteClient:
         self.columns = max(1, int(columns))
         self.rows = max(1, int(rows))
         self.serial_suffix = self._normalize_serial_suffix(serial_suffix)
+        self.device_id = f"{self.SERIAL_PREFIX}{self.serial_suffix}"
         self._on_event = on_event
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -118,7 +118,12 @@ class CompanionSatelliteClient:
         if key < 0:
             return False
         return self._send_line(
-            f"KEY-PRESS DEVICEID={self.DEVICE_ID} KEY={int(key)} PRESSED={'true' if pressed else 'false'}"
+            f"KEY-PRESS DEVICEID={self.device_id} KEY={int(key)} PRESSED={'true' if pressed else 'false'}"
+        )
+
+    def send_change_page(self, next_page: bool) -> bool:
+        return self._send_line(
+            f"CHANGE-PAGE DEVICEID={self.device_id} DIRECTION={1 if bool(next_page) else 0}"
         )
 
     def _emit(self, event_type: str, **payload: Any) -> None:
@@ -268,9 +273,9 @@ class CompanionSatelliteClient:
     def _register_device(self) -> None:
         total_keys = max(1, int(self.columns) * int(self.rows))
         command = (
-            f'ADD-DEVICE DEVICEID={self.DEVICE_ID} PRODUCT_NAME="{self.PRODUCT_NAME}" '
+            f'ADD-DEVICE DEVICEID={self.device_id} PRODUCT_NAME="{self.PRODUCT_NAME}" '
             f'SERIAL="{self.SERIAL_PREFIX}{self.serial_suffix}" KEYS_TOTAL={total_keys} KEYS_PER_ROW={int(self.columns)} '
-            "BITMAPS=72 COLORS=hex TEXT=true TEXT_STYLE=true BRIGHTNESS=false"
+            'BITMAPS=72 COLORS=hex TEXT=true TEXT_STYLE=true BRIGHTNESS=false CAN_CHANGE_PAGE="Page buttons"'
         )
         self._send_line(command)
 

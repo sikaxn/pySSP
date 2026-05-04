@@ -241,6 +241,9 @@ class SelectionMixin:
             return "loop_single"
         return "loop_list"
 
+    def selected_utility_sound_buttons_follow_playback_controls(self) -> bool:
+        return bool(self.utility_sound_buttons_follow_playback_controls_checkbox.isChecked())
+
     def selected_candidate_error_action(self) -> str:
         if self.candidate_error_keep_radio.isChecked():
             return "keep_playing"

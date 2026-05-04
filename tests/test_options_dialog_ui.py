@@ -177,6 +177,12 @@ def _build_dialog(**overrides):
         rapid_fire_play_mode=defaults["rapid_fire_play_mode"],
         next_play_mode=defaults["next_play_mode"],
         playlist_loop_mode=defaults["playlist_loop_mode"],
+        utility_sound_buttons_follow_playback_controls=bool(
+            overrides.get(
+                "utility_sound_buttons_follow_playback_controls",
+                defaults["utility_sound_buttons_follow_playback_controls"],
+            )
+        ),
         candidate_error_action=defaults["candidate_error_action"],
         web_remote_enabled=defaults["web_remote_enabled"],
         web_remote_port=defaults["web_remote_port"],
@@ -458,6 +464,7 @@ def test_selected_value_methods_follow_toggles(qapp):
     dialog.rapid_fire_mode_any_radio.setChecked(True)
     dialog.next_mode_any_radio.setChecked(True)
     dialog.playlist_loop_single_radio.setChecked(True)
+    dialog.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(False)
     dialog.multi_play_disallow_radio.setChecked(True)
     dialog.candidate_error_keep_radio.setChecked(True)
     dialog.timecode_timeline_audio_file_radio.setChecked(True)
@@ -472,6 +479,7 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_rapid_fire_play_mode() == "any_available"
     assert dialog.selected_next_play_mode() == "any_available"
     assert dialog.selected_playlist_loop_mode() == "loop_single"
+    assert dialog.selected_utility_sound_buttons_follow_playback_controls() is False
     assert dialog.selected_multi_play_limit_action() == "disallow_more_play"
     assert dialog.selected_candidate_error_action() == "keep_playing"
     assert dialog.selected_timecode_timeline_mode() == "audio_file"

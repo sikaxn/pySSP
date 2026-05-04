@@ -579,6 +579,7 @@ class AppSettings:
     rapid_fire_play_mode: str = "unplayed_only"
     next_play_mode: str = "unplayed_only"
     playlist_loop_mode: str = "loop_list"
+    utility_sound_buttons_follow_playback_controls: bool = True
     candidate_error_action: str = "stop_playback"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
@@ -960,6 +961,7 @@ def save_settings(settings: AppSettings) -> None:
         "rapid_fire_play_mode": settings.rapid_fire_play_mode,
         "next_play_mode": settings.next_play_mode,
         "playlist_loop_mode": settings.playlist_loop_mode,
+        "utility_sound_buttons_follow_playback_controls": "1" if settings.utility_sound_buttons_follow_playback_controls else "0",
         "candidate_error_action": settings.candidate_error_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
@@ -1341,6 +1343,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     playlist_loop_mode = str(section.get("playlist_loop_mode", "loop_list")).strip().lower()
     if playlist_loop_mode not in {"loop_list", "loop_single"}:
         playlist_loop_mode = "loop_list"
+    utility_sound_buttons_follow_playback_controls = _get_bool(
+        section,
+        "utility_sound_buttons_follow_playback_controls",
+        True,
+    )
     candidate_error_action = str(section.get("candidate_error_action", "stop_playback")).strip().lower()
     if candidate_error_action not in {"stop_playback", "keep_playing"}:
         candidate_error_action = "stop_playback"
@@ -1710,6 +1717,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         rapid_fire_play_mode=rapid_fire_play_mode,
         next_play_mode=next_play_mode,
         playlist_loop_mode=playlist_loop_mode,
+        utility_sound_buttons_follow_playback_controls=utility_sound_buttons_follow_playback_controls,
         candidate_error_action=candidate_error_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,

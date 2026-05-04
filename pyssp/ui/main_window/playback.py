@@ -12,6 +12,14 @@ class PlaybackMixin:
     def _is_audio_player(player) -> bool:
         return isinstance(player, (ExternalMediaPlayer, AudioPlayerProxy))
 
+    def _play_slot_via_control_flow(self, slot_index: int, allow_fade: bool = True) -> bool:
+        try:
+            return self._play_slot(slot_index, allow_fade=allow_fade, prefer_immediate_load=True)
+        except TypeError as exc:
+            if "prefer_immediate_load" not in str(exc):
+                raise
+            return self._play_slot(slot_index, allow_fade=allow_fade)
+
     def _init_audio_players(self) -> None:
         self.player = self._audio_service.create_player(self)
         self.player_b = self._audio_service.create_player(self)
@@ -78,7 +86,7 @@ class PlaybackMixin:
         for btn in self.sound_buttons:
             btn.setDown(False)
 
-    def _play_slot(self, slot_index: int, allow_fade: bool = True) -> bool:
+    def _play_slot(self, slot_index: int, allow_fade: bool = True, prefer_immediate_load: bool = False) -> bool:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
             self.statusBar().showMessage(tr("Playback is not allowed while Button Drag is enabled."), 2500)
@@ -150,7 +158,7 @@ class PlaybackMixin:
             return True
 
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-        if playlist_enabled and self.current_playlist_start is None:
+        if playlist_enabled and self.current_playlist_start is None and self._slot_follows_regular_playback_controls(slot):
             self.current_playlist_start = slot_index
         slot.played = True
         slot.activity_code = "2"
@@ -173,7 +181,7 @@ class PlaybackMixin:
                 new_player,
                 slot,
                 playing_key=playing_key,
-                allow_deferred=True,
+                allow_deferred=(not prefer_immediate_load),
                 on_success=lambda old=old_player, new=new_player, s=slot, key=playing_key, pct=slot_pct: self._finish_cross_loaded_playback(
                     old, new, s, key, pct
                 ),
@@ -229,7 +237,7 @@ class PlaybackMixin:
                 self.player,
                 slot,
                 playing_key=playing_key,
-                allow_deferred=True,
+                allow_deferred=(not prefer_immediate_load),
                 on_success=lambda p=self.player, s=slot, key=playing_key, pct=slot_pct, fade=fade_in_on: self._finish_primary_loaded_playback(
                     p, s, key, pct, fade
                 ),
@@ -449,6 +457,10 @@ class PlaybackMixin:
     ) -> None:
         self.current_playing = playing_key
         self._player_slot_volume_pct = slot_pct
+        resolved_duration = max(0, int(player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
         self._prepare_vocal_shadow_player(player, slot, start_playing=False)
@@ -484,6 +496,10 @@ class PlaybackMixin:
             self._player_slot_volume_pct = slot_pct
         else:
             self._player_b_slot_volume_pct = slot_pct
+        resolved_duration = max(0, int(new_player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(new_player, slot)
         self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
@@ -512,6 +528,10 @@ class PlaybackMixin:
         slot_pct: int,
     ) -> None:
         self._set_player_slot_pct(player, slot_pct)
+        resolved_duration = max(0, int(player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
         target_volume = self._effective_slot_target_volume(slot_pct)
         self._seek_player_to_slot_start_cue(player, slot)
         self._prepare_vocal_shadow_player(player, slot, start_playing=False)
@@ -840,15 +860,28 @@ class PlaybackMixin:
         if self._ignore_state_changes > 0:
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
+            stopped_key = self._player_slot_key_map.get(id(self.player))
+            last_playing = stopped_key if stopped_key is not None else self.current_playing
+            last_slot = self._slot_for_key(last_playing) if last_playing is not None else None
+            controls_follow_last_slot = self._slot_follows_regular_playback_controls(last_slot)
             self._timecode_on_playback_stop()
             self._clear_vocal_shadow_player(self.player)
             self._player_mix_volume_map.pop(id(self.player), None)
             self._clear_player_slot_key(self.player)
             self._clear_main_waveform_display()
-            last_playing = self.current_playing
-            playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+            playlist_enabled = False
+            if last_playing is not None and controls_follow_last_slot:
+                last_group, last_page, _last_slot = last_playing
+                if last_group != "Q" and 0 <= int(last_page) < PAGE_COUNT:
+                    playlist_enabled = self.page_playlist_enabled[last_group][int(last_page)]
             manual_stop = self._manual_stop_requested
-            should_loop = self.loop_enabled and last_playing is not None and not manual_stop and not playlist_enabled
+            should_loop = (
+                self.loop_enabled
+                and last_playing is not None
+                and controls_follow_last_slot
+                and not manual_stop
+                and not playlist_enabled
+            )
             self._manual_stop_requested = False
             if should_loop:
                 loop_group, loop_page, loop_slot = last_playing
@@ -860,7 +893,7 @@ class PlaybackMixin:
                 self.current_page = loop_page
                 self._refresh_group_buttons()
                 self._refresh_page_list()
-                self._play_slot(loop_slot)
+                self._play_slot_via_control_flow(loop_slot)
                 return
             if self._pending_start_request is not None:
                 self.current_playing = None
@@ -883,12 +916,28 @@ class PlaybackMixin:
                     self._update_now_playing_label("")
                     self._refresh_sound_grid()
                     return
+                play_group, play_page, _play_slot = last_playing
+                if play_group == "Q":
+                    self.cue_mode = True
+                else:
+                    self.cue_mode = False
+                    self.current_group = play_group
+                self.current_page = int(play_page)
+                self._refresh_group_buttons()
+                self._sync_playlist_shuffle_buttons()
+                self._refresh_page_list()
                 blocked: set[int] = set()
                 while True:
-                    next_slot = self._next_playlist_slot(for_auto_advance=True, blocked=blocked)
+                    next_slot = self._next_playlist_slot(
+                        for_auto_advance=True,
+                        blocked=blocked,
+                        group_key=play_group,
+                        page_index=int(play_page),
+                        current_track=last_playing,
+                    )
                     if next_slot is None:
                         break
-                    if self._play_slot(next_slot):
+                    if self._play_slot_via_control_flow(next_slot):
                         return
                     blocked.add(next_slot)
                     if self.candidate_error_action == "stop_playback":
@@ -1462,22 +1511,8 @@ class PlaybackMixin:
         next_btn = self.control_buttons.get("Next")
         if not next_btn:
             return
-        is_playing = self.player.state() in {
-            ExternalMediaPlayer.PlayingState,
-            ExternalMediaPlayer.PausedState,
-        } or self.player_b.state() in {
-            ExternalMediaPlayer.PlayingState,
-            ExternalMediaPlayer.PausedState,
-        }
-        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
-        if playlist_enabled:
-            has_next = self._has_next_playlist_slot(for_auto_advance=False)
-        else:
-            if self.next_play_mode == "any_available":
-                has_next = self._next_available_slot_on_current_page() is not None
-            else:
-                has_next = self._next_unplayed_slot_on_current_page() is not None
-        next_btn.setEnabled(is_playing and has_next)
+        has_next = self._next_slot_for_next_action(blocked=None) is not None
+        next_btn.setEnabled(has_next)
         self._sync_control_button_instances("Next")
         self._update_button_drag_control_state()
 
@@ -1863,7 +1898,14 @@ class PlaybackMixin:
             return
         if not self.current_playing:
             return
-        if not self.page_playlist_enabled[self.current_group][self.current_page]:
+        track_key = self.current_playing
+        track_slot = self._slot_for_key(track_key)
+        if not self._slot_follows_regular_playback_controls(track_slot):
+            return
+        track_group, track_page, _track_slot_index = track_key
+        if track_group == "Q":
+            return
+        if not self.page_playlist_enabled[track_group][int(track_page)]:
             return
         if self.player.state() != ExternalMediaPlayer.PlayingState:
             return
@@ -1872,7 +1914,6 @@ class PlaybackMixin:
         if (time.monotonic() - self._track_started_at) < 0.35:
             return
 
-        track_key = self.current_playing
         if self._auto_transition_track != track_key:
             self._auto_transition_track = track_key
             self._auto_transition_done = False
@@ -1884,10 +1925,22 @@ class PlaybackMixin:
             if remaining_ms <= int(self.cross_fade_sec * 1000):
                 blocked: set[int] = set()
                 while True:
-                    next_slot = self._next_playlist_slot(for_auto_advance=True, blocked=blocked)
+                    next_slot = self._next_playlist_slot(
+                        for_auto_advance=True,
+                        blocked=blocked,
+                        group_key=track_group,
+                        page_index=int(track_page),
+                        current_track=track_key,
+                    )
                     if next_slot is None:
                         break
-                    if self._play_slot(next_slot):
+                    self.current_group = track_group
+                    self.current_page = int(track_page)
+                    self.cue_mode = False
+                    self._refresh_group_buttons()
+                    self._sync_playlist_shuffle_buttons()
+                    self._refresh_page_list()
+                    if self._play_slot_via_control_flow(next_slot):
                         self._auto_transition_done = True
                         break
                     blocked.add(next_slot)

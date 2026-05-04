@@ -14,6 +14,24 @@ from pyssp.utility_audio import (
 
 
 class ActionsInputMixin:
+    def _slot_follows_regular_playback_controls(self, slot: Optional[SoundButtonData]) -> bool:
+        if slot is None:
+            return False
+        if slot.source_type != UTILITY_SOURCE_TYPE:
+            return True
+        return bool(getattr(self, "utility_sound_buttons_follow_playback_controls", True))
+
+    def _slot_is_regular_playback_candidate(self, slot: Optional[SoundButtonData]) -> bool:
+        if slot is None:
+            return False
+        return (
+            slot.assigned
+            and (not slot.marker)
+            and (not slot.locked)
+            and (not slot.missing)
+            and self._slot_follows_regular_playback_controls(slot)
+        )
+
     def _toggle_colour_legend(self, checked: bool) -> None:
         self.show_colour_legend = bool(checked)
         if getattr(self, "button_legend_label", None) is not None:
@@ -32,6 +50,34 @@ class ActionsInputMixin:
         if self.next_play_mode == "any_available":
             return self._next_available_slot_on_current_page(blocked=blocked)
         return self._next_unplayed_slot_on_current_page(blocked=blocked)
+
+    def _playlist_slots_for_page(self, group_key: Optional[str] = None, page_index: Optional[int] = None) -> List[SoundButtonData]:
+        resolved_group = self._view_group_key() if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        if resolved_group == "Q":
+            return list(self.cue_page)
+        if resolved_group not in self.data:
+            return []
+        if resolved_page < 0 or resolved_page >= PAGE_COUNT:
+            return []
+        return self.data[resolved_group][resolved_page]
+
+    def _playlist_current_index_for_page(
+        self,
+        group_key: str,
+        page_index: int,
+        *,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> Optional[int]:
+        track = self.current_playing if current_track is None else current_track
+        if track is None:
+            return None
+        track_group, track_page, track_slot = track
+        if str(track_group or "").strip().upper() != str(group_key or "").strip().upper():
+            return None
+        if int(track_page) != int(page_index):
+            return None
+        return int(track_slot)
 
     def _next_stage_from_hover(self) -> Optional[str]:
         slot_index = self._hover_slot_index
@@ -613,27 +659,38 @@ class ActionsInputMixin:
             if next_slot is None:
                 self._update_next_button_enabled()
                 return
-            if self._play_slot(next_slot):
+            if self._play_slot_via_control_flow(next_slot):
                 return
             blocked.add(next_slot)
             if self.candidate_error_action == "stop_playback":
                 self._stop_playback()
                 return
 
-    def _has_next_playlist_slot(self, for_auto_advance: bool = False) -> bool:
-        page = self._current_page_slots()
+    def _has_next_playlist_slot(
+        self,
+        for_auto_advance: bool = False,
+        *,
+        group_key: Optional[str] = None,
+        page_index: Optional[int] = None,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> bool:
+        resolved_group = self.current_group if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        page = self._playlist_slots_for_page(resolved_group, resolved_page)
         if not page:
             return False
         valid_slots = [
             idx
             for idx, slot in enumerate(page)
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing
+            if self._slot_is_regular_playback_candidate(slot)
         ]
         if not valid_slots:
             return False
-        current_idx: Optional[int] = None
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            current_idx = self.current_playing[2]
+        current_idx = self._playlist_current_index_for_page(
+            resolved_group,
+            resolved_page,
+            current_track=current_track,
+        )
         if (
             for_auto_advance
             and self.loop_enabled
@@ -642,8 +699,13 @@ class ActionsInputMixin:
             and current_idx in valid_slots
         ):
             return True
+        shuffle_enabled = (
+            resolved_group != "Q"
+            and 0 <= resolved_page < PAGE_COUNT
+            and self.page_shuffle_enabled[resolved_group][resolved_page]
+        )
         if self.playlist_play_mode == "any_available":
-            if self.page_shuffle_enabled[self.current_group][self.current_page]:
+            if shuffle_enabled:
                 if current_idx is not None and len(valid_slots) > 1:
                     return any(idx != current_idx for idx in valid_slots)
                 return bool(valid_slots)
@@ -657,7 +719,7 @@ class ActionsInputMixin:
                     return True
             return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
         unplayed_slots = [idx for idx in valid_slots if not page[idx].played]
-        if self.page_shuffle_enabled[self.current_group][self.current_page]:
+        if shuffle_enabled:
             if unplayed_slots:
                 return True
             return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
@@ -684,7 +746,7 @@ class ActionsInputMixin:
             slot = page[idx]
             if idx in blocked:
                 continue
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played:
+            if self._slot_is_regular_playback_candidate(slot) and not slot.played:
                 return idx
         return None
 
@@ -701,7 +763,7 @@ class ActionsInputMixin:
             slot = page[idx]
             if idx in blocked:
                 continue
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+            if self._slot_is_regular_playback_candidate(slot):
                 return idx
         return None
 
@@ -713,25 +775,37 @@ class ActionsInputMixin:
         for step in range(1, SLOTS_PER_PAGE + 1):
             idx = (start_slot + step) % SLOTS_PER_PAGE
             slot = page[idx]
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+            if self._slot_is_regular_playback_candidate(slot):
                 return idx
         return None
 
-    def _next_playlist_slot(self, for_auto_advance: bool = False, blocked: Optional[set[int]] = None) -> Optional[int]:
-        page = self._current_page_slots()
+    def _next_playlist_slot(
+        self,
+        for_auto_advance: bool = False,
+        blocked: Optional[set[int]] = None,
+        *,
+        group_key: Optional[str] = None,
+        page_index: Optional[int] = None,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> Optional[int]:
+        resolved_group = self.current_group if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        page = self._playlist_slots_for_page(resolved_group, resolved_page)
         if not page:
             return None
         blocked = blocked or set()
         valid_slots = [
             idx
             for idx, slot in enumerate(page)
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and idx not in blocked
+            if self._slot_is_regular_playback_candidate(slot) and idx not in blocked
         ]
         if not valid_slots:
             return None
-        current_idx: Optional[int] = None
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            current_idx = self.current_playing[2]
+        current_idx = self._playlist_current_index_for_page(
+            resolved_group,
+            resolved_page,
+            current_track=current_track,
+        )
         if (
             for_auto_advance
             and self.loop_enabled
@@ -741,7 +815,12 @@ class ActionsInputMixin:
         ):
             return current_idx
         any_available = self.playlist_play_mode == "any_available"
-        if self.page_shuffle_enabled[self.current_group][self.current_page]:
+        shuffle_enabled = (
+            resolved_group != "Q"
+            and 0 <= resolved_page < PAGE_COUNT
+            and self.page_shuffle_enabled[resolved_group][resolved_page]
+        )
+        if shuffle_enabled:
             if any_available:
                 candidates = list(valid_slots)
             else:
@@ -770,7 +849,7 @@ class ActionsInputMixin:
 
         for idx in range(start, SLOTS_PER_PAGE):
             slot = page[idx]
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and (any_available or (not slot.played)):
+            if self._slot_is_regular_playback_candidate(slot) and (any_available or (not slot.played)):
                 return idx
         if self.loop_enabled and self.playlist_loop_mode == "loop_list":
             if not any_available:
@@ -781,7 +860,7 @@ class ActionsInputMixin:
                 self._set_dirty(True)
             for idx in range(0, SLOTS_PER_PAGE):
                 slot = page[idx]
-                if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+                if self._slot_is_regular_playback_candidate(slot):
                     return idx
         return None
 
@@ -791,7 +870,7 @@ class ActionsInputMixin:
         candidates = [
             idx
             for idx, slot in enumerate(page)
-            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
+            if idx not in blocked and self._slot_is_regular_playback_candidate(slot) and not slot.played
         ]
         if not candidates:
             return None
@@ -803,7 +882,7 @@ class ActionsInputMixin:
         candidates = [
             idx
             for idx, slot in enumerate(page)
-            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing
+            if idx not in blocked and self._slot_is_regular_playback_candidate(slot)
         ]
         if not candidates:
             return None
@@ -818,7 +897,7 @@ class ActionsInputMixin:
                 slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
             if slot_index is None:
                 return
-            if self._play_slot(slot_index):
+            if self._play_slot_via_control_flow(slot_index):
                 return
             blocked.add(slot_index)
             if self.candidate_error_action == "stop_playback":
@@ -1548,6 +1627,7 @@ class ActionsInputMixin:
             rapid_fire_play_mode=self.rapid_fire_play_mode,
             next_play_mode=self.next_play_mode,
             playlist_loop_mode=self.playlist_loop_mode,
+            utility_sound_buttons_follow_playback_controls=self.utility_sound_buttons_follow_playback_controls,
             candidate_error_action=self.candidate_error_action,
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
@@ -1735,6 +1815,7 @@ class ActionsInputMixin:
         self.rapid_fire_play_mode = dialog.selected_rapid_fire_play_mode()
         self.next_play_mode = dialog.selected_next_play_mode()
         self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
+        self.utility_sound_buttons_follow_playback_controls = dialog.selected_utility_sound_buttons_follow_playback_controls()
         self.candidate_error_action = dialog.selected_candidate_error_action()
         self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
         self.main_progress_display_mode = dialog.selected_main_progress_display_mode()

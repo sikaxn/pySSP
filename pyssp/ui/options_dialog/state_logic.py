@@ -663,6 +663,9 @@ class StateLogicMixin:
             self.playlist_loop_single_radio.setChecked(True)
         else:
             self.playlist_loop_list_radio.setChecked(True)
+        self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(d.get("utility_sound_buttons_follow_playback_controls", True))
+        )
         if str(d["candidate_error_action"]) == "keep_playing":
             self.candidate_error_keep_radio.setChecked(True)
         else:

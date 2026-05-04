@@ -1255,6 +1255,7 @@ class SettingsArchiveMixin:
         self.settings.rapid_fire_play_mode = self.rapid_fire_play_mode
         self.settings.next_play_mode = self.next_play_mode
         self.settings.playlist_loop_mode = self.playlist_loop_mode
+        self.settings.utility_sound_buttons_follow_playback_controls = self.utility_sound_buttons_follow_playback_controls
         self.settings.candidate_error_action = self.candidate_error_action
         self.settings.web_remote_enabled = self.web_remote_enabled
         self.settings.web_remote_port = self.web_remote_port

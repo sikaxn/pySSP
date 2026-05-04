@@ -209,6 +209,9 @@ class MainWindow(
             if self.settings.playlist_loop_mode in {"loop_list", "loop_single"}
             else "loop_list"
         )
+        self.utility_sound_buttons_follow_playback_controls = bool(
+            getattr(self.settings, "utility_sound_buttons_follow_playback_controls", True)
+        )
         self.candidate_error_action = (
             self.settings.candidate_error_action
             if self.settings.candidate_error_action in {"stop_playback", "keep_playing"}

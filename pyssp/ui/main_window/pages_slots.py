@@ -1565,6 +1565,7 @@ class PagesSlotsMixin:
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+        self._update_next_button_enabled()
         self._apply_hotkeys()
         self._refresh_playing_slot_after_audio_path_change(slot_key)
 
@@ -1645,6 +1646,7 @@ class PagesSlotsMixin:
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+        self._update_next_button_enabled()
         self._apply_hotkeys()
         self._refresh_playing_slot_after_audio_path_change(slot_key)
 
@@ -2318,6 +2320,7 @@ class PagesSlotsMixin:
         self._set_dirty(True)
         self._refresh_page_list()
         self._refresh_sound_grid()
+        self._update_next_button_enabled()
         self._apply_hotkeys()
 
     def _scan_lyric_candidates_with_progress(

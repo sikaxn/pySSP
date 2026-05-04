@@ -887,7 +887,7 @@ class RemoteApiMixin:
                     slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
                 if slot_index is None:
                     return self._api_error("no_candidate", "No playable button is available on the current page.", status=409)
-                if self._play_slot(slot_index):
+                if self._play_slot_via_control_flow(slot_index):
                     key = (self._view_group_key(), self.current_page, slot_index)
                     return self._api_success({"button": self._api_slot_state(*key), "state": self._api_state()})
                 blocked.add(slot_index)
@@ -910,7 +910,7 @@ class RemoteApiMixin:
                         next_slot = self._next_unplayed_slot_on_current_page(blocked=blocked)
                 if next_slot is None:
                     return self._api_error("no_next", "No next track is available.", status=409)
-                if self._play_slot(next_slot):
+                if self._play_slot_via_control_flow(next_slot):
                     return self._api_success({"state": self._api_state()})
                 blocked.add(next_slot)
                 if self.candidate_error_action == "stop_playback":

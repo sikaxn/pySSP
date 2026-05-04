@@ -13,6 +13,7 @@ class PlaybackPageMixin:
         rapid_fire_play_mode: str,
         next_play_mode: str,
         playlist_loop_mode: str,
+        utility_sound_buttons_follow_playback_controls: bool,
         candidate_error_action: str,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
@@ -97,6 +98,17 @@ class PlaybackPageMixin:
         playlist_loop_layout.addWidget(self.playlist_loop_list_radio)
         playlist_loop_layout.addWidget(self.playlist_loop_single_radio)
         layout.addWidget(playlist_loop_group)
+
+        utility_group = QGroupBox("Utility Sound Buttons in Playback Controls:")
+        utility_layout = QVBoxLayout(utility_group)
+        self.utility_sound_buttons_follow_playback_controls_checkbox = QCheckBox(
+            "Treat Utility Sound Buttons like regular sound buttons for Loop / Next / Play List / Shuffle / Rapid Fire"
+        )
+        self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(utility_sound_buttons_follow_playback_controls)
+        )
+        utility_layout.addWidget(self.utility_sound_buttons_follow_playback_controls_checkbox)
+        layout.addWidget(utility_group)
 
         candidate_error_group = QGroupBox("When Play List/Next/Rapid Fire hits audio load error (purple):")
         candidate_error_layout = QVBoxLayout(candidate_error_group)

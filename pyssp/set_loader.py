@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AutomationCommandSpec,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    normalize_automation_spec,
+)
 from pyssp.midi_control import normalize_midi_binding
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
@@ -33,6 +39,7 @@ class SetSlotData:
     notes: str = ""
     lyric_file: str = ""
     duration_ms: int = 0
+    automation_spec: Optional[AutomationCommandSpec] = None
     utility_spec: Optional[UtilitySoundSpec] = None
     copied_to_cue: bool = False
     custom_color: Optional[str] = None
@@ -98,6 +105,11 @@ def load_set_file(file_path: str) -> SetLoadResult:
         page_shuffle_enabled[group][page_index] = section.get("PageShuffle", "F").strip().upper() == "T"
 
         for i in range(1, SLOTS_PER_PAGE + 1):
+            automation_slot = _parse_automation_slot_from_section(section, i)
+            if automation_slot is not None:
+                pages[group][page_index][i - 1] = automation_slot
+                loaded_slots += 1
+                continue
             utility_slot = _parse_utility_slot_from_section(section, i)
             if utility_slot is not None:
                 pages[group][page_index][i - 1] = utility_slot
@@ -150,6 +162,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 notes=notes,
                 lyric_file=lyric_file,
                 duration_ms=duration,
+                automation_spec=None,
                 utility_spec=None,
                 copied_to_cue=copied,
                 custom_color=custom_color,
@@ -265,6 +278,7 @@ def _parse_utility_slot_from_section(
         notes=notes,
         lyric_file=lyric_file,
         duration_ms=spec.duration_ms,
+        automation_spec=None,
         utility_spec=spec,
         copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
         custom_color=parse_delphi_color(section.get(f"co{slot_index}", "").strip()),
@@ -280,6 +294,50 @@ def _parse_utility_slot_from_section(
         ),
         sound_hotkey=_parse_sound_hotkey(section.get(f"h{slot_index}", "").strip()),
         sound_midi_hotkey=_parse_sound_midi_hotkey(section.get(f"pysspmidi{slot_index}", "").strip()),
+    )
+
+
+def _parse_automation_slot_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[SetSlotData]:
+    source_type = str(section.get(f"pysspsourcetype{slot_index}", "")).strip().lower()
+    if source_type != AUTOMATION_SOURCE_TYPE:
+        return None
+    spec = normalize_automation_spec(
+        {
+            "location": section.get(f"pysspautomationlocation{slot_index}", "").strip(),
+            "button_text": section.get(f"pysspautomationtext{slot_index}", "").strip(),
+            "hold_to_release": str(section.get(f"pysspautomationhold{slot_index}", "0")).strip() in {"1", "true", "True"},
+        }
+    )
+    title = _normalize_set_path_string(section.get(f"pysspautomationtitle{slot_index}", "").strip())
+    notes = _normalize_set_path_string(section.get(f"pysspautomationnotes{slot_index}", "").strip())
+    custom_color = parse_delphi_color(section.get(f"pysspautomationcolor{slot_index}", "").strip())
+    activity_code = section.get(f"activity{slot_index}", "").strip()
+    played = str(section.get(f"pysspautomationplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
+    return SetSlotData(
+        source_type=AUTOMATION_SOURCE_TYPE,
+        file_path="",
+        vocal_removed_file="",
+        title=title or spec.button_text or spec.location or AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+        notes=notes,
+        lyric_file="",
+        duration_ms=0,
+        automation_spec=spec,
+        utility_spec=None,
+        copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
+        custom_color=custom_color,
+        played=played,
+        activity_code=activity_code or ("2" if played else "8"),
+        marker=False,
+        volume_override_pct=None,
+        cue_start_ms=None,
+        cue_end_ms=None,
+        timecode_offset_ms=None,
+        timecode_timeline_mode="global",
+        sound_hotkey=_parse_sound_hotkey(section.get(f"pysspautomationhotkey{slot_index}", "").strip()),
+        sound_midi_hotkey=_parse_sound_midi_hotkey(section.get(f"pysspautomationmidi{slot_index}", "").strip()),
     )
 
 

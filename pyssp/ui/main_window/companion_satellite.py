@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 
 from .shared import *
+from pyssp.automation_command import AUTOMATION_AUTO_RELEASE_IMMEDIATE, AUTOMATION_SOURCE_TYPE
 
 from pyssp.companion_remote_control import send_companion_location_command
 from pyssp.companion_satellite import CompanionSatelliteClient
@@ -80,10 +81,10 @@ class CompanionSatelliteMixin:
             pressed=bool(normalized_state.get("pressed", False)),
         )
 
-    def _send_companion_location_command_async(self, location: str, action: str) -> None:
+    def _send_companion_location_command_async(self, location: str, action: str) -> bool:
         if bool(getattr(self, "companion_bypass", False)):
             self._show_info_notice_banner(tr("Companion commands are bypassed. Command will not go through."))
-            return
+            return False
         host = self.companion_satellite_host
         mode = self.companion_command_mode
         tcp_port = self.companion_command_tcp_port
@@ -123,6 +124,117 @@ class CompanionSatelliteMixin:
             threading.Thread(target=_worker, name="pyssp-companion-command", daemon=True).start()
         except Exception as exc:
             _notify_failure(str(exc))
+            return False
+        return True
+
+    def _automation_slot_key(self, slot_index: int) -> Tuple[str, int, int]:
+        return (self._view_group_key(), self.current_page, int(slot_index))
+
+    def _set_automation_slot_active(self, slot_key: Tuple[str, int, int], active: bool) -> None:
+        if active:
+            self._automation_active_keys.add(slot_key)
+        else:
+            self._automation_active_keys.discard(slot_key)
+        self._refresh_sound_grid()
+
+    def _mark_automation_slot_played(self, slot_key: Tuple[str, int, int]) -> None:
+        slot = self._slot_for_key(slot_key)
+        if slot is None:
+            return
+        slot.played = True
+        slot.activity_code = "2"
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+
+    def _flash_automation_slot(self, slot_key: Tuple[str, int, int], duration_ms: int = 180) -> None:
+        self._set_automation_slot_active(slot_key, True)
+
+        def _clear_flash() -> None:
+            if slot_key in self._automation_hold_active_keys:
+                return
+            self._set_automation_slot_active(slot_key, False)
+
+        QTimer.singleShot(max(1, int(duration_ms)), _clear_flash)
+
+    def _automation_button_auto_release_mode(self) -> str:
+        token = str(getattr(self, "automation_command_button_auto_release_mode", AUTOMATION_AUTO_RELEASE_IMMEDIATE) or "")
+        return token if token in {"immediate", "down_only"} else AUTOMATION_AUTO_RELEASE_IMMEDIATE
+
+    def _trigger_automation_slot_press(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
+            return False
+        spec = slot.automation_spec
+        if spec is None or (not spec.hold_to_release):
+            return False
+        if slot_key in self._automation_hold_active_keys:
+            return True
+        if not self._send_companion_location_command_async(spec.location, "down"):
+            return False
+        self._automation_hold_active_keys.add(slot_key)
+        self._set_automation_slot_active(slot_key, True)
+        return True
+
+    def _trigger_automation_slot_release(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned:
+            return False
+        if slot_key not in self._automation_hold_active_keys:
+            return False
+        spec = slot.automation_spec
+        self._automation_hold_active_keys.discard(slot_key)
+        self._automation_click_suppressed_slot_key = slot_key
+        QTimer.singleShot(0, lambda: setattr(self, "_automation_click_suppressed_slot_key", None))
+        self._set_automation_slot_active(slot_key, False)
+        if spec is None:
+            return False
+        if self._send_companion_location_command_async(spec.location, "up"):
+            self._mark_automation_slot_played(slot_key)
+            self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        return False
+
+    def _trigger_automation_slot_click(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        if getattr(self, "_automation_click_suppressed_slot_key", None) == slot_key:
+            return True
+        return self._trigger_automation_slot_non_audio(slot_index, auto_release=True)
+
+    def _trigger_automation_slot_non_audio(self, slot_index: int, auto_release: bool = True) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
+            return False
+        spec = slot.automation_spec
+        if spec is None or not spec.location:
+            self._show_info_notice_banner(tr("Automation command location is missing."))
+            return False
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if playlist_enabled and self.current_playlist_start is None:
+            self.current_playlist_start = slot_index
+        if spec.hold_to_release and (not auto_release):
+            if not self._send_companion_location_command_async(spec.location, "down"):
+                return False
+            self._flash_automation_slot(slot_key, duration_ms=600)
+            self._mark_automation_slot_played(slot_key)
+            self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        if spec.hold_to_release:
+            if not self._send_companion_location_command_async(spec.location, "down"):
+                return False
+            self._flash_automation_slot(slot_key)
+            self._mark_automation_slot_played(slot_key)
+            self._send_companion_location_command_async(spec.location, "up")
+            self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        if not self._send_companion_location_command_async(spec.location, "press"):
+            return False
+        self._flash_automation_slot(slot_key)
+        self._mark_automation_slot_played(slot_key)
+        self._continue_playlist_after_automation_trigger(slot_key)
+        return True
 
     def _companion_satellite_event(self, event_type: str, payload: dict) -> None:
         if event_type == "status":

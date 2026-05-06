@@ -6,6 +6,7 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, normalize_automation_spec
 from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec
 
 
@@ -89,14 +90,18 @@ class PlaybackMixin:
         self,
         transition: _TrackEndTransitionState,
         slot_index: int,
-    ) -> bool:
+    ) -> Optional[bool]:
         source_key = transition.source_key
         if source_key is None:
             return False
         target_key = (source_key[0], int(source_key[1]), int(slot_index))
+        target_slot = self._slot_for_key(target_key)
         if not self._play_slot_via_control_flow(slot_index):
             self._clear_track_end_transition_state()
             return False
+        if target_slot is not None and target_slot.source_type == AUTOMATION_SOURCE_TYPE:
+            self._clear_track_end_transition_state()
+            return None
         has_pending_transition = bool(self._pending_player_media_loads) or self._pending_deferred_audio_request is not None
         if self.current_playing is None and has_pending_transition:
             transition.pending_target_key = target_key
@@ -149,8 +154,12 @@ class PlaybackMixin:
                 )
                 if next_slot is None:
                     break
-                if self._track_end_transition_started(transition, next_slot):
+                started = self._track_end_transition_started(transition, next_slot)
+                if started is True:
                     return True
+                if started is None:
+                    blocked.add(next_slot)
+                    continue
                 blocked.add(next_slot)
                 if self.candidate_error_action == "stop_playback":
                     self._clear_track_end_transition_state()
@@ -158,6 +167,36 @@ class PlaybackMixin:
                     return True
         self._clear_track_end_transition_state()
         return False
+
+    def _continue_playlist_after_automation_trigger(self, source_key: Optional[Tuple[str, int, int]]) -> bool:
+        if source_key is None:
+            return False
+        source_group, source_page, _source_slot = source_key
+        if source_group == "Q":
+            return False
+        if not (0 <= int(source_page) < PAGE_COUNT):
+            return False
+        if not bool(self.page_playlist_enabled[source_group][int(source_page)]):
+            return False
+        # Manual automation clicks must not interrupt an already-running audio path.
+        if self._all_active_players() or self._pending_deferred_audio_request is not None or self._pending_player_media_loads:
+            return False
+        blocked: set[int] = set()
+        while True:
+            next_slot = self._next_playlist_slot(
+                for_auto_advance=True,
+                blocked=blocked,
+                group_key=source_group,
+                page_index=int(source_page),
+                current_track=source_key,
+            )
+            if next_slot is None:
+                return False
+            if self._play_slot_via_control_flow(next_slot):
+                return True
+            blocked.add(next_slot)
+            if self.candidate_error_action == "stop_playback":
+                return False
 
     def _init_audio_players(self) -> None:
         self.player = self._audio_service.create_player(self)
@@ -238,6 +277,11 @@ class PlaybackMixin:
             return False
         if not slot.assigned:
             return False
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return self._trigger_automation_slot_non_audio(
+                slot_index,
+                auto_release=(self._automation_button_auto_release_mode() == "immediate"),
+            )
         if slot.missing:
             self._refresh_sound_grid()
             return False
@@ -1625,6 +1669,7 @@ class PlaybackMixin:
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
                     duration_ms=slot.duration_ms,
+                    automation_spec=None if slot.automation_spec is None else normalize_automation_spec(slot.automation_spec),
                     utility_spec=None if slot.utility_spec is None else normalize_utility_spec(slot.utility_spec),
                     custom_color=slot.custom_color,
                     played=slot.played,
@@ -2006,6 +2051,11 @@ class PlaybackMixin:
                     )
                     if next_slot is None:
                         break
+                    next_key = (track_group, int(track_page), int(next_slot))
+                    next_slot_data = self._slot_for_key(next_key)
+                    if next_slot_data is not None and next_slot_data.source_type == AUTOMATION_SOURCE_TYPE:
+                        blocked.add(next_slot)
+                        continue
                     self.current_group = track_group
                     self.current_page = int(track_page)
                     self.cue_mode = False

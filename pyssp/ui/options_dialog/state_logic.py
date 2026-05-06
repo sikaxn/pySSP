@@ -663,6 +663,13 @@ class StateLogicMixin:
             self.playlist_loop_single_radio.setChecked(True)
         else:
             self.playlist_loop_list_radio.setChecked(True)
+        self.automation_command_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(d.get("automation_command_buttons_follow_playback_controls", False))
+        )
+        if str(d.get("automation_command_button_auto_release_mode", "immediate")) == "down_only":
+            self.automation_command_button_auto_release_down_only_radio.setChecked(True)
+        else:
+            self.automation_command_button_auto_release_immediate_radio.setChecked(True)
         self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
             bool(d.get("utility_sound_buttons_follow_playback_controls", True))
         )

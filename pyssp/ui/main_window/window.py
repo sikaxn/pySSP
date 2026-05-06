@@ -210,6 +210,14 @@ class MainWindow(
             if self.settings.playlist_loop_mode in {"loop_list", "loop_single"}
             else "loop_list"
         )
+        self.automation_command_buttons_follow_playback_controls = bool(
+            getattr(self.settings, "automation_command_buttons_follow_playback_controls", False)
+        )
+        self.automation_command_button_auto_release_mode = str(
+            getattr(self.settings, "automation_command_button_auto_release_mode", "immediate") or "immediate"
+        ).strip().lower()
+        if self.automation_command_button_auto_release_mode not in {"immediate", "down_only"}:
+            self.automation_command_button_auto_release_mode = "immediate"
         self.utility_sound_buttons_follow_playback_controls = bool(
             getattr(self.settings, "utility_sound_buttons_follow_playback_controls", True)
         )
@@ -770,6 +778,9 @@ class MainWindow(
         self._player_end_override_ms: Dict[int, int] = {}
         self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
+        self._automation_active_keys: set[Tuple[str, int, int]] = set()
+        self._automation_hold_active_keys: set[Tuple[str, int, int]] = set()
+        self._automation_click_suppressed_slot_key: Optional[Tuple[str, int, int]] = None
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
         self._drag_target_slot_key: Optional[Tuple[str, int, int]] = None

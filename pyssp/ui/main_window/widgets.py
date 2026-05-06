@@ -3,6 +3,10 @@ from __future__ import annotations
 from .shared import *
 from .constants import *
 from .helpers import *
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AutomationCommandSpec,
+)
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
@@ -35,6 +39,7 @@ class SoundButtonData:
     notes: str = ""
     lyric_file: str = ""
     duration_ms: int = 0
+    automation_spec: Optional[AutomationCommandSpec] = None
     utility_spec: Optional[UtilitySoundSpec] = None
     custom_color: Optional[str] = None
     highlighted: bool = False
@@ -54,12 +59,16 @@ class SoundButtonData:
 
     @property
     def assigned(self) -> bool:
+        if self.source_type == AUTOMATION_SOURCE_TYPE:
+            return self.automation_spec is not None
         if self.source_type == UTILITY_SOURCE_TYPE:
             return self.utility_spec is not None
         return bool(self.file_path)
 
     @property
     def missing(self) -> bool:
+        if self.source_type == AUTOMATION_SOURCE_TYPE:
+            return False
         if self.source_type == UTILITY_SOURCE_TYPE:
             return False
         return self.assigned and not os.path.exists(str(self.file_path or "").strip())

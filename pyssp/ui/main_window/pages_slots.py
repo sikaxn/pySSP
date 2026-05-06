@@ -4,6 +4,15 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.automation_command import (
+    AUTOMATION_DEFAULT_BUTTON_COLOR,
+    AUTOMATION_SOURCE_TYPE,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    AutomationCommandSpec,
+    automation_display_name,
+    normalize_automation_spec,
+)
+from pyssp.ui.automation_command_sound_button_dialog import AutomationCommandSoundButtonDialog
 from pyssp.ui.utility_sound_button_dialog import UtilitySoundButtonDialog
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
@@ -366,6 +375,33 @@ class PagesSlotsMixin:
                 lines.append(f"activity{slot_index}=7")
                 lines.append(f"co{slot_index}=clBtnFace")
                 continue
+            if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
+                title = clean_set_value(slot.title or automation_display_name(slot.automation_spec))
+                notes = clean_set_value(slot.notes)
+                lines.append(f"c{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%")
+                lines.append(f"n{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}")
+                lines.append(f"t{slot_index}= ")
+                lines.append(f"activity{slot_index}=7")
+                lines.append(f"co{slot_index}=clBtnFace")
+                lines.append(f"pysspsourcetype{slot_index}={AUTOMATION_SOURCE_TYPE}")
+                lines.append(f"pysspautomationlocation{slot_index}={slot.automation_spec.location}")
+                lines.append(f"pysspautomationtext{slot_index}={clean_set_value(slot.automation_spec.button_text)}")
+                lines.append(f"pysspautomationhold{slot_index}={'1' if slot.automation_spec.hold_to_release else '0'}")
+                lines.append(f"pysspautomationtitle{slot_index}={title}")
+                lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
+                if notes:
+                    lines.append(f"pysspautomationnotes{slot_index}={notes}")
+                if slot.custom_color:
+                    lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
+                hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                if hotkey_code:
+                    lines.append(f"pysspautomationhotkey{slot_index}={hotkey_code}")
+                midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                if midi_hotkey_code:
+                    lines.append(f"pysspautomationmidi{slot_index}={midi_hotkey_code}")
+                if slot.copied_to_cue:
+                    lines.append(f"ci{slot_index}=Y")
+                continue
             if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
                 title = clean_set_value(slot.title or utility_display_name(slot.utility_spec))
                 notes = clean_set_value(slot.notes)
@@ -481,6 +517,10 @@ class PagesSlotsMixin:
         page_shuffle_enabled = section.get("PageShuffle", "F").strip().upper() == "T"
         slots = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
         for i in range(1, SLOTS_PER_PAGE + 1):
+            automation_slot = self._parse_automation_slot_from_section(section, i)
+            if automation_slot is not None:
+                slots[i - 1] = automation_slot
+                continue
             utility_slot = self._parse_utility_slot_from_section(section, i)
             if utility_slot is not None:
                 slots[i - 1] = utility_slot
@@ -536,6 +576,7 @@ class PagesSlotsMixin:
                 notes=notes,
                 lyric_file=section.get(f"pyssplyric{i}", "").strip(),
                 duration_ms=duration,
+                automation_spec=None,
                 utility_spec=None,
                 custom_color=color,
                 played=played,
@@ -756,6 +797,8 @@ class PagesSlotsMixin:
             return self.state_colors["missing"]
         if playing_key in self._active_playing_keys:
             return self.state_colors["playing"]
+        if playing_key in self._automation_active_keys:
+            return self.state_colors["playing"]
         if slot.played:
             return self.state_colors["played"]
         if slot.highlighted:
@@ -763,6 +806,8 @@ class PagesSlotsMixin:
         if slot.copied_to_cue:
             return self.state_colors["copied"]
         if slot.assigned:
+            if slot.source_type == AUTOMATION_SOURCE_TYPE:
+                return slot.custom_color or AUTOMATION_DEFAULT_BUTTON_COLOR
             if slot.custom_color:
                 return slot.custom_color
             return self.state_colors["assigned"]
@@ -798,6 +843,8 @@ class PagesSlotsMixin:
             add_action.setEnabled(page_created)
             add_utility_action = menu.addAction(tr("Add Utility Sound Button"))
             add_utility_action.setEnabled(page_created)
+            add_automation_action = menu.addAction(tr("Add Automation Command Sound Button"))
+            add_automation_action.setEnabled(page_created)
             edit_action = menu.addAction(tr("Edit Sound Button"))
             edit_action.setEnabled(page_created)
             marker_action = menu.addAction(tr("Insert Place Marker"))
@@ -810,6 +857,8 @@ class PagesSlotsMixin:
                 self._pick_sound(slot_index)
             elif selected == add_utility_action:
                 self._add_utility_sound_button(slot_index)
+            elif selected == add_automation_action:
+                self._add_automation_sound_button(slot_index)
             elif selected == edit_action:
                 self._edit_sound_button(slot_index)
             elif selected == marker_action:
@@ -864,9 +913,9 @@ class PagesSlotsMixin:
         edit_action = menu.addAction(tr("Edit Sound Button"))
         edit_action.setEnabled(page_created)
         cue_points_action = menu.addAction(tr("Set Cue Points..."))
-        cue_points_action.setEnabled(slot.assigned)
+        cue_points_action.setEnabled(slot.assigned and slot.source_type != AUTOMATION_SOURCE_TYPE)
         lyric_editor_action = menu.addAction(tr("Lyric Editor..."))
-        lyric_editor_action.setEnabled(slot.assigned)
+        lyric_editor_action.setEnabled(slot.assigned and slot.source_type != AUTOMATION_SOURCE_TYPE)
         reveal_sound_file_action = None
         reveal_lyric_file_action = None
         lyric_linked = bool(str(slot.lyric_file or "").strip())
@@ -880,7 +929,7 @@ class PagesSlotsMixin:
             reveal_sound_file_action = menu.addAction(tr("Reveal Sound File in File Browser"))
             reveal_sound_file_action.setEnabled(bool(str(slot.file_path or "").strip()))
         timecode_setup_action = menu.addAction(tr("Timecode Setup..."))
-        timecode_setup_action.setEnabled(slot.assigned)
+        timecode_setup_action.setEnabled(slot.assigned and slot.source_type != AUTOMATION_SOURCE_TYPE)
         copy_action = menu.addAction(tr("Copy Sound Button"))
         copy_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
         paste_action = menu.addAction(tr("Paste Sound Button"))
@@ -970,10 +1019,32 @@ class PagesSlotsMixin:
     def _on_sound_button_clicked(self, slot_index: int) -> None:
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         if not self._is_button_drag_enabled():
-            self._play_slot(slot_index)
+            page = self._current_page_slots()
+            slot = page[slot_index]
+            if slot.source_type == AUTOMATION_SOURCE_TYPE:
+                self._trigger_automation_slot_click(slot_index)
+            else:
+                self._play_slot(slot_index)
             return
         # In drag mode, click does not play; dragging handles move operations.
         return
+
+    def _on_sound_button_pressed(self, slot_index: int) -> None:
+        self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
+        if self._is_button_drag_enabled():
+            return
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            self._trigger_automation_slot_press(slot_index)
+
+    def _on_sound_button_released(self, slot_index: int) -> None:
+        if self._is_button_drag_enabled():
+            return
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            self._trigger_automation_slot_release(slot_index)
 
     def _can_accept_sound_button_drop(self, mime_data: QMimeData) -> bool:
         return self._is_button_drag_enabled() and mime_data.hasFormat("application/x-pyssp-slot")
@@ -1341,6 +1412,7 @@ class PagesSlotsMixin:
             notes=slot.notes,
             lyric_file=slot.lyric_file,
             duration_ms=slot.duration_ms,
+            automation_spec=None if slot.automation_spec is None else normalize_automation_spec(slot.automation_spec),
             utility_spec=None if slot.utility_spec is None else normalize_utility_spec(slot.utility_spec),
             custom_color=slot.custom_color,
             highlighted=slot.highlighted,
@@ -1360,6 +1432,8 @@ class PagesSlotsMixin:
         )
 
     def _slot_audio_source_payload(self, slot: SoundButtonData) -> object:
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return ""
         if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
             return {
                 "source_type": UTILITY_SOURCE_TYPE,
@@ -1379,10 +1453,48 @@ class PagesSlotsMixin:
         title = str(slot.title or "").strip()
         if title:
             return title
+        if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
+            return automation_display_name(slot.automation_spec)
         if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
             return utility_display_name(slot.utility_spec)
         path = str(slot.file_path or "").strip()
         return os.path.splitext(os.path.basename(path))[0] if path else ""
+
+    def _parse_automation_slot_from_section(self, section: configparser.SectionProxy, index: int) -> Optional[SoundButtonData]:
+        source_type = str(section.get(f"pysspsourcetype{index}", "")).strip().lower()
+        if source_type != AUTOMATION_SOURCE_TYPE:
+            return None
+        spec = normalize_automation_spec(
+            {
+                "location": section.get(f"pysspautomationlocation{index}", "").strip(),
+                "button_text": section.get(f"pysspautomationtext{index}", "").strip(),
+                "hold_to_release": str(section.get(f"pysspautomationhold{index}", "0")).strip() in {"1", "true", "True"},
+            }
+        )
+        played = str(section.get(f"pysspautomationplayed{index}", "0")).strip() in {"1", "true", "True"}
+        return SoundButtonData(
+            source_type=AUTOMATION_SOURCE_TYPE,
+            file_path="",
+            vocal_removed_file="",
+            title=section.get(f"pysspautomationtitle{index}", "").strip() or automation_display_name(spec),
+            notes=section.get(f"pysspautomationnotes{index}", "").strip(),
+            lyric_file="",
+            duration_ms=0,
+            automation_spec=spec,
+            utility_spec=None,
+            custom_color=parse_delphi_color(section.get(f"pysspautomationcolor{index}", "").strip()),
+            played=played,
+            activity_code="2" if played else "8",
+            marker=False,
+            copied_to_cue=section.get(f"ci{index}", "").strip().upper() == "Y",
+            volume_override_pct=None,
+            cue_start_ms=None,
+            cue_end_ms=None,
+            timecode_offset_ms=None,
+            timecode_timeline_mode="global",
+            sound_hotkey=self._parse_sound_hotkey(section.get(f"pysspautomationhotkey{index}", "").strip()),
+            sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspautomationmidi{index}", "").strip()),
+        )
 
     def _parse_utility_slot_from_section(self, section: configparser.SectionProxy, index: int) -> Optional[SoundButtonData]:
         source_type = str(section.get(f"pysspsourcetype{index}", "")).strip().lower()
@@ -1455,6 +1567,9 @@ class PagesSlotsMixin:
         slot = page[slot_index]
         if slot.locked:
             self._show_info_notice_banner("This sound button is locked.")
+            return
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            self._edit_automation_sound_button(slot_index)
             return
         if slot.source_type == UTILITY_SOURCE_TYPE:
             self._edit_utility_sound_button(slot_index)
@@ -1649,6 +1764,90 @@ class PagesSlotsMixin:
         self._update_next_button_enabled()
         self._apply_hotkeys()
         self._refresh_playing_slot_after_audio_path_change(slot_key)
+
+    def _add_automation_sound_button(self, slot_index: int) -> None:
+        if not self.cue_mode and not self._is_page_created(self.current_group, self.current_page):
+            self._show_info_notice_banner("Create the page first before adding sound buttons.")
+            return
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        if slot.locked:
+            self._show_info_notice_banner("This sound button is locked.")
+            return
+        self._edit_automation_sound_button(slot_index, create_new=True)
+
+    def _edit_automation_sound_button(self, slot_index: int, create_new: bool = False) -> None:
+        page = self._current_page_slots()
+        slot = page[slot_index]
+        dialog = AutomationCommandSoundButtonDialog(
+            caption="" if create_new else slot.title,
+            notes="" if create_new else slot.notes,
+            automation_spec=(AutomationCommandSpec() if create_new else slot.automation_spec) or AutomationCommandSpec(),
+            custom_color=None if create_new else slot.custom_color,
+            sound_hotkey="" if create_new else slot.sound_hotkey,
+            sound_midi_hotkey="" if create_new else slot.sound_midi_hotkey,
+            available_midi_input_devices=list_midi_input_devices(),
+            selected_midi_input_device_ids=self.midi_input_device_ids,
+            companion_payload=load_companion_available_commands(),
+            hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
+            language=self.ui_language,
+            parent=self,
+        )
+        self._midi_context_handler = dialog
+        self._midi_context_block_actions = True
+        result_code = dialog.exec_()
+        self._midi_context_handler = None
+        self._midi_context_block_actions = False
+        if result_code != QDialog.Accepted:
+            return
+        caption, notes, automation_spec, custom_color, sound_hotkey, sound_midi_hotkey = dialog.values()
+        slot_key = (self._view_group_key(), self.current_page, slot_index)
+        conflict = self._find_sound_hotkey_conflict(sound_hotkey, slot_key)
+        if conflict is not None:
+            QMessageBox.warning(
+                self,
+                "Sound Button Hot Key",
+                f"Hot key {sound_hotkey} is already assigned to {self._format_button_key(conflict)}.",
+            )
+            return
+        midi_conflict = self._find_sound_midi_hotkey_conflict(sound_midi_hotkey, slot_key)
+        if midi_conflict is not None:
+            QMessageBox.warning(
+                self,
+                "Sound Button MIDI Hot Key",
+                f"MIDI key {sound_midi_hotkey} is already assigned to {self._format_button_key(midi_conflict)}.",
+            )
+            return
+        spec = normalize_automation_spec(automation_spec)
+        if not spec.location:
+            self._show_info_notice_banner(tr("Automation command location is required."))
+            return
+        slot.source_type = AUTOMATION_SOURCE_TYPE
+        slot.file_path = ""
+        slot.vocal_removed_file = ""
+        slot.title = caption or automation_display_name(spec)
+        slot.notes = notes
+        slot.lyric_file = ""
+        slot.duration_ms = 0
+        slot.automation_spec = spec
+        slot.utility_spec = None
+        slot.custom_color = custom_color
+        slot.marker = False
+        slot.played = False
+        slot.activity_code = "8"
+        slot.load_failed = False
+        slot.volume_override_pct = None
+        slot.cue_start_ms = None
+        slot.cue_end_ms = None
+        slot.timecode_offset_ms = None
+        slot.timecode_timeline_mode = "global"
+        slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
+        slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        self._set_dirty(True)
+        self._refresh_page_list()
+        self._refresh_sound_grid()
+        self._update_next_button_enabled()
+        self._apply_hotkeys()
 
     def _generate_vocal_removed_file_for_slot(self, file_path: str, current_output_path: str = "") -> str:
         source_path = str(file_path or "").strip()
@@ -2420,6 +2619,9 @@ class PagesSlotsMixin:
         return "Linked lyric file path is missing."
 
     def _verify_slot(self, slot: SoundButtonData) -> None:
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            self._show_info_notice_banner(tr("Automation command button is available."))
+            return
         if slot.source_type == UTILITY_SOURCE_TYPE:
             self._show_info_notice_banner("Utility sound button is available.")
             return

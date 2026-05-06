@@ -4,6 +4,11 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    normalize_automation_spec,
+)
 from pyssp.utility_audio import (
     UTILITY_SOURCE_TYPE,
     UTILITY_UNSUPPORTED_MARKER_TEXT,
@@ -17,6 +22,8 @@ class ActionsInputMixin:
     def _slot_follows_regular_playback_controls(self, slot: Optional[SoundButtonData]) -> bool:
         if slot is None:
             return False
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return bool(getattr(self, "automation_command_buttons_follow_playback_controls", False))
         if slot.source_type != UTILITY_SOURCE_TYPE:
             return True
         return bool(getattr(self, "utility_sound_buttons_follow_playback_controls", True))
@@ -1171,6 +1178,13 @@ class ActionsInputMixin:
             group: [[SoundButtonData() for _ in range(SLOTS_PER_PAGE)] for _ in range(PAGE_COUNT)]
             for group in GROUPS
         }
+        if not hasattr(self, "_automation_active_keys"):
+            self._automation_active_keys = set()
+        if not hasattr(self, "_automation_hold_active_keys"):
+            self._automation_hold_active_keys = set()
+        self._automation_active_keys.clear()
+        self._automation_hold_active_keys.clear()
+        self._automation_click_suppressed_slot_key = None
         self.page_names = {group: ["" for _ in range(PAGE_COUNT)] for group in GROUPS}
         self.page_colors = {group: [None for _ in range(PAGE_COUNT)] for group in GROUPS}
         self.page_playlist_enabled = {group: [False for _ in range(PAGE_COUNT)] for group in GROUPS}
@@ -1327,6 +1341,33 @@ class ActionsInputMixin:
                             lines.append(f"activity{slot_index}=7")
                             lines.append(f"co{slot_index}=clBtnFace")
                             continue
+                        if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
+                            title = clean_set_value(slot.title or slot.automation_spec.button_text or slot.automation_spec.location)
+                            notes = clean_set_value(slot.notes or "")
+                            lines.append(f"c{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%")
+                            lines.append(f"n{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}")
+                            lines.append(f"t{slot_index}= ")
+                            lines.append(f"activity{slot_index}=7")
+                            lines.append(f"co{slot_index}=clBtnFace")
+                            lines.append(f"pysspsourcetype{slot_index}={AUTOMATION_SOURCE_TYPE}")
+                            lines.append(f"pysspautomationlocation{slot_index}={slot.automation_spec.location}")
+                            lines.append(f"pysspautomationtext{slot_index}={clean_set_value(slot.automation_spec.button_text)}")
+                            lines.append(f"pysspautomationhold{slot_index}={'1' if slot.automation_spec.hold_to_release else '0'}")
+                            lines.append(f"pysspautomationtitle{slot_index}={title}")
+                            lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
+                            if notes:
+                                lines.append(f"pysspautomationnotes{slot_index}={notes}")
+                            if slot.custom_color:
+                                lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
+                            hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                            if hotkey_code:
+                                lines.append(f"pysspautomationhotkey{slot_index}={hotkey_code}")
+                            midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                            if midi_hotkey_code:
+                                lines.append(f"pysspautomationmidi{slot_index}={midi_hotkey_code}")
+                            if slot.copied_to_cue:
+                                lines.append(f"ci{slot_index}=Y")
+                            continue
                         if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
                             title = clean_set_value(slot.title or utility_display_name(slot.utility_spec))
                             notes = clean_set_value(slot.notes or "")
@@ -1474,6 +1515,7 @@ class ActionsInputMixin:
                         notes=src.notes,
                         lyric_file=src.lyric_file,
                         duration_ms=src.duration_ms,
+                        automation_spec=None if src.automation_spec is None else normalize_automation_spec(src.automation_spec),
                         utility_spec=None if src.utility_spec is None else normalize_utility_spec(src.utility_spec),
                         custom_color=src.custom_color,
                         played=src.played,
@@ -1631,6 +1673,8 @@ class ActionsInputMixin:
             rapid_fire_play_mode=self.rapid_fire_play_mode,
             next_play_mode=self.next_play_mode,
             playlist_loop_mode=self.playlist_loop_mode,
+            automation_command_buttons_follow_playback_controls=self.automation_command_buttons_follow_playback_controls,
+            automation_command_button_auto_release_mode=self.automation_command_button_auto_release_mode,
             utility_sound_buttons_follow_playback_controls=self.utility_sound_buttons_follow_playback_controls,
             candidate_error_action=self.candidate_error_action,
             web_remote_enabled=self.web_remote_enabled,
@@ -1824,6 +1868,12 @@ class ActionsInputMixin:
         self.rapid_fire_play_mode = dialog.selected_rapid_fire_play_mode()
         self.next_play_mode = dialog.selected_next_play_mode()
         self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
+        self.automation_command_buttons_follow_playback_controls = (
+            dialog.selected_automation_command_buttons_follow_playback_controls()
+        )
+        self.automation_command_button_auto_release_mode = (
+            dialog.selected_automation_command_button_auto_release_mode()
+        )
         self.utility_sound_buttons_follow_playback_controls = dialog.selected_utility_sound_buttons_follow_playback_controls()
         self.candidate_error_action = dialog.selected_candidate_error_action()
         self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()

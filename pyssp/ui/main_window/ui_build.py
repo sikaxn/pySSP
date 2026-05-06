@@ -949,6 +949,8 @@ class UiBuildMixin:
             for col in range(GRID_COLS):
                 idx = row * GRID_COLS + col
                 button = SoundButton(idx, self)
+                button.pressed.connect(lambda slot=idx: self._on_sound_button_pressed(slot))
+                button.released.connect(lambda slot=idx: self._on_sound_button_released(slot))
                 button.clicked.connect(lambda _=False, slot=idx: self._on_sound_button_clicked(slot))
                 self.sound_buttons.append(button)
                 grid_layout.addWidget(button, row, col)

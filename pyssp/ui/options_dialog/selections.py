@@ -241,6 +241,14 @@ class SelectionMixin:
             return "loop_single"
         return "loop_list"
 
+    def selected_automation_command_buttons_follow_playback_controls(self) -> bool:
+        return bool(self.automation_command_buttons_follow_playback_controls_checkbox.isChecked())
+
+    def selected_automation_command_button_auto_release_mode(self) -> str:
+        if self.automation_command_button_auto_release_down_only_radio.isChecked():
+            return "down_only"
+        return "immediate"
+
     def selected_utility_sound_buttons_follow_playback_controls(self) -> bool:
         return bool(self.utility_sound_buttons_follow_playback_controls_checkbox.isChecked())
 

@@ -1,5 +1,9 @@
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+)
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
-from pyssp.utility_audio import UTILITY_SOURCE_TYPE
+from pyssp.utility_audio import FILE_SOURCE_TYPE, UTILITY_SOURCE_TYPE
 
 
 def test_parse_time_mm_ss():
@@ -327,5 +331,87 @@ def test_load_set_marker_fallback_without_utility_source_type_stays_marker(tmp_p
     result = load_set_file(str(set_path))
     slot = result.pages["A"][0][0]
     assert slot.marker is True
-    assert slot.source_type == "file"
+    assert slot.source_type == FILE_SOURCE_TYPE
     assert slot.utility_spec is None
+
+
+def test_load_set_automation_sound_button_reconstructs_source_from_pyssp_fields(tmp_path):
+    set_path = tmp_path / "automation.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=T",
+                "PageShuffle=F",
+                f"c1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%",
+                f"n1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}",
+                "t1= ",
+                "activity1=7",
+                "co1=clBtnFace",
+                f"pysspsourcetype1={AUTOMATION_SOURCE_TYPE}",
+                "pysspautomationlocation1=5/1/2",
+                "pysspautomationtext1=Take Camera 1",
+                "pysspautomationhold1=1",
+                "pysspautomationtitle1=Camera Take",
+                "pysspautomationnotes1=Runs companion automation",
+                "pysspautomationcolor1=$007AC6E8",
+                "pysspautomationplayed1=1",
+                "pysspautomationhotkey1=0F1",
+                "pysspautomationmidi1=90:3C",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.source_type == AUTOMATION_SOURCE_TYPE
+    assert slot.marker is False
+    assert slot.file_path == ""
+    assert slot.duration_ms == 0
+    assert slot.title == "Camera Take"
+    assert slot.notes == "Runs companion automation"
+    assert slot.played is True
+    assert slot.activity_code == "7"
+    assert slot.custom_color == "#E8C67A"
+    assert slot.sound_hotkey == "F1"
+    assert slot.sound_midi_hotkey == "90:3C"
+    assert slot.automation_spec is not None
+    assert slot.automation_spec.location == "5/1/2"
+    assert slot.automation_spec.button_text == "Take Camera 1"
+    assert slot.automation_spec.hold_to_release is True
+
+
+def test_load_set_legacy_unsupported_automation_marker_stays_marker_without_pyssp_metadata(tmp_path):
+    set_path = tmp_path / "automation_legacy_marker.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                f"c1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%",
+                f"n1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}",
+                "t1= ",
+                "activity1=7",
+                "co1=clBtnFace",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.source_type == FILE_SOURCE_TYPE
+    assert slot.marker is True
+    assert slot.automation_spec is None
+    assert slot.title == AUTOMATION_UNSUPPORTED_MARKER_TEXT
+    assert slot.notes == AUTOMATION_UNSUPPORTED_MARKER_TEXT

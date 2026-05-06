@@ -585,6 +585,8 @@ class AppSettings:
     rapid_fire_play_mode: str = "unplayed_only"
     next_play_mode: str = "unplayed_only"
     playlist_loop_mode: str = "loop_list"
+    automation_command_buttons_follow_playback_controls: bool = False
+    automation_command_button_auto_release_mode: str = "immediate"
     utility_sound_buttons_follow_playback_controls: bool = True
     candidate_error_action: str = "stop_playback"
     web_remote_enabled: bool = False
@@ -973,6 +975,12 @@ def save_settings(settings: AppSettings) -> None:
         "rapid_fire_play_mode": settings.rapid_fire_play_mode,
         "next_play_mode": settings.next_play_mode,
         "playlist_loop_mode": settings.playlist_loop_mode,
+        "automation_command_buttons_follow_playback_controls": (
+            "1" if settings.automation_command_buttons_follow_playback_controls else "0"
+        ),
+        "automation_command_button_auto_release_mode": str(
+            settings.automation_command_button_auto_release_mode or "immediate"
+        ),
         "utility_sound_buttons_follow_playback_controls": "1" if settings.utility_sound_buttons_follow_playback_controls else "0",
         "candidate_error_action": settings.candidate_error_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
@@ -1363,6 +1371,16 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     playlist_loop_mode = str(section.get("playlist_loop_mode", "loop_list")).strip().lower()
     if playlist_loop_mode not in {"loop_list", "loop_single"}:
         playlist_loop_mode = "loop_list"
+    automation_command_buttons_follow_playback_controls = _get_bool(
+        section,
+        "automation_command_buttons_follow_playback_controls",
+        False,
+    )
+    automation_command_button_auto_release_mode = str(
+        section.get("automation_command_button_auto_release_mode", "immediate")
+    ).strip().lower()
+    if automation_command_button_auto_release_mode not in {"immediate", "down_only"}:
+        automation_command_button_auto_release_mode = "immediate"
     utility_sound_buttons_follow_playback_controls = _get_bool(
         section,
         "utility_sound_buttons_follow_playback_controls",
@@ -1747,6 +1765,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         rapid_fire_play_mode=rapid_fire_play_mode,
         next_play_mode=next_play_mode,
         playlist_loop_mode=playlist_loop_mode,
+        automation_command_buttons_follow_playback_controls=automation_command_buttons_follow_playback_controls,
+        automation_command_button_auto_release_mode=automation_command_button_auto_release_mode,
         utility_sound_buttons_follow_playback_controls=utility_sound_buttons_follow_playback_controls,
         candidate_error_action=candidate_error_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),

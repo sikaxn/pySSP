@@ -204,14 +204,86 @@ class CompanionSatelliteMixin:
             return False
         return self._send_companion_command_specs_async(specs)
 
-    def _trigger_sound_button_started_event(self, slot_key: Optional[Tuple[str, int, int]], *, include_advanced: bool) -> None:
-        self._trigger_sound_button_automation_event(slot_key, "on_become_playing")
+    def _trigger_sound_button_automation_events(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *event_names: str,
+    ) -> None:
+        for event_name in event_names:
+            if event_name:
+                self._trigger_sound_button_automation_event(slot_key, event_name)
+
+    def _trigger_sound_button_trigger_event(self, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_trigger")
+
+    def _trigger_sound_button_started_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *,
+        include_advanced: bool,
+    ) -> None:
+        event_names = ["on_become_playing"]
         if include_advanced:
-            self._trigger_sound_button_automation_event(slot_key, "on_play")
+            event_names.append("on_play")
+        self._trigger_sound_button_automation_events(slot_key, *event_names)
+
+    def _trigger_sound_button_fade_events(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *event_names: str,
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, *event_names)
+
+    def _trigger_sound_button_pause_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_pause_requested")
 
     def _trigger_sound_button_paused_event(self, slot_key: Optional[Tuple[str, int, int]]) -> None:
-        self._trigger_sound_button_automation_event(slot_key, "on_leave_playing")
-        self._trigger_sound_button_automation_event(slot_key, "on_pause")
+        self._trigger_sound_button_automation_events(slot_key, "on_pause")
+
+    def _trigger_sound_button_resume_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_resume_requested")
+
+    def _trigger_sound_button_resumed_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_resume_complete")
+
+    def _trigger_sound_button_stop_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_stop_requested")
+
+    def _trigger_sound_button_force_stop_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_force_stop")
+
+    def _trigger_sound_button_interrupted_by_sound_button_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_sound_button")
+
+    def _trigger_sound_button_interrupted_by_playback_control_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_playback_control")
+
+    def _trigger_sound_button_interrupted_by_app_reset_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_app_reset")
 
     def _trigger_sound_button_stopped_event(
         self,
@@ -219,8 +291,11 @@ class CompanionSatelliteMixin:
         *,
         natural: bool,
     ) -> None:
-        self._trigger_sound_button_automation_event(slot_key, "on_leave_playing")
-        self._trigger_sound_button_automation_event(slot_key, "on_done_play" if natural else "on_stop")
+        self._trigger_sound_button_automation_events(
+            slot_key,
+            "on_leave_playing",
+            "on_done_play" if natural else "on_stop",
+        )
 
     def _automation_slot_key(self, slot_index: int) -> Tuple[str, int, int]:
         return (self._view_group_key(), self.current_page, int(slot_index))

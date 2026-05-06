@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
 from pyssp.automation_command import (
     AutomationCommandSpec,
     SOUND_BUTTON_AUTOMATION_EVENTS,
+    SOUND_BUTTON_AUTOMATION_SIMPLE_EVENTS,
     SOUND_BUTTON_AUTOMATION_MODE_ADVANCED,
     SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
     SoundButtonAutomationConfig,
@@ -44,10 +45,12 @@ class _CommandListEditor(QGroupBox):
         *,
         commands: Optional[list[AutomationCommandSpec]] = None,
         open_picker,
+        on_changed=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(title, parent)
         self._open_picker = open_picker
+        self._on_changed = on_changed
         self._commands: list[AutomationCommandSpec] = [
             normalize_automation_spec(item) for item in list(commands or []) if normalize_automation_spec(item).location
         ]
@@ -88,6 +91,12 @@ class _CommandListEditor(QGroupBox):
     def commands(self) -> list[AutomationCommandSpec]:
         return [normalize_automation_spec(item) for item in self._commands if normalize_automation_spec(item).location]
 
+    def set_commands(self, commands: Optional[list[AutomationCommandSpec]]) -> None:
+        self._commands = [
+            normalize_automation_spec(item) for item in list(commands or []) if normalize_automation_spec(item).location
+        ]
+        self._refresh_list()
+
     def _refresh_list(self) -> None:
         current_row = self.list_widget.currentRow()
         self.list_widget.clear()
@@ -118,6 +127,7 @@ class _CommandListEditor(QGroupBox):
         self._commands.append(normalize_automation_spec(spec))
         self._refresh_list()
         self.list_widget.setCurrentRow(len(self._commands) - 1)
+        self._emit_changed()
 
     def _edit_selected_command(self) -> None:
         row = self.list_widget.currentRow()
@@ -129,6 +139,7 @@ class _CommandListEditor(QGroupBox):
         self._commands[row] = normalize_automation_spec(spec)
         self._refresh_list()
         self.list_widget.setCurrentRow(row)
+        self._emit_changed()
 
     def _remove_selected_command(self) -> None:
         row = self.list_widget.currentRow()
@@ -136,6 +147,7 @@ class _CommandListEditor(QGroupBox):
             return
         self._commands.pop(row)
         self._refresh_list()
+        self._emit_changed()
 
     def _move_selected(self, delta: int) -> None:
         row = self.list_widget.currentRow()
@@ -147,10 +159,16 @@ class _CommandListEditor(QGroupBox):
         self._commands[row], self._commands[target] = self._commands[target], self._commands[row]
         self._refresh_list()
         self.list_widget.setCurrentRow(target)
+        self._emit_changed()
 
     def _clear_commands(self) -> None:
         self._commands = []
         self._refresh_list()
+        self._emit_changed()
+
+    def _emit_changed(self) -> None:
+        if callable(self._on_changed):
+            self._on_changed()
 
 
 class _AdvancedAutomationRowDialog(QDialog):
@@ -231,10 +249,12 @@ class _AdvancedAutomationTable(QGroupBox):
         *,
         rows: Optional[list[tuple[str, AutomationCommandSpec]]] = None,
         open_picker,
+        on_changed=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(tr("Advanced Automation"), parent)
         self._open_picker = open_picker
+        self._on_changed = on_changed
         self._rows: list[tuple[str, AutomationCommandSpec]] = []
 
         root = QVBoxLayout(self)
@@ -286,6 +306,44 @@ class _AdvancedAutomationTable(QGroupBox):
             if str(event_name or "").strip().lower() in SOUND_BUTTON_AUTOMATION_EVENTS
             and normalize_automation_spec(spec).location
         ]
+
+    def set_rows(self, rows: Optional[list[tuple[str, AutomationCommandSpec]]]) -> None:
+        self._rows = []
+        for row_data in list(rows or []):
+            self._append_row(row_data[0], row_data[1])
+        self._refresh_table()
+
+    def replace_event_rows(
+        self,
+        event_names: tuple[str, ...],
+        replacement_rows: list[tuple[str, AutomationCommandSpec]],
+    ) -> None:
+        event_set = {str(name or "").strip().lower() for name in event_names}
+        normalized_replacements: dict[str, list[tuple[str, AutomationCommandSpec]]] = {
+            name: [] for name in event_set
+        }
+        for event_name, spec in replacement_rows:
+            normalized_event = str(event_name or "").strip().lower()
+            normalized_spec = normalize_automation_spec(spec)
+            if normalized_event in event_set and normalized_spec.location:
+                normalized_replacements.setdefault(normalized_event, []).append((normalized_event, normalized_spec))
+        updated_rows: list[tuple[str, AutomationCommandSpec]] = []
+        inserted_events: set[str] = set()
+        for event_name, spec in self._rows:
+            normalized_event = str(event_name or "").strip().lower()
+            if normalized_event in event_set:
+                if normalized_event not in inserted_events:
+                    updated_rows.extend(normalized_replacements.get(normalized_event, []))
+                    inserted_events.add(normalized_event)
+                continue
+            updated_rows.append((normalized_event, normalize_automation_spec(spec)))
+        for event_name in event_names:
+            normalized_event = str(event_name or "").strip().lower()
+            if normalized_event in inserted_events:
+                continue
+            updated_rows.extend(normalized_replacements.get(normalized_event, []))
+        self._rows = updated_rows
+        self._refresh_table()
 
     def _append_row(self, event_name: str, spec: AutomationCommandSpec) -> None:
         normalized_event = str(event_name or "").strip().lower()
@@ -344,6 +402,7 @@ class _AdvancedAutomationTable(QGroupBox):
         self._rows.append((row_data[0], normalize_automation_spec(row_data[1])))
         self._refresh_table()
         self.table.selectRow(len(self._rows) - 1)
+        self._emit_changed()
 
     def _edit_selected_row(self) -> None:
         row = self.table.currentRow()
@@ -355,6 +414,7 @@ class _AdvancedAutomationTable(QGroupBox):
         self._rows[row] = (updated[0], normalize_automation_spec(updated[1]))
         self._refresh_table()
         self.table.selectRow(row)
+        self._emit_changed()
 
     def _remove_selected_row(self) -> None:
         row = self.table.currentRow()
@@ -362,6 +422,7 @@ class _AdvancedAutomationTable(QGroupBox):
             return
         self._rows.pop(row)
         self._refresh_table()
+        self._emit_changed()
 
     def _move_selected(self, delta: int) -> None:
         row = self.table.currentRow()
@@ -373,10 +434,16 @@ class _AdvancedAutomationTable(QGroupBox):
         self._rows[row], self._rows[target] = self._rows[target], self._rows[row]
         self._refresh_table()
         self.table.selectRow(target)
+        self._emit_changed()
 
     def _clear_rows(self) -> None:
         self._rows = []
         self._refresh_table()
+        self._emit_changed()
+
+    def _emit_changed(self) -> None:
+        if callable(self._on_changed):
+            self._on_changed()
 
 
 class SoundButtonAutomationDialog(QDialog):
@@ -395,6 +462,7 @@ class SoundButtonAutomationDialog(QDialog):
         self._payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
         self._hide_black_empty = bool(hide_black_empty)
         self._language = language
+        self._syncing_views = False
         self._config = normalize_sound_button_automation_config(config)
         if self._config is None:
             self._config = SoundButtonAutomationConfig()
@@ -422,26 +490,45 @@ class SoundButtonAutomationDialog(QDialog):
         self.stack.addWidget(self.simple_page)
         self.stack.addWidget(self.advanced_page)
 
-        simple_layout = QVBoxLayout(self.simple_page)
+        simple_layout = QGridLayout(self.simple_page)
         self.simple_start_editor = _CommandListEditor(
             tr("When this sound button starts playing"),
             commands=self._config.on_become_playing,
             open_picker=self._open_picker_dialog,
+            on_changed=self._on_simple_lists_changed,
             parent=self.simple_page,
         )
         self.simple_stop_editor = _CommandListEditor(
-            tr("When this sound button stops playing for any reason"),
+            tr("When this sound button stops playing for any reason except pause"),
             commands=self._config.on_leave_playing,
             open_picker=self._open_picker_dialog,
+            on_changed=self._on_simple_lists_changed,
             parent=self.simple_page,
         )
-        simple_layout.addWidget(self.simple_start_editor, 1)
-        simple_layout.addWidget(self.simple_stop_editor, 1)
+        self.simple_pause_editor = _CommandListEditor(
+            tr("When this sound button pauses"),
+            commands=self._config.on_pause,
+            open_picker=self._open_picker_dialog,
+            on_changed=self._on_simple_lists_changed,
+            parent=self.simple_page,
+        )
+        self.simple_resume_editor = _CommandListEditor(
+            tr("When this sound button resumes playing"),
+            commands=self._config.on_resume_complete,
+            open_picker=self._open_picker_dialog,
+            on_changed=self._on_simple_lists_changed,
+            parent=self.simple_page,
+        )
+        simple_layout.addWidget(self.simple_start_editor, 0, 0)
+        simple_layout.addWidget(self.simple_stop_editor, 0, 1)
+        simple_layout.addWidget(self.simple_pause_editor, 1, 0)
+        simple_layout.addWidget(self.simple_resume_editor, 1, 1)
 
         advanced_layout = QVBoxLayout(self.advanced_page)
         self.advanced_table = _AdvancedAutomationTable(
             rows=self._config_to_advanced_rows(self._config),
             open_picker=self._open_picker_dialog,
+            on_changed=self._on_advanced_rows_changed,
             parent=self.advanced_page,
         )
         advanced_layout.addWidget(self.advanced_table, 1)
@@ -463,21 +550,23 @@ class SoundButtonAutomationDialog(QDialog):
 
     def values(self) -> Optional[SoundButtonAutomationConfig]:
         mode = self.selected_mode()
-        data = {
-            "mode": mode,
-            "on_become_playing": self.simple_start_editor.commands(),
-            "on_leave_playing": self.simple_stop_editor.commands(),
-            "on_play": None,
-            "on_pause": None,
-            "on_done_play": None,
-            "on_stop": None,
-        }
-        if mode == SOUND_BUTTON_AUTOMATION_MODE_ADVANCED:
-            for event_name, spec in self.advanced_table.rows():
-                bucket = list(data.get(event_name) or [])
-                bucket.append(spec)
-                data[event_name] = bucket
+        data = self._advanced_rows_to_data()
+        data["mode"] = mode
+        data["on_become_playing"] = self.simple_start_editor.commands()
+        data["on_leave_playing"] = self.simple_stop_editor.commands()
+        data["on_pause"] = self.simple_pause_editor.commands()
+        data["on_resume_complete"] = self.simple_resume_editor.commands()
         return normalize_sound_button_automation_config(data)
+
+    def _advanced_rows_to_data(self) -> dict[str, object]:
+        data = {
+            event_name: None for event_name in SOUND_BUTTON_AUTOMATION_EVENTS
+        }
+        for event_name, spec in self.advanced_table.rows():
+            bucket = list(data.get(event_name) or [])
+            bucket.append(spec)
+            data[event_name] = bucket
+        return data
 
     def selected_mode(self) -> str:
         token = str(self.mode_combo.currentData() or SOUND_BUTTON_AUTOMATION_MODE_SIMPLE).strip().lower()
@@ -487,6 +576,7 @@ class SoundButtonAutomationDialog(QDialog):
 
     def _refresh_mode_ui(self) -> None:
         mode = self.selected_mode()
+        self._sync_views_for_mode(mode)
         if mode == SOUND_BUTTON_AUTOMATION_MODE_ADVANCED:
             self.stack.setCurrentWidget(self.advanced_page)
             self.mode_note.setText(
@@ -495,7 +585,7 @@ class SoundButtonAutomationDialog(QDialog):
             return
         self.stack.setCurrentWidget(self.simple_page)
         self.mode_note.setText(
-            tr("Simple mode runs commands when playback starts, and when playback stops for any reason, including pause, stop, end, or interruption.")
+            tr("Simple mode gives you separate command lists for start, stop, pause, and resume. Stop excludes pause.")
         )
 
     def _open_picker_dialog(self, spec: Optional[AutomationCommandSpec]) -> Optional[AutomationCommandSpec]:
@@ -517,6 +607,77 @@ class SoundButtonAutomationDialog(QDialog):
         if not normalized.location:
             return None
         return normalized
+
+    def _sync_views_for_mode(self, mode: str) -> None:
+        if self._syncing_views:
+            return
+        self._syncing_views = True
+        try:
+            if mode == SOUND_BUTTON_AUTOMATION_MODE_ADVANCED:
+                self.advanced_table.replace_event_rows(
+                    SOUND_BUTTON_AUTOMATION_SIMPLE_EVENTS,
+                    self._simple_rows(),
+                )
+            else:
+                self._set_simple_editors_from_advanced_rows()
+        finally:
+            self._syncing_views = False
+
+    def _simple_rows(self) -> list[tuple[str, AutomationCommandSpec]]:
+        rows: list[tuple[str, AutomationCommandSpec]] = []
+        rows.extend(
+            ("on_become_playing", spec) for spec in self.simple_start_editor.commands()
+        )
+        rows.extend(
+            ("on_leave_playing", spec) for spec in self.simple_stop_editor.commands()
+        )
+        rows.extend(
+            ("on_pause", spec) for spec in self.simple_pause_editor.commands()
+        )
+        rows.extend(
+            ("on_resume_complete", spec) for spec in self.simple_resume_editor.commands()
+        )
+        return rows
+
+    def _set_simple_editors_from_advanced_rows(self) -> None:
+        start_specs: list[AutomationCommandSpec] = []
+        stop_specs: list[AutomationCommandSpec] = []
+        pause_specs: list[AutomationCommandSpec] = []
+        resume_specs: list[AutomationCommandSpec] = []
+        for event_name, spec in self.advanced_table.rows():
+            if event_name == "on_become_playing":
+                start_specs.append(spec)
+            elif event_name == "on_leave_playing":
+                stop_specs.append(spec)
+            elif event_name == "on_pause":
+                pause_specs.append(spec)
+            elif event_name == "on_resume_complete":
+                resume_specs.append(spec)
+        self.simple_start_editor.set_commands(start_specs)
+        self.simple_stop_editor.set_commands(stop_specs)
+        self.simple_pause_editor.set_commands(pause_specs)
+        self.simple_resume_editor.set_commands(resume_specs)
+
+    def _on_simple_lists_changed(self) -> None:
+        if self._syncing_views:
+            return
+        self._syncing_views = True
+        try:
+            self.advanced_table.replace_event_rows(
+                SOUND_BUTTON_AUTOMATION_SIMPLE_EVENTS,
+                self._simple_rows(),
+            )
+        finally:
+            self._syncing_views = False
+
+    def _on_advanced_rows_changed(self) -> None:
+        if self._syncing_views:
+            return
+        self._syncing_views = True
+        try:
+            self._set_simple_editors_from_advanced_rows()
+        finally:
+            self._syncing_views = False
 
     @staticmethod
     def _config_to_advanced_rows(

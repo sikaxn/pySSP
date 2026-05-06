@@ -14,26 +14,89 @@ SOUND_BUTTON_AUTOMATION_MODE_ADVANCED = "advanced"
 SOUND_BUTTON_AUTOMATION_EVENTS = (
     "on_become_playing",
     "on_leave_playing",
+    "on_trigger",
     "on_play",
+    "on_fade_in_start",
+    "on_fade_in_end",
+    "on_pause_requested",
     "on_pause",
+    "on_resume_requested",
+    "on_resume_complete",
+    "on_pause_fade_out_start",
+    "on_pause_fade_out_end",
+    "on_resume_fade_in_start",
+    "on_resume_fade_in_end",
     "on_done_play",
+    "on_end_fade_out_start",
+    "on_end_fade_out_end",
+    "on_stop_requested",
+    "on_force_stop",
     "on_stop",
+    "on_stop_fade_out_start",
+    "on_stop_fade_out_end",
+    "on_interrupted_by_sound_button",
+    "on_interrupted_by_playback_control",
+    "on_interrupted_by_app_reset",
+)
+SOUND_BUTTON_AUTOMATION_SIMPLE_EVENTS = (
+    "on_become_playing",
+    "on_leave_playing",
+    "on_pause",
+    "on_resume_complete",
 )
 SOUND_BUTTON_AUTOMATION_EVENT_TOKENS = {
     "on_become_playing": "onbecomeplaying",
     "on_leave_playing": "onleaveplaying",
+    "on_trigger": "ontrigger",
     "on_play": "onplay",
+    "on_fade_in_start": "onfadeinstart",
+    "on_fade_in_end": "onfadeinend",
+    "on_pause_requested": "onpauserequested",
     "on_pause": "onpause",
+    "on_resume_requested": "onresumerequested",
+    "on_resume_complete": "onresumecomplete",
+    "on_pause_fade_out_start": "onpausefadeoutstart",
+    "on_pause_fade_out_end": "onpausefadeoutend",
+    "on_resume_fade_in_start": "onresumefadeinstart",
+    "on_resume_fade_in_end": "onresumefadeinend",
     "on_done_play": "ondoneplay",
+    "on_end_fade_out_start": "onendfadeoutstart",
+    "on_end_fade_out_end": "onendfadeoutend",
+    "on_stop_requested": "onstoprequested",
+    "on_force_stop": "onforcestop",
     "on_stop": "onstop",
+    "on_stop_fade_out_start": "onstopfadeoutstart",
+    "on_stop_fade_out_end": "onstopfadeoutend",
+    "on_interrupted_by_sound_button": "oninterruptedbysoundbutton",
+    "on_interrupted_by_playback_control": "oninterruptedbyplaybackcontrol",
+    "on_interrupted_by_app_reset": "oninterruptedbyappreset",
 }
 SOUND_BUTTON_AUTOMATION_EVENT_LABELS = {
     "on_become_playing": "When playback starts",
-    "on_leave_playing": "When playback stops for any reason",
-    "on_play": "On Play",
-    "on_pause": "On Pause",
+    "on_leave_playing": "When playback stops for any reason except pause",
+    "on_trigger": "On Trigger",
+    "on_play": "On Playback Start",
+    "on_fade_in_start": "On Fade In Start",
+    "on_fade_in_end": "On Fade In End",
+    "on_pause_requested": "On Pause Requested",
+    "on_pause": "On Pause Complete",
+    "on_resume_requested": "On Resume Requested",
+    "on_resume_complete": "On Resume Complete",
+    "on_pause_fade_out_start": "On Pause Fade Out Start",
+    "on_pause_fade_out_end": "On Pause Fade Out End",
+    "on_resume_fade_in_start": "On Resume Fade In Start",
+    "on_resume_fade_in_end": "On Resume Fade In End",
     "on_done_play": "On Done Play",
-    "on_stop": "On Stop",
+    "on_end_fade_out_start": "On End Fade Out Start",
+    "on_end_fade_out_end": "On End Fade Out End",
+    "on_stop_requested": "On Stop Requested",
+    "on_force_stop": "On Force Stop",
+    "on_stop": "On Stop Complete",
+    "on_stop_fade_out_start": "On Stop Fade Out Start",
+    "on_stop_fade_out_end": "On Stop Fade Out End",
+    "on_interrupted_by_sound_button": "On Interrupted By Another Sound Button",
+    "on_interrupted_by_playback_control": "On Interrupted By Playback Control",
+    "on_interrupted_by_app_reset": "On Interrupted By App Reset / Set Load / Hard Stop",
 }
 
 
@@ -49,10 +112,29 @@ class SoundButtonAutomationConfig:
     mode: str = SOUND_BUTTON_AUTOMATION_MODE_SIMPLE
     on_become_playing: list[AutomationCommandSpec] | None = None
     on_leave_playing: list[AutomationCommandSpec] | None = None
+    on_trigger: list[AutomationCommandSpec] | None = None
     on_play: list[AutomationCommandSpec] | None = None
+    on_fade_in_start: list[AutomationCommandSpec] | None = None
+    on_fade_in_end: list[AutomationCommandSpec] | None = None
+    on_pause_requested: list[AutomationCommandSpec] | None = None
     on_pause: list[AutomationCommandSpec] | None = None
+    on_resume_requested: list[AutomationCommandSpec] | None = None
+    on_resume_complete: list[AutomationCommandSpec] | None = None
+    on_pause_fade_out_start: list[AutomationCommandSpec] | None = None
+    on_pause_fade_out_end: list[AutomationCommandSpec] | None = None
+    on_resume_fade_in_start: list[AutomationCommandSpec] | None = None
+    on_resume_fade_in_end: list[AutomationCommandSpec] | None = None
     on_done_play: list[AutomationCommandSpec] | None = None
+    on_end_fade_out_start: list[AutomationCommandSpec] | None = None
+    on_end_fade_out_end: list[AutomationCommandSpec] | None = None
+    on_stop_requested: list[AutomationCommandSpec] | None = None
+    on_force_stop: list[AutomationCommandSpec] | None = None
     on_stop: list[AutomationCommandSpec] | None = None
+    on_stop_fade_out_start: list[AutomationCommandSpec] | None = None
+    on_stop_fade_out_end: list[AutomationCommandSpec] | None = None
+    on_interrupted_by_sound_button: list[AutomationCommandSpec] | None = None
+    on_interrupted_by_playback_control: list[AutomationCommandSpec] | None = None
+    on_interrupted_by_app_reset: list[AutomationCommandSpec] | None = None
 
 
 def normalize_automation_location(raw: object) -> str:
@@ -121,7 +203,15 @@ def normalize_sound_button_automation_config(raw: object) -> Optional[SoundButto
             values["on_become_playing"] = list(values["on_play"])
         if not values.get("on_leave_playing"):
             merged_leave: list[AutomationCommandSpec] = []
-            for event_name in ("on_pause", "on_done_play", "on_stop"):
+            for event_name in (
+                "on_done_play",
+                "on_end_fade_out_end",
+                "on_stop",
+                "on_stop_fade_out_end",
+                "on_interrupted_by_sound_button",
+                "on_interrupted_by_playback_control",
+                "on_interrupted_by_app_reset",
+            ):
                 merged_leave.extend(list(values.get(event_name) or []))
             values["on_leave_playing"] = merged_leave or None
     elif mode == SOUND_BUTTON_AUTOMATION_MODE_ADVANCED:

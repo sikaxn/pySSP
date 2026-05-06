@@ -143,6 +143,8 @@ class ActionsInputMixin:
         playing = [p for p in players if p.state() == ExternalMediaPlayer.PlayingState]
         if not playing:
             return
+        for player in playing:
+            self._trigger_sound_button_pause_requested_event(self._player_slot_key_map.get(id(player)))
         if self.fade_on_pause and self._is_fade_out_enabled() and self.fade_out_sec > 0:
             for player in playing:
                 resume_target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
@@ -153,6 +155,9 @@ class ActionsInputMixin:
                     stop_on_complete=False,
                     pause_on_complete=True,
                     pause_resume_volume=resume_target,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_pause_fade_out_start",),
+                    automation_end_events=("on_pause_fade_out_end",),
                 )
             return
         for player in playing:
@@ -164,25 +169,29 @@ class ActionsInputMixin:
         paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
         if not paused:
             return
+        for player in paused:
+            self._trigger_sound_button_resume_requested_event(self._player_slot_key_map.get(id(player)))
         if self.fade_on_resume and self._is_fade_in_enabled() and self.fade_in_sec > 0:
             for player in paused:
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._set_player_volume(player, 0)
                 player.play()
                 self._sync_shadow_transport_from_primary(player)
-                self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
-                self._trigger_sound_button_started_event(
-                    self._player_slot_key_map.get(id(player)),
-                    include_advanced=False,
+                self._start_fade(
+                    player,
+                    target,
+                    self.fade_in_sec,
+                    stop_on_complete=False,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_resume_fade_in_start",),
+                    automation_end_events=("on_resume_fade_in_end",),
                 )
+                self._trigger_sound_button_resumed_event(self._player_slot_key_map.get(id(player)))
             return
         for player in paused:
             player.play()
             self._sync_shadow_transport_from_primary(player)
-            self._trigger_sound_button_started_event(
-                self._player_slot_key_map.get(id(player)),
-                include_advanced=False,
-            )
+            self._trigger_sound_button_resumed_event(self._player_slot_key_map.get(id(player)))
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -442,7 +451,15 @@ class ActionsInputMixin:
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
-            self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
+            self._start_fade(
+                player,
+                0,
+                self.fade_out_sec,
+                stop_on_complete=True,
+                automation_slot_key=self._player_slot_key_map.get(id(player)),
+                automation_start_events=("on_stop_fade_out_start",),
+                automation_end_events=("on_stop_fade_out_end",),
+            )
         else:
             self._stop_single_player(player)
         if self.current_playing == slot_key:
@@ -593,7 +610,9 @@ class ActionsInputMixin:
         active_players = self._all_active_players()
         if self._stop_fade_armed:
             self._stop_fade_armed = False
-            self._hard_stop_all()
+            for player in active_players:
+                self._trigger_sound_button_force_stop_event(self._player_slot_key_map.get(id(player)))
+            self._hard_stop_all(emit_app_interrupt_events=False)
             self._player_slot_volume_pct = 75
             self._player_b_slot_volume_pct = 75
             self.current_playing = None
@@ -616,17 +635,32 @@ class ActionsInputMixin:
                 3000,
             )
             for player in active_players:
-                self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
+                self._trigger_sound_button_stop_requested_event(self._player_slot_key_map.get(id(player)))
+                self._start_fade(
+                    player,
+                    0,
+                    self.fade_out_sec,
+                    stop_on_complete=True,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_stop_fade_out_start",),
+                    automation_end_events=("on_stop_fade_out_end",),
+                )
             return
         self._stop_fade_armed = False
         player_slot_key = self._player_slot_key_map.get(id(self.player))
         player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
         if player_slot_key is not None:
+            self._trigger_sound_button_stop_requested_event(player_slot_key)
             self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
             self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
         if player_b_slot_key is not None:
+            self._trigger_sound_button_stop_requested_event(player_b_slot_key)
             self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
             self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
+        for extra in list(self._multi_players):
+            extra_slot_key = self._player_slot_key_map.get(id(extra))
+            if extra_slot_key is not None:
+                self._trigger_sound_button_stop_requested_event(extra_slot_key)
         self.player.stop()
         self.player_b.stop()
         self._clear_all_vocal_shadow_players()
@@ -653,7 +687,7 @@ class ActionsInputMixin:
         self._refresh_sound_grid()
         self._update_now_playing_label("")
 
-    def _hard_stop_all(self) -> None:
+    def _hard_stop_all(self, emit_app_interrupt_events: bool = True) -> None:
         self._fade_jobs.clear()
         self._vocal_toggle_fade_jobs.clear()
         self._update_fade_button_flash(False)
@@ -668,9 +702,13 @@ class ActionsInputMixin:
         player_slot_key = self._player_slot_key_map.get(id(self.player))
         player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
         if player_slot_key is not None:
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(player_slot_key)
             self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
             self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
         if player_b_slot_key is not None:
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(player_b_slot_key)
             self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
             self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
         self.player.stop()
@@ -678,6 +716,11 @@ class ActionsInputMixin:
         self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
+        for extra in list(self._multi_players):
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(
+                    self._player_slot_key_map.get(id(extra))
+                )
         for extra in list(self._multi_players):
             self._stop_single_player(extra)
         self._prune_multi_players()

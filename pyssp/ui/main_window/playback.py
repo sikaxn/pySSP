@@ -43,14 +43,40 @@ class PlaybackMixin:
                 allow_fade=allow_fade,
                 prefer_immediate_load=True,
                 continue_playlist_after_automation=continue_playlist_after_automation,
+                trigger_source="playback_control",
             )
         except TypeError as exc:
-            if (
-                "prefer_immediate_load" not in str(exc)
-                and "continue_playlist_after_automation" not in str(exc)
-            ):
-                raise
-            return self._play_slot(slot_index, allow_fade=allow_fade)
+            message = str(exc)
+            if "trigger_source" not in message:
+                if (
+                    "prefer_immediate_load" not in message
+                    and "continue_playlist_after_automation" not in message
+                ):
+                    raise
+            try:
+                return self._play_slot(
+                    slot_index,
+                    allow_fade=allow_fade,
+                    prefer_immediate_load=True,
+                    continue_playlist_after_automation=continue_playlist_after_automation,
+                )
+            except TypeError as inner_exc:
+                inner_message = str(inner_exc)
+                if (
+                    "prefer_immediate_load" not in inner_message
+                    and "continue_playlist_after_automation" not in inner_message
+                ):
+                    raise
+                try:
+                    return self._play_slot(
+                        slot_index,
+                        allow_fade=allow_fade,
+                        continue_playlist_after_automation=continue_playlist_after_automation,
+                    )
+                except TypeError as final_exc:
+                    if "continue_playlist_after_automation" not in str(final_exc):
+                        raise
+                    return self._play_slot(slot_index, allow_fade=allow_fade)
 
     def _clear_track_end_transition_state(self) -> None:
         self._track_end_transition_state = None
@@ -71,6 +97,21 @@ class PlaybackMixin:
         if transition is None:
             return None
         return transition.pending_target_key
+
+    def _emit_interruption_events_for_active_players(self, trigger_source: str) -> None:
+        event_token = (
+            "playback_control"
+            if str(trigger_source or "").strip().lower() == "playback_control"
+            else "sound_button"
+        )
+        for player in self._all_active_players():
+            slot_key = self._player_slot_key_map.get(id(player))
+            if slot_key is None:
+                continue
+            if event_token == "playback_control":
+                self._trigger_sound_button_interrupted_by_playback_control_event(slot_key)
+            else:
+                self._trigger_sound_button_interrupted_by_sound_button_event(slot_key)
 
     def _capture_track_end_transition_state(self) -> _TrackEndTransitionState:
         stopped_key = self._player_slot_key_map.get(id(self.player))
@@ -311,6 +352,7 @@ class PlaybackMixin:
         allow_fade: bool = True,
         prefer_immediate_load: bool = False,
         continue_playlist_after_automation: bool = True,
+        trigger_source: str = "sound_button",
     ) -> bool:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
@@ -336,6 +378,7 @@ class PlaybackMixin:
 
         group_key = self._view_group_key()
         playing_key = (group_key, self.current_page, slot_index)
+        self._trigger_sound_button_trigger_event(playing_key)
         print(
             f"[TCDBG] {click_t:.6f} play_click key={playing_key} title={(slot.title or '<untitled>')} "
             f"mode={self._current_fade_mode()} multi={self._is_multi_play_enabled()}"
@@ -379,6 +422,8 @@ class PlaybackMixin:
         fade_in_on = mode in {"fade_in_only", "fade_out_then_fade_in"}
         fade_out_on = mode in {"fade_out_only", "fade_out_then_fade_in"}
         cross_mode = mode == "cross_fade"
+        if any_playing:
+            self._emit_interruption_events_for_active_players(trigger_source)
         if (
             any_playing
             and fade_out_on
@@ -453,7 +498,15 @@ class PlaybackMixin:
             self._set_player_slot_key(new_player, playing_key)
             self._mark_player_started(new_player)
             fade_seconds = self.cross_fade_sec
-            self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
+            self._start_fade(
+                new_player,
+                target_volume,
+                fade_seconds,
+                stop_on_complete=False,
+                automation_slot_key=playing_key,
+                automation_start_events=("on_fade_in_start",),
+                automation_end_events=("on_fade_in_end",),
+            )
             if old_player is not None:
                 self._start_fade(old_player, 0, fade_seconds, stop_on_complete=True)
             # Keep the "primary" player bound to the newest track for UI updates.
@@ -507,7 +560,15 @@ class PlaybackMixin:
                 self._set_player_slot_key(self.player, playing_key)
                 self._mark_player_started(self.player)
                 self.current_playing = playing_key
-                self._start_fade(self.player, target_volume, self.fade_in_sec, stop_on_complete=False)
+                self._start_fade(
+                    self.player,
+                    target_volume,
+                    self.fade_in_sec,
+                    stop_on_complete=False,
+                    automation_slot_key=playing_key,
+                    automation_start_events=("on_fade_in_start",),
+                    automation_end_events=("on_fade_in_end",),
+                )
             else:
                 self._set_player_volume(self.player, target_volume)
                 print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
@@ -703,7 +764,15 @@ class PlaybackMixin:
             self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
             self._mark_player_started(player)
-            self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
+            self._start_fade(
+                player,
+                target_volume,
+                self.fade_in_sec,
+                stop_on_complete=False,
+                automation_slot_key=playing_key,
+                automation_start_events=("on_fade_in_start",),
+                automation_end_events=("on_fade_in_end",),
+            )
         else:
             self._set_player_volume(player, target_volume)
             player.play()
@@ -744,7 +813,15 @@ class PlaybackMixin:
         self._set_player_slot_key(new_player, playing_key)
         self._mark_player_started(new_player)
         fade_seconds = self.cross_fade_sec
-        self._start_fade(new_player, target_volume, fade_seconds, stop_on_complete=False)
+        self._start_fade(
+            new_player,
+            target_volume,
+            fade_seconds,
+            stop_on_complete=False,
+            automation_slot_key=playing_key,
+            automation_start_events=("on_fade_in_start",),
+            automation_end_events=("on_fade_in_end",),
+        )
         if old_player is not None:
             self._start_fade(old_player, 0, fade_seconds, stop_on_complete=True)
         if self.player is not new_player:
@@ -780,7 +857,15 @@ class PlaybackMixin:
         player.play()
         self._sync_shadow_transport_from_primary(player)
         if fade_in_on and self.fade_in_sec > 0:
-            self._start_fade(player, target_volume, self.fade_in_sec, stop_on_complete=False)
+            self._start_fade(
+                player,
+                target_volume,
+                self.fade_in_sec,
+                stop_on_complete=False,
+                automation_slot_key=playing_key,
+                automation_start_events=("on_fade_in_start",),
+                automation_end_events=("on_fade_in_end",),
+            )
         if player not in self._multi_players:
             self._multi_players.append(player)
         self._set_player_slot_key(player, playing_key)
@@ -1962,6 +2047,9 @@ class PlaybackMixin:
         stop_on_complete: bool = False,
         pause_on_complete: bool = False,
         pause_resume_volume: Optional[int] = None,
+        automation_slot_key: Optional[Tuple[str, int, int]] = None,
+        automation_start_events: tuple[str, ...] = (),
+        automation_end_events: tuple[str, ...] = (),
     ) -> None:
         start_volume = self._logical_player_volume(player)
         target = max(0, min(100, int(target_volume)))
@@ -1990,6 +2078,8 @@ class PlaybackMixin:
             direction = "in"
         elif target < start_volume:
             direction = "out"
+        if automation_slot_key is not None and automation_start_events:
+            self._trigger_sound_button_fade_events(automation_slot_key, *automation_start_events)
         self._fade_jobs.append(
             {
                 "player": player,
@@ -2001,6 +2091,8 @@ class PlaybackMixin:
                 "stop": stop_on_complete,
                 "pause": pause_on_complete,
                 "pause_resume_volume": pause_resume_volume,
+                "automation_slot_key": automation_slot_key,
+                "automation_end_events": tuple(automation_end_events or ()),
             }
         )
 
@@ -2046,11 +2138,15 @@ class PlaybackMixin:
             volume = int(job["start"] + (job["end"] - job["start"]) * ratio)
             self._set_player_volume(job["player"], volume)
             if ratio >= 1.0:
+                slot_key = job.get("automation_slot_key")
+                end_events = tuple(job.get("automation_end_events") or ())
+                if slot_key is not None and end_events:
+                    self._trigger_sound_button_fade_events(slot_key, *end_events)
                 if job["stop"]:
                     if job["player"] is not self.player or self._manual_stop_requested:
-                        slot_key = self._player_slot_key_map.get(id(job["player"]))
-                        if slot_key is not None:
-                            self._trigger_sound_button_stopped_event(slot_key, natural=False)
+                        stop_slot_key = self._player_slot_key_map.get(id(job["player"]))
+                        if stop_slot_key is not None:
+                            self._trigger_sound_button_stopped_event(stop_slot_key, natural=False)
                             self._sound_button_automation_handled_stop_player_ids.add(id(job["player"]))
                     self._stop_player_internal(job["player"])
                     any_stopped = True
@@ -2107,7 +2203,15 @@ class PlaybackMixin:
                 lead_ms = max(0, int(self.fade_out_end_lead_sec * 1000))
                 if remaining_ms <= lead_ms:
                     self._auto_end_fade_done = True
-                    self._start_fade(self.player, 0, self.fade_out_sec, stop_on_complete=True)
+                    self._start_fade(
+                        self.player,
+                        0,
+                        self.fade_out_sec,
+                        stop_on_complete=True,
+                        automation_slot_key=track_key,
+                        automation_start_events=("on_end_fade_out_start",),
+                        automation_end_events=("on_end_fade_out_end",),
+                    )
 
         if not self._is_cross_fade_enabled():
             return

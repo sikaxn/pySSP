@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import http.server
 import queue
 import socket
 import threading
 from pathlib import Path
 
+from pyssp.companion_remote_control import send_companion_location_command
 from pyssp.companion_satellite import CompanionSatelliteClient
 from pyssp.settings_store import (
     AppSettings,
@@ -95,6 +97,11 @@ def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
     settings.companion_satellite_rows = 4
     settings.companion_satellite_render_mode = "styled"
     settings.companion_satellite_serial_suffix = "my-surface"
+    settings.companion_command_mode = "http"
+    settings.companion_command_tcp_port = 19001
+    settings.companion_command_udp_port = 19002
+    settings.companion_command_http_port = 19003
+    settings.companion_available_commands_filter_black_empty = False
     save_settings(settings)
     loaded = load_settings()
     assert loaded.companion_satellite_host == "companion.local"
@@ -104,6 +111,11 @@ def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
     assert loaded.companion_satellite_rows == 4
     assert loaded.companion_satellite_render_mode == "styled"
     assert loaded.companion_satellite_serial_suffix == "my-surface"
+    assert loaded.companion_command_mode == "http"
+    assert loaded.companion_command_tcp_port == 19001
+    assert loaded.companion_command_udp_port == 19002
+    assert loaded.companion_command_http_port == 19003
+    assert loaded.companion_available_commands_filter_black_empty is False
 
 
 def test_companion_satellite_defaults_use_machine_serial_and_8x4_layout():
@@ -112,6 +124,11 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4_layout():
     assert settings.companion_satellite_rows == 4
     assert settings.companion_satellite_render_mode == "bitmap"
     assert settings.companion_satellite_serial_suffix == default_companion_satellite_serial_suffix()
+    assert settings.companion_command_mode == "tcp"
+    assert settings.companion_command_tcp_port == 16759
+    assert settings.companion_command_udp_port == 16759
+    assert settings.companion_command_http_port == 8000
+    assert settings.companion_available_commands_filter_black_empty is True
 
 
 def test_companion_satellite_client_registers_surface_and_sends_key_presses():
@@ -153,3 +170,101 @@ def test_companion_satellite_client_registers_surface_and_sends_key_presses():
     finally:
         client.stop()
         server.stop()
+
+
+def test_companion_remote_control_sends_tcp_udp_and_http_commands():
+    tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_server.bind(("127.0.0.1", 0))
+    tcp_server.listen(1)
+    tcp_host, tcp_port = tcp_server.getsockname()
+    tcp_lines: queue.Queue[str] = queue.Queue()
+
+    def _tcp_worker() -> None:
+        conn, _addr = tcp_server.accept()
+        with conn:
+            payload = conn.recv(4096)
+            tcp_lines.put(payload.decode("utf-8", errors="replace"))
+
+    tcp_thread = threading.Thread(target=_tcp_worker, daemon=True)
+    tcp_thread.start()
+
+    udp_server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_server.bind(("127.0.0.1", 0))
+    _udp_host, udp_port = udp_server.getsockname()
+    udp_lines: queue.Queue[str] = queue.Queue()
+
+    def _udp_worker() -> None:
+        payload, _addr = udp_server.recvfrom(4096)
+        udp_lines.put(payload.decode("utf-8", errors="replace"))
+
+    udp_thread = threading.Thread(target=_udp_worker, daemon=True)
+    udp_thread.start()
+
+    http_requests: queue.Queue[tuple[str, str]] = queue.Queue()
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            http_requests.put((self.command, self.path))
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    http_port = httpd.server_address[1]
+    http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    http_thread.start()
+
+    try:
+        ok, message = send_companion_location_command(
+            host=tcp_host,
+            mode="tcp",
+            tcp_port=tcp_port,
+            udp_port=udp_port,
+            http_port=http_port,
+            location="1/2/3",
+            action="press",
+        )
+        assert ok is True
+        assert message == ""
+        assert tcp_lines.get(timeout=2.0) == "LOCATION 1/2/3 PRESS\n"
+
+        ok, message = send_companion_location_command(
+            host="127.0.0.1",
+            mode="udp",
+            tcp_port=tcp_port,
+            udp_port=udp_port,
+            http_port=http_port,
+            location="4/5/6",
+            action="down",
+        )
+        assert ok is True
+        assert message == ""
+        assert udp_lines.get(timeout=2.0) == "LOCATION 4/5/6 DOWN"
+
+        ok, message = send_companion_location_command(
+            host="127.0.0.1",
+            mode="http",
+            tcp_port=tcp_port,
+            udp_port=udp_port,
+            http_port=http_port,
+            location="7/8/9",
+            action="up",
+        )
+        assert ok is True
+        assert message == ""
+        assert http_requests.get(timeout=2.0) == ("POST", "/api/location/7/8/9/up")
+    finally:
+        try:
+            tcp_server.close()
+        except Exception:
+            pass
+        try:
+            udp_server.close()
+        except Exception:
+            pass
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass

@@ -72,6 +72,11 @@ def _normalize_companion_satellite_render_mode(raw: object) -> str:
     return token if token in {"bitmap", "styled"} else "bitmap"
 
 
+def _normalize_companion_command_mode(raw: object) -> str:
+    token = str(raw or "").strip().lower()
+    return token if token in {"udp", "tcp", "http"} else "tcp"
+
+
 def default_stage_display_layout() -> list[str]:
     return [
         "current_time",
@@ -591,6 +596,11 @@ class AppSettings:
     companion_satellite_rows: int = 4
     companion_satellite_render_mode: str = "bitmap"
     companion_satellite_serial_suffix: str = field(default_factory=default_companion_satellite_serial_suffix)
+    companion_command_mode: str = "tcp"
+    companion_command_tcp_port: int = 16759
+    companion_command_udp_port: int = 16759
+    companion_command_http_port: int = 8000
+    companion_available_commands_filter_black_empty: bool = True
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
     timecode_mode: str = "follow_media"
@@ -976,6 +986,13 @@ def save_settings(settings: AppSettings) -> None:
         ),
         "companion_satellite_serial_suffix": _normalize_companion_satellite_serial_suffix(
             settings.companion_satellite_serial_suffix
+        ),
+        "companion_command_mode": _normalize_companion_command_mode(settings.companion_command_mode),
+        "companion_command_tcp_port": str(settings.companion_command_tcp_port),
+        "companion_command_udp_port": str(settings.companion_command_udp_port),
+        "companion_command_http_port": str(settings.companion_command_http_port),
+        "companion_available_commands_filter_black_empty": (
+            "1" if settings.companion_available_commands_filter_black_empty else "0"
         ),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
         "timecode_midi_output_device": settings.timecode_midi_output_device,
@@ -1369,6 +1386,15 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     companion_satellite_serial_suffix = _normalize_companion_satellite_serial_suffix(
         section.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix())
     )
+    companion_command_mode = _normalize_companion_command_mode(section.get("companion_command_mode", "tcp"))
+    companion_command_tcp_port = _clamp_int(_get_int(section, "companion_command_tcp_port", 16759), 1, 65535)
+    companion_command_udp_port = _clamp_int(_get_int(section, "companion_command_udp_port", 16759), 1, 65535)
+    companion_command_http_port = _clamp_int(_get_int(section, "companion_command_http_port", 8000), 1, 65535)
+    companion_available_commands_filter_black_empty = _get_bool(
+        section,
+        "companion_available_commands_filter_black_empty",
+        True,
+    )
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
     timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
@@ -1729,6 +1755,11 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         companion_satellite_rows=companion_satellite_rows,
         companion_satellite_render_mode=companion_satellite_render_mode,
         companion_satellite_serial_suffix=companion_satellite_serial_suffix,
+        companion_command_mode=companion_command_mode,
+        companion_command_tcp_port=companion_command_tcp_port,
+        companion_command_udp_port=companion_command_udp_port,
+        companion_command_http_port=companion_command_http_port,
+        companion_available_commands_filter_black_empty=companion_available_commands_filter_black_empty,
         timecode_audio_output_device=timecode_audio_output_device,
         timecode_midi_output_device=timecode_midi_output_device,
         timecode_mode=timecode_mode,

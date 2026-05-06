@@ -251,6 +251,26 @@ class MainWindow(
             )
             or default_companion_satellite_serial_suffix()
         ).strip() or default_companion_satellite_serial_suffix()
+        self.companion_command_mode = str(
+            getattr(self.settings, "companion_command_mode", "tcp") or "tcp"
+        ).strip().lower()
+        if self.companion_command_mode not in {"udp", "tcp", "http"}:
+            self.companion_command_mode = "tcp"
+        self.companion_command_tcp_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_tcp_port", 16759) or 16759)),
+        )
+        self.companion_command_udp_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_udp_port", 16759) or 16759)),
+        )
+        self.companion_command_http_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_http_port", 8000) or 8000)),
+        )
+        self.companion_available_commands_filter_black_empty = bool(
+            getattr(self.settings, "companion_available_commands_filter_black_empty", True)
+        )
         self._local_ip_cache = "127.0.0.1"
         self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
@@ -641,6 +661,7 @@ class MainWindow(
         self._web_remote_server: Optional[WebRemoteServer] = None
         self._companion_satellite_client: Optional[CompanionSatelliteClient] = None
         self._companion_satellite_window: Optional[CompanionSatelliteWindow] = None
+        self._companion_available_commands_dialog: Optional[CompanionAvailableCommandsDialog] = None
         self._companion_satellite_bridge = _CompanionSatelliteBridge(self)
         self._companion_satellite_bridge.statusChanged.connect(self._on_companion_satellite_status_changed)
         self._companion_satellite_bridge.helloReceived.connect(self._on_companion_satellite_hello_received)

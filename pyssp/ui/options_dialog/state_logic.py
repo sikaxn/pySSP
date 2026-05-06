@@ -792,6 +792,15 @@ class StateLogicMixin:
         self.companion_satellite_serial_suffix_edit.setText(
             str(d.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix()))
         )
+        command_mode = str(d.get("companion_command_mode", "tcp")).strip().lower()
+        self.companion_command_mode_tcp_radio.setChecked(command_mode == "tcp")
+        self.companion_command_mode_udp_radio.setChecked(command_mode == "udp")
+        self.companion_command_mode_http_radio.setChecked(command_mode == "http")
+        if command_mode not in {"tcp", "udp", "http"}:
+            self.companion_command_mode_tcp_radio.setChecked(True)
+        self.companion_command_tcp_port_spin.setValue(int(d.get("companion_command_tcp_port", 16759)))
+        self.companion_command_udp_port_spin.setValue(int(d.get("companion_command_udp_port", 16759)))
+        self.companion_command_http_port_spin.setValue(int(d.get("companion_command_http_port", 8000)))
 
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS

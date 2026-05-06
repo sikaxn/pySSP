@@ -208,6 +208,18 @@ def _build_dialog(**overrides):
         companion_satellite_serial_suffix=str(
             overrides.get("companion_satellite_serial_suffix", defaults["companion_satellite_serial_suffix"])
         ),
+        companion_command_mode=str(
+            overrides.get("companion_command_mode", defaults["companion_command_mode"])
+        ),
+        companion_command_tcp_port=int(
+            overrides.get("companion_command_tcp_port", defaults["companion_command_tcp_port"])
+        ),
+        companion_command_udp_port=int(
+            overrides.get("companion_command_udp_port", defaults["companion_command_udp_port"])
+        ),
+        companion_command_http_port=int(
+            overrides.get("companion_command_http_port", defaults["companion_command_http_port"])
+        ),
         main_transport_timeline_mode=defaults["main_transport_timeline_mode"],
         main_jog_outside_cue_action=defaults["main_jog_outside_cue_action"],
         state_colors=defaults["state_colors"],
@@ -813,6 +825,10 @@ def test_companion_satellite_options_round_trip(qapp):
         companion_satellite_rows=4,
         companion_satellite_render_mode="styled",
         companion_satellite_serial_suffix="my-surface",
+        companion_command_mode="udp",
+        companion_command_tcp_port=16759,
+        companion_command_udp_port=18000,
+        companion_command_http_port=9000,
         initial_page="Companion Satellite",
     )
     assert dialog.selected_companion_satellite_host() == "10.0.0.8"
@@ -822,6 +838,10 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_rows() == 4
     assert dialog.selected_companion_satellite_render_mode() == "styled"
     assert dialog.selected_companion_satellite_serial_suffix() == "my-surface"
+    assert dialog.selected_companion_command_mode() == "udp"
+    assert dialog.selected_companion_command_tcp_port() == 16759
+    assert dialog.selected_companion_command_udp_port() == 18000
+    assert dialog.selected_companion_command_http_port() == 9000
     dialog.companion_satellite_host_edit.setText("companion.local")
     dialog.companion_satellite_port_spin.setValue(16622)
     dialog.companion_satellite_enabled_checkbox.setChecked(False)
@@ -831,6 +851,10 @@ def test_companion_satellite_options_round_trip(qapp):
         dialog.companion_satellite_render_mode_combo.findData("bitmap")
     )
     dialog.companion_satellite_serial_suffix_edit.setText("pyssp:custom_suffix")
+    dialog.companion_command_mode_http_radio.setChecked(True)
+    dialog.companion_command_tcp_port_spin.setValue(20001)
+    dialog.companion_command_udp_port_spin.setValue(20002)
+    dialog.companion_command_http_port_spin.setValue(8000)
     assert dialog.selected_companion_satellite_host() == "companion.local"
     assert dialog.selected_companion_satellite_port() == 16622
     assert dialog.selected_companion_satellite_enabled() is False
@@ -838,6 +862,10 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_rows() == 3
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
     assert dialog.selected_companion_satellite_serial_suffix() == "custom_suffix"
+    assert dialog.selected_companion_command_mode() == "http"
+    assert dialog.selected_companion_command_tcp_port() == 20001
+    assert dialog.selected_companion_command_udp_port() == 20002
+    assert dialog.selected_companion_command_http_port() == 8000
 
 
 def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
@@ -846,6 +874,10 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
     assert dialog.companion_satellite_rows_spin.value() == 4
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
     assert dialog.selected_companion_satellite_serial_suffix() == default_companion_satellite_serial_suffix()
+    assert dialog.selected_companion_command_mode() == "tcp"
+    assert dialog.selected_companion_command_tcp_port() == 16759
+    assert dialog.selected_companion_command_udp_port() == 16759
+    assert dialog.selected_companion_command_http_port() == 8000
 
 
 def test_options_pages_are_wrapped_in_scroll_areas(qapp):

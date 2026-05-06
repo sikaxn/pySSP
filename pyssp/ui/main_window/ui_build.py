@@ -397,6 +397,10 @@ class UiBuildMixin:
         open_companion_satellite_options_action.triggered.connect(self._open_companion_satellite_options)
         companion_menu.addAction(open_companion_satellite_options_action)
         self._menu_actions["open_companion_satellite_options"] = open_companion_satellite_options_action
+        available_commands_action = QAction("Available Commands", self)
+        available_commands_action.triggered.connect(self._open_companion_available_commands)
+        companion_menu.addAction(available_commands_action)
+        self._menu_actions["companion_available_commands"] = available_commands_action
 
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)

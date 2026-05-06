@@ -1643,6 +1643,10 @@ class ActionsInputMixin:
             companion_satellite_rows=self.companion_satellite_rows,
             companion_satellite_render_mode=self.companion_satellite_render_mode,
             companion_satellite_serial_suffix=self.companion_satellite_serial_suffix,
+            companion_command_mode=self.companion_command_mode,
+            companion_command_tcp_port=self.companion_command_tcp_port,
+            companion_command_udp_port=self.companion_command_udp_port,
+            companion_command_http_port=self.companion_command_http_port,
             main_transport_timeline_mode=self.main_transport_timeline_mode,
             main_jog_outside_cue_action=self.main_jog_outside_cue_action,
             state_colors={
@@ -1987,6 +1991,10 @@ class ActionsInputMixin:
         self.companion_satellite_rows = dialog.selected_companion_satellite_rows()
         self.companion_satellite_render_mode = dialog.selected_companion_satellite_render_mode()
         self.companion_satellite_serial_suffix = dialog.selected_companion_satellite_serial_suffix()
+        self.companion_command_mode = dialog.selected_companion_command_mode()
+        self.companion_command_tcp_port = dialog.selected_companion_command_tcp_port()
+        self.companion_command_udp_port = dialog.selected_companion_command_udp_port()
+        self.companion_command_http_port = dialog.selected_companion_command_http_port()
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()

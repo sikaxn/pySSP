@@ -108,6 +108,11 @@ from pyssp.settings_store import (
     normalize_window_layout,
     save_settings,
 )
+from pyssp.companion_available_commands import (
+    clear_companion_available_commands,
+    load_companion_available_commands,
+    record_companion_available_command,
+)
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.launchpad import (
     LAUNCHPAD_ACTION_NONE,
@@ -190,6 +195,7 @@ from pyssp.ui.stage_display import (
 )
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
+from pyssp.ui.companion_available_commands_dialog import CompanionAvailableCommandsDialog
 from pyssp.ui.getting_started_dialog import GettingStartedDialog
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions

@@ -44,6 +44,8 @@ class _SatelliteButton(QToolButton):
 
 class CompanionSatelliteWindow(QWidget):
     openOptionsRequested = pyqtSignal()
+    openAvailableCommandsRequested = pyqtSignal()
+    refreshAvailableCommandsRequested = pyqtSignal()
     buttonPressed = pyqtSignal(int, bool)
     navigationRequested = pyqtSignal(str)
     windowClosed = pyqtSignal()
@@ -71,6 +73,14 @@ class CompanionSatelliteWindow(QWidget):
         self.options_button.setText(tr("Options"))
         self.options_button.clicked.connect(self.openOptionsRequested.emit)
         header_layout.addWidget(self.options_button)
+        self.available_commands_button = QToolButton(self)
+        self.available_commands_button.setText(tr("Available Commands"))
+        self.available_commands_button.clicked.connect(self.openAvailableCommandsRequested.emit)
+        header_layout.addWidget(self.available_commands_button)
+        self.refresh_commands_button = QToolButton(self)
+        self.refresh_commands_button.setText(tr("Refresh Current Page"))
+        self.refresh_commands_button.clicked.connect(self.refreshAvailableCommandsRequested.emit)
+        header_layout.addWidget(self.refresh_commands_button)
         root.addLayout(header_layout)
 
         self.navigation_widget = QWidget(self)
@@ -174,6 +184,26 @@ class CompanionSatelliteWindow(QWidget):
             if page >= 1:
                 return page
         return None
+
+    def current_page_button_states(self) -> list[dict[str, object]]:
+        current_page = self.current_page()
+        if current_page is None:
+            return []
+        output: list[dict[str, object]] = []
+        for state in self._button_states.values():
+            location = str(state.get("location", "") or "").strip()
+            if not location:
+                continue
+            parts = location.split("/")
+            if len(parts) != 3:
+                continue
+            try:
+                page = int(parts[0])
+            except Exception:
+                continue
+            if page == current_page:
+                output.append(dict(state))
+        return output
 
     def _apply_button_state(self, index: int, state: dict[str, object]) -> None:
         if index < 0 or index >= len(self._buttons):

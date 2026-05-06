@@ -183,6 +183,10 @@ class OptionsDialog(
         "companion_satellite_rows": 4,
         "companion_satellite_render_mode": "bitmap",
         "companion_satellite_serial_suffix": default_companion_satellite_serial_suffix(),
+        "companion_command_mode": "tcp",
+        "companion_command_tcp_port": 16759,
+        "companion_command_udp_port": 16759,
+        "companion_command_http_port": 8000,
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
         "timecode_mode": TIMECODE_MODE_FOLLOW,
@@ -452,6 +456,10 @@ class OptionsDialog(
         companion_satellite_rows: int,
         companion_satellite_render_mode: str,
         companion_satellite_serial_suffix: str,
+        companion_command_mode: str,
+        companion_command_tcp_port: int,
+        companion_command_udp_port: int,
+        companion_command_http_port: int,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
         state_colors: Dict[str, str],
@@ -741,6 +749,14 @@ class OptionsDialog(
         self._companion_satellite_serial_suffix = (
             str(companion_satellite_serial_suffix or "").strip() or default_companion_satellite_serial_suffix()
         )
+        self._companion_command_mode = (
+            str(companion_command_mode or "").strip().lower()
+            if str(companion_command_mode or "").strip().lower() in {"udp", "tcp", "http"}
+            else "tcp"
+        )
+        self._companion_command_tcp_port = max(1, min(65535, int(companion_command_tcp_port)))
+        self._companion_command_udp_port = max(1, min(65535, int(companion_command_udp_port)))
+        self._companion_command_http_port = max(1, min(65535, int(companion_command_http_port)))
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -936,6 +952,10 @@ class OptionsDialog(
                 rows=self._companion_satellite_rows,
                 render_mode=self._companion_satellite_render_mode,
                 serial_suffix=self._companion_satellite_serial_suffix,
+                command_mode=self._companion_command_mode,
+                command_tcp_port=self._companion_command_tcp_port,
+                command_udp_port=self._companion_command_udp_port,
+                command_http_port=self._companion_command_http_port,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

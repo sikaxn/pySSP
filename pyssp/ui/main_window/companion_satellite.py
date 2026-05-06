@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .shared import *
 
+from pyssp.companion_remote_control import send_companion_location_command
 from pyssp.companion_satellite import CompanionSatelliteClient
 from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
 
@@ -15,6 +16,106 @@ class _CompanionSatelliteBridge(QObject):
 
 
 class CompanionSatelliteMixin:
+    def _open_companion_available_commands(self) -> None:
+        dialog = self._companion_available_commands_dialog
+        if dialog is None:
+            dialog = CompanionAvailableCommandsDialog(self)
+            dialog.clear_button.clicked.connect(self._clear_companion_available_commands)
+            dialog.hide_black_empty_checkbox.toggled.connect(
+                self._set_companion_available_commands_filter_black_empty
+            )
+            dialog.hide_navigation_checkbox.toggled.connect(self._refresh_companion_available_commands_dialog)
+            dialog.locationCommandRequested.connect(self._send_companion_location_command_async)
+            self._companion_available_commands_dialog = dialog
+        dialog.hide_black_empty_checkbox.blockSignals(True)
+        dialog.hide_black_empty_checkbox.setChecked(bool(self.companion_available_commands_filter_black_empty))
+        dialog.hide_black_empty_checkbox.blockSignals(False)
+        self._refresh_companion_available_commands_dialog()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _refresh_companion_available_commands_dialog(self) -> None:
+        dialog = self._companion_available_commands_dialog
+        if dialog is None:
+            return
+        dialog.set_payload(
+            load_companion_available_commands(),
+            hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
+            hide_navigation=bool(dialog.hide_navigation_checkbox.isChecked()),
+        )
+
+    def _clear_companion_available_commands(self) -> None:
+        clear_companion_available_commands()
+        self._refresh_companion_available_commands_dialog()
+
+    def _refresh_companion_available_commands_from_window(self) -> None:
+        window = self._companion_satellite_window
+        if window is None:
+            return
+        for state in window.current_page_button_states():
+            self._record_companion_available_command_state(state)
+        self._refresh_companion_available_commands_dialog()
+
+    def _set_companion_available_commands_filter_black_empty(self, checked: bool) -> None:
+        self.companion_available_commands_filter_black_empty = bool(checked)
+        self._refresh_companion_available_commands_dialog()
+        self._save_settings()
+
+    def _record_companion_available_command_state(self, state: dict) -> None:
+        normalized_state = dict(state or {})
+        location = str(normalized_state.get("location", "") or "").strip()
+        if not location:
+            return
+        record_companion_available_command(
+            location=location,
+            text=str(normalized_state.get("text", "") or ""),
+            key_type=str(normalized_state.get("type", "") or ""),
+            color=str(normalized_state.get("color", "") or ""),
+            pressed=bool(normalized_state.get("pressed", False)),
+        )
+
+    def _send_companion_location_command_async(self, location: str, action: str) -> None:
+        host = self.companion_satellite_host
+        mode = self.companion_command_mode
+        tcp_port = self.companion_command_tcp_port
+        udp_port = self.companion_command_udp_port
+        http_port = self.companion_command_http_port
+
+        def _notify_failure(message: str) -> None:
+            failure_message = str(message or location).strip() or str(location or "").strip() or "Unknown error"
+            try:
+                self._main_thread_executor.call(
+                    lambda: self._show_info_notice_banner(
+                        f"{tr('Companion command failed')}: {failure_message}"
+                    )
+                )
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            try:
+                ok, message = send_companion_location_command(
+                    host=host,
+                    mode=mode,
+                    tcp_port=tcp_port,
+                    udp_port=udp_port,
+                    http_port=http_port,
+                    location=location,
+                    action=action,
+                )
+            except Exception as exc:
+                _notify_failure(str(exc))
+                return
+            if ok:
+                return
+            _notify_failure(message)
+
+        try:
+            threading.Thread(target=_worker, name="pyssp-companion-command", daemon=True).start()
+        except Exception as exc:
+            _notify_failure(str(exc))
+
     def _companion_satellite_event(self, event_type: str, payload: dict) -> None:
         if event_type == "status":
             self._companion_satellite_bridge.statusChanged.emit(
@@ -101,6 +202,8 @@ class CompanionSatelliteMixin:
             return window
         window = CompanionSatelliteWindow(None)
         window.openOptionsRequested.connect(self._open_companion_satellite_options)
+        window.openAvailableCommandsRequested.connect(self._open_companion_available_commands)
+        window.refreshAvailableCommandsRequested.connect(self._refresh_companion_available_commands_from_window)
         window.buttonPressed.connect(self._on_companion_satellite_button_pressed)
         window.navigationRequested.connect(self._on_companion_satellite_navigation_requested)
         window.windowClosed.connect(self._on_companion_satellite_window_closed)
@@ -156,7 +259,10 @@ class CompanionSatelliteMixin:
 
     def _on_companion_satellite_key_state_received(self, key: int, state: dict) -> None:
         window = self._ensure_companion_satellite_window()
-        window.update_button(int(key), dict(state or {}))
+        normalized_state = dict(state or {})
+        window.update_button(int(key), normalized_state)
+        self._record_companion_available_command_state(normalized_state)
+        self._refresh_companion_available_commands_dialog()
 
     def _on_companion_satellite_keys_cleared(self) -> None:
         window = self._companion_satellite_window

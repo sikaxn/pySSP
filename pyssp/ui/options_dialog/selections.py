@@ -275,6 +275,22 @@ class SelectionMixin:
         cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
         return cleaned or default_companion_satellite_serial_suffix()
 
+    def selected_companion_command_mode(self) -> str:
+        if self.companion_command_mode_udp_radio.isChecked():
+            return "udp"
+        if self.companion_command_mode_http_radio.isChecked():
+            return "http"
+        return "tcp"
+
+    def selected_companion_command_tcp_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_tcp_port_spin.value())))
+
+    def selected_companion_command_udp_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_udp_port_spin.value())))
+
+    def selected_companion_command_http_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_http_port_spin.value())))
+
     def selected_main_transport_timeline_mode(self) -> str:
         if self.cue_timeline_audio_file_radio.isChecked():
             return "audio_file"

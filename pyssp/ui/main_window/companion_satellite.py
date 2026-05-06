@@ -3,7 +3,13 @@ from __future__ import annotations
 import threading
 
 from .shared import *
-from pyssp.automation_command import AUTOMATION_AUTO_RELEASE_IMMEDIATE, AUTOMATION_SOURCE_TYPE
+from pyssp.automation_command import (
+    AUTOMATION_AUTO_RELEASE_IMMEDIATE,
+    AUTOMATION_SOURCE_TYPE,
+    AutomationCommandSpec,
+    normalize_automation_spec,
+    normalize_sound_button_automation_config,
+)
 
 from pyssp.companion_remote_control import send_companion_location_command
 from pyssp.companion_satellite import CompanionSatelliteClient
@@ -126,6 +132,95 @@ class CompanionSatelliteMixin:
             _notify_failure(str(exc))
             return False
         return True
+
+    def _send_companion_command_specs_async(self, specs: list[AutomationCommandSpec]) -> bool:
+        normalized_specs = [
+            normalize_automation_spec(spec) for spec in list(specs or []) if normalize_automation_spec(spec).location
+        ]
+        if not normalized_specs:
+            return False
+        if bool(getattr(self, "companion_bypass", False)):
+            self._show_info_notice_banner(tr("Companion commands are bypassed. Command will not go through."))
+            return False
+        host = self.companion_satellite_host
+        mode = self.companion_command_mode
+        tcp_port = self.companion_command_tcp_port
+        udp_port = self.companion_command_udp_port
+        http_port = self.companion_command_http_port
+
+        def _notify_failure(message: str) -> None:
+            failure_message = str(message or "").strip() or "Unknown error"
+            try:
+                self._main_thread_executor.call(
+                    lambda: self._show_info_notice_banner(f"{tr('Companion command failed')}: {failure_message}")
+                )
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            for spec in normalized_specs:
+                try:
+                    ok, message = send_companion_location_command(
+                        host=host,
+                        mode=mode,
+                        tcp_port=tcp_port,
+                        udp_port=udp_port,
+                        http_port=http_port,
+                        location=spec.location,
+                        action="press",
+                    )
+                except Exception as exc:
+                    _notify_failure(f"{spec.location}: {exc}")
+                    continue
+                if ok:
+                    continue
+                detail = str(message or "").strip()
+                _notify_failure(f"{spec.location}: {detail}" if detail else spec.location)
+
+        try:
+            threading.Thread(target=_worker, name="pyssp-companion-command-batch", daemon=True).start()
+        except Exception as exc:
+            _notify_failure(str(exc))
+            return False
+        return True
+
+    def _trigger_sound_button_automation_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        event_name: str,
+    ) -> bool:
+        if slot_key is None:
+            return False
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.marker or (not slot.assigned):
+            return False
+        if slot.source_type not in {"file", "utility"}:
+            return False
+        config = normalize_sound_button_automation_config(getattr(slot, "sound_button_automation", None))
+        if config is None:
+            return False
+        specs = list(getattr(config, event_name, None) or [])
+        if not specs:
+            return False
+        return self._send_companion_command_specs_async(specs)
+
+    def _trigger_sound_button_started_event(self, slot_key: Optional[Tuple[str, int, int]], *, include_advanced: bool) -> None:
+        self._trigger_sound_button_automation_event(slot_key, "on_become_playing")
+        if include_advanced:
+            self._trigger_sound_button_automation_event(slot_key, "on_play")
+
+    def _trigger_sound_button_paused_event(self, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        self._trigger_sound_button_automation_event(slot_key, "on_leave_playing")
+        self._trigger_sound_button_automation_event(slot_key, "on_pause")
+
+    def _trigger_sound_button_stopped_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *,
+        natural: bool,
+    ) -> None:
+        self._trigger_sound_button_automation_event(slot_key, "on_leave_playing")
+        self._trigger_sound_button_automation_event(slot_key, "on_done_play" if natural else "on_stop")
 
     def _automation_slot_key(self, slot_index: int) -> Tuple[str, int, int]:
         return (self._view_group_key(), self.current_page, int(slot_index))

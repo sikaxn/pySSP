@@ -1,6 +1,7 @@
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
 )
 from pyssp.set_loader import load_set_file, parse_delphi_color, parse_time_string_to_ms
 from pyssp.utility_audio import FILE_SOURCE_TYPE, UTILITY_SOURCE_TYPE
@@ -384,6 +385,45 @@ def test_load_set_automation_sound_button_reconstructs_source_from_pyssp_fields(
     assert slot.automation_spec.location == "5/1/2"
     assert slot.automation_spec.button_text == "Take Camera 1"
     assert slot.automation_spec.hold_to_release is True
+
+
+def test_load_set_sound_button_simple_automation_round_trip_fields(tmp_path):
+    set_path = tmp_path / "sound_button_automation.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Song One",
+                "s1=C:\\\\Music\\\\song1.mp3",
+                "pysspsbamode1=simple",
+                "pyssponbecomeplayingcount1=2",
+                "pyssponbecomeplayinglocation1_1=5/1/2",
+                "pyssponbecomeplayingtext1_1=Start One",
+                "pyssponbecomeplayinglocation1_2=5/1/3",
+                "pyssponbecomeplayingtext1_2=Start Two",
+                "pyssponleaveplayingcount1=1",
+                "pyssponleaveplayinglocation1_1=5/1/4",
+                "pyssponleaveplayingtext1_1=Stop One",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.sound_button_automation is not None
+    assert slot.sound_button_automation.mode == SOUND_BUTTON_AUTOMATION_MODE_SIMPLE
+    assert slot.sound_button_automation.on_become_playing is not None
+    assert [item.location for item in slot.sound_button_automation.on_become_playing] == ["5/1/2", "5/1/3"]
+    assert [item.button_text for item in slot.sound_button_automation.on_become_playing] == ["Start One", "Start Two"]
+    assert slot.sound_button_automation.on_leave_playing is not None
+    assert [item.location for item in slot.sound_button_automation.on_leave_playing] == ["5/1/4"]
 
 
 def test_load_set_legacy_unsupported_automation_marker_stays_marker_without_pyssp_metadata(tmp_path):

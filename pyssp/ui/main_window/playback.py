@@ -6,7 +6,11 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
-from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, normalize_automation_spec
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    normalize_automation_spec,
+    normalize_sound_button_automation_config,
+)
 from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec
 
 
@@ -515,6 +519,7 @@ class PlaybackMixin:
                 self.current_playing = playing_key
 
         if started_playback:
+            self._trigger_sound_button_started_event(playing_key, include_advanced=True)
             self._timecode_on_playback_start(slot)
             self._prepare_transport_for_new_playback()
 
@@ -706,6 +711,7 @@ class PlaybackMixin:
             self._set_player_slot_key(player, playing_key)
             self._mark_player_started(player)
         self._timecode_on_playback_start(slot)
+        self._trigger_sound_button_started_event(playing_key, include_advanced=True)
         self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
@@ -744,6 +750,7 @@ class PlaybackMixin:
         if self.player is not new_player:
             self._swap_primary_secondary_players()
         self._timecode_on_playback_start(slot)
+        self._trigger_sound_button_started_event(playing_key, include_advanced=True)
         self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
@@ -782,6 +789,7 @@ class PlaybackMixin:
         slot.activity_code = "2"
         self._set_dirty(True)
         self.current_playing = playing_key
+        self._trigger_sound_button_started_event(playing_key, include_advanced=True)
         self._prepare_transport_for_new_playback()
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
@@ -1024,8 +1032,9 @@ class PlaybackMixin:
         self._main_waveform_future = None
         self._main_waveform_future_token = 0
         self._main_waveform_future_key = None
-        if self._main_waveform_poll_timer.isActive():
-            self._main_waveform_poll_timer.stop()
+        timer = getattr(self, "_main_waveform_poll_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
 
     def _clear_main_waveform_display(self) -> None:
         self._cancel_main_waveform_refresh()
@@ -1056,7 +1065,9 @@ class PlaybackMixin:
     def _poll_main_waveform_refresh(self) -> None:
         future = self._main_waveform_future
         if future is None:
-            self._main_waveform_poll_timer.stop()
+            timer = getattr(self, "_main_waveform_poll_timer", None)
+            if timer is not None:
+                timer.stop()
             return
         if not future.done():
             return
@@ -1068,7 +1079,9 @@ class PlaybackMixin:
         if token != self._main_waveform_request_token:
             return
         if expected_key is None or self.current_playing != expected_key:
-            self._main_waveform_poll_timer.stop()
+            timer = getattr(self, "_main_waveform_poll_timer", None)
+            if timer is not None:
+                timer.stop()
             return
         try:
             peaks = list(future.result())
@@ -1077,12 +1090,18 @@ class PlaybackMixin:
         self._main_progress_waveform = list(peaks)
         self.progress_label.set_waveform(self._main_progress_waveform)
         if self.main_progress_display_mode != "waveform":
-            self._main_waveform_poll_timer.stop()
+            timer = getattr(self, "_main_waveform_poll_timer", None)
+            if timer is not None:
+                timer.stop()
             return
         if self.current_playing != expected_key:
-            self._main_waveform_poll_timer.stop()
+            timer = getattr(self, "_main_waveform_poll_timer", None)
+            if timer is not None:
+                timer.stop()
             return
-        self._main_waveform_poll_timer.stop()
+        timer = getattr(self, "_main_waveform_poll_timer", None)
+        if timer is not None:
+            timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
         print(
@@ -1097,6 +1116,10 @@ class PlaybackMixin:
             self._timecode_on_playback_stop()
             self._clear_vocal_shadow_player(self.player)
             self._player_mix_volume_map.pop(id(self.player), None)
+            if id(self.player) in self._sound_button_automation_handled_stop_player_ids:
+                self._sound_button_automation_handled_stop_player_ids.discard(id(self.player))
+            elif transition.source_key is not None and not transition.manual_stop:
+                self._trigger_sound_button_stopped_event(transition.source_key, natural=True)
             self._clear_player_slot_key(self.player)
             self._clear_main_waveform_display()
             self._manual_stop_requested = False
@@ -1156,6 +1179,14 @@ class PlaybackMixin:
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
             had_player_b_key = id(self.player_b) in self._player_slot_key_map
+            if had_player_b_key:
+                if id(self.player_b) in self._sound_button_automation_handled_stop_player_ids:
+                    self._sound_button_automation_handled_stop_player_ids.discard(id(self.player_b))
+                else:
+                    self._trigger_sound_button_stopped_event(
+                        self._player_slot_key_map.get(id(self.player_b)),
+                        natural=True,
+                    )
             self._clear_vocal_shadow_player(self.player_b)
             self._player_mix_volume_map.pop(id(self.player_b), None)
             self._clear_player_slot_key(self.player_b)
@@ -1714,6 +1745,7 @@ class PlaybackMixin:
                     lyric_file=slot.lyric_file,
                     duration_ms=slot.duration_ms,
                     automation_spec=None if slot.automation_spec is None else normalize_automation_spec(slot.automation_spec),
+                    sound_button_automation=normalize_sound_button_automation_config(slot.sound_button_automation),
                     utility_spec=None if slot.utility_spec is None else normalize_utility_spec(slot.utility_spec),
                     custom_color=slot.custom_color,
                     played=slot.played,
@@ -1861,6 +1893,11 @@ class PlaybackMixin:
             if player.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
                 remaining.append(player)
                 continue
+            handled_stop = id(player) in self._sound_button_automation_handled_stop_player_ids
+            if handled_stop:
+                self._sound_button_automation_handled_stop_player_ids.discard(id(player))
+            else:
+                self._trigger_sound_button_stopped_event(self._player_slot_key_map.get(id(player)), natural=True)
             if self.current_playing == self._player_slot_key_map.get(id(player)):
                 current_changed = True
             self._clear_vocal_shadow_player(player)
@@ -1891,8 +1928,11 @@ class PlaybackMixin:
         self._prune_multi_players()
         return True
 
-    def _stop_single_player(self, player: ExternalMediaPlayer) -> None:
+    def _stop_single_player(self, player: ExternalMediaPlayer, emit_stop_events: bool = True) -> None:
         stopped_key = self._player_slot_key_map.get(id(player))
+        if emit_stop_events and stopped_key is not None:
+            self._trigger_sound_button_stopped_event(stopped_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(player))
         self._cancel_fade_for_player(player)
         self._stop_player_internal(player)
         self._clear_vocal_shadow_player(player)
@@ -1928,11 +1968,21 @@ class PlaybackMixin:
         self._cancel_fade_for_player(player)
         if target == start_volume:
             if stop_on_complete and target == 0:
+                if player is not self.player or self._manual_stop_requested:
+                    slot_key = self._player_slot_key_map.get(id(player))
+                    if slot_key is not None:
+                        self._trigger_sound_button_stopped_event(slot_key, natural=False)
+                        self._sound_button_automation_handled_stop_player_ids.add(id(player))
                 player.stop()
             return
         if seconds <= 0:
             self._set_player_volume(player, target)
             if stop_on_complete:
+                if player is not self.player or self._manual_stop_requested:
+                    slot_key = self._player_slot_key_map.get(id(player))
+                    if slot_key is not None:
+                        self._trigger_sound_button_stopped_event(slot_key, natural=False)
+                        self._sound_button_automation_handled_stop_player_ids.add(id(player))
                 player.stop()
             return
         direction = "none"
@@ -1997,11 +2047,17 @@ class PlaybackMixin:
             self._set_player_volume(job["player"], volume)
             if ratio >= 1.0:
                 if job["stop"]:
+                    if job["player"] is not self.player or self._manual_stop_requested:
+                        slot_key = self._player_slot_key_map.get(id(job["player"]))
+                        if slot_key is not None:
+                            self._trigger_sound_button_stopped_event(slot_key, natural=False)
+                            self._sound_button_automation_handled_stop_player_ids.add(id(job["player"]))
                     self._stop_player_internal(job["player"])
                     any_stopped = True
                 elif job.get("pause"):
                     job["player"].pause()
                     self._sync_shadow_transport_from_primary(job["player"])
+                    self._trigger_sound_button_paused_event(self._player_slot_key_map.get(id(job["player"])))
                     resume_volume = job.get("pause_resume_volume")
                     if resume_volume is not None:
                         self._set_player_volume(job["player"], int(resume_volume))

@@ -98,6 +98,7 @@ class MainWindow(
         self._player_mix_volume_map: Dict[int, int] = {}
         self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
         self._vocal_shadow_pending_loads: Dict[int, dict] = {}
+        self._sound_button_automation_handled_stop_player_ids: set[int] = set()
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
         self._last_meter_aux_refresh_t = 0.0
@@ -488,6 +489,7 @@ class MainWindow(
             "vocal_removed_indicator": getattr(self.settings, "color_vocal_removed_indicator", "#8E7CFF"),
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
+            "automation_indicator": getattr(self.settings, "color_automation_indicator", "#49C16D"),
         }
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":

@@ -59,10 +59,13 @@ class AutomationCommandSoundButtonDialog(QDialog):
         companion_payload: Optional[dict] = None,
         hide_black_empty: bool = True,
         language: str = "en",
+        selection_only: bool = False,
+        window_title: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Automation Command Sound Button"))
+        self._selection_only = bool(selection_only)
+        self.setWindowTitle(window_title or tr("Automation Command Sound Button"))
         self.resize(820, 620)
         self._payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
         self._custom_color = str(custom_color or "").strip().upper()
@@ -73,15 +76,20 @@ class AutomationCommandSoundButtonDialog(QDialog):
             normalized_caption
             and normalized_caption not in {"", self._caption_auto_value, self._spec.button_text, self._spec.location}
         )
+        self._form = None
+        self._selection_only_row_fields: list[QWidget] = []
 
         root = QVBoxLayout(self)
         form = QFormLayout()
+        self._form = form
 
         self.caption_edit = QLineEdit(caption)
         form.addRow(tr("Caption"), self.caption_edit)
+        self._selection_only_row_fields.append(self.caption_edit)
 
         self.notes_edit = QLineEdit(notes)
         form.addRow(tr("Notes"), self.notes_edit)
+        self._selection_only_row_fields.append(self.notes_edit)
 
         self.location_value_label = QLabel(self._spec.location or "-")
         form.addRow(tr("Selected Command"), self.location_value_label)
@@ -117,6 +125,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.hold_to_release_checkbox = QCheckBox(tr("Respect press-down / release-up input"))
         self.hold_to_release_checkbox.setChecked(bool(self._spec.hold_to_release))
         form.addRow("", self.hold_to_release_checkbox)
+        self._selection_only_row_fields.append(self.hold_to_release_checkbox)
 
         color_row = QWidget()
         color_layout = QHBoxLayout(color_row)
@@ -128,6 +137,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         color_layout.addWidget(self.custom_color_button, 1)
         color_layout.addWidget(clear_color_button)
         form.addRow(tr("Button Colour"), color_row)
+        self._selection_only_row_fields.append(color_row)
         self._refresh_custom_color_button()
 
         hk_row = QWidget()
@@ -140,6 +150,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         hk_layout.addWidget(self.sound_hotkey_edit, 1)
         hk_layout.addWidget(clear_hk_btn)
         form.addRow(tr("Sound Button Hot Key"), hk_row)
+        self._selection_only_row_fields.append(hk_row)
 
         midi_hk_row = QWidget()
         midi_hk_layout = QHBoxLayout(midi_hk_row)
@@ -155,6 +166,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         midi_hk_layout.addWidget(learn_midi_btn)
         midi_hk_layout.addWidget(clear_midi_btn)
         form.addRow(tr("Sound Button MIDI Hot Key"), midi_hk_row)
+        self._selection_only_row_fields.append(midi_hk_row)
 
         root.addLayout(form)
 
@@ -238,6 +250,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
             self.manual_location_radio.setChecked(True)
         self._on_location_mode_changed()
         self._sync_selected_command()
+        self._apply_selection_only_mode()
         localize_widget_tree(self, language)
 
     def values(self) -> tuple[str, str, AutomationCommandSpec, Optional[str], str, str]:
@@ -443,3 +456,16 @@ class AutomationCommandSoundButtonDialog(QDialog):
             self._set_midi_binding(normalized_token)
         self._midi_learning = False
         self.sound_midi_hotkey_edit.setStyleSheet("")
+
+    def _apply_selection_only_mode(self) -> None:
+        if not self._selection_only:
+            return
+        if self._form is not None:
+            for widget in self._selection_only_row_fields:
+                label = self._form.labelForField(widget)
+                if label is not None:
+                    label.setVisible(False)
+                widget.setVisible(False)
+        self.help_label.setText(
+            tr("Pick one Companion command to add to this sound button automation list.")
+        )

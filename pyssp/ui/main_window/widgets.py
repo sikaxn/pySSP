@@ -6,6 +6,7 @@ from .helpers import *
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AutomationCommandSpec,
+    SoundButtonAutomationConfig,
 )
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
@@ -40,6 +41,7 @@ class SoundButtonData:
     lyric_file: str = ""
     duration_ms: int = 0
     automation_spec: Optional[AutomationCommandSpec] = None
+    sound_button_automation: Optional[SoundButtonAutomationConfig] = None
     utility_spec: Optional[UtilitySoundSpec] = None
     custom_color: Optional[str] = None
     highlighted: bool = False

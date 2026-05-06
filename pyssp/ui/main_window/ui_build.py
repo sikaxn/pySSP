@@ -135,6 +135,7 @@ class UiBuildMixin:
             (self.state_colors["volume_indicator"], tr("Volume Stripe")),
             (self.state_colors["vocal_removed_indicator"], tr("Vocal Removed Stripe")),
             (self.state_colors["lyric_indicator"], tr("Lyric Stripe")),
+            (self.state_colors["automation_indicator"], tr("Automation Stripe")),
             (TIMECODE_SLOT_INDICATOR_COLOR, tr("Timecode Stripe")),
             (self.state_colors["midi_indicator"], tr("MIDI Top Stripe")),
         ]

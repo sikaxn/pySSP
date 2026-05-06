@@ -8,6 +8,7 @@ from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
     normalize_automation_spec,
+    normalize_sound_button_automation_config,
 )
 from pyssp.utility_audio import (
     UTILITY_SOURCE_TYPE,
@@ -157,6 +158,7 @@ class ActionsInputMixin:
         for player in playing:
             player.pause()
             self._sync_shadow_transport_from_primary(player)
+            self._trigger_sound_button_paused_event(self._player_slot_key_map.get(id(player)))
 
     def _resume_players(self, players: List[ExternalMediaPlayer]) -> None:
         paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
@@ -169,10 +171,18 @@ class ActionsInputMixin:
                 player.play()
                 self._sync_shadow_transport_from_primary(player)
                 self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
+                self._trigger_sound_button_started_event(
+                    self._player_slot_key_map.get(id(player)),
+                    include_advanced=False,
+                )
             return
         for player in paused:
             player.play()
             self._sync_shadow_transport_from_primary(player)
+            self._trigger_sound_button_started_event(
+                self._player_slot_key_map.get(id(player)),
+                include_advanced=False,
+            )
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -609,6 +619,14 @@ class ActionsInputMixin:
                 self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
             return
         self._stop_fade_armed = False
+        player_slot_key = self._player_slot_key_map.get(id(self.player))
+        player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
+        if player_slot_key is not None:
+            self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
+        if player_b_slot_key is not None:
+            self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
         self.player.stop()
         self.player_b.stop()
         self._clear_all_vocal_shadow_players()
@@ -647,6 +665,14 @@ class ActionsInputMixin:
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False
         self._cancel_all_pending_player_media_loads()
+        player_slot_key = self._player_slot_key_map.get(id(self.player))
+        player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
+        if player_slot_key is not None:
+            self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
+        if player_b_slot_key is not None:
+            self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
         self.player.stop()
         self.player_b.stop()
         self._clear_all_vocal_shadow_players()
@@ -1423,6 +1449,7 @@ class ActionsInputMixin:
                             timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
                             if timecode_timeline != "global":
                                 lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
+                            self._append_sound_button_automation_set_lines(lines, slot_index, slot)
                             continue
                         effective_file_path = overrides.get(slot_key, slot.file_path)
                         title = clean_set_value(slot.title or os.path.splitext(os.path.basename(slot.file_path))[0])
@@ -1463,6 +1490,7 @@ class ActionsInputMixin:
                         timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
                         if timecode_timeline != "global":
                             lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
+                        self._append_sound_button_automation_set_lines(lines, slot_index, slot)
                 lines.append("")
 
         lines.extend(
@@ -1516,6 +1544,7 @@ class ActionsInputMixin:
                         lyric_file=src.lyric_file,
                         duration_ms=src.duration_ms,
                         automation_spec=None if src.automation_spec is None else normalize_automation_spec(src.automation_spec),
+                        sound_button_automation=normalize_sound_button_automation_config(src.sound_button_automation),
                         utility_spec=None if src.utility_spec is None else normalize_utility_spec(src.utility_spec),
                         custom_color=src.custom_color,
                         played=src.played,

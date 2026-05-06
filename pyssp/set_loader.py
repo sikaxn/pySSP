@@ -10,7 +10,11 @@ from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AutomationCommandSpec,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    SOUND_BUTTON_AUTOMATION_EVENTS,
+    SOUND_BUTTON_AUTOMATION_EVENT_TOKENS,
+    SoundButtonAutomationConfig,
     normalize_automation_spec,
+    normalize_sound_button_automation_config,
 )
 from pyssp.midi_control import normalize_midi_binding
 from pyssp.utility_audio import (
@@ -40,6 +44,7 @@ class SetSlotData:
     lyric_file: str = ""
     duration_ms: int = 0
     automation_spec: Optional[AutomationCommandSpec] = None
+    sound_button_automation: Optional[SoundButtonAutomationConfig] = None
     utility_spec: Optional[UtilitySoundSpec] = None
     copied_to_cue: bool = False
     custom_color: Optional[str] = None
@@ -163,6 +168,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 lyric_file=lyric_file,
                 duration_ms=duration,
                 automation_spec=None,
+                sound_button_automation=_parse_sound_button_automation_from_section(section, i),
                 utility_spec=None,
                 copied_to_cue=copied,
                 custom_color=custom_color,
@@ -279,6 +285,7 @@ def _parse_utility_slot_from_section(
         lyric_file=lyric_file,
         duration_ms=spec.duration_ms,
         automation_spec=None,
+        sound_button_automation=_parse_sound_button_automation_from_section(section, slot_index),
         utility_spec=spec,
         copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
         custom_color=parse_delphi_color(section.get(f"co{slot_index}", "").strip()),
@@ -325,6 +332,7 @@ def _parse_automation_slot_from_section(
         lyric_file="",
         duration_ms=0,
         automation_spec=spec,
+        sound_button_automation=None,
         utility_spec=None,
         copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
         custom_color=custom_color,
@@ -349,6 +357,37 @@ def _parse_time_signature_part(value: str, index: int) -> int:
         return int(parts[index])
     except Exception:
         return 0
+
+
+def _parse_sound_button_automation_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[SoundButtonAutomationConfig]:
+    data: dict[str, object] = {
+        "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower()
+    }
+    for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
+        token = SOUND_BUTTON_AUTOMATION_EVENT_TOKENS[event_name]
+        count_raw = str(section.get(f"pyssp{token}count{slot_index}", "") or "").strip()
+        try:
+            count = max(0, int(count_raw))
+        except Exception:
+            count = 0
+        items: list[dict[str, object]] = []
+        for command_index in range(1, count + 1):
+            location = str(section.get(f"pyssp{token}location{slot_index}_{command_index}", "") or "").strip()
+            text = str(section.get(f"pyssp{token}text{slot_index}_{command_index}", "") or "").strip()
+            if not location:
+                continue
+            items.append(
+                {
+                    "location": location,
+                    "button_text": text,
+                    "hold_to_release": False,
+                }
+            )
+        data[event_name] = items
+    return normalize_sound_button_automation_config(data)
 
 
 def parse_delphi_color(value: str) -> Optional[str]:

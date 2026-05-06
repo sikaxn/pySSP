@@ -27,12 +27,14 @@ class CompanionSatelliteMixin:
                 self._set_companion_available_commands_filter_black_empty
             )
             dialog.hide_navigation_checkbox.toggled.connect(self._refresh_companion_available_commands_dialog)
+            dialog.bypassToggled.connect(self._toggle_companion_bypass)
             dialog.locationCommandRequested.connect(self._send_companion_location_command_async)
             dialog.openVirtualSatelliteRequested.connect(self._open_virtual_satellite)
             self._companion_available_commands_dialog = dialog
         dialog.hide_black_empty_checkbox.blockSignals(True)
         dialog.hide_black_empty_checkbox.setChecked(bool(self.companion_available_commands_filter_black_empty))
         dialog.hide_black_empty_checkbox.blockSignals(False)
+        dialog.set_bypass_checked(bool(self.companion_bypass))
         self._refresh_companion_available_commands_dialog()
         dialog.show()
         dialog.raise_()
@@ -79,6 +81,9 @@ class CompanionSatelliteMixin:
         )
 
     def _send_companion_location_command_async(self, location: str, action: str) -> None:
+        if bool(getattr(self, "companion_bypass", False)):
+            self._show_info_notice_banner(tr("Companion commands are bypassed. Command will not go through."))
+            return
         host = self.companion_satellite_host
         mode = self.companion_command_mode
         tcp_port = self.companion_command_tcp_port
@@ -239,7 +244,8 @@ class CompanionSatelliteMixin:
         if label is None:
             return
         state = str(self._companion_satellite_last_status[0] or "").strip().lower()
-        text = "SAT"
+        bypassed = bool(getattr(self, "companion_bypass", False))
+        text = tr("SAT (Bypassed)") if bypassed else "SAT"
         if state == "connected":
             style = "QLabel{font-size:9pt;font-weight:bold;color:#165A20;background:#CFF3D6;border:1px solid #2E9B47;border-radius:8px;padding:0 6px;}"
         elif state in {"connecting", "reconnecting"}:
@@ -249,10 +255,28 @@ class CompanionSatelliteMixin:
         label.setText(text)
         label.setStyleSheet(style)
         message = str(self._companion_satellite_last_status[1] or "").strip()
+        if bypassed:
+            message = tr("Companion remote commands are bypassed.") + (f" {message}" if message else "")
         tooltip = message or (
             tr("Connected") if state == "connected" else tr("Connecting") if state in {"connecting", "reconnecting"} else tr("Not Connected")
         )
         label.setToolTip(tooltip)
+
+    def _toggle_companion_bypass(self, checked: bool) -> None:
+        self.companion_bypass = bool(checked)
+        action = self._menu_actions.get("companion_bypass")
+        if action is not None and action.isChecked() != self.companion_bypass:
+            action.setChecked(self.companion_bypass)
+        dialog = self._companion_available_commands_dialog
+        if dialog is not None:
+            dialog.set_bypass_checked(self.companion_bypass)
+        btn = self.control_buttons.get("Companion Bypass")
+        if btn is not None and btn.isChecked() != self.companion_bypass:
+            btn.setChecked(self.companion_bypass)
+        self._sync_control_button_instances("Companion Bypass")
+        self._update_companion_satellite_status_indicator()
+        if not self._suspend_settings_save:
+            self._save_settings()
 
     def _on_companion_satellite_hello_received(self, version: str) -> None:
         self._companion_satellite_api_version = str(version or "").strip()

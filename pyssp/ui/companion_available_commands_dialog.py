@@ -15,6 +15,7 @@ from pyssp.i18n import tr
 class CompanionAvailableCommandsDialog(QDialog):
     locationCommandRequested = pyqtSignal(str, str)
     openVirtualSatelliteRequested = pyqtSignal()
+    bypassToggled = pyqtSignal(bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -27,6 +28,8 @@ class CompanionAvailableCommandsDialog(QDialog):
         header.addWidget(self.hide_black_empty_checkbox, 0)
         self.hide_navigation_checkbox = QCheckBox(tr("Hide Page Buttons"))
         header.addWidget(self.hide_navigation_checkbox, 0)
+        self.bypass_checkbox = QCheckBox(tr("Bypass"))
+        header.addWidget(self.bypass_checkbox, 0)
         header.addStretch(1)
         self.open_virtual_satellite_button = QPushButton(tr("Open Virtual Satellite"))
         header.addWidget(self.open_virtual_satellite_button, 0)
@@ -75,8 +78,14 @@ class CompanionAvailableCommandsDialog(QDialog):
         self.up_button.clicked.connect(lambda: self._emit_selected_location_command("up"))
         self.search_edit.textChanged.connect(self._apply_filters)
         self.open_virtual_satellite_button.clicked.connect(self.openVirtualSatelliteRequested.emit)
+        self.bypass_checkbox.toggled.connect(self.bypassToggled.emit)
 
         self._payload: dict = {"pages": {}, "updated_at": ""}
+
+    def set_bypass_checked(self, checked: bool) -> None:
+        self.bypass_checkbox.blockSignals(True)
+        self.bypass_checkbox.setChecked(bool(checked))
+        self.bypass_checkbox.blockSignals(False)
 
     def set_payload(
         self,

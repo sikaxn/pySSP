@@ -401,6 +401,12 @@ class UiBuildMixin:
         available_commands_action.triggered.connect(self._open_companion_available_commands)
         companion_menu.addAction(available_commands_action)
         self._menu_actions["companion_available_commands"] = available_commands_action
+        bypass_action = QAction("Bypass", self)
+        bypass_action.setCheckable(True)
+        bypass_action.setChecked(bool(self.companion_bypass))
+        bypass_action.triggered.connect(self._toggle_companion_bypass)
+        companion_menu.addAction(bypass_action)
+        self._menu_actions["companion_bypass"] = bypass_action
 
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)
@@ -1023,7 +1029,11 @@ class UiBuildMixin:
                 btn.setCheckable(True)
                 btn.setToolTip("")
                 btn.clicked.connect(self._toggle_global_vocal_removed_mode)
-            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed"}:
+            elif text == "Companion Bypass":
+                btn.setCheckable(True)
+                btn.setChecked(bool(self.companion_bypass))
+                btn.clicked.connect(self._toggle_companion_bypass)
+            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed", "Companion Bypass"}:
                 self.control_buttons[text] = btn
             self._main_control_buttons_ui[text] = btn
             btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))

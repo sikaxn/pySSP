@@ -93,6 +93,7 @@ def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
     settings.companion_satellite_host = "companion.local"
     settings.companion_satellite_port = 17777
     settings.companion_satellite_enabled = True
+    settings.companion_bypass = True
     settings.companion_satellite_columns = 7
     settings.companion_satellite_rows = 4
     settings.companion_satellite_render_mode = "styled"
@@ -107,6 +108,7 @@ def test_companion_satellite_settings_round_trip(tmp_path, monkeypatch):
     assert loaded.companion_satellite_host == "companion.local"
     assert loaded.companion_satellite_port == 17777
     assert loaded.companion_satellite_enabled is True
+    assert loaded.companion_bypass is True
     assert loaded.companion_satellite_columns == 7
     assert loaded.companion_satellite_rows == 4
     assert loaded.companion_satellite_render_mode == "styled"
@@ -122,6 +124,7 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4_layout():
     settings = AppSettings()
     assert settings.companion_satellite_columns == 8
     assert settings.companion_satellite_rows == 4
+    assert settings.companion_bypass is False
     assert settings.companion_satellite_render_mode == "bitmap"
     assert settings.companion_satellite_serial_suffix == default_companion_satellite_serial_suffix()
     assert settings.companion_command_mode == "tcp"

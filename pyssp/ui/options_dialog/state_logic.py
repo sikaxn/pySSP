@@ -784,6 +784,7 @@ class StateLogicMixin:
         self.companion_satellite_host_edit.setText(str(d.get("companion_satellite_host", "127.0.0.1")))
         self.companion_satellite_port_spin.setValue(int(d.get("companion_satellite_port", 16622)))
         self.companion_satellite_enabled_checkbox.setChecked(bool(d.get("companion_satellite_enabled", False)))
+        self.companion_bypass_checkbox.setChecked(bool(d.get("companion_bypass", False)))
         self.companion_satellite_columns_spin.setValue(int(d.get("companion_satellite_columns", 8)))
         self.companion_satellite_rows_spin.setValue(int(d.get("companion_satellite_rows", 4)))
         render_mode = str(d.get("companion_satellite_render_mode", "bitmap")).strip().lower()

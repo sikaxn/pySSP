@@ -196,6 +196,9 @@ def _build_dialog(**overrides):
         companion_satellite_enabled=bool(
             overrides.get("companion_satellite_enabled", defaults["companion_satellite_enabled"])
         ),
+        companion_bypass=bool(
+            overrides.get("companion_bypass", defaults["companion_bypass"])
+        ),
         companion_satellite_columns=int(
             overrides.get("companion_satellite_columns", defaults["companion_satellite_columns"])
         ),
@@ -695,6 +698,7 @@ def test_restore_defaults_window_layout_page(qapp):
     x_item = [item for item in selected["fade"] if item.get("button") == "X"][0]
     assert stop == {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2}
     assert x_item == {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1}
+    assert "Companion Bypass" in selected["available"]
 
 
 def test_window_layout_drop_invalid_size_payload_is_tolerated(qapp):
@@ -821,6 +825,7 @@ def test_companion_satellite_options_round_trip(qapp):
         companion_satellite_host="10.0.0.8",
         companion_satellite_port=17777,
         companion_satellite_enabled=True,
+        companion_bypass=True,
         companion_satellite_columns=7,
         companion_satellite_rows=4,
         companion_satellite_render_mode="styled",
@@ -834,6 +839,7 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_host() == "10.0.0.8"
     assert dialog.selected_companion_satellite_port() == 17777
     assert dialog.selected_companion_satellite_enabled() is True
+    assert dialog.selected_companion_bypass() is True
     assert dialog.selected_companion_satellite_columns() == 7
     assert dialog.selected_companion_satellite_rows() == 4
     assert dialog.selected_companion_satellite_render_mode() == "styled"
@@ -845,6 +851,7 @@ def test_companion_satellite_options_round_trip(qapp):
     dialog.companion_satellite_host_edit.setText("companion.local")
     dialog.companion_satellite_port_spin.setValue(16622)
     dialog.companion_satellite_enabled_checkbox.setChecked(False)
+    dialog.companion_bypass_checkbox.setChecked(False)
     dialog.companion_satellite_columns_spin.setValue(5)
     dialog.companion_satellite_rows_spin.setValue(3)
     dialog.companion_satellite_render_mode_combo.setCurrentIndex(
@@ -858,6 +865,7 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_host() == "companion.local"
     assert dialog.selected_companion_satellite_port() == 16622
     assert dialog.selected_companion_satellite_enabled() is False
+    assert dialog.selected_companion_bypass() is False
     assert dialog.selected_companion_satellite_columns() == 5
     assert dialog.selected_companion_satellite_rows() == 3
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
@@ -872,6 +880,7 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
     dialog = _build_dialog(initial_page="Companion Satellite")
     assert dialog.companion_satellite_columns_spin.value() == 8
     assert dialog.companion_satellite_rows_spin.value() == 4
+    assert dialog.selected_companion_bypass() is False
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
     assert dialog.selected_companion_satellite_serial_suffix() == default_companion_satellite_serial_suffix()
     assert dialog.selected_companion_command_mode() == "tcp"

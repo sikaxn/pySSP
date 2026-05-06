@@ -10,6 +10,7 @@ class CompanionSatellitePageMixin:
         host: str,
         port: int,
         enabled: bool,
+        bypass: bool,
         columns: int,
         rows: int,
         render_mode: str,
@@ -34,6 +35,10 @@ class CompanionSatellitePageMixin:
         self.companion_satellite_enabled_checkbox = QCheckBox(tr("Enable Companion Satellite at pySSP startup"))
         self.companion_satellite_enabled_checkbox.setChecked(bool(enabled))
         form.addRow(tr("Companion Satellite:"), self.companion_satellite_enabled_checkbox)
+
+        self.companion_bypass_checkbox = QCheckBox(tr("Bypass Companion remote commands"))
+        self.companion_bypass_checkbox.setChecked(bool(bypass))
+        form.addRow(tr("Companion Bypass:"), self.companion_bypass_checkbox)
 
         self.companion_satellite_columns_spin = QSpinBox()
         self.companion_satellite_columns_spin.setRange(1, 12)
@@ -116,6 +121,12 @@ class CompanionSatellitePageMixin:
         )
         command_note.setWordWrap(True)
         form.addRow("", command_note)
+
+        bypass_note = QLabel(
+            tr("When bypass is enabled, Companion TCP/UDP/HTTP remote commands do not send. Satellite mode still works normally.")
+        )
+        bypass_note.setWordWrap(True)
+        form.addRow("", bypass_note)
 
         layout.addLayout(form)
         note = QLabel(

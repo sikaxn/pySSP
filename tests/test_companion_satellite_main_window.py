@@ -86,6 +86,8 @@ def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):
         assert "open_virtual_satellite" in window._menu_actions
         assert "open_companion_satellite_options" in window._menu_actions
         assert "companion_available_commands" in window._menu_actions
+        assert "companion_bypass" in window._menu_actions
+        assert window._menu_actions["companion_bypass"].isCheckable() is True
         opened = {"page": None}
         monkeypatch.setattr(
             window,
@@ -108,7 +110,6 @@ def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):
         except Exception:
             pass
         window.deleteLater()
-        qapp.processEvents()
 
 
 def test_available_commands_filter_checkbox_updates_main_window_state(qapp, monkeypatch):
@@ -180,6 +181,97 @@ def test_available_commands_filter_checkbox_updates_main_window_state(qapp, monk
         dialog.hide_black_empty_checkbox.setChecked(False)
         qapp.processEvents()
         assert window.companion_available_commands_filter_black_empty is False
+    finally:
+        try:
+            satellite_window = getattr(window, "_companion_satellite_window", None)
+            if satellite_window is not None:
+                satellite_window.close()
+        except Exception:
+            pass
+        try:
+            window.close()
+        except Exception:
+            pass
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_companion_bypass_blocks_remote_command_send(qapp, monkeypatch):
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.web_remote_enabled = False
+    settings.companion_satellite_enabled = False
+    settings.companion_bypass = True
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_apply_companion_satellite_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_companion_satellite_client", lambda self: None)
+    sent_calls = []
+    monkeypatch.setattr(
+        companion_satellite_module,
+        "send_companion_location_command",
+        lambda **kwargs: sent_calls.append(kwargs),
+        raising=False,
+    )
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    notices = []
+    try:
+        monkeypatch.setattr(window, "_show_info_notice_banner", notices.append)
+        window._send_companion_location_command_async("5/1/2", "press")
+
+        assert sent_calls == []
+        assert notices == ["Companion commands are bypassed. Command will not go through."]
+        assert window.companion_satellite_status_icon.text() == "SAT (Bypassed)"
     finally:
         try:
             satellite_window = getattr(window, "_companion_satellite_window", None)

@@ -194,6 +194,17 @@ def test_companion_available_commands_dialog_open_virtual_satellite_signal(qapp)
     assert seen == ["open"]
 
 
+def test_companion_available_commands_dialog_bypass_signal(qapp):
+    dialog = CompanionAvailableCommandsDialog()
+    seen: list[bool] = []
+    dialog.bypassToggled.connect(seen.append)
+
+    dialog.bypass_checkbox.setChecked(True)
+    dialog.bypass_checkbox.setChecked(False)
+
+    assert seen == [True, False]
+
+
 def test_companion_available_commands_dialog_search_filters_by_location_and_text(qapp):
     dialog = CompanionAvailableCommandsDialog()
     payload = {

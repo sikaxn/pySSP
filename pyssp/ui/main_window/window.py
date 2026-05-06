@@ -230,6 +230,7 @@ class MainWindow(
             min(65535, int(getattr(self.settings, "companion_satellite_port", 16622) or 16622)),
         )
         self.companion_satellite_enabled = bool(getattr(self.settings, "companion_satellite_enabled", False))
+        self.companion_bypass = bool(getattr(self.settings, "companion_bypass", False))
         self.companion_satellite_columns = max(
             1,
             min(12, int(getattr(self.settings, "companion_satellite_columns", 8) or 8)),

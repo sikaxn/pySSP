@@ -202,7 +202,13 @@ class CompanionSatelliteMixin:
             return True
         return self._trigger_automation_slot_non_audio(slot_index, auto_release=True)
 
-    def _trigger_automation_slot_non_audio(self, slot_index: int, auto_release: bool = True) -> bool:
+    def _trigger_automation_slot_non_audio(
+        self,
+        slot_index: int,
+        auto_release: bool = True,
+        *,
+        continue_playlist_after_automation: bool = True,
+    ) -> bool:
         slot_key = self._automation_slot_key(slot_index)
         slot = self._slot_for_key(slot_key)
         if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
@@ -219,7 +225,8 @@ class CompanionSatelliteMixin:
                 return False
             self._flash_automation_slot(slot_key, duration_ms=600)
             self._mark_automation_slot_played(slot_key)
-            self._continue_playlist_after_automation_trigger(slot_key)
+            if continue_playlist_after_automation:
+                self._continue_playlist_after_automation_trigger(slot_key)
             return True
         if spec.hold_to_release:
             if not self._send_companion_location_command_async(spec.location, "down"):
@@ -227,13 +234,15 @@ class CompanionSatelliteMixin:
             self._flash_automation_slot(slot_key)
             self._mark_automation_slot_played(slot_key)
             self._send_companion_location_command_async(spec.location, "up")
-            self._continue_playlist_after_automation_trigger(slot_key)
+            if continue_playlist_after_automation:
+                self._continue_playlist_after_automation_trigger(slot_key)
             return True
         if not self._send_companion_location_command_async(spec.location, "press"):
             return False
         self._flash_automation_slot(slot_key)
         self._mark_automation_slot_played(slot_key)
-        self._continue_playlist_after_automation_trigger(slot_key)
+        if continue_playlist_after_automation:
+            self._continue_playlist_after_automation_trigger(slot_key)
         return True
 
     def _companion_satellite_event(self, event_type: str, payload: dict) -> None:

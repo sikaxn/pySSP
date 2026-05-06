@@ -26,16 +26,41 @@ class PlaybackMixin:
     def _is_audio_player(player) -> bool:
         return isinstance(player, (ExternalMediaPlayer, AudioPlayerProxy))
 
-    def _play_slot_via_control_flow(self, slot_index: int, allow_fade: bool = True) -> bool:
+    def _play_slot_via_control_flow(
+        self,
+        slot_index: int,
+        allow_fade: bool = True,
+        *,
+        continue_playlist_after_automation: bool = True,
+    ) -> bool:
         try:
-            return self._play_slot(slot_index, allow_fade=allow_fade, prefer_immediate_load=True)
+            return self._play_slot(
+                slot_index,
+                allow_fade=allow_fade,
+                prefer_immediate_load=True,
+                continue_playlist_after_automation=continue_playlist_after_automation,
+            )
         except TypeError as exc:
-            if "prefer_immediate_load" not in str(exc):
+            if (
+                "prefer_immediate_load" not in str(exc)
+                and "continue_playlist_after_automation" not in str(exc)
+            ):
                 raise
             return self._play_slot(slot_index, allow_fade=allow_fade)
 
     def _clear_track_end_transition_state(self) -> None:
         self._track_end_transition_state = None
+
+    def _finalize_primary_stop_after_transition(self) -> None:
+        self._clear_track_end_transition_state()
+        self.current_playing = None
+        self._last_ui_position_ms = -1
+        self.elapsed_time.setText("00:00:00")
+        self.remaining_time.setText("00:00:00")
+        self._set_progress_display(0)
+        self.seek_slider.setValue(0)
+        self._update_now_playing_label("")
+        self._refresh_sound_grid()
 
     def _track_end_transition_target_key(self) -> Optional[Tuple[str, int, int]]:
         transition = getattr(self, "_track_end_transition_state", None)
@@ -96,11 +121,27 @@ class PlaybackMixin:
             return False
         target_key = (source_key[0], int(source_key[1]), int(slot_index))
         target_slot = self._slot_for_key(target_key)
-        if not self._play_slot_via_control_flow(slot_index):
+        continue_playlist_after_automation = not (
+            target_slot is not None and target_slot.source_type == AUTOMATION_SOURCE_TYPE
+        )
+        try:
+            started_ok = self._play_slot_via_control_flow(
+                slot_index,
+                continue_playlist_after_automation=continue_playlist_after_automation,
+            )
+        except TypeError as exc:
+            if "continue_playlist_after_automation" not in str(exc):
+                raise
+            started_ok = self._play_slot_via_control_flow(slot_index)
+        if not started_ok:
             self._clear_track_end_transition_state()
             return False
         if target_slot is not None and target_slot.source_type == AUTOMATION_SOURCE_TYPE:
-            self._clear_track_end_transition_state()
+            transition.source_key = target_key
+            transition.source_slot = target_slot
+            transition.controls_follow_source = self._slot_follows_regular_playback_controls(target_slot)
+            transition.pending_target_key = None
+            self._track_end_transition_state = transition
             return None
         has_pending_transition = bool(self._pending_player_media_loads) or self._pending_deferred_audio_request is not None
         if self.current_playing is None and has_pending_transition:
@@ -131,19 +172,12 @@ class PlaybackMixin:
             return True
         if transition.playlist_enabled and transition.source_key is not None:
             if transition.manual_stop:
-                self._clear_track_end_transition_state()
-                self.current_playing = None
-                self._last_ui_position_ms = -1
-                self.elapsed_time.setText("00:00:00")
-                self.remaining_time.setText("00:00:00")
-                self._set_progress_display(0)
-                self.seek_slider.setValue(0)
-                self._update_now_playing_label("")
-                self._refresh_sound_grid()
+                self._finalize_primary_stop_after_transition()
                 return True
             source_group, source_page, _source_slot = transition.source_key
             self._apply_track_end_source_view(transition)
             blocked: set[int] = set()
+            executed_automation = False
             while True:
                 next_slot = self._next_playlist_slot(
                     for_auto_advance=True,
@@ -158,13 +192,16 @@ class PlaybackMixin:
                 if started is True:
                     return True
                 if started is None:
-                    blocked.add(next_slot)
+                    executed_automation = True
                     continue
                 blocked.add(next_slot)
                 if self.candidate_error_action == "stop_playback":
                     self._clear_track_end_transition_state()
                     self._stop_playback()
                     return True
+            if executed_automation:
+                self._finalize_primary_stop_after_transition()
+                return True
         self._clear_track_end_transition_state()
         return False
 
@@ -264,7 +301,13 @@ class PlaybackMixin:
         for btn in self.sound_buttons:
             btn.setDown(False)
 
-    def _play_slot(self, slot_index: int, allow_fade: bool = True, prefer_immediate_load: bool = False) -> bool:
+    def _play_slot(
+        self,
+        slot_index: int,
+        allow_fade: bool = True,
+        prefer_immediate_load: bool = False,
+        continue_playlist_after_automation: bool = True,
+    ) -> bool:
         click_t = time.perf_counter()
         if self._is_button_drag_enabled():
             self.statusBar().showMessage(tr("Playback is not allowed while Button Drag is enabled."), 2500)
@@ -281,6 +324,7 @@ class PlaybackMixin:
             return self._trigger_automation_slot_non_audio(
                 slot_index,
                 auto_release=(self._automation_button_auto_release_mode() == "immediate"),
+                continue_playlist_after_automation=continue_playlist_after_automation,
             )
         if slot.missing:
             self._refresh_sound_grid()

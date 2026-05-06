@@ -77,6 +77,7 @@ class MainWindow(
         self.current_playlist_start: Optional[int] = None
         self._auto_transition_track: Optional[Tuple[str, int, int]] = None
         self._auto_transition_done = False
+        self._track_end_transition_state = None
         self._pending_start_request: Optional[Tuple[str, int, int]] = None
         self._pending_start_token = 0
         self._pending_deferred_audio_request: Optional[Tuple[str, int, int, str, float]] = None

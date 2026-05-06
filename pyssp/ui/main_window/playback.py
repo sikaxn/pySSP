@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
 from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec
+
+
+@dataclass
+class _TrackEndTransitionState:
+    source_key: Optional[Tuple[str, int, int]]
+    source_slot: Optional[SoundButtonData]
+    controls_follow_source: bool
+    playlist_enabled: bool
+    should_loop: bool
+    manual_stop: bool
+    pending_target_key: Optional[Tuple[str, int, int]] = None
 
 
 class PlaybackMixin:
@@ -19,6 +32,132 @@ class PlaybackMixin:
             if "prefer_immediate_load" not in str(exc):
                 raise
             return self._play_slot(slot_index, allow_fade=allow_fade)
+
+    def _clear_track_end_transition_state(self) -> None:
+        self._track_end_transition_state = None
+
+    def _track_end_transition_target_key(self) -> Optional[Tuple[str, int, int]]:
+        transition = getattr(self, "_track_end_transition_state", None)
+        if transition is None:
+            return None
+        return transition.pending_target_key
+
+    def _capture_track_end_transition_state(self) -> _TrackEndTransitionState:
+        stopped_key = self._player_slot_key_map.get(id(self.player))
+        source_key = stopped_key if stopped_key is not None else self.current_playing
+        source_slot = self._slot_for_key(source_key) if source_key is not None else None
+        controls_follow_source = self._slot_follows_regular_playback_controls(source_slot)
+        playlist_enabled = False
+        if source_key is not None and controls_follow_source:
+            source_group, source_page, _source_slot = source_key
+            if source_group != "Q" and 0 <= int(source_page) < PAGE_COUNT:
+                playlist_enabled = bool(self.page_playlist_enabled[source_group][int(source_page)])
+        manual_stop = bool(self._manual_stop_requested)
+        should_loop = bool(
+            self.loop_enabled
+            and source_key is not None
+            and controls_follow_source
+            and (not manual_stop)
+            and (not playlist_enabled)
+        )
+        return _TrackEndTransitionState(
+            source_key=source_key,
+            source_slot=source_slot,
+            controls_follow_source=controls_follow_source,
+            playlist_enabled=playlist_enabled,
+            should_loop=should_loop,
+            manual_stop=manual_stop,
+        )
+
+    def _apply_track_end_source_view(self, transition: _TrackEndTransitionState) -> bool:
+        source_key = transition.source_key
+        if source_key is None:
+            return False
+        source_group, source_page, _source_slot = source_key
+        if source_group == "Q":
+            self.cue_mode = True
+        else:
+            self.cue_mode = False
+            self.current_group = source_group
+        self.current_page = int(source_page)
+        self._refresh_group_buttons()
+        self._sync_playlist_shuffle_buttons()
+        self._refresh_page_list()
+        return True
+
+    def _track_end_transition_started(
+        self,
+        transition: _TrackEndTransitionState,
+        slot_index: int,
+    ) -> bool:
+        source_key = transition.source_key
+        if source_key is None:
+            return False
+        target_key = (source_key[0], int(source_key[1]), int(slot_index))
+        if not self._play_slot_via_control_flow(slot_index):
+            self._clear_track_end_transition_state()
+            return False
+        has_pending_transition = bool(self._pending_player_media_loads) or self._pending_deferred_audio_request is not None
+        if self.current_playing is None and has_pending_transition:
+            transition.pending_target_key = target_key
+            self._track_end_transition_state = transition
+        else:
+            self._clear_track_end_transition_state()
+        return True
+
+    def _handle_track_end_transition(self, transition: _TrackEndTransitionState) -> bool:
+        self._track_end_transition_state = transition
+        if transition.should_loop:
+            if self._apply_track_end_source_view(transition) and transition.source_key is not None:
+                if self._track_end_transition_started(transition, int(transition.source_key[2])):
+                    return True
+            self._clear_track_end_transition_state()
+            return False
+        if self._pending_start_request is not None:
+            self._clear_track_end_transition_state()
+            self.current_playing = None
+            self._last_ui_position_ms = -1
+            self.elapsed_time.setText("00:00:00")
+            self.remaining_time.setText("00:00:00")
+            self._set_progress_display(0)
+            self.seek_slider.setValue(0)
+            self._update_now_playing_label("")
+            self._refresh_sound_grid()
+            return True
+        if transition.playlist_enabled and transition.source_key is not None:
+            if transition.manual_stop:
+                self._clear_track_end_transition_state()
+                self.current_playing = None
+                self._last_ui_position_ms = -1
+                self.elapsed_time.setText("00:00:00")
+                self.remaining_time.setText("00:00:00")
+                self._set_progress_display(0)
+                self.seek_slider.setValue(0)
+                self._update_now_playing_label("")
+                self._refresh_sound_grid()
+                return True
+            source_group, source_page, _source_slot = transition.source_key
+            self._apply_track_end_source_view(transition)
+            blocked: set[int] = set()
+            while True:
+                next_slot = self._next_playlist_slot(
+                    for_auto_advance=True,
+                    blocked=blocked,
+                    group_key=source_group,
+                    page_index=int(source_page),
+                    current_track=transition.source_key,
+                )
+                if next_slot is None:
+                    break
+                if self._track_end_transition_started(transition, next_slot):
+                    return True
+                blocked.add(next_slot)
+                if self.candidate_error_action == "stop_playback":
+                    self._clear_track_end_transition_state()
+                    self._stop_playback()
+                    return True
+        self._clear_track_end_transition_state()
+        return False
 
     def _init_audio_players(self) -> None:
         self.player = self._audio_service.create_player(self)
@@ -456,6 +595,7 @@ class PlaybackMixin:
         fade_in_on: bool,
     ) -> None:
         self.current_playing = playing_key
+        self._clear_track_end_transition_state()
         self._player_slot_volume_pct = slot_pct
         resolved_duration = max(0, int(player.duration()))
         if resolved_duration > 0:
@@ -492,6 +632,7 @@ class PlaybackMixin:
         slot_pct: int,
     ) -> None:
         self.current_playing = playing_key
+        self._clear_track_end_transition_state()
         if new_player is self.player:
             self._player_slot_volume_pct = slot_pct
         else:
@@ -528,6 +669,7 @@ class PlaybackMixin:
         slot_pct: int,
     ) -> None:
         self._set_player_slot_pct(player, slot_pct)
+        self._clear_track_end_transition_state()
         resolved_duration = max(0, int(player.duration()))
         if resolved_duration > 0:
             self.current_duration_ms = resolved_duration
@@ -571,6 +713,7 @@ class PlaybackMixin:
         if player is self.player:
             self.statusBar().clearMessage()
         if not ok:
+            self._clear_track_end_transition_state()
             slot.load_failed = True
             self._stop_player_internal(player)
             title = self._slot_display_name(slot) or "(unknown)"
@@ -724,6 +867,7 @@ class PlaybackMixin:
             self._play_slot(slot_index)
             return
         if elapsed >= 120.0:
+            self._clear_track_end_transition_state()
             self._clear_pending_deferred_audio_start()
             self._show_playback_warning_banner(f"{tr('Audio Load Failed:')} {tr('Reading audio file timed out.')}")
             self._update_now_playing_label("")
@@ -767,8 +911,9 @@ class PlaybackMixin:
         total_ms = self._transport_total_ms()
         self.seek_slider.setRange(0, total_ms)
         self.total_time.setText(format_clock_time(total_ms))
-        if self.current_playing:
-            group, page_index, slot_index = self.current_playing
+        target_key = self.current_playing if self.current_playing is not None else self._track_end_transition_target_key()
+        if target_key:
+            group, page_index, slot_index = target_key
             if group == "Q":
                 if 0 <= slot_index < len(self.cue_page):
                     self.cue_page[slot_index].duration_ms = duration
@@ -860,89 +1005,16 @@ class PlaybackMixin:
         if self._ignore_state_changes > 0:
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
-            stopped_key = self._player_slot_key_map.get(id(self.player))
-            last_playing = stopped_key if stopped_key is not None else self.current_playing
-            last_slot = self._slot_for_key(last_playing) if last_playing is not None else None
-            controls_follow_last_slot = self._slot_follows_regular_playback_controls(last_slot)
+            transition = self._capture_track_end_transition_state()
             self._timecode_on_playback_stop()
             self._clear_vocal_shadow_player(self.player)
             self._player_mix_volume_map.pop(id(self.player), None)
             self._clear_player_slot_key(self.player)
             self._clear_main_waveform_display()
-            playlist_enabled = False
-            if last_playing is not None and controls_follow_last_slot:
-                last_group, last_page, _last_slot = last_playing
-                if last_group != "Q" and 0 <= int(last_page) < PAGE_COUNT:
-                    playlist_enabled = self.page_playlist_enabled[last_group][int(last_page)]
-            manual_stop = self._manual_stop_requested
-            should_loop = (
-                self.loop_enabled
-                and last_playing is not None
-                and controls_follow_last_slot
-                and not manual_stop
-                and not playlist_enabled
-            )
             self._manual_stop_requested = False
-            if should_loop:
-                loop_group, loop_page, loop_slot = last_playing
-                if loop_group != "Q":
-                    self.current_group = loop_group
-                    self.cue_mode = False
-                else:
-                    self.cue_mode = True
-                self.current_page = loop_page
-                self._refresh_group_buttons()
-                self._refresh_page_list()
-                self._play_slot_via_control_flow(loop_slot)
+            if self._handle_track_end_transition(transition):
                 return
-            if self._pending_start_request is not None:
-                self.current_playing = None
-                self._last_ui_position_ms = -1
-                self.elapsed_time.setText("00:00:00")
-                self.remaining_time.setText("00:00:00")
-                self._set_progress_display(0)
-                self.seek_slider.setValue(0)
-                self._update_now_playing_label("")
-                self._refresh_sound_grid()
-                return
-            if playlist_enabled and last_playing is not None:
-                if manual_stop:
-                    self.current_playing = None
-                    self._last_ui_position_ms = -1
-                    self.elapsed_time.setText("00:00:00")
-                    self.remaining_time.setText("00:00:00")
-                    self._set_progress_display(0)
-                    self.seek_slider.setValue(0)
-                    self._update_now_playing_label("")
-                    self._refresh_sound_grid()
-                    return
-                play_group, play_page, _play_slot = last_playing
-                if play_group == "Q":
-                    self.cue_mode = True
-                else:
-                    self.cue_mode = False
-                    self.current_group = play_group
-                self.current_page = int(play_page)
-                self._refresh_group_buttons()
-                self._sync_playlist_shuffle_buttons()
-                self._refresh_page_list()
-                blocked: set[int] = set()
-                while True:
-                    next_slot = self._next_playlist_slot(
-                        for_auto_advance=True,
-                        blocked=blocked,
-                        group_key=play_group,
-                        page_index=int(play_page),
-                        current_track=last_playing,
-                    )
-                    if next_slot is None:
-                        break
-                    if self._play_slot_via_control_flow(next_slot):
-                        return
-                    blocked.add(next_slot)
-                    if self.candidate_error_action == "stop_playback":
-                        self._stop_playback()
-                        return
+            self._clear_track_end_transition_state()
             self.current_playing = None
             self._auto_transition_track = None
             self._auto_transition_done = False

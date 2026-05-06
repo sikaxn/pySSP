@@ -563,6 +563,7 @@ class ActionsInputMixin:
 
     def _stop_playback(self) -> None:
         self._manual_stop_requested = True
+        self._clear_track_end_transition_state()
         self._pending_start_request = None
         self._pending_start_token += 1
         self._vocal_toggle_fade_jobs.clear()
@@ -631,6 +632,7 @@ class ActionsInputMixin:
         self._fade_jobs.clear()
         self._vocal_toggle_fade_jobs.clear()
         self._update_fade_button_flash(False)
+        self._clear_track_end_transition_state()
         self._pending_start_request = None
         self._pending_start_token += 1
         self._clear_pending_deferred_audio_start()
@@ -1194,6 +1196,7 @@ class ActionsInputMixin:
 
     def _new_set(self) -> None:
         self._hard_stop_all()
+        self._clear_track_end_transition_state()
         self._drag_source_key = None
         self.current_set_path = ""
         self.settings.last_set_path = ""
@@ -1493,6 +1496,7 @@ class ActionsInputMixin:
         else:
             self.current_group = "A"
             self.current_page = 0
+        self._clear_track_end_transition_state()
         self.current_playing = None
         self.current_duration_ms = 0
         self.total_time.setText("00:00:00")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from .shared import *
 
 from pyssp.companion_remote_control import send_companion_location_command
@@ -26,6 +28,7 @@ class CompanionSatelliteMixin:
             )
             dialog.hide_navigation_checkbox.toggled.connect(self._refresh_companion_available_commands_dialog)
             dialog.locationCommandRequested.connect(self._send_companion_location_command_async)
+            dialog.openVirtualSatelliteRequested.connect(self._open_virtual_satellite)
             self._companion_available_commands_dialog = dialog
         dialog.hide_black_empty_checkbox.blockSignals(True)
         dialog.hide_black_empty_checkbox.setChecked(bool(self.companion_available_commands_filter_black_empty))
@@ -200,7 +203,7 @@ class CompanionSatelliteMixin:
         window = self._companion_satellite_window
         if window is not None:
             return window
-        window = CompanionSatelliteWindow(None)
+        window = CompanionSatelliteWindow(self)
         window.openOptionsRequested.connect(self._open_companion_satellite_options)
         window.openAvailableCommandsRequested.connect(self._open_companion_available_commands)
         window.refreshAvailableCommandsRequested.connect(self._refresh_companion_available_commands_from_window)

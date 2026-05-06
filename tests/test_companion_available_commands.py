@@ -167,6 +167,8 @@ def test_companion_available_commands_dialog_emits_press_down_up_for_selected_ro
     seen: list[tuple[str, str]] = []
     dialog.locationCommandRequested.connect(lambda location, action: seen.append((location, action)))
     dialog.set_payload(payload)
+    assert dialog.down_button.text() == "Press Down"
+    assert dialog.up_button.text() == "Release Up"
     dialog.table.selectRow(0)
 
     dialog.press_button.click()
@@ -180,3 +182,42 @@ def test_companion_available_commands_dialog_emits_press_down_up_for_selected_ro
         ("2/1/3", "up"),
         ("2/1/3", "press"),
     ]
+
+
+def test_companion_available_commands_dialog_open_virtual_satellite_signal(qapp):
+    dialog = CompanionAvailableCommandsDialog()
+    seen: list[str] = []
+    dialog.openVirtualSatelliteRequested.connect(lambda: seen.append("open"))
+
+    dialog.open_virtual_satellite_button.click()
+
+    assert seen == ["open"]
+
+
+def test_companion_available_commands_dialog_search_filters_by_location_and_text(qapp):
+    dialog = CompanionAvailableCommandsDialog()
+    payload = {
+        "pages": {
+            "1": {
+                "0/1": {"page": 1, "row": 0, "column": 1, "text": "Play Intro", "type": "BUTTON", "color": "#123456"},
+                "2/3": {"page": 1, "row": 2, "column": 3, "text": "Stop", "type": "BUTTON", "color": "#654321"},
+            }
+        },
+        "updated_at": "",
+    }
+
+    dialog.set_payload(payload)
+    assert dialog.table.rowCount() == 2
+
+    dialog.search_edit.setText("1/2/3")
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 0).text() == "1/2/3"
+    assert dialog.table.item(0, 2).text() == "Stop"
+
+    dialog.search_edit.setText("play")
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 0).text() == "1/0/1"
+    assert dialog.table.item(0, 2).text() == "Play Intro"
+
+    dialog.search_edit.setText("")
+    assert dialog.table.rowCount() == 2

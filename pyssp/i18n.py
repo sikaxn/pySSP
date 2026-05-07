@@ -322,7 +322,7 @@ _TRANSLATIONS = {
         "Play Selected": "播放已选",
         "Play Selected / Pause": "播放已选 / 暂停",
         "Toggle Mute": "切换静音",
-        "Lock Screen": "锁定屏幕",
+        "Lock Screen": "锁屏",
         "Automation Lock": "自动化锁定",
         "Unlock Screen": "解锁屏幕",
         "Lyric Display": "歌词显示",

@@ -79,6 +79,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
         selected_midi_input_device_ids: Optional[list[str]] = None,
         companion_payload: Optional[dict] = None,
+        internal_target_catalog: Optional[dict] = None,
         hide_black_empty: bool = True,
         language: str = "en",
         selection_only: bool = False,
@@ -90,6 +91,7 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.setWindowTitle(window_title or tr("Automation Command Sound Button"))
         self.resize(820, 620)
         self._payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
+        self._internal_target_catalog = dict(internal_target_catalog or {})
         self._custom_color = str(custom_color or "").strip().upper()
         self._spec = normalize_automation_spec(automation_spec or AutomationCommandSpec())
         self._caption_auto_value = automation_display_name(self._spec)
@@ -371,8 +373,8 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_target_input_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_target_kind_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_target_edit.textChanged.connect(self._sync_selected_command)
-        self.internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
-        self.internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._refresh_internal_target_page_choices())
+        self.internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._refresh_internal_target_slot_choices())
         self.internal_target_slot_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_volume_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
         self.internal_seek_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
@@ -406,6 +408,8 @@ class AutomationCommandSoundButtonDialog(QDialog):
 
         self._apply_filters()
         self._populate_internal_command_list()
+        self._refresh_internal_target_page_choices()
+        self._refresh_internal_target_slot_choices()
         if self._spec.location and self._find_location_row(self._spec.location) < 0:
             self.manual_location_radio.setChecked(True)
         elif self.table.rowCount() > 0:
@@ -588,6 +592,42 @@ class AutomationCommandSoundButtonDialog(QDialog):
             self.internal_command_list.addItem(item)
         if self.internal_command_list.count() > 0 and self.internal_command_list.currentRow() < 0:
             self.internal_command_list.setCurrentRow(0)
+
+    def _page_label_for_target(self, group: str, page_number: int) -> str:
+        key = f"{str(group).upper()}-{int(page_number)}"
+        page_labels = dict(self._internal_target_catalog.get("page_labels", {}) or {})
+        return str(page_labels.get(key, key) or key)
+
+    def _button_label_for_target(self, group: str, page_number: int, slot_number: int) -> str:
+        key = f"{str(group).upper()}-{int(page_number)}-{int(slot_number)}"
+        button_labels = dict(self._internal_target_catalog.get("button_labels", {}) or {})
+        return str(button_labels.get(key, key) or key)
+
+    def _refresh_internal_target_page_choices(self) -> None:
+        current = self.internal_target_page_combo.currentData()
+        group = str(self.internal_target_group_combo.currentData() or "A").strip().upper()
+        self.internal_target_page_combo.blockSignals(True)
+        self.internal_target_page_combo.clear()
+        for page_number in range(1, _TARGET_PAGE_COUNT + 1):
+            self.internal_target_page_combo.addItem(self._page_label_for_target(group, page_number), page_number)
+        self.internal_target_page_combo.setCurrentIndex(max(0, self.internal_target_page_combo.findData(current or 1)))
+        self.internal_target_page_combo.blockSignals(False)
+        self._refresh_internal_target_slot_choices()
+
+    def _refresh_internal_target_slot_choices(self) -> None:
+        current = self.internal_target_slot_combo.currentData()
+        group = str(self.internal_target_group_combo.currentData() or "A").strip().upper()
+        page_number = int(self.internal_target_page_combo.currentData() or 1)
+        self.internal_target_slot_combo.blockSignals(True)
+        self.internal_target_slot_combo.clear()
+        for slot_number in range(1, _TARGET_SLOTS_PER_PAGE + 1):
+            self.internal_target_slot_combo.addItem(
+                self._button_label_for_target(group, page_number, slot_number),
+                slot_number,
+            )
+        self.internal_target_slot_combo.setCurrentIndex(max(0, self.internal_target_slot_combo.findData(current or 1)))
+        self.internal_target_slot_combo.blockSignals(False)
+        self._sync_selected_command()
 
     def _selected_internal_command_id(self) -> str:
         item = self.internal_command_list.currentItem()

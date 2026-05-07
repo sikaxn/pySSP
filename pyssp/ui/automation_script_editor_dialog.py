@@ -87,6 +87,7 @@ class AutomationScriptEditorDialog(QDialog):
         cue_start_ms: Optional[int] = None,
         cue_end_ms: Optional[int] = None,
         companion_payload: Optional[dict] = None,
+        internal_target_catalog: Optional[dict] = None,
         hide_black_empty: bool = True,
         show_lyric_default: bool = False,
         on_show_lyric_changed: Optional[Callable[[bool], None]] = None,
@@ -106,6 +107,7 @@ class AutomationScriptEditorDialog(QDialog):
         self._cue_start_ms = None if cue_start_ms is None else max(0, int(cue_start_ms))
         self._cue_end_ms = None if cue_end_ms is None else max(0, int(cue_end_ms))
         self._companion_payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
+        self._internal_target_catalog = dict(internal_target_catalog or {})
         self._hide_black_empty = bool(hide_black_empty)
         self._show_lyric_default = bool(show_lyric_default)
         self._on_show_lyric_changed = on_show_lyric_changed
@@ -523,8 +525,8 @@ class AutomationScriptEditorDialog(QDialog):
         self._internal_target_input_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_target_kind_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_target_edit.textChanged.connect(self._sync_selected_command)
-        self._internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
-        self._internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._refresh_internal_target_page_choices())
+        self._internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._refresh_internal_target_slot_choices())
         self._internal_target_slot_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_volume_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
         self._internal_seek_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
@@ -537,6 +539,8 @@ class AutomationScriptEditorDialog(QDialog):
 
         self._apply_command_filters()
         self._populate_internal_command_list()
+        self._refresh_internal_target_page_choices()
+        self._refresh_internal_target_slot_choices()
         if self._command_table.rowCount() > 0:
             self._pick_from_list_radio.setChecked(True)
         else:
@@ -1103,6 +1107,42 @@ class AutomationScriptEditorDialog(QDialog):
             self._internal_command_list.addItem(item)
         if self._internal_command_list.count() > 0 and self._internal_command_list.currentRow() < 0:
             self._internal_command_list.setCurrentRow(0)
+
+    def _page_label_for_target(self, group: str, page_number: int) -> str:
+        key = f"{str(group).upper()}-{int(page_number)}"
+        page_labels = dict(self._internal_target_catalog.get("page_labels", {}) or {})
+        return str(page_labels.get(key, key) or key)
+
+    def _button_label_for_target(self, group: str, page_number: int, slot_number: int) -> str:
+        key = f"{str(group).upper()}-{int(page_number)}-{int(slot_number)}"
+        button_labels = dict(self._internal_target_catalog.get("button_labels", {}) or {})
+        return str(button_labels.get(key, key) or key)
+
+    def _refresh_internal_target_page_choices(self) -> None:
+        current = self._internal_target_page_combo.currentData()
+        group = str(self._internal_target_group_combo.currentData() or "A").strip().upper()
+        self._internal_target_page_combo.blockSignals(True)
+        self._internal_target_page_combo.clear()
+        for page_number in range(1, _TARGET_PAGE_COUNT + 1):
+            self._internal_target_page_combo.addItem(self._page_label_for_target(group, page_number), page_number)
+        self._internal_target_page_combo.setCurrentIndex(max(0, self._internal_target_page_combo.findData(current or 1)))
+        self._internal_target_page_combo.blockSignals(False)
+        self._refresh_internal_target_slot_choices()
+
+    def _refresh_internal_target_slot_choices(self) -> None:
+        current = self._internal_target_slot_combo.currentData()
+        group = str(self._internal_target_group_combo.currentData() or "A").strip().upper()
+        page_number = int(self._internal_target_page_combo.currentData() or 1)
+        self._internal_target_slot_combo.blockSignals(True)
+        self._internal_target_slot_combo.clear()
+        for slot_number in range(1, _TARGET_SLOTS_PER_PAGE + 1):
+            self._internal_target_slot_combo.addItem(
+                self._button_label_for_target(group, page_number, slot_number),
+                slot_number,
+            )
+        self._internal_target_slot_combo.setCurrentIndex(max(0, self._internal_target_slot_combo.findData(current or 1)))
+        self._internal_target_slot_combo.blockSignals(False)
+        self._sync_selected_command()
 
     def _selected_internal_command_id(self) -> str:
         item = self._internal_command_list.currentItem()

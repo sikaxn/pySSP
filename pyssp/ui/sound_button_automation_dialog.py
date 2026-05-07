@@ -464,6 +464,7 @@ class SoundButtonAutomationDialog(QDialog):
         *,
         config: Optional[SoundButtonAutomationConfig] = None,
         companion_payload: Optional[dict] = None,
+        internal_target_catalog: Optional[dict] = None,
         hide_black_empty: bool = True,
         language: str = "en",
         parent: Optional[QWidget] = None,
@@ -472,6 +473,7 @@ class SoundButtonAutomationDialog(QDialog):
         self.setWindowTitle(tr("Set Sound Button Automation"))
         self.resize(960, 760)
         self._payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
+        self._internal_target_catalog = dict(internal_target_catalog or {})
         self._hide_black_empty = bool(hide_black_empty)
         self._language = language
         self._syncing_views = False
@@ -611,6 +613,7 @@ class SoundButtonAutomationDialog(QDialog):
             notes="",
             automation_spec=spec or AutomationCommandSpec(),
             companion_payload=self._payload,
+            internal_target_catalog=self._internal_target_catalog,
             hide_black_empty=self._hide_black_empty,
             language=self._language,
             selection_only=True,

@@ -1522,6 +1522,7 @@ class PagesSlotsMixin:
         dialog = SoundButtonAutomationDialog(
             config=slot.sound_button_automation,
             companion_payload=load_companion_available_commands(),
+            internal_target_catalog=self._internal_automation_target_catalog(),
             hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
             language=self.ui_language,
             parent=self,
@@ -1560,6 +1561,29 @@ class PagesSlotsMixin:
             return utility_display_name(slot.utility_spec)
         path = str(slot.file_path or "").strip()
         return os.path.splitext(os.path.basename(path))[0] if path else ""
+
+    def _internal_automation_target_catalog(self) -> dict:
+        page_labels: dict[str, str] = {}
+        button_labels: dict[str, str] = {}
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                page_number = page_index + 1
+                page_key = f"{group}-{page_number}"
+                page_name = str(self.page_names[group][page_index] or "").strip()
+                page_labels[page_key] = f"{page_key} - {page_name}" if page_name else page_key
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    slot_number = slot_index + 1
+                    button_key = f"{page_key}-{slot_number}"
+                    button_name = self._slot_display_name(slot).strip()
+                    button_labels[button_key] = f"{button_key} - {button_name}" if button_name else button_key
+        cue_page_key = "Q-1"
+        page_labels[cue_page_key] = f"{cue_page_key} - {tr('Cue Page')}"
+        for slot_index, slot in enumerate(self.cue_page):
+            slot_number = slot_index + 1
+            button_key = f"{cue_page_key}-{slot_number}"
+            button_name = self._slot_display_name(slot).strip()
+            button_labels[button_key] = f"{button_key} - {button_name}" if button_name else button_key
+        return {"page_labels": page_labels, "button_labels": button_labels}
 
     def _parse_automation_slot_from_section(self, section: configparser.SectionProxy, index: int) -> Optional[SoundButtonData]:
         source_type = str(section.get(f"pysspsourcetype{index}", "")).strip().lower()
@@ -1992,6 +2016,7 @@ class PagesSlotsMixin:
             available_midi_input_devices=list_midi_input_devices(),
             selected_midi_input_device_ids=self.midi_input_device_ids,
             companion_payload=load_companion_available_commands(),
+            internal_target_catalog=self._internal_automation_target_catalog(),
             hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
             language=self.ui_language,
             parent=self,
@@ -2616,6 +2641,7 @@ class PagesSlotsMixin:
             cue_start_ms=slot.cue_start_ms,
             cue_end_ms=slot.cue_end_ms,
             companion_payload=load_companion_available_commands(),
+            internal_target_catalog=self._internal_automation_target_catalog(),
             hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
             show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
             on_show_lyric_changed=self._set_automation_script_editor_show_lyric,

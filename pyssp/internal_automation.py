@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyssp.i18n import tr
+
 
 INTERNAL_AUTOMATION_CATEGORY_TRANSPORT = "Transport"
 INTERNAL_AUTOMATION_CATEGORY_MODE = "Mode"
@@ -11,6 +13,8 @@ INTERNAL_AUTOMATION_CATEGORY_STAGE = "Stage"
 
 
 INTERNAL_AUTOMATION_COMMANDS: tuple[dict[str, Any], ...] = (
+    {"id": "play", "label": "Play Sound Button", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
+    {"id": "goto", "label": "Go To Page", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
     {"id": "pause", "label": "Pause Playback", "category": INTERNAL_AUTOMATION_CATEGORY_TRANSPORT},
     {"id": "resume", "label": "Resume Playback", "category": INTERNAL_AUTOMATION_CATEGORY_TRANSPORT},
     {"id": "stop", "label": "Stop Playback", "category": INTERNAL_AUTOMATION_CATEGORY_TRANSPORT},
@@ -32,8 +36,6 @@ INTERNAL_AUTOMATION_COMMANDS: tuple[dict[str, Any], ...] = (
     {"id": "fade", "label": "Fade", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "resetpage", "label": "Reset Page", "category": INTERNAL_AUTOMATION_CATEGORY_NAVIGATION},
     {"id": "navigate", "label": "Navigate", "category": INTERNAL_AUTOMATION_CATEGORY_NAVIGATION},
-    {"id": "play", "label": "Play Sound Button", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
-    {"id": "goto", "label": "Go To Page or Button", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
     {"id": "volume_set", "label": "Set Volume", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
     {"id": "seek", "label": "Seek Transport", "category": INTERNAL_AUTOMATION_CATEGORY_TARGET},
     {"id": "alert", "label": "Stage Alert", "category": INTERNAL_AUTOMATION_CATEGORY_STAGE},
@@ -43,7 +45,14 @@ _COMMANDS_BY_ID = {str(item["id"]): dict(item) for item in INTERNAL_AUTOMATION_C
 
 
 def list_internal_automation_commands() -> list[dict[str, Any]]:
-    return [dict(item) for item in INTERNAL_AUTOMATION_COMMANDS]
+    return [
+        {
+            **dict(item),
+            "label": tr(str(item.get("label", "") or "")),
+            "category": tr(str(item.get("category", "") or "")),
+        }
+        for item in INTERNAL_AUTOMATION_COMMANDS
+    ]
 
 
 def normalize_internal_automation_command_id(raw: object) -> str:
@@ -120,41 +129,43 @@ def internal_automation_command_summary(command_id: object, params: object) -> s
     data = normalize_internal_automation_params(cmd, params)
     if not cmd:
         return ""
-    base = str(_COMMANDS_BY_ID.get(cmd, {}).get("label", cmd) or cmd)
+    base = tr(str(_COMMANDS_BY_ID.get(cmd, {}).get("label", cmd) or cmd))
     if cmd == "lyric_display":
-        mode = str(data.get("mode", "")).capitalize()
-        return f"{mode} Lyrics"
+        mode = tr(str(data.get("mode", "")).capitalize())
+        return f"{mode} {tr('Lyrics')}"
     if cmd in {"vocal_removed", "talk", "playlist", "playlist_shuffle", "multiplay"}:
-        mode = str(data.get("mode", "")).capitalize()
+        mode = tr(str(data.get("mode", "")).capitalize())
         return f"{mode} {base}"
     if cmd == "fade":
-        mode = str(data.get("mode", "")).capitalize()
-        kind = str(data.get("kind", "")).replace("fade", "Fade ").strip().title()
+        mode = tr(str(data.get("mode", "")).capitalize())
+        kind_map = {"fadein": tr("Fade In"), "fadeout": tr("Fade Out"), "crossfade": tr("Crossfade")}
+        kind = kind_map.get(str(data.get("kind", "")).strip().lower(), tr("Fade In"))
         return f"{mode} {kind}"
     if cmd == "resetpage":
-        scope = str(data.get("scope", "")).capitalize()
-        return f"Reset {scope} Page"
+        scope = tr(str(data.get("scope", "")).capitalize())
+        return f"{tr('Reset')} {scope} {tr('Page')}"
     if cmd == "navigate":
-        direction = str(data.get("direction", "")).capitalize()
-        target = str(data.get("target", "")).replace("_", " ").title()
-        return f"Navigate To {direction} {target}"
+        direction = tr("Next") if str(data.get("direction", "")).strip().lower() == "next" else tr("Previous")
+        target_map = {"group": tr("Group"), "page": tr("Page"), "sound_button": tr("Sound Button")}
+        target = target_map.get(str(data.get("target", "")).strip().lower(), tr("Page"))
+        return f"{tr('Navigate To')} {direction} {target}"
     if cmd == "play":
         button_id = str(data.get("button_id", "") or "").strip().upper()
-        return f"Play {button_id}" if button_id else base
+        return f"{tr('Play')} {button_id}" if button_id else base
     if cmd == "goto":
         target = str(data.get("target", "") or "").strip().upper()
-        return f"Go To {target}" if target else base
+        return f"{tr('Go To')} {target}" if target else base
     if cmd == "volume_set":
-        return f"Set Volume {int(data.get('level', 0))}%"
+        return f"{tr('Set Volume')} {int(data.get('level', 0))}%"
     if cmd == "seek":
         if str(data.get("seek_mode", "")) == "time":
-            return f"Seek To {str(data.get('time', '') or '').strip()}"
-        return f"Seek To {float(data.get('percent', 0.0)):g}%"
+            return f"{tr('Seek To')} {str(data.get('time', '') or '').strip()}"
+        return f"{tr('Seek To')} {float(data.get('percent', 0.0)):g}%"
     if cmd == "alert":
         if str(data.get("alert_mode", "")) == "clear":
-            return "Clear Stage Alert"
+            return tr("Clear Stage Alert")
         text = str(data.get("text", "") or "").strip()
-        return f"Show Stage Alert: {text}" if text else "Show Stage Alert"
+        return f"{tr('Show Stage Alert')}: {text}" if text else tr("Show Stage Alert")
     return base
 
 

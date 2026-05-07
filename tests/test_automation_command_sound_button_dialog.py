@@ -125,6 +125,10 @@ def test_internal_play_command_supports_list_target_picker(qapp):
         caption="",
         notes="",
         companion_payload=_payload(),
+        internal_target_catalog={
+            "page_labels": {"B-3": "B-3 - Chorus"},
+            "button_labels": {"B-3-5": "B-3-5 - Lead Vocal"},
+        },
     )
     dialog.show()
     qapp.processEvents()
@@ -150,6 +154,9 @@ def test_internal_play_command_supports_list_target_picker(qapp):
         )
         qapp.processEvents()
 
+        assert dialog.internal_target_page_combo.currentText() == "B-3 - Chorus"
+        assert dialog.internal_target_slot_combo.currentText() == "B-3-5 - Lead Vocal"
+
         _caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
 
         assert spec.source == "internal"
@@ -164,6 +171,9 @@ def test_internal_goto_command_supports_list_page_picker(qapp):
         caption="",
         notes="",
         companion_payload=_payload(),
+        internal_target_catalog={
+            "page_labels": {"C-7": "C-7 - Bridge"},
+        },
     )
     dialog.show()
     qapp.processEvents()
@@ -189,10 +199,29 @@ def test_internal_goto_command_supports_list_page_picker(qapp):
         )
         qapp.processEvents()
 
+        assert dialog.internal_target_page_combo.currentText() == "C-7 - Bridge"
+
         _caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
 
         assert spec.source == "internal"
         assert spec.internal_command == "goto"
         assert spec.internal_params == {"target": "c-7"}
+    finally:
+        _cleanup(dialog, qapp)
+
+
+def test_internal_target_commands_appear_first(qapp):
+    dialog = AutomationCommandSoundButtonDialog(
+        caption="",
+        notes="",
+        companion_payload=_payload(),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        dialog.source_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        assert dialog.internal_command_list.item(0).data(256) == "play"
+        assert dialog.internal_command_list.item(1).data(256) == "goto"
     finally:
         _cleanup(dialog, qapp)

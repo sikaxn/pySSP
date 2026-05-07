@@ -403,11 +403,11 @@ class UiBuildMixin:
         list_sound_device_midi_mapping_action.triggered.connect(self._list_sound_device_midi_mappings)
         tools_menu.addAction(list_sound_device_midi_mapping_action)
 
-        scan_sound_button_automation_scripts_action = QAction("Scan Sound Button Automation Scripts", self)
+        scan_sound_button_automation_scripts_action = QAction(tr("Scan Sound Button Automation Scripts"), self)
         scan_sound_button_automation_scripts_action.triggered.connect(self._scan_sound_button_automation_scripts)
         tools_menu.addAction(scan_sound_button_automation_scripts_action)
 
-        remove_all_linked_automation_scripts_action = QAction("Remove All Linked Automation Scripts", self)
+        remove_all_linked_automation_scripts_action = QAction(tr("Remove All Linked Automation Scripts"), self)
         remove_all_linked_automation_scripts_action.triggered.connect(self._remove_all_linked_automation_scripts)
         tools_menu.addAction(remove_all_linked_automation_scripts_action)
 
@@ -415,29 +415,30 @@ class UiBuildMixin:
         launchpad_cheatsheet_action.triggered.connect(self._show_launchpad_cheatsheet)
         tools_menu.addAction(launchpad_cheatsheet_action)
 
-        companion_menu = self.menuBar().addMenu("Companion")
-        open_virtual_satellite_action = QAction("Open Virtual Satellite", self)
+        companion_menu = self.menuBar().addMenu(tr("Automation"))
+        open_virtual_satellite_action = QAction(tr("Open Virtual Satellite"), self)
         open_virtual_satellite_action.triggered.connect(self._open_virtual_satellite)
         companion_menu.addAction(open_virtual_satellite_action)
         self._menu_actions["open_virtual_satellite"] = open_virtual_satellite_action
-        open_companion_satellite_options_action = QAction("Open Companion Satellite Options", self)
-        open_companion_satellite_options_action.triggered.connect(self._open_companion_satellite_options)
-        companion_menu.addAction(open_companion_satellite_options_action)
-        self._menu_actions["open_companion_satellite_options"] = open_companion_satellite_options_action
-        available_commands_action = QAction("Available Commands", self)
+        available_commands_action = QAction(tr("Available Commands"), self)
         available_commands_action.triggered.connect(self._open_companion_available_commands)
         companion_menu.addAction(available_commands_action)
         self._menu_actions["companion_available_commands"] = available_commands_action
-        automation_script_navigator_action = QAction("Automation Script Navigator", self)
+        automation_script_navigator_action = QAction(tr("Automation Script Navigator"), self)
         automation_script_navigator_action.triggered.connect(self._open_automation_script_navigator)
         companion_menu.addAction(automation_script_navigator_action)
         self._menu_actions["automation_script_navigator"] = automation_script_navigator_action
-        bypass_action = QAction("Bypass", self)
+        bypass_action = QAction(tr("Bypass"), self)
         bypass_action.setCheckable(True)
         bypass_action.setChecked(bool(self.companion_bypass))
         bypass_action.triggered.connect(self._toggle_companion_bypass)
         companion_menu.addAction(bypass_action)
         self._menu_actions["companion_bypass"] = bypass_action
+        companion_menu.addSeparator()
+        open_companion_satellite_options_action = QAction(tr("Open Automation Setup"), self)
+        open_companion_satellite_options_action.triggered.connect(self._open_companion_satellite_options)
+        companion_menu.addAction(open_companion_satellite_options_action)
+        self._menu_actions["open_companion_satellite_options"] = open_companion_satellite_options_action
 
         log_menu = self.menuBar().addMenu("Logs")
         view_log_action = QAction("View Log", self)

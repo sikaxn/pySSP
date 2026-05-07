@@ -70,7 +70,7 @@ class CompanionSatelliteWindow(QWidget):
         self.target_label = QLabel("")
         header_layout.addWidget(self.target_label, 1)
         self.options_button = QToolButton(self)
-        self.options_button.setText(tr("Options"))
+        self.options_button.setText(tr("Automation Setup"))
         self.options_button.clicked.connect(self.openOptionsRequested.emit)
         header_layout.addWidget(self.options_button)
         self.available_commands_button = QToolButton(self)

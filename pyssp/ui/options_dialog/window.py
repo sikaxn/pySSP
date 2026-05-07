@@ -846,7 +846,6 @@ class OptionsDialog(
                 lyric_display_show_not_playing_message=self._lyric_display_show_not_playing_message,
                 search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
                 new_lyric_file_format=self._new_lyric_file_format,
-                warn_dual_automation_sources=self._warn_dual_automation_sources,
                 lyric_display_font_family=self._lyric_display_font_family,
                 lyric_display_font_size=self._lyric_display_font_size,
                 lyric_display_previous_line_count=self._lyric_display_previous_line_count,
@@ -959,8 +958,8 @@ class OptionsDialog(
             ),
         )
         self._add_page(
-            "Companion Satellite",
-            self._mono_icon("wireless"),
+            "Automation",
+            self._mono_icon("robot"),
             self._build_companion_satellite_page(
                 host=self._companion_satellite_host,
                 port=self._companion_satellite_port,
@@ -974,6 +973,7 @@ class OptionsDialog(
                 command_tcp_port=self._companion_command_tcp_port,
                 command_udp_port=self._companion_command_udp_port,
                 command_http_port=self._companion_command_http_port,
+                warn_dual_automation_sources=self._warn_dual_automation_sources,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

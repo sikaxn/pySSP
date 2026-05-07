@@ -650,7 +650,7 @@ class CompanionSatelliteMixin:
         self._companion_satellite_client.reconnect()
 
     def _open_companion_satellite_options(self) -> None:
-        self._open_options_dialog(initial_page="Companion Satellite")
+        self._open_options_dialog(initial_page="Automation")
 
     def _open_virtual_satellite(self) -> None:
         window = self._ensure_companion_satellite_window()

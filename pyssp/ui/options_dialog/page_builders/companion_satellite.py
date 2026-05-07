@@ -19,6 +19,7 @@ class CompanionSatellitePageMixin:
         command_tcp_port: int,
         command_udp_port: int,
         command_http_port: int,
+        warn_dual_automation_sources: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -39,6 +40,12 @@ class CompanionSatellitePageMixin:
         self.companion_bypass_checkbox = QCheckBox(tr("Bypass Companion remote commands"))
         self.companion_bypass_checkbox.setChecked(bool(bypass))
         form.addRow(tr("Companion Bypass:"), self.companion_bypass_checkbox)
+
+        self.warn_dual_automation_sources_checkbox = QCheckBox(
+            tr("Warn when both Sound Button Automation and Automation Script are linked to the same sound button")
+        )
+        self.warn_dual_automation_sources_checkbox.setChecked(bool(warn_dual_automation_sources))
+        form.addRow(tr("Automation Warning:"), self.warn_dual_automation_sources_checkbox)
 
         self.companion_satellite_columns_spin = QSpinBox()
         self.companion_satellite_columns_spin.setRange(1, 12)

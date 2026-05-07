@@ -115,6 +115,9 @@ def _build_dialog(**overrides):
         ),
         search_lyric_on_add_sound_button=defaults["search_lyric_on_add_sound_button"],
         new_lyric_file_format=defaults["new_lyric_file_format"],
+        warn_dual_automation_sources=bool(
+            overrides.get("warn_dual_automation_sources", defaults["warn_dual_automation_sources"])
+        ),
         supported_audio_format_extensions=overrides.get("supported_audio_format_extensions", []),
         verify_sound_file_on_add=bool(overrides.get("verify_sound_file_on_add", True)),
         allow_other_unsupported_audio_files=bool(overrides.get("allow_other_unsupported_audio_files", False)),
@@ -850,7 +853,7 @@ def test_companion_satellite_options_round_trip(qapp):
         companion_command_tcp_port=16759,
         companion_command_udp_port=18000,
         companion_command_http_port=9000,
-        initial_page="Companion Satellite",
+        initial_page="Automation",
     )
     assert dialog.selected_companion_satellite_host() == "10.0.0.8"
     assert dialog.selected_companion_satellite_port() == 17777
@@ -893,7 +896,7 @@ def test_companion_satellite_options_round_trip(qapp):
 
 
 def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
-    dialog = _build_dialog(initial_page="Companion Satellite")
+    dialog = _build_dialog(initial_page="Automation")
     assert dialog.companion_satellite_columns_spin.value() == 8
     assert dialog.companion_satellite_rows_spin.value() == 4
     assert dialog.selected_companion_bypass() is False

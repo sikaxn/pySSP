@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMainWindow
 
 from pyssp.settings_store import AppSettings
 from pyssp.ui.main_window import companion_satellite as companion_satellite_module
@@ -20,6 +20,21 @@ def qapp():
     if app is None:
         app = QApplication([])
     return app
+
+
+def _cleanup_window(window, qapp: QApplication) -> None:
+    try:
+        satellite_window = getattr(window, "_companion_satellite_window", None)
+        if satellite_window is not None:
+            satellite_window.close()
+    except Exception:
+        pass
+    try:
+        window.hide()
+        QMainWindow.close(window)
+    except Exception:
+        pass
+    qapp.processEvents()
 
 
 def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):
@@ -95,22 +110,11 @@ def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):
             lambda initial_page=None: opened.__setitem__("page", initial_page),
         )
         window._menu_actions["open_companion_satellite_options"].trigger()
-        assert opened["page"] == "Companion Satellite"
+        assert opened["page"] == "Automation"
         window._menu_actions["companion_available_commands"].trigger()
         assert window._companion_available_commands_dialog is not None
     finally:
-        try:
-            satellite_window = getattr(window, "_companion_satellite_window", None)
-            if satellite_window is not None:
-                satellite_window.close()
-        except Exception:
-            pass
-        try:
-            window.close()
-        except Exception:
-            pass
-        window.deleteLater()
-
+        _cleanup_window(window, qapp)
 
 def test_available_commands_filter_checkbox_updates_main_window_state(qapp, monkeypatch):
     class _DummyLtcSender:
@@ -182,18 +186,7 @@ def test_available_commands_filter_checkbox_updates_main_window_state(qapp, monk
         qapp.processEvents()
         assert window.companion_available_commands_filter_black_empty is False
     finally:
-        try:
-            satellite_window = getattr(window, "_companion_satellite_window", None)
-            if satellite_window is not None:
-                satellite_window.close()
-        except Exception:
-            pass
-        try:
-            window.close()
-        except Exception:
-            pass
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_window(window, qapp)
 
 
 def test_companion_bypass_blocks_remote_command_send(qapp, monkeypatch):
@@ -273,18 +266,7 @@ def test_companion_bypass_blocks_remote_command_send(qapp, monkeypatch):
         assert notices == ["Companion commands are bypassed. Command will not go through."]
         assert window.companion_satellite_status_icon.text() == "SAT (Bypassed)"
     finally:
-        try:
-            satellite_window = getattr(window, "_companion_satellite_window", None)
-            if satellite_window is not None:
-                satellite_window.close()
-        except Exception:
-            pass
-        try:
-            window.close()
-        except Exception:
-            pass
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_window(window, qapp)
 
 
 def test_companion_location_command_sends_without_satellite_connection_and_handles_failure(
@@ -401,15 +383,4 @@ def test_companion_location_command_sends_without_satellite_connection_and_handl
         ]
         assert notices == ["Companion command failed: boom"]
     finally:
-        try:
-            satellite_window = getattr(window, "_companion_satellite_window", None)
-            if satellite_window is not None:
-                satellite_window.close()
-        except Exception:
-            pass
-        try:
-            window.close()
-        except Exception:
-            pass
-        window.deleteLater()
-        qapp.processEvents()
+        _cleanup_window(window, qapp)

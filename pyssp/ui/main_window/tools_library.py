@@ -921,8 +921,8 @@ class ToolsLibraryMixin:
             self._show_info_notice_banner("No sound buttons assigned.")
             return
 
-        progress = QProgressDialog("Scanning automation scripts...", "Skip", 0, max(1, total), self)
-        progress.setWindowTitle("Scan Sound Button Automation Scripts")
+        progress = QProgressDialog(tr("Scanning automation scripts..."), tr("Skip"), 0, max(1, total), self)
+        progress.setWindowTitle(tr("Scan Sound Button Automation Scripts"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -939,7 +939,7 @@ class ToolsLibraryMixin:
             if progress.wasCanceled():
                 cancelled = True
                 break
-            progress.setLabelText(f"Scanning {location} - Button {slot_index + 1}...")
+            progress.setLabelText(tr("Scanning {location} - Button {button}...").format(location=location, button=slot_index + 1))
             if str(slot.automation_script_path or "").strip():
                 processed += 1
                 progress.setValue(processed)
@@ -956,13 +956,19 @@ class ToolsLibraryMixin:
 
         if cancelled and rows:
             self._show_info_notice_banner(
-                f"Automation script scan skipped ({processed}/{total}). Showing partial scan results."
+                tr("Automation script scan skipped ({processed}/{total}). Showing partial scan results.").format(
+                    processed=processed, total=total
+                )
             )
         elif cancelled:
-            self._show_info_notice_banner(f"Automation script scan cancelled ({processed}/{total}).")
+            self._show_info_notice_banner(
+                tr("Automation script scan cancelled ({processed}/{total}).").format(
+                    processed=processed, total=total
+                )
+            )
             return
         if not rows:
-            self._show_info_notice_banner("No matching automation scripts found.")
+            self._show_info_notice_banner(tr("No matching automation scripts found."))
             return
 
         dialog = LinkLyricDialog(rows, self)
@@ -989,10 +995,12 @@ class ToolsLibraryMixin:
             self._set_dirty(True)
             self._refresh_sound_grid()
             self._show_save_notice_banner(
-                f"Automation script scan complete. Linked: {linked}, Unlinked: {unlinked}."
+                tr("Automation script scan complete. Linked: {linked}, Unlinked: {unlinked}.").format(
+                    linked=linked, unlinked=unlinked
+                )
             )
             return
-        self._show_info_notice_banner("Automation script scan complete. No changes.")
+        self._show_info_notice_banner(tr("Automation script scan complete. No changes."))
 
     def _remove_all_linked_automation_scripts(self) -> None:
         linked_count = 0
@@ -1004,13 +1012,13 @@ class ToolsLibraryMixin:
                 linked_count += 1
 
         if linked_count <= 0:
-            self._show_info_notice_banner("No linked automation scripts to remove.")
+            self._show_info_notice_banner(tr("No linked automation scripts to remove."))
             return
 
         answer = QMessageBox.question(
             self,
-            "Remove All Linked Automation Scripts",
-            f"Remove linked automation scripts from {linked_count} sound button(s)?",
+            tr("Remove All Linked Automation Scripts"),
+            tr("Remove linked automation scripts from {count} sound button(s)?").format(count=linked_count),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

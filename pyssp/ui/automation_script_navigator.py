@@ -85,12 +85,12 @@ class AutomationScriptNavigatorWindow(QWidget):
 
         path = str(script_path or "").strip()
         if not path:
-            self._status_label.setText("No automation script assigned for this sound.")
+            self._status_label.setText(tr("No automation script assigned for this sound."))
             self._rows = []
             self._table.setRowCount(0)
             return
         if not os.path.exists(path):
-            self._status_label.setText(f"Automation script not found:\n{path}")
+            self._status_label.setText(tr("Automation script not found:\n{path}").format(path=path))
             self._rows = []
             self._table.setRowCount(0)
             return
@@ -126,7 +126,7 @@ class AutomationScriptNavigatorWindow(QWidget):
         try:
             mtime = os.path.getmtime(script_path)
         except OSError:
-            return [], f"Automation script not found:\n{script_path}"
+            return [], tr("Automation script not found:\n{path}").format(path=script_path)
         if script_path == self._cache_path and abs(mtime - self._cache_mtime) < 0.0001:
             return self._cache_rows, self._cache_error
         try:
@@ -135,7 +135,7 @@ class AutomationScriptNavigatorWindow(QWidget):
             error = ""
         except Exception as exc:
             rows = []
-            error = f"Failed to read automation script:\n{exc}"
+            error = f"{tr('Failed to read automation script:')}\n{exc}"
         self._cache_path = script_path
         self._cache_mtime = mtime
         self._cache_rows = rows

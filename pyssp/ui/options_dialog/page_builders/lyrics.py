@@ -12,7 +12,6 @@ class LyricsPageMixin:
         lyric_display_show_not_playing_message: bool,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
-        warn_dual_automation_sources: bool,
         lyric_display_font_family: str,
         lyric_display_font_size: int,
         lyric_display_previous_line_count: int,
@@ -53,11 +52,6 @@ class LyricsPageMixin:
             token = "srt"
         self._set_combo_data_or_default(self.new_lyric_file_format_combo, token, "srt")
         link_layout.addRow("Default format for new lyric file:", self.new_lyric_file_format_combo)
-        self.warn_dual_automation_sources_checkbox = QCheckBox(
-            "Warn when both Sound Button Automation and Automation Script are linked to the same sound button"
-        )
-        self.warn_dual_automation_sources_checkbox.setChecked(bool(warn_dual_automation_sources))
-        link_layout.addRow(self.warn_dual_automation_sources_checkbox)
         layout.addWidget(link_group)
 
         display_font_group = QGroupBox("Lyric Display Window")

@@ -58,15 +58,14 @@ class CompanionSatelliteMixin:
         for action in list(actions or []):
             if str(getattr(action, "type", "") or "").strip() != AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND:
                 continue
-            payload = dict(getattr(action, "payload", {}) or {})
-            location = str(payload.get("location", "") or "").strip()
-            if not location:
+            payload_spec = normalize_automation_spec(getattr(action, "payload", None) or {})
+            if not payload_spec.location:
                 continue
             specs.append(
                 normalize_automation_spec(
                     {
-                        "location": location,
-                        "button_text": str(payload.get("button_text", "") or "").strip(),
+                        "location": payload_spec.location,
+                        "button_text": str(payload_spec.button_text or "").strip(),
                         "hold_to_release": False,
                     }
                 )

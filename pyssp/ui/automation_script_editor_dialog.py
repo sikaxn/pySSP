@@ -333,8 +333,7 @@ class AutomationScriptEditorDialog(QDialog):
         self._remaining_label.setText(f"Remaining {self._format_clock_time(remaining)}")
 
     def _refresh_cue_indicator(self) -> None:
-        self._cue_indicator.set_duration_ms(self._duration_ms)
-        self._cue_indicator.set_range(self._cue_start_ms, self._cue_end_ms)
+        self._cue_indicator.set_values(self._duration_ms, self._cue_start_ms, self._cue_end_ms)
 
     def _play(self) -> None:
         if callable(self._stop_host_playback):

@@ -1781,6 +1781,8 @@ class ActionsInputMixin:
                 "vocal_removed_indicator": self.state_colors["vocal_removed_indicator"],
                 "midi_indicator": self.state_colors["midi_indicator"],
                 "lyric_indicator": self.state_colors["lyric_indicator"],
+                "automation_indicator": self.state_colors["automation_indicator"],
+                "automation_indicator_bypassed": self.state_colors["automation_indicator_bypassed"],
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
@@ -1998,6 +2000,14 @@ class ActionsInputMixin:
         self.state_colors["lyric_indicator"] = selected_colors.get(
             "lyric_indicator",
             self.state_colors["lyric_indicator"],
+        )
+        self.state_colors["automation_indicator"] = selected_colors.get(
+            "automation_indicator",
+            self.state_colors["automation_indicator"],
+        )
+        self.state_colors["automation_indicator_bypassed"] = selected_colors.get(
+            "automation_indicator_bypassed",
+            self.state_colors["automation_indicator_bypassed"],
         )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()

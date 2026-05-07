@@ -410,6 +410,7 @@ def test_load_set_sound_button_simple_automation_round_trip_fields(tmp_path):
                 "pyssponleaveplayingcount1=1",
                 "pyssponleaveplayinglocation1_1=5/1/4",
                 "pyssponleaveplayingtext1_1=Stop One",
+                "pysspsbabypass1=1",
                 "",
             ]
         ),
@@ -424,6 +425,7 @@ def test_load_set_sound_button_simple_automation_round_trip_fields(tmp_path):
     assert [item.button_text for item in slot.sound_button_automation.on_become_playing] == ["Start One", "Start Two"]
     assert slot.sound_button_automation.on_leave_playing is not None
     assert [item.location for item in slot.sound_button_automation.on_leave_playing] == ["5/1/4"]
+    assert slot.sound_button_automation.bypassed is True
 
 
 def test_load_set_legacy_unsupported_automation_marker_stays_marker_without_pyssp_metadata(tmp_path):

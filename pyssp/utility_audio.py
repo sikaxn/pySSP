@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
+from pyssp.i18n import tr
+
 
 UTILITY_SOURCE_TYPE = "utility"
 FILE_SOURCE_TYPE = "file"
@@ -152,12 +154,18 @@ def parse_utility_duration_hhmmssmmm(value: object) -> Optional[int]:
 def utility_display_name(spec: Optional[UtilitySoundSpec]) -> str:
     normalized = normalize_utility_spec(spec or UtilitySoundSpec())
     if normalized.mode == UTILITY_MODE_BLANK:
-        return "Blank"
+        return tr("Blank")
     if normalized.mode == UTILITY_MODE_PINK_NOISE:
-        return "Pink Noise"
+        return tr("Pink Noise")
     if normalized.mode == UTILITY_MODE_WAVEFORM:
-        return f"{normalized.waveform_type.title()} {int(round(normalized.frequency_hz))} Hz"
+        waveform_label = {
+            UTILITY_WAVEFORM_SINE: tr("Sine"),
+            UTILITY_WAVEFORM_SQUARE: tr("Square"),
+            UTILITY_WAVEFORM_TRIANGLE: tr("Triangle"),
+            UTILITY_WAVEFORM_SAWTOOTH: tr("Sawtooth"),
+        }.get(normalized.waveform_type, tr("Sine"))
+        return f"{waveform_label} {int(round(normalized.frequency_hz))} Hz"
     return (
-        f"Metronome {normalized.tempo_bpm:.0f} BPM "
+        f"{tr('Metronome')} {normalized.tempo_bpm:.0f} BPM "
         f"{normalized.time_signature_num}/{normalized.time_signature_den}"
     )

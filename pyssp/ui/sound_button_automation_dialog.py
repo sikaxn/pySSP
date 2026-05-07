@@ -5,6 +5,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -478,6 +479,10 @@ class SoundButtonAutomationDialog(QDialog):
         mode_row.addStretch(1)
         root.addLayout(mode_row)
 
+        self.bypass_checkbox = QCheckBox(tr("Bypass this sound button automation"), self)
+        self.bypass_checkbox.setChecked(bool(getattr(self._config, "bypassed", False)))
+        root.addWidget(self.bypass_checkbox)
+
         self.mode_note = QLabel(self)
         self.mode_note.setWordWrap(True)
         root.addWidget(self.mode_note)
@@ -552,6 +557,7 @@ class SoundButtonAutomationDialog(QDialog):
         mode = self.selected_mode()
         data = self._advanced_rows_to_data()
         data["mode"] = mode
+        data["bypassed"] = bool(self.bypass_checkbox.isChecked())
         data["on_become_playing"] = self.simple_start_editor.commands()
         data["on_leave_playing"] = self.simple_stop_editor.commands()
         data["on_pause"] = self.simple_pause_editor.commands()

@@ -661,7 +661,11 @@ class PagesSlotsMixin:
             if has_linked_lyric:
                 indicator_colors.append(self.state_colors["lyric_indicator"])
             if has_sound_button_automation:
-                indicator_colors.append(self.state_colors["automation_indicator"])
+                indicator_colors.append(
+                    self.state_colors["automation_indicator_bypassed"]
+                    if self._slot_sound_button_automation_bypassed(slot)
+                    else self.state_colors["automation_indicator"]
+                )
             if has_custom_timecode:
                 indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
             button.set_indicator_colors(
@@ -927,6 +931,14 @@ class PagesSlotsMixin:
         set_sound_button_automation_action.setEnabled(
             slot.assigned and slot.source_type in {FILE_SOURCE_TYPE, UTILITY_SOURCE_TYPE}
         )
+        bypass_sound_button_automation_action = menu.addAction(tr("Bypass Sound Button Automation"))
+        bypass_sound_button_automation_action.setCheckable(True)
+        bypass_sound_button_automation_action.setEnabled(
+            slot.assigned
+            and slot.source_type in {FILE_SOURCE_TYPE, UTILITY_SOURCE_TYPE}
+            and self._slot_has_sound_button_automation(slot)
+        )
+        bypass_sound_button_automation_action.setChecked(self._slot_sound_button_automation_bypassed(slot))
         cue_points_action = menu.addAction(tr("Set Cue Points..."))
         cue_points_action.setEnabled(slot.assigned and slot.source_type != AUTOMATION_SOURCE_TYPE)
         lyric_editor_action = menu.addAction(tr("Lyric Editor..."))
@@ -969,6 +981,11 @@ class PagesSlotsMixin:
             self._edit_sound_button(slot_index)
         elif selected == set_sound_button_automation_action:
             self._edit_sound_button_automation(slot_index)
+        elif selected == bypass_sound_button_automation_action:
+            self._set_slot_sound_button_automation_bypassed(
+                slot,
+                bool(bypass_sound_button_automation_action.isChecked()),
+            )
         elif selected == cue_points_action:
             self._edit_slot_cue_points(slot_index)
         elif selected == lyric_editor_action:
@@ -1610,7 +1627,8 @@ class PagesSlotsMixin:
         slot_index: int,
     ):
         data: dict[str, object] = {
-            "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower()
+            "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower(),
+            "bypassed": str(section.get(f"pysspsbabypass{slot_index}", "0") or "").strip() in {"1", "true", "True"},
         }
         for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
             token = SOUND_BUTTON_AUTOMATION_EVENT_TOKENS[event_name]
@@ -1634,6 +1652,8 @@ class PagesSlotsMixin:
         if config is None:
             return
         lines.append(f"pysspsbamode{slot_index}={config.mode}")
+        if bool(getattr(config, "bypassed", False)):
+            lines.append(f"pysspsbabypass{slot_index}=1")
         for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
             specs = list(getattr(config, event_name, None) or [])
             if not specs:
@@ -2838,6 +2858,18 @@ class PagesSlotsMixin:
         if slot.marker or (not slot.assigned) or slot.source_type == AUTOMATION_SOURCE_TYPE:
             return False
         return normalize_sound_button_automation_config(slot.sound_button_automation) is not None
+
+    def _slot_sound_button_automation_bypassed(self, slot: SoundButtonData) -> bool:
+        config = normalize_sound_button_automation_config(slot.sound_button_automation)
+        return bool(getattr(config, "bypassed", False)) if config is not None else False
+
+    def _set_slot_sound_button_automation_bypassed(self, slot: SoundButtonData, bypassed: bool) -> None:
+        config = normalize_sound_button_automation_config(slot.sound_button_automation)
+        if config is None:
+            return
+        config.bypassed = bool(bypassed)
+        slot.sound_button_automation = normalize_sound_button_automation_config(config)
+        self._set_dirty(True)
 
     def _build_slot_background_gradient(
         self,

@@ -490,6 +490,7 @@ class MainWindow(
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
             "automation_indicator": getattr(self.settings, "color_automation_indicator", "#49C16D"),
+            "automation_indicator_bypassed": getattr(self.settings, "color_automation_indicator_bypassed", "#9A9A9A"),
         }
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":

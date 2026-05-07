@@ -364,7 +364,8 @@ def _parse_sound_button_automation_from_section(
     slot_index: int,
 ) -> Optional[SoundButtonAutomationConfig]:
     data: dict[str, object] = {
-        "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower()
+        "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower(),
+        "bypassed": str(section.get(f"pysspsbabypass{slot_index}", "0") or "").strip() in {"1", "true", "True"},
     }
     for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
         token = SOUND_BUTTON_AUTOMATION_EVENT_TOKENS[event_name]

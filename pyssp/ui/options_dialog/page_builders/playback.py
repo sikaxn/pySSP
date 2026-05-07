@@ -124,10 +124,10 @@ class PlaybackPageMixin:
         automation_layout.addWidget(self.automation_command_button_auto_release_down_only_radio)
         layout.addWidget(automation_group)
 
-        utility_group = QGroupBox("Utility Sound Buttons in Playback Controls:")
+        utility_group = QGroupBox(tr("Utility Sound Buttons in Playback Controls:"))
         utility_layout = QVBoxLayout(utility_group)
         self.utility_sound_buttons_follow_playback_controls_checkbox = QCheckBox(
-            "Treat Utility Sound Buttons like regular sound buttons for Loop / Next / Play List / Shuffle / Rapid Fire"
+            tr("Treat Utility Sound Buttons like regular sound buttons for Loop / Next / Play List / Shuffle / Rapid Fire")
         )
         self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
             bool(utility_sound_buttons_follow_playback_controls)

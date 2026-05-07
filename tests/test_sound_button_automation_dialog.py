@@ -149,3 +149,26 @@ def test_advanced_mode_preserves_extra_rows_when_switching_to_simple_and_back(qa
         assert ("on_stop", AutomationCommandSpec(location="3/1/3", button_text="Stop")) in rows
     finally:
         _cleanup(dialog, qapp)
+
+
+def test_dialog_preserves_bypass_checkbox_in_values(qapp):
+    dialog = SoundButtonAutomationDialog(
+        config=SoundButtonAutomationConfig(
+            mode=SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
+            bypassed=True,
+            on_become_playing=[AutomationCommandSpec(location="4/1/1", button_text="Start")],
+        ),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        assert dialog.bypass_checkbox.isChecked() is True
+        values = dialog.values()
+        assert values is not None
+        assert values.bypassed is True
+        dialog.bypass_checkbox.setChecked(False)
+        values = dialog.values()
+        assert values is not None
+        assert values.bypassed is False
+    finally:
+        _cleanup(dialog, qapp)

@@ -110,6 +110,7 @@ class AutomationCommandSpec:
 @dataclass
 class SoundButtonAutomationConfig:
     mode: str = SOUND_BUTTON_AUTOMATION_MODE_SIMPLE
+    bypassed: bool = False
     on_become_playing: list[AutomationCommandSpec] | None = None
     on_leave_playing: list[AutomationCommandSpec] | None = None
     on_trigger: list[AutomationCommandSpec] | None = None
@@ -185,6 +186,7 @@ def normalize_sound_button_automation_config(raw: object) -> Optional[SoundButto
         return None
     if isinstance(raw, SoundButtonAutomationConfig):
         mode = str(getattr(raw, "mode", "") or "").strip().lower()
+        bypassed = bool(getattr(raw, "bypassed", False))
         values = {
             event_name: _normalize_optional_press_spec_list(getattr(raw, event_name, None))
             for event_name in SOUND_BUTTON_AUTOMATION_EVENTS
@@ -192,6 +194,7 @@ def normalize_sound_button_automation_config(raw: object) -> Optional[SoundButto
     else:
         data = dict(raw or {})
         mode = str(data.get("mode", "") or "").strip().lower()
+        bypassed = bool(data.get("bypassed", False))
         values = {
             event_name: _normalize_optional_press_spec_list(data.get(event_name))
             for event_name in SOUND_BUTTON_AUTOMATION_EVENTS
@@ -225,7 +228,7 @@ def normalize_sound_button_automation_config(raw: object) -> Optional[SoundButto
             if values.get("on_become_playing") or values.get("on_leave_playing")
             else SOUND_BUTTON_AUTOMATION_MODE_ADVANCED
         )
-    return SoundButtonAutomationConfig(mode=mode, **values)
+    return SoundButtonAutomationConfig(mode=mode, bypassed=bypassed, **values)
 
 
 def sound_button_automation_config_to_dict(
@@ -237,6 +240,7 @@ def sound_button_automation_config_to_dict(
         if normalized is None
         else _normalize_sound_button_automation_mode(normalized.mode)
     }
+    payload["bypassed"] = False if normalized is None else bool(normalized.bypassed)
     for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
         payload[event_name] = (
             None

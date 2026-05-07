@@ -126,10 +126,10 @@ class UtilitySoundButtonDialog(QDialog):
         form.addRow(tr("Duration"), duration_row)
 
         self.waveform_type_combo = QComboBox()
-        self.waveform_type_combo.addItem("Sine", UTILITY_WAVEFORM_SINE)
-        self.waveform_type_combo.addItem("Square", UTILITY_WAVEFORM_SQUARE)
-        self.waveform_type_combo.addItem("Triangle", UTILITY_WAVEFORM_TRIANGLE)
-        self.waveform_type_combo.addItem("Sawtooth", UTILITY_WAVEFORM_SAWTOOTH)
+        self.waveform_type_combo.addItem(tr("Sine"), UTILITY_WAVEFORM_SINE)
+        self.waveform_type_combo.addItem(tr("Square"), UTILITY_WAVEFORM_SQUARE)
+        self.waveform_type_combo.addItem(tr("Triangle"), UTILITY_WAVEFORM_TRIANGLE)
+        self.waveform_type_combo.addItem(tr("Sawtooth"), UTILITY_WAVEFORM_SAWTOOTH)
         self._set_combo_data(self.waveform_type_combo, spec.waveform_type, UTILITY_WAVEFORM_SINE)
         form.addRow(tr("Waveform"), self.waveform_type_combo)
 

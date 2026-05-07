@@ -199,6 +199,8 @@ class CompanionSatelliteMixin:
         config = normalize_sound_button_automation_config(getattr(slot, "sound_button_automation", None))
         if config is None:
             return False
+        if bool(getattr(config, "bypassed", False)):
+            return False
         specs = list(getattr(config, event_name, None) or [])
         if not specs:
             return False

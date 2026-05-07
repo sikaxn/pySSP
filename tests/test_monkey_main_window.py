@@ -2161,6 +2161,109 @@ def test_sound_button_automation_uses_stripe_and_legend_entry(qapp, monkeypatch,
 
 
 @pytest.mark.monkey
+def test_bypassed_sound_button_automation_uses_bypassed_stripe_and_suppresses_send(qapp, monkeypatch, tmp_path):
+    audio_path = tmp_path / "automation_bypassed.wav"
+    _write_dummy_wav(audio_path)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.file_path = str(audio_path)
+        slot.title = "Bypassed Automation Track"
+        slot.duration_ms = 1200
+        slot.sound_button_automation = SoundButtonAutomationConfig(
+            mode=SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
+            bypassed=True,
+            on_become_playing=[AutomationCommandSpec(location="7/1/2", button_text="Start Macro")],
+        )
+
+        window._refresh_sound_grid()
+
+        assert window.sound_buttons[0]._bottom_indicator_colors == [
+            window.state_colors["automation_indicator_bypassed"]
+        ]
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            window,
+            "_send_companion_command_specs_async",
+            lambda specs: calls.append([spec.location for spec in specs]) or True,
+        )
+        assert window._trigger_sound_button_automation_event(("A", 0, 0), "on_become_playing") is False
+        assert calls == []
+
+        legend_labels = [
+            child.text()
+            for child in window.button_legend_label.findChildren(QLabel)
+            if child.text()
+        ]
+        assert "Automation Bypassed Stripe" in legend_labels
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
 def test_sound_button_text_wrap_and_status_legend(qapp, monkeypatch, tmp_path):
     audio_path = tmp_path / "very_long_demo_filename_for_wrapped_button_text.wav"
     _write_dummy_wav(audio_path)

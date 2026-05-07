@@ -6,7 +6,7 @@ The main window is the primary workspace for loading a set and triggering sounds
 
 ## Main Areas
 
-- Menu bar: `File`, `Setup`, `Display`, `Timecode`, `Tools`, `Logs`, `Help`.
+- Menu bar: `File`, `Setup`, `Display`, `Timecode`, `Tools`, `Companion`, `Logs`, `Help`.
 - Group buttons: `A` to `J`.
 - Page list/controls: page selection for the active group.
 - Sound grid: 48 sound buttons per page.
@@ -108,6 +108,13 @@ Common tools:
 - Duplicate and verification checks.
 - Display file/library paths.
 - Export/listing utilities.
+
+### Companion Menu
+
+- `Open Virtual Satellite`
+  - Opens the virtual Companion Satellite window with connection controls and the configured button grid.
+- `Open Companion Satellite Options`
+  - Opens `Options -> Companion Satellite`.
 
 ## Lock Behavior on Main UI
 

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
+    AutomationCommandSpec,
+    normalize_automation_spec,
+)
+from pyssp.internal_automation import internal_automation_dispatch
+
 from .shared import *
 from .constants import *
 from .helpers import *
@@ -7,6 +14,27 @@ from .widgets import *
 
 
 class RemoteApiMixin:
+    def _execute_internal_automation_spec(self, spec: Optional[AutomationCommandSpec]) -> bool:
+        normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+        if normalized.source != AUTOMATION_COMMAND_SOURCE_INTERNAL or not normalized.internal_command:
+            return False
+        if bool(getattr(self, "internal_bypass", False)):
+            self._show_info_notice_banner(tr("Internal commands are bypassed. Command will not run."))
+            return False
+        command, params = internal_automation_dispatch(
+            normalized.internal_command,
+            normalized.internal_params or {},
+        )
+        if not command:
+            return False
+        result = self._handle_web_remote_command(command, params)
+        if bool(result.get("ok", False)):
+            return True
+        error = dict(result.get("error", {}) or {})
+        message = str(error.get("message", "") or command).strip() or command
+        self._show_info_notice_banner(f"{tr('Automation command failed')}: {message}")
+        return False
+
     def _api_success(self, result: Optional[dict] = None, status: int = 200) -> dict:
         return {"ok": True, "status": status, "result": result or {}}
 
@@ -104,6 +132,11 @@ class RemoteApiMixin:
             "button": slot_index + 1,
             "title": slot.title,
             "file_path": slot.file_path,
+            "source_type": slot.source_type,
+            "utility_mode": "" if slot.utility_spec is None else slot.utility_spec.mode,
+            "automation_location": "" if slot.automation_spec is None else slot.automation_spec.location,
+            "automation_button_text": "" if slot.automation_spec is None else slot.automation_spec.button_text,
+            "automation_hold_to_release": False if slot.automation_spec is None else bool(slot.automation_spec.hold_to_release),
             "assigned": slot.assigned,
             "locked": slot.locked,
             "marker": slot.marker,
@@ -163,6 +196,11 @@ class RemoteApiMixin:
                     "col": (idx % GRID_COLS) + 1,
                     "title": display_title,
                     "marker_text": marker_text,
+                    "source_type": slot.source_type,
+                    "utility_mode": "" if slot.utility_spec is None else slot.utility_spec.mode,
+                    "automation_location": "" if slot.automation_spec is None else slot.automation_spec.location,
+                    "automation_button_text": "" if slot.automation_spec is None else slot.automation_spec.button_text,
+                    "automation_hold_to_release": False if slot.automation_spec is None else bool(slot.automation_spec.hold_to_release),
                     "assigned": slot.assigned,
                     "locked": slot.locked,
                     "marker": slot.marker,
@@ -213,6 +251,11 @@ class RemoteApiMixin:
                     "button_id": self._format_button_key(slot_key).lower(),
                     "title": self._build_now_playing_text(slot),
                     "file_path": slot.file_path,
+                    "source_type": slot.source_type,
+                    "utility_mode": "" if slot.utility_spec is None else slot.utility_spec.mode,
+                    "automation_location": "" if slot.automation_spec is None else slot.automation_spec.location,
+                    "automation_button_text": "" if slot.automation_spec is None else slot.automation_spec.button_text,
+                    "automation_hold_to_release": False if slot.automation_spec is None else bool(slot.automation_spec.hold_to_release),
                     "group": slot_key[0],
                     "page": slot_key[1] + 1,
                     "button": slot_key[2] + 1,
@@ -881,7 +924,7 @@ class RemoteApiMixin:
                     slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
                 if slot_index is None:
                     return self._api_error("no_candidate", "No playable button is available on the current page.", status=409)
-                if self._play_slot(slot_index):
+                if self._play_slot_via_control_flow(slot_index):
                     key = (self._view_group_key(), self.current_page, slot_index)
                     return self._api_success({"button": self._api_slot_state(*key), "state": self._api_state()})
                 blocked.add(slot_index)
@@ -904,7 +947,7 @@ class RemoteApiMixin:
                         next_slot = self._next_unplayed_slot_on_current_page(blocked=blocked)
                 if next_slot is None:
                     return self._api_error("no_next", "No next track is available.", status=409)
-                if self._play_slot(next_slot):
+                if self._play_slot_via_control_flow(next_slot):
                     return self._api_success({"state": self._api_state()})
                 blocked.add(next_slot)
                 if self.candidate_error_action == "stop_playback":

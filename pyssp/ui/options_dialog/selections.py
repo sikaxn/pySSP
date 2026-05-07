@@ -107,6 +107,12 @@ class SelectionMixin:
         value = str(self.new_lyric_file_format_combo.currentData() or "srt").strip().lower()
         return value if value in {"srt", "lrc"} else "srt"
 
+    def selected_warn_dual_automation_sources(self) -> bool:
+        return bool(self.warn_dual_automation_sources_checkbox.isChecked())
+
+    def selected_automation_script_editor_show_lyric(self) -> bool:
+        return bool(self.automation_script_editor_show_lyric_checkbox.isChecked())
+
     def selected_supported_audio_format_extensions(self) -> List[str]:
         text = str(self.supported_audio_format_extensions_value.text() or "").strip()
         if (not text) or text in {"(none detected)", tr("(none detected)")}:
@@ -241,10 +247,69 @@ class SelectionMixin:
             return "loop_single"
         return "loop_list"
 
+    def selected_automation_command_buttons_follow_playback_controls(self) -> bool:
+        return bool(self.automation_command_buttons_follow_playback_controls_checkbox.isChecked())
+
+    def selected_automation_command_button_auto_release_mode(self) -> str:
+        if self.automation_command_button_auto_release_down_only_radio.isChecked():
+            return "down_only"
+        return "immediate"
+
+    def selected_utility_sound_buttons_follow_playback_controls(self) -> bool:
+        return bool(self.utility_sound_buttons_follow_playback_controls_checkbox.isChecked())
+
     def selected_candidate_error_action(self) -> str:
         if self.candidate_error_keep_radio.isChecked():
             return "keep_playing"
         return "stop_playback"
+
+    def selected_companion_satellite_host(self) -> str:
+        return str(self.companion_satellite_host_edit.text() or "").strip() or "127.0.0.1"
+
+    def selected_companion_satellite_port(self) -> int:
+        return max(1, min(65535, int(self.companion_satellite_port_spin.value())))
+
+    def selected_companion_satellite_enabled(self) -> bool:
+        return bool(self.companion_satellite_enabled_checkbox.isChecked())
+
+    def selected_companion_bypass(self) -> bool:
+        return bool(self.companion_bypass_checkbox.isChecked())
+
+    def selected_internal_bypass(self) -> bool:
+        return bool(self.internal_bypass_checkbox.isChecked())
+
+    def selected_companion_satellite_columns(self) -> int:
+        return max(1, min(12, int(self.companion_satellite_columns_spin.value())))
+
+    def selected_companion_satellite_rows(self) -> int:
+        return max(1, min(8, int(self.companion_satellite_rows_spin.value())))
+
+    def selected_companion_satellite_render_mode(self) -> str:
+        token = str(self.companion_satellite_render_mode_combo.currentData() or "bitmap").strip().lower()
+        return token if token in {"bitmap", "styled"} else "bitmap"
+
+    def selected_companion_satellite_serial_suffix(self) -> str:
+        text = str(self.companion_satellite_serial_suffix_edit.text() or "").strip().lower()
+        if text.startswith("pyssp:"):
+            text = text.partition(":")[2].strip().lower()
+        cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
+        return cleaned or default_companion_satellite_serial_suffix()
+
+    def selected_companion_command_mode(self) -> str:
+        if self.companion_command_mode_udp_radio.isChecked():
+            return "udp"
+        if self.companion_command_mode_http_radio.isChecked():
+            return "http"
+        return "tcp"
+
+    def selected_companion_command_tcp_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_tcp_port_spin.value())))
+
+    def selected_companion_command_udp_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_udp_port_spin.value())))
+
+    def selected_companion_command_http_port(self) -> int:
+        return max(1, min(65535, int(self.companion_command_http_port_spin.value())))
 
     def selected_main_transport_timeline_mode(self) -> str:
         if self.cue_timeline_audio_file_radio.isChecked():

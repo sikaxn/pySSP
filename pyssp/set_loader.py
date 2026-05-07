@@ -6,7 +6,27 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AutomationCommandSpec,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    SOUND_BUTTON_AUTOMATION_EVENTS,
+    SOUND_BUTTON_AUTOMATION_EVENT_TOKENS,
+    SoundButtonAutomationConfig,
+    automation_display_name,
+    automation_spec_from_set_fields,
+    normalize_automation_spec,
+    normalize_sound_button_automation_config,
+)
 from pyssp.midi_control import normalize_midi_binding
+from pyssp.utility_audio import (
+    FILE_SOURCE_TYPE,
+    UTILITY_SOURCE_TYPE,
+    UTILITY_UNSUPPORTED_MARKER_TEXT,
+    UtilitySoundSpec,
+    normalize_utility_spec,
+    parse_utility_duration_hhmmssmmm,
+)
 
 GROUPS = list("ABCDEFGHIJ")
 PAGE_COUNT = 18
@@ -18,12 +38,18 @@ CUE_SECTION_RE = re.compile(r"^PageQ(\d+)$", re.IGNORECASE)
 
 @dataclass
 class SetSlotData:
+    source_type: str = FILE_SOURCE_TYPE
     file_path: str = ""
     vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
+    automation_script_path: str = ""
     duration_ms: int = 0
+    automation_spec: Optional[AutomationCommandSpec] = None
+    sound_button_automation: Optional[SoundButtonAutomationConfig] = None
+    automation_script_bypassed: bool = False
+    utility_spec: Optional[UtilitySoundSpec] = None
     copied_to_cue: bool = False
     custom_color: Optional[str] = None
     played: bool = False
@@ -88,6 +114,16 @@ def load_set_file(file_path: str) -> SetLoadResult:
         page_shuffle_enabled[group][page_index] = section.get("PageShuffle", "F").strip().upper() == "T"
 
         for i in range(1, SLOTS_PER_PAGE + 1):
+            automation_slot = _parse_automation_slot_from_section(section, i)
+            if automation_slot is not None:
+                pages[group][page_index][i - 1] = automation_slot
+                loaded_slots += 1
+                continue
+            utility_slot = _parse_utility_slot_from_section(section, i)
+            if utility_slot is not None:
+                pages[group][page_index][i - 1] = utility_slot
+                loaded_slots += 1
+                continue
             path = section.get(f"s{i}", "").strip()
             caption = section.get(f"c{i}", "").strip()
             name = section.get(f"n{i}", "").strip()
@@ -105,6 +141,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
             lyric_file = _normalize_set_path_string(section.get(f"pyssplyric{i}", "").strip())
+            automation_script_path = _normalize_set_path_string(section.get(f"pysspautoscript{i}", "").strip())
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -128,12 +165,18 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 title = os.path.splitext(os.path.basename(path))[0]
 
             pages[group][page_index][i - 1] = SetSlotData(
+                source_type=FILE_SOURCE_TYPE,
                 file_path=path,
                 vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,
                 lyric_file=lyric_file,
+                automation_script_path=automation_script_path,
                 duration_ms=duration,
+                automation_spec=None,
+                sound_button_automation=_parse_sound_button_automation_from_section(section, i),
+                automation_script_bypassed=str(section.get(f"pysspautoscriptbypass{i}", "0")).strip() in {"1", "true", "True"},
+                utility_spec=None,
                 copied_to_cue=copied,
                 custom_color=custom_color,
                 played=played,
@@ -204,6 +247,162 @@ def parse_time_string_to_ms(value: str) -> int:
         if hours.isdigit() and minutes.isdigit() and seconds.isdigit():
             return (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
     return 0
+
+
+def _parse_utility_slot_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[SetSlotData]:
+    source_type = str(section.get(f"pysspsourcetype{slot_index}", "")).strip().lower()
+    if source_type != UTILITY_SOURCE_TYPE:
+        return None
+    duration_ms = parse_utility_duration_hhmmssmmm(section.get(f"pyssputilityduration{slot_index}", "").strip())
+    spec = normalize_utility_spec(
+        {
+            "mode": section.get(f"pyssputilitymode{slot_index}", "").strip(),
+            "duration_ms": 1000 if duration_ms is None else duration_ms,
+            "waveform_type": section.get(f"pyssputilitywaveform{slot_index}", "").strip(),
+            "frequency_hz": section.get(f"pyssputilityfreq{slot_index}", "").strip(),
+            "tempo_bpm": section.get(f"pyssputilitytempo{slot_index}", "").strip(),
+            "time_signature_num": _parse_time_signature_part(
+                section.get(f"pyssputilitytimesig{slot_index}", "").strip(), 0
+            ),
+            "time_signature_den": _parse_time_signature_part(
+                section.get(f"pyssputilitytimesig{slot_index}", "").strip(), 1
+            ),
+        }
+    )
+    title = _normalize_set_path_string(section.get(f"pyssputilitytitle{slot_index}", "").strip())
+    notes = _normalize_set_path_string(section.get(f"pyssputilitynotes{slot_index}", "").strip())
+    lyric_file = _normalize_set_path_string(section.get(f"pyssputilitylyric{slot_index}", "").strip())
+    automation_script_path = _normalize_set_path_string(section.get(f"pysspautoscript{slot_index}", "").strip())
+    activity_code = section.get(f"activity{slot_index}", "").strip()
+    played = str(section.get(f"pyssputilityplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
+    cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(
+        section,
+        slot_index,
+        spec.duration_ms,
+    )
+    _ = migrated_slot_cue
+    return SetSlotData(
+        source_type=UTILITY_SOURCE_TYPE,
+        file_path="",
+        vocal_removed_file="",
+        title=title or UTILITY_UNSUPPORTED_MARKER_TEXT,
+        notes=notes,
+        lyric_file=lyric_file,
+        automation_script_path=automation_script_path,
+        duration_ms=spec.duration_ms,
+        automation_spec=None,
+        sound_button_automation=_parse_sound_button_automation_from_section(section, slot_index),
+        automation_script_bypassed=str(section.get(f"pysspautoscriptbypass{slot_index}", "0")).strip() in {"1", "true", "True"},
+        utility_spec=spec,
+        copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
+        custom_color=parse_delphi_color(section.get(f"co{slot_index}", "").strip()),
+        played=played,
+        activity_code=activity_code or ("2" if played else "8"),
+        marker=False,
+        volume_override_pct=_parse_volume_pct(section.get(f"v{slot_index}", "").strip()),
+        cue_start_ms=cue_start_ms,
+        cue_end_ms=cue_end_ms,
+        timecode_offset_ms=_parse_timecode_offset_ms(section.get(f"pyssptimecodeoffset{slot_index}", "").strip()),
+        timecode_timeline_mode=_parse_slot_timecode_timeline_mode(
+            section.get(f"pyssptimecodedisplaytimeline{slot_index}", "").strip()
+        ),
+        sound_hotkey=_parse_sound_hotkey(section.get(f"h{slot_index}", "").strip()),
+        sound_midi_hotkey=_parse_sound_midi_hotkey(section.get(f"pysspmidi{slot_index}", "").strip()),
+    )
+
+
+def _parse_automation_slot_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[SetSlotData]:
+    source_type = str(section.get(f"pysspsourcetype{slot_index}", "")).strip().lower()
+    if source_type != AUTOMATION_SOURCE_TYPE:
+        return None
+    spec = automation_spec_from_set_fields(
+        source=section.get(f"pysspautomationsource{slot_index}", "").strip(),
+        location=section.get(f"pysspautomationlocation{slot_index}", "").strip(),
+        button_text=section.get(f"pysspautomationtext{slot_index}", "").strip(),
+        hold_to_release=str(section.get(f"pysspautomationhold{slot_index}", "0")).strip() in {"1", "true", "True"},
+        internal_command=section.get(f"pysspautomationinternalcommand{slot_index}", "").strip(),
+        internal_params_json=section.get(f"pysspautomationinternalparams{slot_index}", "").strip(),
+    )
+    title = _normalize_set_path_string(section.get(f"pysspautomationtitle{slot_index}", "").strip())
+    notes = _normalize_set_path_string(section.get(f"pysspautomationnotes{slot_index}", "").strip())
+    custom_color = parse_delphi_color(section.get(f"pysspautomationcolor{slot_index}", "").strip())
+    activity_code = section.get(f"activity{slot_index}", "").strip()
+    played = str(section.get(f"pysspautomationplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
+    return SetSlotData(
+        source_type=AUTOMATION_SOURCE_TYPE,
+        file_path="",
+        vocal_removed_file="",
+        title=title or automation_display_name(spec) or AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+        notes=notes,
+        lyric_file="",
+        automation_script_path="",
+        duration_ms=0,
+        automation_spec=spec,
+        sound_button_automation=None,
+        automation_script_bypassed=False,
+        utility_spec=None,
+        copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
+        custom_color=custom_color,
+        played=played,
+        activity_code=activity_code or ("2" if played else "8"),
+        marker=False,
+        volume_override_pct=None,
+        cue_start_ms=None,
+        cue_end_ms=None,
+        timecode_offset_ms=None,
+        timecode_timeline_mode="global",
+        sound_hotkey=_parse_sound_hotkey(section.get(f"pysspautomationhotkey{slot_index}", "").strip()),
+        sound_midi_hotkey=_parse_sound_midi_hotkey(section.get(f"pysspautomationmidi{slot_index}", "").strip()),
+    )
+
+
+def _parse_time_signature_part(value: str, index: int) -> int:
+    parts = [part.strip() for part in str(value or "").strip().split("/", 1)]
+    if len(parts) != 2:
+        return 0
+    try:
+        return int(parts[index])
+    except Exception:
+        return 0
+
+
+def _parse_sound_button_automation_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[SoundButtonAutomationConfig]:
+    data: dict[str, object] = {
+        "mode": str(section.get(f"pysspsbamode{slot_index}", "") or "").strip().lower(),
+        "bypassed": str(section.get(f"pysspsbabypass{slot_index}", "0") or "").strip() in {"1", "true", "True"},
+    }
+    for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
+        token = SOUND_BUTTON_AUTOMATION_EVENT_TOKENS[event_name]
+        count_raw = str(section.get(f"pyssp{token}count{slot_index}", "") or "").strip()
+        try:
+            count = max(0, int(count_raw))
+        except Exception:
+            count = 0
+        items: list[dict[str, object]] = []
+        for command_index in range(1, count + 1):
+            spec = automation_spec_from_set_fields(
+                source=section.get(f"pyssp{token}source{slot_index}_{command_index}", "").strip(),
+                location=section.get(f"pyssp{token}location{slot_index}_{command_index}", "").strip(),
+                button_text=section.get(f"pyssp{token}text{slot_index}_{command_index}", "").strip(),
+                hold_to_release=False,
+                internal_command=section.get(f"pyssp{token}internalcommand{slot_index}_{command_index}", "").strip(),
+                internal_params_json=section.get(f"pyssp{token}internalparams{slot_index}_{command_index}", "").strip(),
+            )
+            normalized_spec = normalize_automation_spec(spec)
+            if not (normalized_spec.location or normalized_spec.internal_command):
+                continue
+            items.append(normalized_spec)
+        data[event_name] = items
+    return normalize_sound_button_automation_config(data)
 
 
 def parse_delphi_color(value: str) -> Optional[str]:

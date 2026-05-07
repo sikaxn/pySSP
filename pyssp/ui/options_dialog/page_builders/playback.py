@@ -13,6 +13,9 @@ class PlaybackPageMixin:
         rapid_fire_play_mode: str,
         next_play_mode: str,
         playlist_loop_mode: str,
+        automation_command_buttons_follow_playback_controls: bool,
+        automation_command_button_auto_release_mode: str,
+        utility_sound_buttons_follow_playback_controls: bool,
         candidate_error_action: str,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
@@ -97,6 +100,40 @@ class PlaybackPageMixin:
         playlist_loop_layout.addWidget(self.playlist_loop_list_radio)
         playlist_loop_layout.addWidget(self.playlist_loop_single_radio)
         layout.addWidget(playlist_loop_group)
+
+        automation_group = QGroupBox("Automation Command Buttons in Playback Controls:")
+        automation_layout = QVBoxLayout(automation_group)
+        self.automation_command_buttons_follow_playback_controls_checkbox = QCheckBox(
+            "Treat Automation Command Buttons like regular sound buttons for Next / Play List / Shuffle / Rapid Fire"
+        )
+        self.automation_command_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(automation_command_buttons_follow_playback_controls)
+        )
+        automation_layout.addWidget(self.automation_command_buttons_follow_playback_controls_checkbox)
+        self.automation_command_button_auto_release_immediate_radio = QRadioButton(
+            "For hold-mode automation buttons triggered by Next / Play List / Shuffle / Rapid Fire: send Press Down then Release Up immediately"
+        )
+        self.automation_command_button_auto_release_down_only_radio = QRadioButton(
+            "For hold-mode automation buttons triggered by Next / Play List / Shuffle / Rapid Fire: send Press Down only"
+        )
+        if automation_command_button_auto_release_mode == "down_only":
+            self.automation_command_button_auto_release_down_only_radio.setChecked(True)
+        else:
+            self.automation_command_button_auto_release_immediate_radio.setChecked(True)
+        automation_layout.addWidget(self.automation_command_button_auto_release_immediate_radio)
+        automation_layout.addWidget(self.automation_command_button_auto_release_down_only_radio)
+        layout.addWidget(automation_group)
+
+        utility_group = QGroupBox(tr("Utility Sound Buttons in Playback Controls:"))
+        utility_layout = QVBoxLayout(utility_group)
+        self.utility_sound_buttons_follow_playback_controls_checkbox = QCheckBox(
+            tr("Treat Utility Sound Buttons like regular sound buttons for Loop / Next / Play List / Shuffle / Rapid Fire")
+        )
+        self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(utility_sound_buttons_follow_playback_controls)
+        )
+        utility_layout.addWidget(self.utility_sound_buttons_follow_playback_controls_checkbox)
+        layout.addWidget(utility_group)
 
         candidate_error_group = QGroupBox("When Play List/Next/Rapid Fire hits audio load error (purple):")
         candidate_error_layout = QVBoxLayout(candidate_error_group)

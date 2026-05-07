@@ -1,0 +1,853 @@
+from __future__ import annotations
+
+import threading
+
+from .shared import *
+from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_COMPANION,
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
+    AUTOMATION_AUTO_RELEASE_IMMEDIATE,
+    AUTOMATION_SOURCE_TYPE,
+    AutomationCommandSpec,
+    automation_spec_is_valid,
+    normalize_automation_spec,
+    normalize_sound_button_automation_config,
+)
+from pyssp.automation_script import (
+    AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+    AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
+    AutomationScript,
+    AutomationScriptAction,
+    load_automation_script,
+)
+
+from pyssp.companion_remote_control import send_companion_location_command
+from pyssp.companion_satellite import CompanionSatelliteClient
+from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
+
+
+class _CompanionSatelliteBridge(QObject):
+    statusChanged = pyqtSignal(str, str)
+    helloReceived = pyqtSignal(str)
+    capsReceived = pyqtSignal(dict)
+    keyStateReceived = pyqtSignal(int, dict)
+    keysCleared = pyqtSignal()
+
+
+class CompanionSatelliteMixin:
+    def _load_automation_script_cached(self, path: str) -> tuple[Optional[AutomationScript], str]:
+        normalized_path = str(path or "").strip()
+        if not normalized_path:
+            return None, "Missing automation script path."
+        if not os.path.exists(normalized_path):
+            return None, f"Automation script not found: {normalized_path}"
+        try:
+            mtime = os.path.getmtime(normalized_path)
+        except OSError as exc:
+            return None, str(exc)
+        cached = self._automation_script_cache.get(normalized_path)
+        if cached is not None and abs(float(cached.get("mtime", -1.0)) - float(mtime)) < 0.0001:
+            return cached.get("script"), str(cached.get("error", "") or "")
+        try:
+            script = load_automation_script(normalized_path)
+            error = ""
+        except Exception as exc:
+            script = None
+            error = str(exc)
+        self._automation_script_cache[normalized_path] = {"mtime": mtime, "script": script, "error": error}
+        return script, error
+
+    def _build_automation_script_specs(self, actions: list[AutomationScriptAction]) -> list[AutomationCommandSpec]:
+        specs: list[AutomationCommandSpec] = []
+        for action in list(actions or []):
+            action_type = str(getattr(action, "type", "") or "").strip()
+            if action_type not in {
+                AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+                AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
+            }:
+                continue
+            payload_spec = normalize_automation_spec(getattr(action, "payload", None) or {})
+            if action_type == AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND:
+                payload_spec = normalize_automation_spec(
+                    {
+                        "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                        "internal_command": payload_spec.internal_command,
+                        "internal_params": payload_spec.internal_params,
+                    }
+                )
+            else:
+                payload_spec = normalize_automation_spec(
+                    {
+                        "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
+                        "location": payload_spec.location,
+                        "button_text": payload_spec.button_text,
+                        "hold_to_release": False,
+                    }
+                )
+            if not automation_spec_is_valid(payload_spec):
+                continue
+            specs.append(payload_spec)
+        return [spec for spec in specs if automation_spec_is_valid(spec)]
+
+    def _execute_automation_command_spec(self, spec: AutomationCommandSpec, action: str = "press") -> bool:
+        normalized = normalize_automation_spec(spec)
+        if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+            return bool(self._execute_internal_automation_spec(normalized))
+        if not normalized.location:
+            return False
+        return self._send_companion_location_command_async(normalized.location, action)
+
+    def _execute_automation_command_specs(self, specs: list[AutomationCommandSpec]) -> bool:
+        normalized_specs = [
+            normalize_automation_spec(spec)
+            for spec in list(specs or [])
+            if automation_spec_is_valid(normalize_automation_spec(spec))
+        ]
+        if not normalized_specs:
+            return False
+        if all(spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION for spec in normalized_specs):
+            return self._send_companion_command_specs_async(normalized_specs)
+        executed = False
+        for spec in normalized_specs:
+            executed = self._execute_automation_command_spec(spec) or executed
+        return executed
+
+    def _prime_automation_script_player(self, player: ExternalMediaPlayer, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        pid = id(player)
+        self._automation_script_runtime.pop(pid, None)
+        if slot_key is None:
+            return
+        slot = self._slot_for_key(slot_key)
+        if slot is None or not self._slot_has_automation_script(slot) or bool(slot.automation_script_bypassed):
+            return
+        script_path = str(slot.automation_script_path or "").strip()
+        script, error = self._load_automation_script_cached(script_path)
+        if script is None:
+            if error:
+                self._show_info_notice_banner(f"{tr('Automation script failed')}: {error}")
+            return
+        try:
+            position_ms = max(0, int(player.position()))
+        except Exception:
+            position_ms = 0
+        next_index = 0
+        current_index = -1
+        for idx, cue in enumerate(list(script.cues or [])):
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms <= position_ms:
+                current_index = idx
+                next_index = idx + 1
+            else:
+                break
+        self._automation_script_runtime[pid] = {
+            "slot_key": slot_key,
+            "path": script_path,
+            "script": script,
+            "next_index": next_index,
+            "current_index": current_index,
+            "last_position_ms": position_ms,
+        }
+
+    def _resync_automation_script_player_for_position(self, player: ExternalMediaPlayer, position_ms: int) -> None:
+        state = self._automation_script_runtime.get(id(player))
+        if not state:
+            return
+        script = state.get("script")
+        if script is None:
+            return
+        next_index = 0
+        current_index = -1
+        for idx, cue in enumerate(list(script.cues or [])):
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms <= position_ms:
+                current_index = idx
+                next_index = idx + 1
+            else:
+                break
+        state["next_index"] = next_index
+        state["current_index"] = current_index
+        state["last_position_ms"] = max(0, int(position_ms))
+
+    def _process_automation_script_player(self, player: ExternalMediaPlayer) -> None:
+        state = self._automation_script_runtime.get(id(player))
+        if not state:
+            return
+        slot_key = state.get("slot_key")
+        slot = self._slot_for_key(slot_key) if slot_key is not None else None
+        if slot is None or bool(slot.automation_script_bypassed):
+            return
+        script = state.get("script")
+        if script is None:
+            return
+        try:
+            position_ms = max(0, int(player.position()))
+        except Exception:
+            return
+        last_position_ms = max(0, int(state.get("last_position_ms", 0)))
+        if position_ms < last_position_ms or abs(position_ms - last_position_ms) > 1500:
+            self._resync_automation_script_player_for_position(player, position_ms)
+            return
+        cues = list(script.cues or [])
+        next_index = max(0, int(state.get("next_index", 0)))
+        while next_index < len(cues):
+            cue = cues[next_index]
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms > position_ms:
+                break
+            specs = self._build_automation_script_specs(list(getattr(cue, "actions", []) or []))
+            if specs:
+                self._execute_automation_command_specs(specs)
+            state["current_index"] = next_index
+            next_index += 1
+        state["next_index"] = next_index
+        state["last_position_ms"] = position_ms
+
+    def _automation_script_comments_for_slot_key(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        player: Optional[ExternalMediaPlayer] = None,
+    ) -> tuple[str, str]:
+        if slot_key is None:
+            return "", ""
+        slot = self._slot_for_key(slot_key)
+        if slot is None or not self._slot_has_automation_script(slot):
+            return "", ""
+        script, _error = self._load_automation_script_cached(str(slot.automation_script_path or "").strip())
+        if script is None:
+            return "", ""
+        state = self._automation_script_runtime.get(id(player)) if player is not None else None
+        current_index = int(state.get("current_index", -1)) if state else -1
+        next_index = int(state.get("next_index", 0)) if state else 0
+        current_comment = ""
+        next_comment = ""
+        cues = list(script.cues or [])
+        if 0 <= current_index < len(cues):
+            current_comment = str(getattr(cues[current_index], "comment", "") or "").strip()
+        if 0 <= next_index < len(cues):
+            next_comment = str(getattr(cues[next_index], "comment", "") or "").strip()
+        return current_comment, next_comment
+
+    def _open_companion_available_commands(self) -> None:
+        dialog = self._companion_available_commands_dialog
+        if dialog is None:
+            dialog = CompanionAvailableCommandsDialog(self)
+            dialog.clear_button.clicked.connect(self._clear_companion_available_commands)
+            dialog.hide_black_empty_checkbox.toggled.connect(
+                self._set_companion_available_commands_filter_black_empty
+            )
+            dialog.hide_navigation_checkbox.toggled.connect(self._refresh_companion_available_commands_dialog)
+            dialog.bypassToggled.connect(self._toggle_companion_bypass)
+            dialog.locationCommandRequested.connect(self._send_companion_location_command_async)
+            dialog.openVirtualSatelliteRequested.connect(self._open_virtual_satellite)
+            self._companion_available_commands_dialog = dialog
+        dialog.hide_black_empty_checkbox.blockSignals(True)
+        dialog.hide_black_empty_checkbox.setChecked(bool(self.companion_available_commands_filter_black_empty))
+        dialog.hide_black_empty_checkbox.blockSignals(False)
+        dialog.set_bypass_checked(bool(self.companion_bypass))
+        self._refresh_companion_available_commands_dialog()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _refresh_companion_available_commands_dialog(self) -> None:
+        dialog = self._companion_available_commands_dialog
+        if dialog is None:
+            return
+        dialog.set_payload(
+            load_companion_available_commands(),
+            hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
+            hide_navigation=bool(dialog.hide_navigation_checkbox.isChecked()),
+        )
+
+    def _clear_companion_available_commands(self) -> None:
+        clear_companion_available_commands()
+        self._refresh_companion_available_commands_dialog()
+
+    def _refresh_companion_available_commands_from_window(self) -> None:
+        window = self._companion_satellite_window
+        if window is None:
+            return
+        for state in window.current_page_button_states():
+            self._record_companion_available_command_state(state)
+        self._refresh_companion_available_commands_dialog()
+
+    def _set_companion_available_commands_filter_black_empty(self, checked: bool) -> None:
+        self.companion_available_commands_filter_black_empty = bool(checked)
+        self._refresh_companion_available_commands_dialog()
+        self._save_settings()
+
+    def _record_companion_available_command_state(self, state: dict) -> None:
+        normalized_state = dict(state or {})
+        location = str(normalized_state.get("location", "") or "").strip()
+        if not location:
+            return
+        record_companion_available_command(
+            location=location,
+            text=str(normalized_state.get("text", "") or ""),
+            key_type=str(normalized_state.get("type", "") or ""),
+            color=str(normalized_state.get("color", "") or ""),
+            pressed=bool(normalized_state.get("pressed", False)),
+        )
+
+    def _send_companion_location_command_async(self, location: str, action: str) -> bool:
+        if bool(getattr(self, "companion_bypass", False)):
+            self._show_info_notice_banner(tr("Companion commands are bypassed. Command will not go through."))
+            return False
+        host = self.companion_satellite_host
+        mode = self.companion_command_mode
+        tcp_port = self.companion_command_tcp_port
+        udp_port = self.companion_command_udp_port
+        http_port = self.companion_command_http_port
+
+        def _notify_failure(message: str) -> None:
+            failure_message = str(message or location).strip() or str(location or "").strip() or "Unknown error"
+            try:
+                self._main_thread_executor.call(
+                    lambda: self._show_info_notice_banner(
+                        f"{tr('Companion command failed')}: {failure_message}"
+                    )
+                )
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            try:
+                ok, message = send_companion_location_command(
+                    host=host,
+                    mode=mode,
+                    tcp_port=tcp_port,
+                    udp_port=udp_port,
+                    http_port=http_port,
+                    location=location,
+                    action=action,
+                )
+            except Exception as exc:
+                _notify_failure(str(exc))
+                return
+            if ok:
+                return
+            _notify_failure(message)
+
+        try:
+            threading.Thread(target=_worker, name="pyssp-companion-command", daemon=True).start()
+        except Exception as exc:
+            _notify_failure(str(exc))
+            return False
+        return True
+
+    def _send_companion_command_specs_async(self, specs: list[AutomationCommandSpec]) -> bool:
+        normalized_specs = [
+            normalize_automation_spec(spec) for spec in list(specs or []) if normalize_automation_spec(spec).location
+        ]
+        if not normalized_specs:
+            return False
+        if bool(getattr(self, "companion_bypass", False)):
+            self._show_info_notice_banner(tr("Companion commands are bypassed. Command will not go through."))
+            return False
+        host = self.companion_satellite_host
+        mode = self.companion_command_mode
+        tcp_port = self.companion_command_tcp_port
+        udp_port = self.companion_command_udp_port
+        http_port = self.companion_command_http_port
+
+        def _notify_failure(message: str) -> None:
+            failure_message = str(message or "").strip() or "Unknown error"
+            try:
+                self._main_thread_executor.call(
+                    lambda: self._show_info_notice_banner(f"{tr('Companion command failed')}: {failure_message}")
+                )
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            for spec in normalized_specs:
+                try:
+                    ok, message = send_companion_location_command(
+                        host=host,
+                        mode=mode,
+                        tcp_port=tcp_port,
+                        udp_port=udp_port,
+                        http_port=http_port,
+                        location=spec.location,
+                        action="press",
+                    )
+                except Exception as exc:
+                    _notify_failure(f"{spec.location}: {exc}")
+                    continue
+                if ok:
+                    continue
+                detail = str(message or "").strip()
+                _notify_failure(f"{spec.location}: {detail}" if detail else spec.location)
+
+        try:
+            threading.Thread(target=_worker, name="pyssp-companion-command-batch", daemon=True).start()
+        except Exception as exc:
+            _notify_failure(str(exc))
+            return False
+        return True
+
+    def _trigger_sound_button_automation_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        event_name: str,
+    ) -> bool:
+        if slot_key is None:
+            return False
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.marker or (not slot.assigned):
+            return False
+        if slot.source_type not in {"file", "utility"}:
+            return False
+        config = normalize_sound_button_automation_config(getattr(slot, "sound_button_automation", None))
+        if config is None:
+            return False
+        if bool(getattr(config, "bypassed", False)):
+            return False
+        specs = list(getattr(config, event_name, None) or [])
+        if not specs:
+            return False
+        return self._execute_automation_command_specs(specs)
+
+    def _trigger_sound_button_automation_events(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *event_names: str,
+    ) -> None:
+        for event_name in event_names:
+            if event_name:
+                self._trigger_sound_button_automation_event(slot_key, event_name)
+
+    def _trigger_sound_button_trigger_event(self, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_trigger")
+
+    def _trigger_sound_button_started_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *,
+        include_advanced: bool,
+    ) -> None:
+        event_names = ["on_become_playing"]
+        if include_advanced:
+            event_names.append("on_play")
+        self._trigger_sound_button_automation_events(slot_key, *event_names)
+
+    def _trigger_sound_button_fade_events(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *event_names: str,
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, *event_names)
+
+    def _trigger_sound_button_pause_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_pause_requested")
+
+    def _trigger_sound_button_paused_event(self, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_pause")
+
+    def _trigger_sound_button_resume_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_resume_requested")
+
+    def _trigger_sound_button_resumed_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_resume_complete")
+
+    def _trigger_sound_button_stop_requested_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_stop_requested")
+
+    def _trigger_sound_button_force_stop_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_force_stop")
+
+    def _trigger_sound_button_interrupted_by_sound_button_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_sound_button")
+
+    def _trigger_sound_button_interrupted_by_playback_control_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_playback_control")
+
+    def _trigger_sound_button_interrupted_by_app_reset_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+    ) -> None:
+        self._trigger_sound_button_automation_events(slot_key, "on_interrupted_by_app_reset")
+
+    def _trigger_sound_button_stopped_event(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        *,
+        natural: bool,
+    ) -> None:
+        self._trigger_sound_button_automation_events(
+            slot_key,
+            "on_leave_playing",
+            "on_done_play" if natural else "on_stop",
+        )
+
+    def _automation_slot_key(self, slot_index: int) -> Tuple[str, int, int]:
+        return (self._view_group_key(), self.current_page, int(slot_index))
+
+    def _set_automation_slot_active(self, slot_key: Tuple[str, int, int], active: bool) -> None:
+        if active:
+            self._automation_active_keys.add(slot_key)
+        else:
+            self._automation_active_keys.discard(slot_key)
+        self._refresh_sound_grid()
+
+    def _mark_automation_slot_played(self, slot_key: Tuple[str, int, int]) -> None:
+        slot = self._slot_for_key(slot_key)
+        if slot is None:
+            return
+        slot.played = True
+        slot.activity_code = "2"
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+
+    def _flash_automation_slot(self, slot_key: Tuple[str, int, int], duration_ms: int = 180) -> None:
+        self._set_automation_slot_active(slot_key, True)
+
+        def _clear_flash() -> None:
+            if slot_key in self._automation_hold_active_keys:
+                return
+            self._set_automation_slot_active(slot_key, False)
+
+        QTimer.singleShot(max(1, int(duration_ms)), _clear_flash)
+
+    def _automation_button_auto_release_mode(self) -> str:
+        token = str(getattr(self, "automation_command_button_auto_release_mode", AUTOMATION_AUTO_RELEASE_IMMEDIATE) or "")
+        return token if token in {"immediate", "down_only"} else AUTOMATION_AUTO_RELEASE_IMMEDIATE
+
+    def _trigger_automation_slot_press(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
+            return False
+        spec = slot.automation_spec
+        if spec is None:
+            return False
+        spec = normalize_automation_spec(spec)
+        if spec.source != AUTOMATION_COMMAND_SOURCE_COMPANION or (not spec.hold_to_release):
+            return False
+        if slot_key in self._automation_hold_active_keys:
+            return True
+        if not self._send_companion_location_command_async(spec.location, "down"):
+            return False
+        self._automation_hold_active_keys.add(slot_key)
+        self._set_automation_slot_active(slot_key, True)
+        return True
+
+    def _trigger_automation_slot_release(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned:
+            return False
+        if slot_key not in self._automation_hold_active_keys:
+            return False
+        spec = slot.automation_spec
+        spec = None if spec is None else normalize_automation_spec(spec)
+        self._automation_hold_active_keys.discard(slot_key)
+        self._automation_click_suppressed_slot_key = slot_key
+        QTimer.singleShot(0, lambda: setattr(self, "_automation_click_suppressed_slot_key", None))
+        self._set_automation_slot_active(slot_key, False)
+        if spec is None or spec.source != AUTOMATION_COMMAND_SOURCE_COMPANION:
+            return False
+        if self._send_companion_location_command_async(spec.location, "up"):
+            self._mark_automation_slot_played(slot_key)
+            self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        return False
+
+    def _trigger_automation_slot_click(self, slot_index: int) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        if getattr(self, "_automation_click_suppressed_slot_key", None) == slot_key:
+            return True
+        return self._trigger_automation_slot_non_audio(slot_index, auto_release=True)
+
+    def _trigger_automation_slot_non_audio(
+        self,
+        slot_index: int,
+        auto_release: bool = True,
+        *,
+        continue_playlist_after_automation: bool = True,
+    ) -> bool:
+        slot_key = self._automation_slot_key(slot_index)
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
+            return False
+        spec = slot.automation_spec
+        if spec is None or not automation_spec_is_valid(spec):
+            self._show_info_notice_banner(tr("Automation command is missing."))
+            return False
+        spec = normalize_automation_spec(spec)
+        playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
+        if playlist_enabled and self.current_playlist_start is None:
+            self.current_playlist_start = slot_index
+        if spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION and spec.hold_to_release and (not auto_release):
+            if not self._send_companion_location_command_async(spec.location, "down"):
+                return False
+            self._flash_automation_slot(slot_key, duration_ms=600)
+            self._mark_automation_slot_played(slot_key)
+            if continue_playlist_after_automation:
+                self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        if spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION and spec.hold_to_release:
+            if not self._send_companion_location_command_async(spec.location, "down"):
+                return False
+            self._flash_automation_slot(slot_key)
+            self._mark_automation_slot_played(slot_key)
+            self._send_companion_location_command_async(spec.location, "up")
+            if continue_playlist_after_automation:
+                self._continue_playlist_after_automation_trigger(slot_key)
+            return True
+        if not self._execute_automation_command_spec(spec, "press"):
+            return False
+        self._flash_automation_slot(slot_key)
+        self._mark_automation_slot_played(slot_key)
+        if continue_playlist_after_automation:
+            self._continue_playlist_after_automation_trigger(slot_key)
+        return True
+
+    def _companion_satellite_event(self, event_type: str, payload: dict) -> None:
+        if event_type == "status":
+            self._companion_satellite_bridge.statusChanged.emit(
+                str(payload.get("state", "") or ""),
+                str(payload.get("message", "") or ""),
+            )
+        elif event_type == "hello":
+            self._companion_satellite_bridge.helloReceived.emit(str(payload.get("api_version", "") or ""))
+        elif event_type == "caps":
+            self._companion_satellite_bridge.capsReceived.emit(dict(payload.get("caps", {}) or {}))
+        elif event_type == "key_state":
+            self._companion_satellite_bridge.keyStateReceived.emit(
+                int(payload.get("key", -1)),
+                dict(payload.get("state", {}) or {}),
+            )
+        elif event_type == "keys_clear":
+            self._companion_satellite_bridge.keysCleared.emit()
+
+    def _companion_satellite_should_run(self) -> bool:
+        return bool(self.companion_satellite_enabled)
+
+    def _companion_satellite_client_matches_settings(self) -> bool:
+        client = self._companion_satellite_client
+        if client is None:
+            return False
+        return (
+            client.host == self.companion_satellite_host
+            and int(client.port) == int(self.companion_satellite_port)
+            and int(client.columns) == int(self.companion_satellite_columns)
+            and int(client.rows) == int(self.companion_satellite_rows)
+            and client.serial_suffix == CompanionSatelliteClient._normalize_serial_suffix(
+                self.companion_satellite_serial_suffix
+            )
+        )
+
+    def _apply_companion_satellite_state(self) -> None:
+        self._refresh_companion_satellite_window()
+        should_run = self._companion_satellite_should_run()
+        if should_run:
+            if not self._companion_satellite_client_matches_settings():
+                self._stop_companion_satellite_client()
+            self._start_companion_satellite_client()
+        else:
+            self._stop_companion_satellite_client()
+
+    def _start_companion_satellite_client(self) -> None:
+        if self._companion_satellite_client is None:
+            self._companion_satellite_client = CompanionSatelliteClient(
+                host=self.companion_satellite_host,
+                port=self.companion_satellite_port,
+                columns=self.companion_satellite_columns,
+                rows=self.companion_satellite_rows,
+                serial_suffix=self.companion_satellite_serial_suffix,
+                on_event=self._companion_satellite_event,
+            )
+        if not self._companion_satellite_client.is_running:
+            self._companion_satellite_client.start()
+
+    def _stop_companion_satellite_client(self) -> None:
+        client = self._companion_satellite_client
+        self._companion_satellite_client = None
+        if client is not None:
+            client.stop()
+
+    def _reconnect_companion_satellite_client(self) -> None:
+        if self._companion_satellite_client is None:
+            self._start_companion_satellite_client()
+            return
+        self._companion_satellite_client.reconnect()
+
+    def _open_companion_satellite_options(self) -> None:
+        self._open_options_dialog(initial_page="Automation")
+
+    def _open_virtual_satellite(self) -> None:
+        window = self._ensure_companion_satellite_window()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self._refresh_companion_satellite_window()
+
+    def _ensure_companion_satellite_window(self) -> CompanionSatelliteWindow:
+        window = self._companion_satellite_window
+        if window is not None:
+            return window
+        window = CompanionSatelliteWindow(self)
+        window.openOptionsRequested.connect(self._open_companion_satellite_options)
+        window.openAvailableCommandsRequested.connect(self._open_companion_available_commands)
+        window.refreshAvailableCommandsRequested.connect(self._refresh_companion_available_commands_from_window)
+        window.buttonPressed.connect(self._on_companion_satellite_button_pressed)
+        window.navigationRequested.connect(self._on_companion_satellite_navigation_requested)
+        window.windowClosed.connect(self._on_companion_satellite_window_closed)
+        self._companion_satellite_window = window
+        self._refresh_companion_satellite_window()
+        return window
+
+    def _on_companion_satellite_window_closed(self) -> None:
+        return
+
+    def _refresh_companion_satellite_window(self) -> None:
+        window = self._companion_satellite_window
+        if window is None:
+            return
+        window.set_target(self.companion_satellite_host, self.companion_satellite_port)
+        window.set_grid_size(self.companion_satellite_columns, self.companion_satellite_rows)
+        window.set_render_mode(self.companion_satellite_render_mode)
+        state, message = self._companion_satellite_last_status
+        window.set_connection_state(state, message)
+
+    def _on_companion_satellite_status_changed(self, state: str, message: str) -> None:
+        self._companion_satellite_last_status = (str(state or ""), str(message or ""))
+        self._update_companion_satellite_status_indicator()
+        window = self._companion_satellite_window
+        if window is not None:
+            window.set_connection_state(state, message)
+
+    def _update_companion_satellite_status_indicator(self) -> None:
+        label = getattr(self, "companion_satellite_status_icon", None)
+        if label is None:
+            return
+        state = str(self._companion_satellite_last_status[0] or "").strip().lower()
+        companion_bypassed = bool(getattr(self, "companion_bypass", False))
+        internal_bypassed = bool(getattr(self, "internal_bypass", False))
+        if companion_bypassed and internal_bypassed:
+            text = tr("SAT (All Bypassed)")
+        elif companion_bypassed:
+            text = tr("SAT (Companion Bypassed)")
+        elif internal_bypassed:
+            text = tr("SAT (Internal Bypassed)")
+        else:
+            text = "SAT"
+        if state == "connected":
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#165A20;background:#CFF3D6;border:1px solid #2E9B47;border-radius:8px;padding:0 6px;}"
+        elif state in {"connecting", "reconnecting"}:
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#5F4200;background:#FFF0A6;border:1px solid #CFAE2A;border-radius:8px;padding:0 6px;}"
+        else:
+            style = "QLabel{font-size:9pt;font-weight:bold;color:#4A4F55;background:#D6D9DE;border:1px solid #8C939D;border-radius:8px;padding:0 6px;}"
+        label.setText(text)
+        label.setStyleSheet(style)
+        message = str(self._companion_satellite_last_status[1] or "").strip()
+        bypass_messages: list[str] = []
+        if companion_bypassed:
+            bypass_messages.append(tr("Companion remote commands are bypassed."))
+        if internal_bypassed:
+            bypass_messages.append(tr("Internal automation commands are bypassed."))
+        if bypass_messages:
+            message = " ".join(bypass_messages) + (f" {message}" if message else "")
+        tooltip = message or (
+            tr("Connected") if state == "connected" else tr("Connecting") if state in {"connecting", "reconnecting"} else tr("Not Connected")
+        )
+        label.setToolTip(tooltip)
+
+    def _toggle_companion_bypass(self, checked: bool) -> None:
+        self.companion_bypass = bool(checked)
+        action = self._menu_actions.get("companion_bypass")
+        if action is not None and action.isChecked() != self.companion_bypass:
+            action.setChecked(self.companion_bypass)
+        dialog = self._companion_available_commands_dialog
+        if dialog is not None:
+            dialog.set_bypass_checked(self.companion_bypass)
+        btn = self.control_buttons.get("Companion Bypass")
+        if btn is not None and btn.isChecked() != self.companion_bypass:
+            btn.setChecked(self.companion_bypass)
+        navigator = getattr(self, "_automation_script_navigator_window", None)
+        if navigator is not None:
+            navigator.set_companion_bypass(self.companion_bypass)
+        self._sync_control_button_instances("Companion Bypass")
+        self._update_companion_satellite_status_indicator()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _toggle_internal_bypass(self, checked: bool) -> None:
+        self.internal_bypass = bool(checked)
+        action = self._menu_actions.get("internal_bypass")
+        if action is not None and action.isChecked() != self.internal_bypass:
+            action.setChecked(self.internal_bypass)
+        btn = self.control_buttons.get("Internal Bypass")
+        if btn is not None and btn.isChecked() != self.internal_bypass:
+            btn.setChecked(self.internal_bypass)
+        navigator = getattr(self, "_automation_script_navigator_window", None)
+        if navigator is not None:
+            navigator.set_internal_bypass(self.internal_bypass)
+        self._sync_control_button_instances("Internal Bypass")
+        self._update_companion_satellite_status_indicator()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _on_companion_satellite_hello_received(self, version: str) -> None:
+        self._companion_satellite_api_version = str(version or "").strip()
+
+    def _on_companion_satellite_caps_received(self, caps: dict) -> None:
+        self._companion_satellite_caps = dict(caps or {})
+
+    def _on_companion_satellite_key_state_received(self, key: int, state: dict) -> None:
+        window = self._ensure_companion_satellite_window()
+        normalized_state = dict(state or {})
+        window.update_button(int(key), normalized_state)
+        self._record_companion_available_command_state(normalized_state)
+        self._refresh_companion_available_commands_dialog()
+
+    def _on_companion_satellite_keys_cleared(self) -> None:
+        window = self._companion_satellite_window
+        if window is not None:
+            window.clear_buttons()
+
+    def _on_companion_satellite_button_pressed(self, key: int, pressed: bool) -> None:
+        client = self._companion_satellite_client
+        if client is None:
+            return
+        client.send_key_press(int(key), bool(pressed))
+
+    def _on_companion_satellite_navigation_requested(self, direction: str) -> None:
+        client = self._companion_satellite_client
+        window = self._companion_satellite_window
+        if client is None or window is None:
+            return
+        token = str(direction or "").strip().upper()
+        if token == "PAGEUP":
+            client.send_change_page(True)
+        elif token == "PAGEDOWN":
+            client.send_change_page(False)
+        elif token == "HOME":
+            current_page = window.current_page()
+            if current_page is None or current_page <= 1:
+                return
+            for _ in range(max(0, min(255, int(current_page) - 1))):
+                if not client.send_change_page(False):
+                    break

@@ -5,6 +5,7 @@ from .constants import *
 from .helpers import *
 from .widgets import *
 from .actions_input import ActionsInputMixin
+from .companion_satellite import CompanionSatelliteMixin, _CompanionSatelliteBridge
 from .locking import LockingMixin
 from .lyrics_stage import LyricsStageMixin
 from .pages_slots import PagesSlotsMixin
@@ -14,6 +15,8 @@ from .settings_archive import SettingsArchiveMixin
 from .timecode import TimecodeMixin
 from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
+from pyssp.companion_satellite import CompanionSatelliteClient
+from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
 
 
 def _stop_qthread_safely(thread: Optional[QThread], timeout_ms: int = 1500) -> None:
@@ -49,6 +52,7 @@ class MainWindow(
     PagesSlotsMixin,
     PlaybackMixin,
     LyricsStageMixin,
+    CompanionSatelliteMixin,
     RemoteApiMixin,
     ActionsInputMixin,
     LockingMixin,
@@ -73,6 +77,7 @@ class MainWindow(
         self.current_playlist_start: Optional[int] = None
         self._auto_transition_track: Optional[Tuple[str, int, int]] = None
         self._auto_transition_done = False
+        self._track_end_transition_state = None
         self._pending_start_request: Optional[Tuple[str, int, int]] = None
         self._pending_start_token = 0
         self._pending_deferred_audio_request: Optional[Tuple[str, int, int, str, float]] = None
@@ -93,6 +98,7 @@ class MainWindow(
         self._player_mix_volume_map: Dict[int, int] = {}
         self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
         self._vocal_shadow_pending_loads: Dict[int, dict] = {}
+        self._sound_button_automation_handled_stop_player_ids: set[int] = set()
         self._fade_flash_on = False
         self._last_fade_flash_toggle = 0.0
         self._last_meter_aux_refresh_t = 0.0
@@ -205,6 +211,17 @@ class MainWindow(
             if self.settings.playlist_loop_mode in {"loop_list", "loop_single"}
             else "loop_list"
         )
+        self.automation_command_buttons_follow_playback_controls = bool(
+            getattr(self.settings, "automation_command_buttons_follow_playback_controls", False)
+        )
+        self.automation_command_button_auto_release_mode = str(
+            getattr(self.settings, "automation_command_button_auto_release_mode", "immediate") or "immediate"
+        ).strip().lower()
+        if self.automation_command_button_auto_release_mode not in {"immediate", "down_only"}:
+            self.automation_command_button_auto_release_mode = "immediate"
+        self.utility_sound_buttons_follow_playback_controls = bool(
+            getattr(self.settings, "utility_sound_buttons_follow_playback_controls", True)
+        )
         self.candidate_error_action = (
             self.settings.candidate_error_action
             if self.settings.candidate_error_action in {"stop_playback", "keep_playing"}
@@ -214,6 +231,57 @@ class MainWindow(
         self.web_remote_host = "0.0.0.0"
         self.web_remote_port = max(1, min(65534, int(self.settings.web_remote_port or 5050)))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.companion_satellite_host = str(
+            getattr(self.settings, "companion_satellite_host", "127.0.0.1") or "127.0.0.1"
+        ).strip() or "127.0.0.1"
+        self.companion_satellite_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_satellite_port", 16622) or 16622)),
+        )
+        self.companion_satellite_enabled = bool(getattr(self.settings, "companion_satellite_enabled", False))
+        self.companion_bypass = bool(getattr(self.settings, "companion_bypass", False))
+        self.internal_bypass = bool(getattr(self.settings, "internal_bypass", False))
+        self.companion_satellite_columns = max(
+            1,
+            min(12, int(getattr(self.settings, "companion_satellite_columns", 8) or 8)),
+        )
+        self.companion_satellite_rows = max(
+            1,
+            min(8, int(getattr(self.settings, "companion_satellite_rows", 4) or 4)),
+        )
+        self.companion_satellite_render_mode = str(
+            getattr(self.settings, "companion_satellite_render_mode", "bitmap") or "bitmap"
+        ).strip().lower()
+        if self.companion_satellite_render_mode not in {"bitmap", "styled"}:
+            self.companion_satellite_render_mode = "bitmap"
+        self.companion_satellite_serial_suffix = str(
+            getattr(
+                self.settings,
+                "companion_satellite_serial_suffix",
+                default_companion_satellite_serial_suffix(),
+            )
+            or default_companion_satellite_serial_suffix()
+        ).strip() or default_companion_satellite_serial_suffix()
+        self.companion_command_mode = str(
+            getattr(self.settings, "companion_command_mode", "tcp") or "tcp"
+        ).strip().lower()
+        if self.companion_command_mode not in {"udp", "tcp", "http"}:
+            self.companion_command_mode = "tcp"
+        self.companion_command_tcp_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_tcp_port", 16759) or 16759)),
+        )
+        self.companion_command_udp_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_udp_port", 16759) or 16759)),
+        )
+        self.companion_command_http_port = max(
+            1,
+            min(65535, int(getattr(self.settings, "companion_command_http_port", 8000) or 8000)),
+        )
+        self.companion_available_commands_filter_black_empty = bool(
+            getattr(self.settings, "companion_available_commands_filter_black_empty", True)
+        )
         self._local_ip_cache = "127.0.0.1"
         self._local_ip_cache_at = 0.0
         self.timecode_audio_output_device = self.settings.timecode_audio_output_device or "none"
@@ -402,6 +470,10 @@ class MainWindow(
             list(getattr(self.settings, "supported_audio_format_extensions", []))
         )
         self.verify_sound_file_on_add = bool(getattr(self.settings, "verify_sound_file_on_add", True))
+        self.warn_dual_automation_sources = bool(getattr(self.settings, "warn_dual_automation_sources", True))
+        self.automation_script_editor_show_lyric = bool(
+            getattr(self.settings, "automation_script_editor_show_lyric", False)
+        )
         self.allow_other_unsupported_audio_files = bool(
             getattr(self.settings, "allow_other_unsupported_audio_files", False)
         )
@@ -422,6 +494,14 @@ class MainWindow(
             "vocal_removed_indicator": getattr(self.settings, "color_vocal_removed_indicator", "#8E7CFF"),
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
+            "automation_indicator": getattr(self.settings, "color_automation_indicator", "#49C16D"),
+            "automation_indicator_bypassed": getattr(self.settings, "color_automation_indicator_bypassed", "#9A9A9A"),
+            "automation_script_indicator": getattr(self.settings, "color_automation_script_indicator", "#2E8BFF"),
+            "automation_script_indicator_bypassed": getattr(
+                self.settings,
+                "color_automation_script_indicator_bypassed",
+                "#708090",
+            ),
         }
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":
@@ -602,6 +682,18 @@ class MainWindow(
         self.midi_rotary_volume_step = max(1, min(20, int(getattr(self.settings, "midi_rotary_volume_step", 2))))
         self.midi_rotary_jog_step_ms = max(10, min(5000, int(getattr(self.settings, "midi_rotary_jog_step_ms", 250))))
         self._web_remote_server: Optional[WebRemoteServer] = None
+        self._companion_satellite_client: Optional[CompanionSatelliteClient] = None
+        self._companion_satellite_window: Optional[CompanionSatelliteWindow] = None
+        self._companion_available_commands_dialog: Optional[CompanionAvailableCommandsDialog] = None
+        self._companion_satellite_bridge = _CompanionSatelliteBridge(self)
+        self._companion_satellite_bridge.statusChanged.connect(self._on_companion_satellite_status_changed)
+        self._companion_satellite_bridge.helloReceived.connect(self._on_companion_satellite_hello_received)
+        self._companion_satellite_bridge.capsReceived.connect(self._on_companion_satellite_caps_received)
+        self._companion_satellite_bridge.keyStateReceived.connect(self._on_companion_satellite_key_state_received)
+        self._companion_satellite_bridge.keysCleared.connect(self._on_companion_satellite_keys_cleared)
+        self._companion_satellite_last_status: tuple[str, str] = ("stopped", "")
+        self._companion_satellite_api_version = ""
+        self._companion_satellite_caps: Dict[str, bool] = {}
         self._main_thread_executor = MainThreadExecutor(self)
         self._audio_service = AudioServiceController(self)
 
@@ -672,6 +764,7 @@ class MainWindow(
         self.status_now_playing_label = QLabel("Now Playing: -")
         self.timecode_status_label = QLabel("")
         self.web_remote_status_label = QLabel("")
+        self.companion_satellite_status_icon = QLabel("")
         self.total_time = QLabel("00:00:00")
         self.preload_status_icon = QLabel("RAM")
         self.elapsed_time = QLabel("00:00:00")
@@ -699,6 +792,11 @@ class MainWindow(
         self._player_end_override_ms: Dict[int, int] = {}
         self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
+        self._automation_active_keys: set[Tuple[str, int, int]] = set()
+        self._automation_hold_active_keys: set[Tuple[str, int, int]] = set()
+        self._automation_click_suppressed_slot_key: Optional[Tuple[str, int, int]] = None
+        self._automation_script_cache: Dict[str, dict] = {}
+        self._automation_script_runtime: Dict[int, dict] = {}
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
         self._drag_target_slot_key: Optional[Tuple[str, int, int]] = None
@@ -774,6 +872,7 @@ class MainWindow(
         self._stage_lyric_cache_error: str = ""
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
+        self._automation_script_navigator_window: Optional[AutomationScriptNavigatorWindow] = None
         self._lyric_force_blank = False
         self._lyric_blank_toggle_action: Optional[QAction] = None
         self._hover_slot_index: Optional[int] = None
@@ -812,6 +911,7 @@ class MainWindow(
         self._apply_launchpad_output_state()
         self._update_timecode_status_label()
         self._update_web_remote_status_label()
+        self._update_companion_satellite_status_indicator()
         self._sync_lock_ui_state()
         if self.lock_restart_state == "lock_on_restart" and bool(getattr(self.settings, "lock_was_locked_on_exit", False)):
             self._engage_lock_screen()
@@ -819,6 +919,9 @@ class MainWindow(
         self.statusBar().addWidget(self.status_now_playing_label, 1)
         self.statusBar().addPermanentWidget(self.timecode_status_label)
         self.statusBar().addPermanentWidget(self.web_remote_status_label)
+        self.companion_satellite_status_icon.setAlignment(Qt.AlignCenter)
+        self.companion_satellite_status_icon.setMinimumWidth(36)
+        self.companion_satellite_status_icon.setFixedHeight(18)
         self.statusBar().addPermanentWidget(self.status_totals_label)
         self.preload_status_icon.setAlignment(Qt.AlignCenter)
         self.preload_status_icon.setFixedSize(34, 18)
@@ -827,6 +930,7 @@ class MainWindow(
         )
         self.preload_status_icon.setToolTip("RAM preload idle")
         self.statusBar().addPermanentWidget(self.preload_status_icon)
+        self.statusBar().addPermanentWidget(self.companion_satellite_status_icon)
         if sys.platform == "darwin":
             self.lock_screen_button = self._create_lock_screen_button(self.statusBar(), auto_raise=False)
             self.lock_screen_button.setMinimumSize(28, 20)
@@ -891,6 +995,7 @@ class MainWindow(
             self._reset_all_played_state()
             self._refresh_sound_grid()
         self._apply_web_remote_state()
+        self._apply_companion_satellite_state()
         if startup_audio_warning:
             QMessageBox.warning(self, "Audio Device", startup_audio_warning)
         self._suspend_settings_save = False

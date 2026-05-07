@@ -77,6 +77,7 @@ class EditSoundButtonDialog(QDialog):
         caption: str,
         notes: str,
         lyric_file: str = "",
+        automation_script_path: str = "",
         vocal_removed_file: str = "",
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
@@ -139,6 +140,19 @@ class EditSoundButtonDialog(QDialog):
         lyric_layout.addWidget(self.lyric_browse_btn)
         lyric_layout.addWidget(self.lyric_clear_btn)
         form.addRow(tr("Lyric File"), lyric_row)
+
+        script_row = QWidget()
+        script_layout = QHBoxLayout(script_row)
+        script_layout.setContentsMargins(0, 0, 0, 0)
+        self.automation_script_edit = QLineEdit(automation_script_path)
+        self.automation_script_browse_btn = QPushButton(tr("Browse"))
+        self.automation_script_browse_btn.clicked.connect(self._browse_automation_script_file)
+        self.automation_script_clear_btn = QPushButton(tr("Clear"))
+        self.automation_script_clear_btn.clicked.connect(lambda _=False: self.automation_script_edit.setText(""))
+        script_layout.addWidget(self.automation_script_edit, 1)
+        script_layout.addWidget(self.automation_script_browse_btn)
+        script_layout.addWidget(self.automation_script_clear_btn)
+        form.addRow(tr("Automation Script"), script_row)
 
         hk_row = QWidget()
         hk_layout = QHBoxLayout(hk_row)
@@ -228,7 +242,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, str, str, str, Optional[int], str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -238,6 +252,7 @@ class EditSoundButtonDialog(QDialog):
             self.notes_edit.text().strip(),
             self.vocal_removed_file_edit.text().strip(),
             self.lyric_file_edit.text().strip(),
+            self.automation_script_edit.text().strip(),
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
             self._midi_binding,
@@ -271,6 +286,21 @@ class EditSoundButtonDialog(QDialog):
         )
         if file_path:
             self.vocal_removed_file_edit.setText(file_path)
+            self._start_dir = os.path.dirname(file_path)
+
+    def _browse_automation_script_file(self) -> None:
+        start_dir = self._start_dir
+        current = self.automation_script_edit.text().strip()
+        if current:
+            start_dir = os.path.dirname(current) or start_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Select Automation Script"),
+            start_dir,
+            tr("Automation Script Files (*.pysspautoscript);;All Files (*.*)"),
+        )
+        if file_path:
+            self.automation_script_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
     def _request_regenerate_vocal_removed(self) -> None:

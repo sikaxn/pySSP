@@ -115,6 +115,8 @@ class OptionsDialog(
         "lyric_display_next_italic": False,
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
+        "warn_dual_automation_sources": True,
+        "automation_script_editor_show_lyric": False,
         "supported_audio_format_extensions": [],
         "verify_sound_file_on_add": True,
         "allow_other_unsupported_audio_files": False,
@@ -165,6 +167,9 @@ class OptionsDialog(
         "rapid_fire_play_mode": "unplayed_only",
         "next_play_mode": "unplayed_only",
         "playlist_loop_mode": "loop_list",
+        "automation_command_buttons_follow_playback_controls": False,
+        "automation_command_button_auto_release_mode": "immediate",
+        "utility_sound_buttons_follow_playback_controls": True,
         "candidate_error_action": "stop_playback",
         "main_transport_timeline_mode": "cue_region",
         "main_jog_outside_cue_action": "stop_immediately",
@@ -175,6 +180,19 @@ class OptionsDialog(
         "web_remote_enabled": False,
         "web_remote_port": 5050,
         "web_remote_ws_port": 5051,
+        "companion_satellite_host": "127.0.0.1",
+        "companion_satellite_port": 16622,
+        "companion_satellite_enabled": False,
+        "companion_bypass": False,
+        "internal_bypass": False,
+        "companion_satellite_columns": 8,
+        "companion_satellite_rows": 4,
+        "companion_satellite_render_mode": "bitmap",
+        "companion_satellite_serial_suffix": default_companion_satellite_serial_suffix(),
+        "companion_command_mode": "tcp",
+        "companion_command_tcp_port": 16759,
+        "companion_command_udp_port": 16759,
+        "companion_command_http_port": 8000,
         "timecode_audio_output_device": "none",
         "timecode_midi_output_device": MIDI_OUTPUT_DEVICE_NONE,
         "timecode_mode": TIMECODE_MODE_FOLLOW,
@@ -201,6 +219,10 @@ class OptionsDialog(
             "vocal_removed_indicator": "#8E7CFF",
             "midi_indicator": "#FF9E4A",
             "lyric_indicator": "#57C3A4",
+            "automation_indicator": "#49C16D",
+            "automation_indicator_bypassed": "#9A9A9A",
+            "automation_script_indicator": "#2E8BFF",
+            "automation_script_indicator_bypassed": "#708090",
         },
         "sound_button_text_color": "#000000",
         "hotkeys": {
@@ -376,6 +398,8 @@ class OptionsDialog(
         lyric_display_next_italic: bool,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
+        warn_dual_automation_sources: bool,
+        automation_script_editor_show_lyric: bool,
         supported_audio_format_extensions: List[str],
         verify_sound_file_on_add: bool,
         allow_other_unsupported_audio_files: bool,
@@ -432,10 +456,26 @@ class OptionsDialog(
         rapid_fire_play_mode: str,
         next_play_mode: str,
         playlist_loop_mode: str,
+        automation_command_buttons_follow_playback_controls: bool,
+        automation_command_button_auto_release_mode: str,
+        utility_sound_buttons_follow_playback_controls: bool,
         candidate_error_action: str,
         web_remote_enabled: bool,
         web_remote_port: int,
         web_remote_url: str,
+        companion_satellite_host: str,
+        companion_satellite_port: int,
+        companion_satellite_enabled: bool,
+        companion_bypass: bool,
+        internal_bypass: bool,
+        companion_satellite_columns: int,
+        companion_satellite_rows: int,
+        companion_satellite_render_mode: str,
+        companion_satellite_serial_suffix: str,
+        companion_command_mode: str,
+        companion_command_tcp_port: int,
+        companion_command_udp_port: int,
+        companion_command_http_port: int,
         main_transport_timeline_mode: str,
         main_jog_outside_cue_action: str,
         state_colors: Dict[str, str],
@@ -529,6 +569,7 @@ class OptionsDialog(
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Options")
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setModal(True)
         self._apply_responsive_dialog_size()
 
@@ -664,6 +705,8 @@ class OptionsDialog(
             if str(new_lyric_file_format or "").strip().lower() in {"srt", "lrc"}
             else "srt"
         )
+        self._warn_dual_automation_sources = bool(warn_dual_automation_sources)
+        self._automation_script_editor_show_lyric = bool(automation_script_editor_show_lyric)
         self._stage_display_font_family = str(stage_display_font_family or "").strip()
         self._stage_display_font_size = max(10, int(stage_display_font_size))
         self._stage_display_lyric_font_family = str(stage_display_lyric_font_family or "").strip()
@@ -712,6 +755,29 @@ class OptionsDialog(
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
         self._available_midi_devices = list(available_midi_devices)
+        self._companion_satellite_host = str(companion_satellite_host or "").strip() or "127.0.0.1"
+        self._companion_satellite_port = max(1, min(65535, int(companion_satellite_port)))
+        self._companion_satellite_enabled = bool(companion_satellite_enabled)
+        self._companion_bypass = bool(companion_bypass)
+        self._internal_bypass = bool(internal_bypass)
+        self._companion_satellite_columns = max(1, min(12, int(companion_satellite_columns)))
+        self._companion_satellite_rows = max(1, min(8, int(companion_satellite_rows)))
+        self._companion_satellite_render_mode = (
+            str(companion_satellite_render_mode or "").strip().lower()
+            if str(companion_satellite_render_mode or "").strip().lower() in {"bitmap", "styled"}
+            else "bitmap"
+        )
+        self._companion_satellite_serial_suffix = (
+            str(companion_satellite_serial_suffix or "").strip() or default_companion_satellite_serial_suffix()
+        )
+        self._companion_command_mode = (
+            str(companion_command_mode or "").strip().lower()
+            if str(companion_command_mode or "").strip().lower() in {"udp", "tcp", "http"}
+            else "tcp"
+        )
+        self._companion_command_tcp_port = max(1, min(65535, int(companion_command_tcp_port)))
+        self._companion_command_udp_port = max(1, min(65535, int(companion_command_udp_port)))
+        self._companion_command_http_port = max(1, min(65535, int(companion_command_http_port)))
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -831,6 +897,9 @@ class OptionsDialog(
                 rapid_fire_play_mode=rapid_fire_play_mode,
                 next_play_mode=next_play_mode,
                 playlist_loop_mode=playlist_loop_mode,
+                automation_command_buttons_follow_playback_controls=automation_command_buttons_follow_playback_controls,
+                automation_command_button_auto_release_mode=automation_command_button_auto_release_mode,
+                utility_sound_buttons_follow_playback_controls=utility_sound_buttons_follow_playback_controls,
                 candidate_error_action=candidate_error_action,
                 main_transport_timeline_mode=main_transport_timeline_mode,
                 main_jog_outside_cue_action=main_jog_outside_cue_action,
@@ -893,6 +962,27 @@ class OptionsDialog(
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
                 web_remote_url=web_remote_url,
+            ),
+        )
+        self._add_page(
+            "Automation",
+            self._mono_icon("robot"),
+            self._build_companion_satellite_page(
+                host=self._companion_satellite_host,
+                port=self._companion_satellite_port,
+                enabled=self._companion_satellite_enabled,
+                bypass=self._companion_bypass,
+                internal_bypass=self._internal_bypass,
+                columns=self._companion_satellite_columns,
+                rows=self._companion_satellite_rows,
+                render_mode=self._companion_satellite_render_mode,
+                serial_suffix=self._companion_satellite_serial_suffix,
+                command_mode=self._companion_command_mode,
+                command_tcp_port=self._companion_command_tcp_port,
+                command_udp_port=self._companion_command_udp_port,
+                command_http_port=self._companion_command_http_port,
+                warn_dual_automation_sources=self._warn_dual_automation_sources,
+                automation_script_editor_show_lyric=self._automation_script_editor_show_lyric,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

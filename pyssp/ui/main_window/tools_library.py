@@ -712,6 +712,9 @@ class ToolsLibraryMixin:
             lyric_cause = self._diagnose_slot_lyric_issue(slot)
             if lyric_cause:
                 causes.append(lyric_cause)
+            automation_script_cause = self._diagnose_slot_automation_script_issue(slot)
+            if automation_script_cause:
+                causes.append(automation_script_cause)
             if causes:
                 title = slot.title.strip() or os.path.splitext(os.path.basename(slot.file_path))[0]
                 matches.append(
@@ -898,6 +901,149 @@ class ToolsLibraryMixin:
         self._refresh_stage_display()
         self._refresh_lyric_display(force=True)
         self._show_save_notice_banner(f"Removed linked lyric files from {changed} sound button(s).")
+
+    def _scan_sound_button_automation_scripts(self) -> None:
+        entries: List[Tuple[str, int, int, SoundButtonData, str]] = []
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                location = self._page_display_name(group, page_index)
+                for slot_index, slot in enumerate(self.data[group][page_index]):
+                    if not slot.assigned or slot.marker:
+                        continue
+                    entries.append((group, page_index, slot_index, slot, location))
+        for slot_index, slot in enumerate(self.cue_page):
+            if not slot.assigned or slot.marker:
+                continue
+            entries.append(("Q", 0, slot_index, slot, "Cue Page"))
+
+        total = len(entries)
+        if total <= 0:
+            self._show_info_notice_banner("No sound buttons assigned.")
+            return
+
+        progress = QProgressDialog(tr("Scanning automation scripts..."), tr("Skip"), 0, max(1, total), self)
+        progress.setWindowTitle(tr("Scan Sound Button Automation Scripts"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
+
+        processed = 0
+        cancelled = False
+        rows: List[Tuple[str, str]] = []
+        refs: List[SoundButtonData] = []
+        for _group, _page, slot_index, slot, location in entries:
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(tr("Scanning {location} - Button {button}...").format(location=location, button=slot_index + 1))
+            if str(slot.automation_script_path or "").strip():
+                processed += 1
+                progress.setValue(processed)
+                QApplication.processEvents()
+                continue
+            candidate = self._find_matching_automation_script_file(slot.file_path)
+            if candidate:
+                rows.append((slot.file_path, candidate))
+                refs.append(slot)
+            processed += 1
+            progress.setValue(processed)
+            QApplication.processEvents()
+        progress.close()
+
+        if cancelled and rows:
+            self._show_info_notice_banner(
+                tr("Automation script scan skipped ({processed}/{total}). Showing partial scan results.").format(
+                    processed=processed, total=total
+                )
+            )
+        elif cancelled:
+            self._show_info_notice_banner(
+                tr("Automation script scan cancelled ({processed}/{total}).").format(
+                    processed=processed, total=total
+                )
+            )
+            return
+        if not rows:
+            self._show_info_notice_banner(tr("No matching automation scripts found."))
+            return
+
+        dialog = LinkLyricDialog(rows, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        flags = dialog.link_flags()
+        changed = False
+        linked = 0
+        unlinked = 0
+        for idx, slot in enumerate(refs):
+            candidate = rows[idx][1]
+            should_link = idx < len(flags) and bool(flags[idx])
+            next_value = candidate if should_link else ""
+            if str(slot.automation_script_path or "").strip() != next_value:
+                slot.automation_script_path = next_value
+                changed = True
+                if should_link:
+                    linked += 1
+                else:
+                    unlinked += 1
+
+        if changed:
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            self._show_save_notice_banner(
+                tr("Automation script scan complete. Linked: {linked}, Unlinked: {unlinked}.").format(
+                    linked=linked, unlinked=unlinked
+                )
+            )
+            return
+        self._show_info_notice_banner(tr("Automation script scan complete. No changes."))
+
+    def _remove_all_linked_automation_scripts(self) -> None:
+        linked_count = 0
+        for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
+            slot = ref["slot_ref"]
+            if not slot.assigned or slot.marker:
+                continue
+            if str(slot.automation_script_path or "").strip():
+                linked_count += 1
+
+        if linked_count <= 0:
+            self._show_info_notice_banner(tr("No linked automation scripts to remove."))
+            return
+
+        answer = QMessageBox.question(
+            self,
+            tr("Remove All Linked Automation Scripts"),
+            tr("Remove linked automation scripts from {count} sound button(s)?").format(count=linked_count),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        changed = 0
+        for ref in self._iter_all_sound_button_slot_refs(include_cue=True):
+            slot = ref["slot_ref"]
+            if not slot.assigned or slot.marker:
+                continue
+            if not str(slot.automation_script_path or "").strip():
+                continue
+            slot.automation_script_path = ""
+            slot.automation_script_bypassed = False
+            changed += 1
+
+        if changed <= 0:
+            self._show_info_notice_banner("No linked automation scripts were removed.")
+            return
+
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        self._refresh_stage_display()
+        self._show_save_notice_banner(f"Removed linked automation scripts from {changed} sound button(s).")
 
     def _bulk_generate_vocal_removed_tracks(self) -> None:
         cli_executable = str(find_bundled_spleeter_cli_executable() or "").strip()

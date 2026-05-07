@@ -32,6 +32,8 @@ class CommonPageBuilderMixin:
             needle = "stage and lyric display"
         if needle in {"stage display", "lyric", "lyric display", "stage and lyric display setting"}:
             needle = "stage and lyric display"
+        if needle in {"companion satellite", "automation setup"}:
+            needle = "automation"
         if needle == "audio device / timecode":
             needle = "audio device & timecode"
         if needle in {"audio preload", "audio format"}:
@@ -118,6 +120,17 @@ class CommonPageBuilderMixin:
             p.drawArc(QRectF(7, 11, 8, 8), 35 * 16, 110 * 16)
             p.drawArc(QRectF(5, 9, 12, 12), 35 * 16, 110 * 16)
             p.drawArc(QRectF(3, 7, 16, 16), 35 * 16, 110 * 16)
+        elif kind == "robot":
+            p.drawRoundedRect(QRectF(5, 6, 12, 10), 2, 2)
+            p.drawLine(11, 3, 11, 6)
+            p.drawEllipse(QRectF(10, 2, 2, 2))
+            p.drawEllipse(QRectF(8, 9, 2, 2))
+            p.drawEllipse(QRectF(12, 9, 2, 2))
+            p.drawLine(9, 13, 13, 13)
+            p.drawLine(5, 10, 3, 10)
+            p.drawLine(17, 10, 19, 10)
+            p.drawLine(8, 16, 7, 19)
+            p.drawLine(14, 16, 15, 19)
         elif kind == "lyric":
             p.drawRoundedRect(QRectF(4, 3, 14, 16), 1.5, 1.5)
             p.drawLine(7, 8, 15, 8)

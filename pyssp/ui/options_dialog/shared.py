@@ -49,6 +49,7 @@ from pyssp.settings_store import (
     WINDOW_LAYOUT_MAIN_GRID_COLS,
     WINDOW_LAYOUT_MAIN_GRID_ROWS,
     WINDOW_LAYOUT_MAIN_ORDER,
+    default_companion_satellite_serial_suffix,
     default_quick_action_keys,
     default_window_layout,
     normalize_window_layout,

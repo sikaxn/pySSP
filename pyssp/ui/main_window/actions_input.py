@@ -4,9 +4,44 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.automation_command import (
+    AUTOMATION_SOURCE_TYPE,
+    AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    automation_display_name,
+    automation_spec_to_set_fields,
+    normalize_automation_spec,
+    normalize_sound_button_automation_config,
+)
+from pyssp.utility_audio import (
+    UTILITY_SOURCE_TYPE,
+    UTILITY_UNSUPPORTED_MARKER_TEXT,
+    normalize_utility_spec,
+    utility_display_name,
+    utility_duration_hhmmssmmm,
+)
 
 
 class ActionsInputMixin:
+    def _slot_follows_regular_playback_controls(self, slot: Optional[SoundButtonData]) -> bool:
+        if slot is None:
+            return False
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return bool(getattr(self, "automation_command_buttons_follow_playback_controls", False))
+        if slot.source_type != UTILITY_SOURCE_TYPE:
+            return True
+        return bool(getattr(self, "utility_sound_buttons_follow_playback_controls", True))
+
+    def _slot_is_regular_playback_candidate(self, slot: Optional[SoundButtonData]) -> bool:
+        if slot is None:
+            return False
+        return (
+            slot.assigned
+            and (not slot.marker)
+            and (not slot.locked)
+            and (not slot.missing)
+            and self._slot_follows_regular_playback_controls(slot)
+        )
+
     def _toggle_colour_legend(self, checked: bool) -> None:
         self.show_colour_legend = bool(checked)
         if getattr(self, "button_legend_label", None) is not None:
@@ -25,6 +60,34 @@ class ActionsInputMixin:
         if self.next_play_mode == "any_available":
             return self._next_available_slot_on_current_page(blocked=blocked)
         return self._next_unplayed_slot_on_current_page(blocked=blocked)
+
+    def _playlist_slots_for_page(self, group_key: Optional[str] = None, page_index: Optional[int] = None) -> List[SoundButtonData]:
+        resolved_group = self._view_group_key() if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        if resolved_group == "Q":
+            return list(self.cue_page)
+        if resolved_group not in self.data:
+            return []
+        if resolved_page < 0 or resolved_page >= PAGE_COUNT:
+            return []
+        return self.data[resolved_group][resolved_page]
+
+    def _playlist_current_index_for_page(
+        self,
+        group_key: str,
+        page_index: int,
+        *,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> Optional[int]:
+        track = self.current_playing if current_track is None else current_track
+        if track is None:
+            return None
+        track_group, track_page, track_slot = track
+        if str(track_group or "").strip().upper() != str(group_key or "").strip().upper():
+            return None
+        if int(track_page) != int(page_index):
+            return None
+        return int(track_slot)
 
     def _next_stage_from_hover(self) -> Optional[str]:
         slot_index = self._hover_slot_index
@@ -82,6 +145,8 @@ class ActionsInputMixin:
         playing = [p for p in players if p.state() == ExternalMediaPlayer.PlayingState]
         if not playing:
             return
+        for player in playing:
+            self._trigger_sound_button_pause_requested_event(self._player_slot_key_map.get(id(player)))
         if self.fade_on_pause and self._is_fade_out_enabled() and self.fade_out_sec > 0:
             for player in playing:
                 resume_target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
@@ -92,27 +157,43 @@ class ActionsInputMixin:
                     stop_on_complete=False,
                     pause_on_complete=True,
                     pause_resume_volume=resume_target,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_pause_fade_out_start",),
+                    automation_end_events=("on_pause_fade_out_end",),
                 )
             return
         for player in playing:
             player.pause()
             self._sync_shadow_transport_from_primary(player)
+            self._trigger_sound_button_paused_event(self._player_slot_key_map.get(id(player)))
 
     def _resume_players(self, players: List[ExternalMediaPlayer]) -> None:
         paused = [p for p in players if p.state() == ExternalMediaPlayer.PausedState]
         if not paused:
             return
+        for player in paused:
+            self._trigger_sound_button_resume_requested_event(self._player_slot_key_map.get(id(player)))
         if self.fade_on_resume and self._is_fade_in_enabled() and self.fade_in_sec > 0:
             for player in paused:
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
                 self._set_player_volume(player, 0)
                 player.play()
                 self._sync_shadow_transport_from_primary(player)
-                self._start_fade(player, target, self.fade_in_sec, stop_on_complete=False)
+                self._start_fade(
+                    player,
+                    target,
+                    self.fade_in_sec,
+                    stop_on_complete=False,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_resume_fade_in_start",),
+                    automation_end_events=("on_resume_fade_in_end",),
+                )
+                self._trigger_sound_button_resumed_event(self._player_slot_key_map.get(id(player)))
             return
         for player in paused:
             player.play()
             self._sync_shadow_transport_from_primary(player)
+            self._trigger_sound_button_resumed_event(self._player_slot_key_map.get(id(player)))
 
     def _toggle_talk(self, checked: bool) -> None:
         self.talk_active = checked
@@ -372,7 +453,15 @@ class ActionsInputMixin:
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
-            self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
+            self._start_fade(
+                player,
+                0,
+                self.fade_out_sec,
+                stop_on_complete=True,
+                automation_slot_key=self._player_slot_key_map.get(id(player)),
+                automation_start_events=("on_stop_fade_out_start",),
+                automation_end_events=("on_stop_fade_out_end",),
+            )
         else:
             self._stop_single_player(player)
         if self.current_playing == slot_key:
@@ -510,6 +599,7 @@ class ActionsInputMixin:
 
     def _stop_playback(self) -> None:
         self._manual_stop_requested = True
+        self._clear_track_end_transition_state()
         self._pending_start_request = None
         self._pending_start_token += 1
         self._vocal_toggle_fade_jobs.clear()
@@ -522,7 +612,9 @@ class ActionsInputMixin:
         active_players = self._all_active_players()
         if self._stop_fade_armed:
             self._stop_fade_armed = False
-            self._hard_stop_all()
+            for player in active_players:
+                self._trigger_sound_button_force_stop_event(self._player_slot_key_map.get(id(player)))
+            self._hard_stop_all(emit_app_interrupt_events=False)
             self._player_slot_volume_pct = 75
             self._player_b_slot_volume_pct = 75
             self.current_playing = None
@@ -545,9 +637,32 @@ class ActionsInputMixin:
                 3000,
             )
             for player in active_players:
-                self._start_fade(player, 0, self.fade_out_sec, stop_on_complete=True)
+                self._trigger_sound_button_stop_requested_event(self._player_slot_key_map.get(id(player)))
+                self._start_fade(
+                    player,
+                    0,
+                    self.fade_out_sec,
+                    stop_on_complete=True,
+                    automation_slot_key=self._player_slot_key_map.get(id(player)),
+                    automation_start_events=("on_stop_fade_out_start",),
+                    automation_end_events=("on_stop_fade_out_end",),
+                )
             return
         self._stop_fade_armed = False
+        player_slot_key = self._player_slot_key_map.get(id(self.player))
+        player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
+        if player_slot_key is not None:
+            self._trigger_sound_button_stop_requested_event(player_slot_key)
+            self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
+        if player_b_slot_key is not None:
+            self._trigger_sound_button_stop_requested_event(player_b_slot_key)
+            self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
+        for extra in list(self._multi_players):
+            extra_slot_key = self._player_slot_key_map.get(id(extra))
+            if extra_slot_key is not None:
+                self._trigger_sound_button_stop_requested_event(extra_slot_key)
         self.player.stop()
         self.player_b.stop()
         self._clear_all_vocal_shadow_players()
@@ -574,10 +689,11 @@ class ActionsInputMixin:
         self._refresh_sound_grid()
         self._update_now_playing_label("")
 
-    def _hard_stop_all(self) -> None:
+    def _hard_stop_all(self, emit_app_interrupt_events: bool = True) -> None:
         self._fade_jobs.clear()
         self._vocal_toggle_fade_jobs.clear()
         self._update_fade_button_flash(False)
+        self._clear_track_end_transition_state()
         self._pending_start_request = None
         self._pending_start_token += 1
         self._clear_pending_deferred_audio_start()
@@ -585,11 +701,28 @@ class ActionsInputMixin:
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False
         self._cancel_all_pending_player_media_loads()
+        player_slot_key = self._player_slot_key_map.get(id(self.player))
+        player_b_slot_key = self._player_slot_key_map.get(id(self.player_b))
+        if player_slot_key is not None:
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(player_slot_key)
+            self._trigger_sound_button_stopped_event(player_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player))
+        if player_b_slot_key is not None:
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(player_b_slot_key)
+            self._trigger_sound_button_stopped_event(player_b_slot_key, natural=False)
+            self._sound_button_automation_handled_stop_player_ids.add(id(self.player_b))
         self.player.stop()
         self.player_b.stop()
         self._clear_all_vocal_shadow_players()
         self._timecode_on_playback_stop()
         self._clear_all_player_slot_keys()
+        for extra in list(self._multi_players):
+            if emit_app_interrupt_events:
+                self._trigger_sound_button_interrupted_by_app_reset_event(
+                    self._player_slot_key_map.get(id(extra))
+                )
         for extra in list(self._multi_players):
             self._stop_single_player(extra)
         self._prune_multi_players()
@@ -606,27 +739,38 @@ class ActionsInputMixin:
             if next_slot is None:
                 self._update_next_button_enabled()
                 return
-            if self._play_slot(next_slot):
+            if self._play_slot_via_control_flow(next_slot):
                 return
             blocked.add(next_slot)
             if self.candidate_error_action == "stop_playback":
                 self._stop_playback()
                 return
 
-    def _has_next_playlist_slot(self, for_auto_advance: bool = False) -> bool:
-        page = self._current_page_slots()
+    def _has_next_playlist_slot(
+        self,
+        for_auto_advance: bool = False,
+        *,
+        group_key: Optional[str] = None,
+        page_index: Optional[int] = None,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> bool:
+        resolved_group = self.current_group if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        page = self._playlist_slots_for_page(resolved_group, resolved_page)
         if not page:
             return False
         valid_slots = [
             idx
             for idx, slot in enumerate(page)
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing
+            if self._slot_is_regular_playback_candidate(slot)
         ]
         if not valid_slots:
             return False
-        current_idx: Optional[int] = None
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            current_idx = self.current_playing[2]
+        current_idx = self._playlist_current_index_for_page(
+            resolved_group,
+            resolved_page,
+            current_track=current_track,
+        )
         if (
             for_auto_advance
             and self.loop_enabled
@@ -635,8 +779,13 @@ class ActionsInputMixin:
             and current_idx in valid_slots
         ):
             return True
+        shuffle_enabled = (
+            resolved_group != "Q"
+            and 0 <= resolved_page < PAGE_COUNT
+            and self.page_shuffle_enabled[resolved_group][resolved_page]
+        )
         if self.playlist_play_mode == "any_available":
-            if self.page_shuffle_enabled[self.current_group][self.current_page]:
+            if shuffle_enabled:
                 if current_idx is not None and len(valid_slots) > 1:
                     return any(idx != current_idx for idx in valid_slots)
                 return bool(valid_slots)
@@ -650,7 +799,7 @@ class ActionsInputMixin:
                     return True
             return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
         unplayed_slots = [idx for idx in valid_slots if not page[idx].played]
-        if self.page_shuffle_enabled[self.current_group][self.current_page]:
+        if shuffle_enabled:
             if unplayed_slots:
                 return True
             return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
@@ -677,7 +826,7 @@ class ActionsInputMixin:
             slot = page[idx]
             if idx in blocked:
                 continue
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played:
+            if self._slot_is_regular_playback_candidate(slot) and not slot.played:
                 return idx
         return None
 
@@ -694,7 +843,7 @@ class ActionsInputMixin:
             slot = page[idx]
             if idx in blocked:
                 continue
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+            if self._slot_is_regular_playback_candidate(slot):
                 return idx
         return None
 
@@ -706,25 +855,37 @@ class ActionsInputMixin:
         for step in range(1, SLOTS_PER_PAGE + 1):
             idx = (start_slot + step) % SLOTS_PER_PAGE
             slot = page[idx]
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+            if self._slot_is_regular_playback_candidate(slot):
                 return idx
         return None
 
-    def _next_playlist_slot(self, for_auto_advance: bool = False, blocked: Optional[set[int]] = None) -> Optional[int]:
-        page = self._current_page_slots()
+    def _next_playlist_slot(
+        self,
+        for_auto_advance: bool = False,
+        blocked: Optional[set[int]] = None,
+        *,
+        group_key: Optional[str] = None,
+        page_index: Optional[int] = None,
+        current_track: Optional[Tuple[str, int, int]] = None,
+    ) -> Optional[int]:
+        resolved_group = self.current_group if group_key is None else str(group_key or "").strip().upper()
+        resolved_page = self.current_page if page_index is None else int(page_index)
+        page = self._playlist_slots_for_page(resolved_group, resolved_page)
         if not page:
             return None
         blocked = blocked or set()
         valid_slots = [
             idx
             for idx, slot in enumerate(page)
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and idx not in blocked
+            if self._slot_is_regular_playback_candidate(slot) and idx not in blocked
         ]
         if not valid_slots:
             return None
-        current_idx: Optional[int] = None
-        if self.current_playing and self.current_playing[0] == self._view_group_key():
-            current_idx = self.current_playing[2]
+        current_idx = self._playlist_current_index_for_page(
+            resolved_group,
+            resolved_page,
+            current_track=current_track,
+        )
         if (
             for_auto_advance
             and self.loop_enabled
@@ -734,7 +895,12 @@ class ActionsInputMixin:
         ):
             return current_idx
         any_available = self.playlist_play_mode == "any_available"
-        if self.page_shuffle_enabled[self.current_group][self.current_page]:
+        shuffle_enabled = (
+            resolved_group != "Q"
+            and 0 <= resolved_page < PAGE_COUNT
+            and self.page_shuffle_enabled[resolved_group][resolved_page]
+        )
+        if shuffle_enabled:
             if any_available:
                 candidates = list(valid_slots)
             else:
@@ -763,7 +929,7 @@ class ActionsInputMixin:
 
         for idx in range(start, SLOTS_PER_PAGE):
             slot = page[idx]
-            if slot.assigned and not slot.marker and not slot.locked and not slot.missing and (any_available or (not slot.played)):
+            if self._slot_is_regular_playback_candidate(slot) and (any_available or (not slot.played)):
                 return idx
         if self.loop_enabled and self.playlist_loop_mode == "loop_list":
             if not any_available:
@@ -774,7 +940,7 @@ class ActionsInputMixin:
                 self._set_dirty(True)
             for idx in range(0, SLOTS_PER_PAGE):
                 slot = page[idx]
-                if slot.assigned and not slot.marker and not slot.locked and not slot.missing:
+                if self._slot_is_regular_playback_candidate(slot):
                     return idx
         return None
 
@@ -784,7 +950,7 @@ class ActionsInputMixin:
         candidates = [
             idx
             for idx, slot in enumerate(page)
-            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing and not slot.played
+            if idx not in blocked and self._slot_is_regular_playback_candidate(slot) and not slot.played
         ]
         if not candidates:
             return None
@@ -796,7 +962,7 @@ class ActionsInputMixin:
         candidates = [
             idx
             for idx, slot in enumerate(page)
-            if idx not in blocked and slot.assigned and not slot.marker and not slot.locked and not slot.missing
+            if idx not in blocked and self._slot_is_regular_playback_candidate(slot)
         ]
         if not candidates:
             return None
@@ -811,7 +977,7 @@ class ActionsInputMixin:
                 slot_index = self._random_unplayed_slot_on_current_page(blocked=blocked)
             if slot_index is None:
                 return
-            if self._play_slot(slot_index):
+            if self._play_slot_via_control_flow(slot_index):
                 return
             blocked.add(slot_index)
             if self.candidate_error_action == "stop_playback":
@@ -1083,6 +1249,13 @@ class ActionsInputMixin:
             group: [[SoundButtonData() for _ in range(SLOTS_PER_PAGE)] for _ in range(PAGE_COUNT)]
             for group in GROUPS
         }
+        if not hasattr(self, "_automation_active_keys"):
+            self._automation_active_keys = set()
+        if not hasattr(self, "_automation_hold_active_keys"):
+            self._automation_hold_active_keys = set()
+        self._automation_active_keys.clear()
+        self._automation_hold_active_keys.clear()
+        self._automation_click_suppressed_slot_key = None
         self.page_names = {group: ["" for _ in range(PAGE_COUNT)] for group in GROUPS}
         self.page_colors = {group: [None for _ in range(PAGE_COUNT)] for group in GROUPS}
         self.page_playlist_enabled = {group: [False for _ in range(PAGE_COUNT)] for group in GROUPS}
@@ -1108,6 +1281,7 @@ class ActionsInputMixin:
 
     def _new_set(self) -> None:
         self._hard_stop_all()
+        self._clear_track_end_transition_state()
         self._drag_source_key = None
         self.current_set_path = ""
         self.settings.last_set_path = ""
@@ -1197,11 +1371,13 @@ class ActionsInputMixin:
         slot_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         vocal_removed_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         lyric_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
+        automation_script_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         skipped_slots: Optional[set[Tuple[str, int, int]]] = None,
     ) -> List[str]:
         overrides = slot_path_overrides or {}
         vocal_removed_overrides = vocal_removed_path_overrides or {}
         lyric_overrides = lyric_path_overrides or {}
+        automation_script_overrides = automation_script_path_overrides or {}
         skipped = skipped_slots or set()
         lines: List[str] = [
             "[Main]",
@@ -1238,6 +1414,109 @@ class ActionsInputMixin:
                             lines.append(f"activity{slot_index}=7")
                             lines.append(f"co{slot_index}=clBtnFace")
                             continue
+                        if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
+                            title = clean_set_value(slot.title or automation_display_name(slot.automation_spec))
+                            notes = clean_set_value(slot.notes or "")
+                            fields = automation_spec_to_set_fields(slot.automation_spec)
+                            lines.append(f"c{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%")
+                            lines.append(f"n{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}")
+                            lines.append(f"t{slot_index}= ")
+                            lines.append(f"activity{slot_index}=7")
+                            lines.append(f"co{slot_index}=clBtnFace")
+                            lines.append(f"pysspsourcetype{slot_index}={AUTOMATION_SOURCE_TYPE}")
+                            lines.append(f"pysspautomationsource{slot_index}={fields['source']}")
+                            if fields["location"]:
+                                lines.append(f"pysspautomationlocation{slot_index}={fields['location']}")
+                            if fields["button_text"]:
+                                lines.append(f"pysspautomationtext{slot_index}={clean_set_value(fields['button_text'])}")
+                            lines.append(f"pysspautomationhold{slot_index}={fields['hold_to_release']}")
+                            if fields["internal_command"]:
+                                lines.append(
+                                    f"pysspautomationinternalcommand{slot_index}={clean_set_value(fields['internal_command'])}"
+                                )
+                            if fields["internal_params_json"]:
+                                lines.append(
+                                    f"pysspautomationinternalparams{slot_index}={clean_set_value(fields['internal_params_json'])}"
+                                )
+                            lines.append(f"pysspautomationtitle{slot_index}={title}")
+                            lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
+                            if notes:
+                                lines.append(f"pysspautomationnotes{slot_index}={notes}")
+                            if slot.custom_color:
+                                lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
+                            hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                            if hotkey_code:
+                                lines.append(f"pysspautomationhotkey{slot_index}={hotkey_code}")
+                            midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                            if midi_hotkey_code:
+                                lines.append(f"pysspautomationmidi{slot_index}={midi_hotkey_code}")
+                            if slot.copied_to_cue:
+                                lines.append(f"ci{slot_index}=Y")
+                            continue
+                        if slot.source_type == UTILITY_SOURCE_TYPE and slot.utility_spec is not None:
+                            title = clean_set_value(slot.title or utility_display_name(slot.utility_spec))
+                            notes = clean_set_value(slot.notes or "")
+                            lines.append(f"c{slot_index}={UTILITY_UNSUPPORTED_MARKER_TEXT}%%")
+                            lines.append(f"n{slot_index}={UTILITY_UNSUPPORTED_MARKER_TEXT}")
+                            lines.append(f"t{slot_index}= ")
+                            lines.append(f"activity{slot_index}=7")
+                            lines.append(f"co{slot_index}=clBtnFace")
+                            lines.append(f"pysspsourcetype{slot_index}={UTILITY_SOURCE_TYPE}")
+                            lines.append(f"pyssputilitymode{slot_index}={slot.utility_spec.mode}")
+                            lines.append(
+                                f"pyssputilityduration{slot_index}={utility_duration_hhmmssmmm(slot.utility_spec.duration_ms)}"
+                            )
+                            lines.append(f"pyssputilitytitle{slot_index}={title}")
+                            lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
+                            if notes:
+                                lines.append(f"pyssputilitynotes{slot_index}={notes}")
+                            if slot.lyric_file:
+                                lines.append(
+                                    f"pyssputilitylyric{slot_index}="
+                                    f"{clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))}"
+                                )
+                            automation_script_path = clean_set_value(
+                                automation_script_overrides.get(slot_key, slot.automation_script_path)
+                            )
+                            if automation_script_path:
+                                lines.append(f"pysspautoscript{slot_index}={automation_script_path}")
+                            if bool(slot.automation_script_bypassed):
+                                lines.append(f"pysspautoscriptbypass{slot_index}=1")
+                            if slot.utility_spec.mode == "waveform":
+                                lines.append(f"pyssputilitywaveform{slot_index}={slot.utility_spec.waveform_type}")
+                                lines.append(f"pyssputilityfreq{slot_index}={slot.utility_spec.frequency_hz:g}")
+                            elif slot.utility_spec.mode == "metronome":
+                                lines.append(f"pyssputilitytempo{slot_index}={slot.utility_spec.tempo_bpm:g}")
+                                lines.append(
+                                    f"pyssputilitytimesig{slot_index}="
+                                    f"{int(slot.utility_spec.time_signature_num)}/{int(slot.utility_spec.time_signature_den)}"
+                                )
+                            if slot.volume_override_pct is not None:
+                                lines.append(f"v{slot_index}={max(0, min(100, int(slot.volume_override_pct)))}")
+                            if slot.copied_to_cue:
+                                lines.append(f"ci{slot_index}=Y")
+                            hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
+                            if hotkey_code:
+                                lines.append(f"h{slot_index}={hotkey_code}")
+                            midi_hotkey_code = self._encode_sound_midi_hotkey(slot.sound_midi_hotkey)
+                            if midi_hotkey_code:
+                                lines.append(f"pysspmidi{slot_index}={midi_hotkey_code}")
+                            cue_start, cue_end = self._cue_time_fields_for_set(slot)
+                            if cue_start is not None:
+                                lines.append(f"pysspcuestart{slot_index}={cue_start}")
+                            if cue_end is not None:
+                                lines.append(f"pysspcueend{slot_index}={cue_end}")
+                            timecode_offset = format_timecode_offset_hhmmss(
+                                slot.timecode_offset_ms,
+                                nominal_fps(self.timecode_fps),
+                            )
+                            if timecode_offset is not None:
+                                lines.append(f"pyssptimecodeoffset{slot_index}={timecode_offset}")
+                            timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
+                            if timecode_timeline != "global":
+                                lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
+                            self._append_sound_button_automation_set_lines(lines, slot_index, slot)
+                            continue
                         effective_file_path = overrides.get(slot_key, slot.file_path)
                         title = clean_set_value(slot.title or os.path.splitext(os.path.basename(slot.file_path))[0])
                         notes = clean_set_value(slot.notes or title)
@@ -1263,6 +1542,13 @@ class ActionsInputMixin:
                         lyric_file = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                         if lyric_file:
                             lines.append(f"pyssplyric{slot_index}={lyric_file}")
+                        automation_script_path = clean_set_value(
+                            automation_script_overrides.get(slot_key, slot.automation_script_path)
+                        )
+                        if automation_script_path:
+                            lines.append(f"pysspautoscript{slot_index}={automation_script_path}")
+                        if bool(slot.automation_script_bypassed):
+                            lines.append(f"pysspautoscriptbypass{slot_index}=1")
                         cue_start, cue_end = self._cue_time_fields_for_set(slot)
                         if cue_start is not None:
                             lines.append(f"pysspcuestart{slot_index}={cue_start}")
@@ -1277,6 +1563,7 @@ class ActionsInputMixin:
                         timecode_timeline = normalize_slot_timecode_timeline_mode(slot.timecode_timeline_mode)
                         if timecode_timeline != "global":
                             lines.append(f"pyssptimecodedisplaytimeline{slot_index}={timecode_timeline}")
+                        self._append_sound_button_automation_set_lines(lines, slot_index, slot)
                 lines.append("")
 
         lines.extend(
@@ -1322,12 +1609,18 @@ class ActionsInputMixin:
                 for slot_index in range(SLOTS_PER_PAGE):
                     src = result.pages[group][page_index][slot_index]
                     self.data[group][page_index][slot_index] = SoundButtonData(
+                        source_type=src.source_type,
                         file_path=src.file_path,
                         vocal_removed_file=src.vocal_removed_file,
                         title=src.title,
                         notes=src.notes,
                         lyric_file=src.lyric_file,
+                        automation_script_path=src.automation_script_path,
                         duration_ms=src.duration_ms,
+                        automation_spec=None if src.automation_spec is None else normalize_automation_spec(src.automation_spec),
+                        sound_button_automation=normalize_sound_button_automation_config(src.sound_button_automation),
+                        automation_script_bypassed=bool(src.automation_script_bypassed),
+                        utility_spec=None if src.utility_spec is None else normalize_utility_spec(src.utility_spec),
                         custom_color=src.custom_color,
                         played=src.played,
                         activity_code=src.activity_code,
@@ -1349,6 +1642,7 @@ class ActionsInputMixin:
         else:
             self.current_group = "A"
             self.current_page = 0
+        self._clear_track_end_transition_state()
         self.current_playing = None
         self.current_duration_ms = 0
         self.total_time.setText("00:00:00")
@@ -1418,6 +1712,8 @@ class ActionsInputMixin:
             lyric_display_next_italic=self.lyric_display_role_italic["next"],
             search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
             new_lyric_file_format=self.new_lyric_file_format,
+            warn_dual_automation_sources=self.warn_dual_automation_sources,
+            automation_script_editor_show_lyric=self.automation_script_editor_show_lyric,
             supported_audio_format_extensions=self.supported_audio_format_extensions,
             verify_sound_file_on_add=self.verify_sound_file_on_add,
             allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
@@ -1483,10 +1779,26 @@ class ActionsInputMixin:
             rapid_fire_play_mode=self.rapid_fire_play_mode,
             next_play_mode=self.next_play_mode,
             playlist_loop_mode=self.playlist_loop_mode,
+            automation_command_buttons_follow_playback_controls=self.automation_command_buttons_follow_playback_controls,
+            automation_command_button_auto_release_mode=self.automation_command_button_auto_release_mode,
+            utility_sound_buttons_follow_playback_controls=self.utility_sound_buttons_follow_playback_controls,
             candidate_error_action=self.candidate_error_action,
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
             web_remote_url=self._web_remote_open_url(),
+            companion_satellite_host=self.companion_satellite_host,
+            companion_satellite_port=self.companion_satellite_port,
+            companion_satellite_enabled=self.companion_satellite_enabled,
+            companion_bypass=self.companion_bypass,
+            internal_bypass=self.internal_bypass,
+            companion_satellite_columns=self.companion_satellite_columns,
+            companion_satellite_rows=self.companion_satellite_rows,
+            companion_satellite_render_mode=self.companion_satellite_render_mode,
+            companion_satellite_serial_suffix=self.companion_satellite_serial_suffix,
+            companion_command_mode=self.companion_command_mode,
+            companion_command_tcp_port=self.companion_command_tcp_port,
+            companion_command_udp_port=self.companion_command_udp_port,
+            companion_command_http_port=self.companion_command_http_port,
             main_transport_timeline_mode=self.main_transport_timeline_mode,
             main_jog_outside_cue_action=self.main_jog_outside_cue_action,
             state_colors={
@@ -1504,6 +1816,10 @@ class ActionsInputMixin:
                 "vocal_removed_indicator": self.state_colors["vocal_removed_indicator"],
                 "midi_indicator": self.state_colors["midi_indicator"],
                 "lyric_indicator": self.state_colors["lyric_indicator"],
+                "automation_indicator": self.state_colors["automation_indicator"],
+                "automation_indicator_bypassed": self.state_colors["automation_indicator_bypassed"],
+                "automation_script_indicator": self.state_colors["automation_script_indicator"],
+                "automation_script_indicator_bypassed": self.state_colors["automation_script_indicator_bypassed"],
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
@@ -1645,6 +1961,8 @@ class ActionsInputMixin:
         self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
+        self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()
+        self.automation_script_editor_show_lyric = dialog.selected_automation_script_editor_show_lyric()
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
@@ -1663,6 +1981,13 @@ class ActionsInputMixin:
         self.rapid_fire_play_mode = dialog.selected_rapid_fire_play_mode()
         self.next_play_mode = dialog.selected_next_play_mode()
         self.playlist_loop_mode = dialog.selected_playlist_loop_mode()
+        self.automation_command_buttons_follow_playback_controls = (
+            dialog.selected_automation_command_buttons_follow_playback_controls()
+        )
+        self.automation_command_button_auto_release_mode = (
+            dialog.selected_automation_command_button_auto_release_mode()
+        )
+        self.utility_sound_buttons_follow_playback_controls = dialog.selected_utility_sound_buttons_follow_playback_controls()
         self.candidate_error_action = dialog.selected_candidate_error_action()
         self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
         self.main_progress_display_mode = dialog.selected_main_progress_display_mode()
@@ -1714,6 +2039,22 @@ class ActionsInputMixin:
         self.state_colors["lyric_indicator"] = selected_colors.get(
             "lyric_indicator",
             self.state_colors["lyric_indicator"],
+        )
+        self.state_colors["automation_indicator"] = selected_colors.get(
+            "automation_indicator",
+            self.state_colors["automation_indicator"],
+        )
+        self.state_colors["automation_indicator_bypassed"] = selected_colors.get(
+            "automation_indicator_bypassed",
+            self.state_colors["automation_indicator_bypassed"],
+        )
+        self.state_colors["automation_script_indicator"] = selected_colors.get(
+            "automation_script_indicator",
+            self.state_colors["automation_script_indicator"],
+        )
+        self.state_colors["automation_script_indicator_bypassed"] = selected_colors.get(
+            "automation_script_indicator_bypassed",
+            self.state_colors["automation_script_indicator_bypassed"],
         )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()
@@ -1823,6 +2164,19 @@ class ActionsInputMixin:
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
         self.web_remote_port = max(1, min(65534, int(dialog.web_remote_port_spin.value())))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.companion_satellite_host = dialog.selected_companion_satellite_host()
+        self.companion_satellite_port = dialog.selected_companion_satellite_port()
+        self.companion_satellite_enabled = dialog.selected_companion_satellite_enabled()
+        self._toggle_companion_bypass(dialog.selected_companion_bypass())
+        self._toggle_internal_bypass(dialog.selected_internal_bypass())
+        self.companion_satellite_columns = dialog.selected_companion_satellite_columns()
+        self.companion_satellite_rows = dialog.selected_companion_satellite_rows()
+        self.companion_satellite_render_mode = dialog.selected_companion_satellite_render_mode()
+        self.companion_satellite_serial_suffix = dialog.selected_companion_satellite_serial_suffix()
+        self.companion_command_mode = dialog.selected_companion_command_mode()
+        self.companion_command_tcp_port = dialog.selected_companion_command_tcp_port()
+        self.companion_command_udp_port = dialog.selected_companion_command_udp_port()
+        self.companion_command_http_port = dialog.selected_companion_command_http_port()
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
@@ -1846,6 +2200,8 @@ class ActionsInputMixin:
         self._refresh_timecode_panel()
         self._update_timecode_multiplay_warning_banner()
         self._refresh_group_buttons()
+        if getattr(self, "_button_legend_layout", None) is not None:
+            self._refresh_button_legend_label()
         self._refresh_sound_grid()
         if self.current_playing is None:
             self._update_now_playing_label("")
@@ -1853,6 +2209,7 @@ class ActionsInputMixin:
             slot = self._slot_for_key(self.current_playing)
             self._update_now_playing_label(self._build_now_playing_text(slot) if slot is not None else "")
         self._apply_web_remote_state()
+        self._apply_companion_satellite_state()
         self._sync_lock_ui_state()
         self._save_settings()
 
@@ -2892,7 +3249,13 @@ class ActionsInputMixin:
                 self._lyric_navigator_window.close()
         except Exception:
             pass
+        try:
+            if self._companion_satellite_window is not None:
+                self._companion_satellite_window.close()
+        except Exception:
+            pass
         self._stop_web_remote_service()
+        self._stop_companion_satellite_client()
         if not self._skip_save_on_close:
             self._save_settings()
         QMainWindow.closeEvent(self, event)

@@ -4,11 +4,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pyssp.settings_store import default_quick_action_keys
+from pyssp.settings_store import default_companion_satellite_serial_suffix, default_quick_action_keys
 from pyssp.timecode import MIDI_OUTPUT_DEVICE_NONE, TIMECODE_MODE_FOLLOW
 from pyssp.ui.options_dialog import OptionsDialog
 
@@ -115,6 +116,15 @@ def _build_dialog(**overrides):
         ),
         search_lyric_on_add_sound_button=defaults["search_lyric_on_add_sound_button"],
         new_lyric_file_format=defaults["new_lyric_file_format"],
+        warn_dual_automation_sources=bool(
+            overrides.get("warn_dual_automation_sources", defaults["warn_dual_automation_sources"])
+        ),
+        automation_script_editor_show_lyric=bool(
+            overrides.get(
+                "automation_script_editor_show_lyric",
+                defaults["automation_script_editor_show_lyric"],
+            )
+        ),
         supported_audio_format_extensions=overrides.get("supported_audio_format_extensions", []),
         verify_sound_file_on_add=bool(overrides.get("verify_sound_file_on_add", True)),
         allow_other_unsupported_audio_files=bool(overrides.get("allow_other_unsupported_audio_files", False)),
@@ -177,10 +187,67 @@ def _build_dialog(**overrides):
         rapid_fire_play_mode=defaults["rapid_fire_play_mode"],
         next_play_mode=defaults["next_play_mode"],
         playlist_loop_mode=defaults["playlist_loop_mode"],
+        automation_command_buttons_follow_playback_controls=bool(
+            overrides.get(
+                "automation_command_buttons_follow_playback_controls",
+                defaults["automation_command_buttons_follow_playback_controls"],
+            )
+        ),
+        automation_command_button_auto_release_mode=str(
+            overrides.get(
+                "automation_command_button_auto_release_mode",
+                defaults["automation_command_button_auto_release_mode"],
+            )
+        ),
+        utility_sound_buttons_follow_playback_controls=bool(
+            overrides.get(
+                "utility_sound_buttons_follow_playback_controls",
+                defaults["utility_sound_buttons_follow_playback_controls"],
+            )
+        ),
         candidate_error_action=defaults["candidate_error_action"],
         web_remote_enabled=defaults["web_remote_enabled"],
         web_remote_port=defaults["web_remote_port"],
         web_remote_url=overrides.get("web_remote_url", "http://127.0.0.1:5050/"),
+        companion_satellite_host=str(
+            overrides.get("companion_satellite_host", defaults["companion_satellite_host"])
+        ),
+        companion_satellite_port=int(
+            overrides.get("companion_satellite_port", defaults["companion_satellite_port"])
+        ),
+        companion_satellite_enabled=bool(
+            overrides.get("companion_satellite_enabled", defaults["companion_satellite_enabled"])
+        ),
+        companion_bypass=bool(
+            overrides.get("companion_bypass", defaults["companion_bypass"])
+        ),
+        internal_bypass=bool(
+            overrides.get("internal_bypass", defaults["internal_bypass"])
+        ),
+        companion_satellite_columns=int(
+            overrides.get("companion_satellite_columns", defaults["companion_satellite_columns"])
+        ),
+        companion_satellite_rows=int(
+            overrides.get("companion_satellite_rows", defaults["companion_satellite_rows"])
+        ),
+        companion_satellite_render_mode=str(
+            overrides.get("companion_satellite_render_mode", defaults["companion_satellite_render_mode"])
+        ),
+        companion_satellite_serial_suffix=str(
+            overrides.get("companion_satellite_serial_suffix", defaults["companion_satellite_serial_suffix"])
+        ),
+        companion_command_mode=str(
+            overrides.get("companion_command_mode", defaults["companion_command_mode"])
+        ),
+        companion_command_tcp_port=int(
+            overrides.get("companion_command_tcp_port", defaults["companion_command_tcp_port"])
+        ),
+        companion_command_udp_port=int(
+            overrides.get("companion_command_udp_port", defaults["companion_command_udp_port"])
+        ),
+        companion_command_http_port=int(
+            overrides.get("companion_command_http_port", defaults["companion_command_http_port"])
+        ),
         main_transport_timeline_mode=defaults["main_transport_timeline_mode"],
         main_jog_outside_cue_action=defaults["main_jog_outside_cue_action"],
         state_colors=defaults["state_colors"],
@@ -366,6 +433,16 @@ def _build_dialog(**overrides):
     )
 
 
+def test_options_dialog_allows_maximize(qapp):
+    dialog = _build_dialog()
+    try:
+        assert bool(dialog.windowFlags() & Qt.WindowMaximizeButtonHint)
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_dialogs_after_test():
     yield
@@ -437,6 +514,9 @@ def test_selected_value_methods_follow_toggles(qapp):
     dialog.rapid_fire_mode_any_radio.setChecked(True)
     dialog.next_mode_any_radio.setChecked(True)
     dialog.playlist_loop_single_radio.setChecked(True)
+    dialog.automation_command_buttons_follow_playback_controls_checkbox.setChecked(True)
+    dialog.automation_command_button_auto_release_down_only_radio.setChecked(True)
+    dialog.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(False)
     dialog.multi_play_disallow_radio.setChecked(True)
     dialog.candidate_error_keep_radio.setChecked(True)
     dialog.timecode_timeline_audio_file_radio.setChecked(True)
@@ -451,6 +531,9 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_rapid_fire_play_mode() == "any_available"
     assert dialog.selected_next_play_mode() == "any_available"
     assert dialog.selected_playlist_loop_mode() == "loop_single"
+    assert dialog.selected_automation_command_buttons_follow_playback_controls() is True
+    assert dialog.selected_automation_command_button_auto_release_mode() == "down_only"
+    assert dialog.selected_utility_sound_buttons_follow_playback_controls() is False
     assert dialog.selected_multi_play_limit_action() == "disallow_more_play"
     assert dialog.selected_candidate_error_action() == "keep_playing"
     assert dialog.selected_timecode_timeline_mode() == "audio_file"
@@ -654,6 +737,7 @@ def test_restore_defaults_window_layout_page(qapp):
     x_item = [item for item in selected["fade"] if item.get("button") == "X"][0]
     assert stop == {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2}
     assert x_item == {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1}
+    assert "Companion Bypass" in selected["available"]
 
 
 def test_window_layout_drop_invalid_size_payload_is_tolerated(qapp):
@@ -773,6 +857,91 @@ def test_launchpad_defaults_include_control_rows(qapp):
     selected = dialog.selected_launchpad_control_bindings()
     assert selected[0] == "prev_group"
     assert selected[15] == "reset_page"
+
+
+def test_companion_satellite_options_round_trip(qapp):
+    dialog = _build_dialog(
+        companion_satellite_host="10.0.0.8",
+        companion_satellite_port=17777,
+        companion_satellite_enabled=True,
+        companion_bypass=True,
+        internal_bypass=True,
+        companion_satellite_columns=7,
+        companion_satellite_rows=4,
+        companion_satellite_render_mode="styled",
+        companion_satellite_serial_suffix="my-surface",
+        companion_command_mode="udp",
+        companion_command_tcp_port=16759,
+        companion_command_udp_port=18000,
+        companion_command_http_port=9000,
+        initial_page="Automation",
+    )
+    assert dialog.selected_companion_satellite_host() == "10.0.0.8"
+    assert dialog.selected_companion_satellite_port() == 17777
+    assert dialog.selected_companion_satellite_enabled() is True
+    assert dialog.selected_companion_bypass() is True
+    assert dialog.selected_internal_bypass() is True
+    assert dialog.selected_companion_satellite_columns() == 7
+    assert dialog.selected_companion_satellite_rows() == 4
+    assert dialog.selected_companion_satellite_render_mode() == "styled"
+    assert dialog.selected_companion_satellite_serial_suffix() == "my-surface"
+    assert dialog.selected_companion_command_mode() == "udp"
+    assert dialog.selected_companion_command_tcp_port() == 16759
+    assert dialog.selected_companion_command_udp_port() == 18000
+    assert dialog.selected_companion_command_http_port() == 9000
+    dialog.companion_satellite_host_edit.setText("companion.local")
+    dialog.companion_satellite_port_spin.setValue(16622)
+    dialog.companion_satellite_enabled_checkbox.setChecked(False)
+    dialog.companion_bypass_checkbox.setChecked(False)
+    dialog.internal_bypass_checkbox.setChecked(False)
+    dialog.companion_satellite_columns_spin.setValue(5)
+    dialog.companion_satellite_rows_spin.setValue(3)
+    dialog.companion_satellite_render_mode_combo.setCurrentIndex(
+        dialog.companion_satellite_render_mode_combo.findData("bitmap")
+    )
+    dialog.companion_satellite_serial_suffix_edit.setText("pyssp:custom_suffix")
+    dialog.companion_command_mode_http_radio.setChecked(True)
+    dialog.companion_command_tcp_port_spin.setValue(20001)
+    dialog.companion_command_udp_port_spin.setValue(20002)
+    dialog.companion_command_http_port_spin.setValue(8000)
+    assert dialog.selected_companion_satellite_host() == "companion.local"
+    assert dialog.selected_companion_satellite_port() == 16622
+    assert dialog.selected_companion_satellite_enabled() is False
+    assert dialog.selected_companion_bypass() is False
+    assert dialog.selected_internal_bypass() is False
+    assert dialog.selected_companion_satellite_columns() == 5
+    assert dialog.selected_companion_satellite_rows() == 3
+    assert dialog.selected_companion_satellite_render_mode() == "bitmap"
+    assert dialog.selected_companion_satellite_serial_suffix() == "custom_suffix"
+    assert dialog.selected_companion_command_mode() == "http"
+    assert dialog.selected_companion_command_tcp_port() == 20001
+    assert dialog.selected_companion_command_udp_port() == 20002
+    assert dialog.selected_companion_command_http_port() == 8000
+
+
+def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
+    dialog = _build_dialog(initial_page="Automation")
+    assert dialog.companion_satellite_columns_spin.value() == 8
+    assert dialog.companion_satellite_rows_spin.value() == 4
+    assert dialog.selected_companion_bypass() is False
+    assert dialog.selected_internal_bypass() is False
+    assert dialog.selected_companion_satellite_render_mode() == "bitmap"
+    assert dialog.selected_companion_satellite_serial_suffix() == default_companion_satellite_serial_suffix()
+    assert dialog.selected_companion_command_mode() == "tcp"
+    assert dialog.selected_companion_command_tcp_port() == 16759
+    assert dialog.selected_companion_command_udp_port() == 16759
+    assert dialog.selected_companion_command_http_port() == 8000
+    assert dialog.selected_automation_script_editor_show_lyric() is False
+
+
+def test_companion_satellite_editor_lyric_visibility_round_trip(qapp):
+    dialog = _build_dialog(
+        initial_page="Automation",
+        automation_script_editor_show_lyric=True,
+    )
+    assert dialog.selected_automation_script_editor_show_lyric() is True
+    dialog.automation_script_editor_show_lyric_checkbox.setChecked(False)
+    assert dialog.selected_automation_script_editor_show_lyric() is False
 
 
 def test_options_pages_are_wrapped_in_scroll_areas(qapp):

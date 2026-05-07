@@ -102,10 +102,16 @@ from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
     AppSettings,
+    default_companion_satellite_serial_suffix,
     get_settings_path,
     load_settings,
     normalize_window_layout,
     save_settings,
+)
+from pyssp.companion_available_commands import (
+    clear_companion_available_commands,
+    load_companion_available_commands,
+    record_companion_available_command,
 )
 from pyssp.i18n import apply_application_font, localize_widget_tree, normalize_language, set_current_language, tr
 from pyssp.launchpad import (
@@ -130,6 +136,7 @@ from pyssp.library_archive import (
     PageSelectionItem,
     UnpackLibraryDialog,
     build_archive_audio_entries,
+    build_archive_automation_script_entries,
     build_archive_lyric_entries,
     build_archive_vocal_removed_entries,
     build_manifest,
@@ -178,6 +185,7 @@ from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.lyric_editor_dialog import LyricEditorDialog
 from pyssp.ui.lyric_navigator import LyricNavigatorWindow
+from pyssp.ui.automation_script_navigator import AutomationScriptNavigatorWindow
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.link_lyric_dialog import LinkLyricDialog
 from pyssp.ui.lyric_display import LyricDisplayWindow
@@ -189,6 +197,7 @@ from pyssp.ui.stage_display import (
 )
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
+from pyssp.ui.companion_available_commands_dialog import CompanionAvailableCommandsDialog
 from pyssp.ui.getting_started_dialog import GettingStartedDialog
 from pyssp.ui.system_info_dialog import SystemInformationDialog
 from pyssp.ui.menu_roles import configure_about_menu_actions, configure_preferences_menu_actions

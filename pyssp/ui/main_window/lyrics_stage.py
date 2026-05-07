@@ -221,6 +221,8 @@ class LyricsStageMixin:
         path = str(slot.file_path or "").strip()
         base_name = os.path.basename(path) if path else ""
         stem = os.path.splitext(base_name)[0] if base_name else ""
+        if not stem and slot.source_type == "utility":
+            stem = self._slot_display_name(slot)
         if mode == "filepath":
             return path or caption or notes or stem
         if mode == "filename":
@@ -285,8 +287,31 @@ class LyricsStageMixin:
         self._lyric_navigator_window.activateWindow()
         self._refresh_lyric_display(force=True)
 
+    def _open_automation_script_navigator(self) -> None:
+        if self._automation_script_navigator_window is None:
+            self._automation_script_navigator_window = AutomationScriptNavigatorWindow(
+                on_seek_to_ms=self._seek_to_lyric_timestamp,
+                show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
+                on_show_lyric_changed=self._set_automation_script_editor_show_lyric,
+                companion_bypass=bool(getattr(self, "companion_bypass", False)),
+                internal_bypass=bool(getattr(self, "internal_bypass", False)),
+                on_companion_bypass_changed=self._toggle_companion_bypass,
+                on_internal_bypass_changed=self._toggle_internal_bypass,
+                language=self.ui_language,
+                parent=self,
+            )
+            self._automation_script_navigator_window.destroyed.connect(self._on_automation_script_navigator_destroyed)
+        self._automation_script_navigator_window.retranslate_ui(self.ui_language)
+        self._automation_script_navigator_window.show()
+        self._automation_script_navigator_window.raise_()
+        self._automation_script_navigator_window.activateWindow()
+        self._refresh_lyric_display(force=True)
+
     def _on_lyric_navigator_destroyed(self, _obj=None) -> None:
         self._lyric_navigator_window = None
+
+    def _on_automation_script_navigator_destroyed(self, _obj=None) -> None:
+        self._automation_script_navigator_window = None
 
     def _seek_to_lyric_timestamp(self, position_ms: int) -> None:
         if self.current_playing is None:
@@ -318,6 +343,25 @@ class LyricsStageMixin:
                 has_active_track=has_active_track,
                 lyric_path=lyric_path,
                 position_ms=position_ms,
+                force=force,
+            )
+        if self._automation_script_navigator_window is not None and (
+            self._automation_script_navigator_window.isVisible() or force
+        ):
+            script_path = ""
+            lyric_path_for_script = ""
+            if self.current_playing is not None:
+                slot = self._slot_for_key(self.current_playing)
+                if slot is not None:
+                    script_path = str(slot.automation_script_path or "").strip()
+                    lyric_path_for_script = str(slot.lyric_file or "").strip()
+            self._automation_script_navigator_window.update_playback_state(
+                has_active_track=has_active_track,
+                script_path=script_path,
+                lyric_path=lyric_path_for_script,
+                position_ms=position_ms,
+                companion_bypass=bool(getattr(self, "companion_bypass", False)),
+                internal_bypass=bool(getattr(self, "internal_bypass", False)),
                 force=force,
             )
 
@@ -437,6 +481,14 @@ class LyricsStageMixin:
             if slot is not None:
                 song_name = self._build_stage_slot_text(slot) or "-"
         lyric = self._stage_display_current_lyric()
+        current_automation_comment = ""
+        next_automation_comment = ""
+        if self.current_playing is not None:
+            player = self._player_for_slot_key(self.current_playing)
+            current_automation_comment, next_automation_comment = self._automation_script_comments_for_slot_key(
+                self.current_playing,
+                player,
+            )
         next_song = self._next_stage_song_name()
         self._stage_display_window.update_values(
             total_time=total_text,
@@ -445,6 +497,8 @@ class LyricsStageMixin:
             progress_percent=progress,
             song_name=song_name,
             lyric=lyric,
+            automation_comment_current=current_automation_comment,
+            automation_comment_next=next_automation_comment,
             next_song=next_song,
             progress_text=self.progress_label.text().strip(),
             progress_style=self._build_progress_bar_stylesheet(progress_ratio, cue_in_ms, cue_out_ms),

@@ -117,6 +117,9 @@ class StateLogicMixin:
             if source_title == "web remote":
                 self._restore_web_remote_defaults()
                 return
+            if source_title == "companion satellite":
+                self._restore_companion_satellite_defaults()
+                return
         finally:
             if hasattr(self, "_update_scroll_hint"):
                 self._update_scroll_hint()
@@ -660,6 +663,16 @@ class StateLogicMixin:
             self.playlist_loop_single_radio.setChecked(True)
         else:
             self.playlist_loop_list_radio.setChecked(True)
+        self.automation_command_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(d.get("automation_command_buttons_follow_playback_controls", False))
+        )
+        if str(d.get("automation_command_button_auto_release_mode", "immediate")) == "down_only":
+            self.automation_command_button_auto_release_down_only_radio.setChecked(True)
+        else:
+            self.automation_command_button_auto_release_immediate_radio.setChecked(True)
+        self.utility_sound_buttons_follow_playback_controls_checkbox.setChecked(
+            bool(d.get("utility_sound_buttons_follow_playback_controls", True))
+        )
         if str(d["candidate_error_action"]) == "keep_playing":
             self.candidate_error_keep_radio.setChecked(True)
         else:
@@ -773,6 +786,35 @@ class StateLogicMixin:
         self.web_remote_port_spin.setValue(int(d["web_remote_port"]))
         self._update_web_remote_page_labels(int(self.web_remote_port_spin.value()))
 
+    def _restore_companion_satellite_defaults(self) -> None:
+        d = self._DEFAULTS
+        self.companion_satellite_host_edit.setText(str(d.get("companion_satellite_host", "127.0.0.1")))
+        self.companion_satellite_port_spin.setValue(int(d.get("companion_satellite_port", 16622)))
+        self.companion_satellite_enabled_checkbox.setChecked(bool(d.get("companion_satellite_enabled", False)))
+        self.companion_bypass_checkbox.setChecked(bool(d.get("companion_bypass", False)))
+        self.internal_bypass_checkbox.setChecked(bool(d.get("internal_bypass", False)))
+        self.companion_satellite_columns_spin.setValue(int(d.get("companion_satellite_columns", 8)))
+        self.companion_satellite_rows_spin.setValue(int(d.get("companion_satellite_rows", 4)))
+        render_mode = str(d.get("companion_satellite_render_mode", "bitmap")).strip().lower()
+        index = self.companion_satellite_render_mode_combo.findData(render_mode if render_mode in {"bitmap", "styled"} else "bitmap")
+        self.companion_satellite_render_mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.companion_satellite_serial_suffix_edit.setText(
+            str(d.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix()))
+        )
+        command_mode = str(d.get("companion_command_mode", "tcp")).strip().lower()
+        self.companion_command_mode_tcp_radio.setChecked(command_mode == "tcp")
+        self.companion_command_mode_udp_radio.setChecked(command_mode == "udp")
+        self.companion_command_mode_http_radio.setChecked(command_mode == "http")
+        if command_mode not in {"tcp", "udp", "http"}:
+            self.companion_command_mode_tcp_radio.setChecked(True)
+        self.companion_command_tcp_port_spin.setValue(int(d.get("companion_command_tcp_port", 16759)))
+        self.companion_command_udp_port_spin.setValue(int(d.get("companion_command_udp_port", 16759)))
+        self.companion_command_http_port_spin.setValue(int(d.get("companion_command_http_port", 8000)))
+        self.warn_dual_automation_sources_checkbox.setChecked(bool(d.get("warn_dual_automation_sources", True)))
+        self.automation_script_editor_show_lyric_checkbox.setChecked(
+            bool(d.get("automation_script_editor_show_lyric", False))
+        )
+
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS
         token = str(d.get("main_ui_lyric_display_mode", "always")).strip().lower()
@@ -794,6 +836,7 @@ class StateLogicMixin:
             str(d.get("new_lyric_file_format", "srt")),
             "srt",
         )
+        self.warn_dual_automation_sources_checkbox.setChecked(bool(d.get("warn_dual_automation_sources", True)))
         self._populate_display_font_combo(
             self.lyric_display_font_family_combo,
             str(d.get("lyric_display_font_family", bundled_display_font_family())),

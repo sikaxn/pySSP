@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,29 @@ def _decode_ascii_setting(value: str) -> str:
     except Exception:
         return raw
     return decoded if isinstance(decoded, str) else raw
+
+
+def default_companion_satellite_serial_suffix() -> str:
+    node = int(uuid.getnode())
+    return f"{node:012x}"
+
+
+def _normalize_companion_satellite_serial_suffix(raw: object) -> str:
+    text = str(raw or "").strip().lower()
+    if text.startswith("pyssp:"):
+        text = text.partition(":")[2].strip().lower()
+    cleaned = "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"})
+    return cleaned or default_companion_satellite_serial_suffix()
+
+
+def _normalize_companion_satellite_render_mode(raw: object) -> str:
+    token = str(raw or "").strip().lower()
+    return token if token in {"bitmap", "styled"} else "bitmap"
+
+
+def _normalize_companion_command_mode(raw: object) -> str:
+    token = str(raw or "").strip().lower()
+    return token if token in {"udp", "tcp", "http"} else "tcp"
 
 
 def default_stage_display_layout() -> list[str]:
@@ -129,6 +153,8 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
     "Talk",
     "Play List",
     "Search",
+    "Companion Bypass",
+    "Internal Bypass",
     "Vocal Removed",
 ]
 WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
@@ -497,6 +523,8 @@ class AppSettings:
     lyric_display_next_italic: bool = False
     search_lyric_on_add_sound_button: bool = True
     new_lyric_file_format: str = "srt"
+    warn_dual_automation_sources: bool = True
+    automation_script_editor_show_lyric: bool = False
     supported_audio_format_extensions: list[str] = field(default_factory=default_supported_audio_format_extensions)
     verify_sound_file_on_add: bool = True
     allow_other_unsupported_audio_files: bool = False
@@ -560,10 +588,27 @@ class AppSettings:
     rapid_fire_play_mode: str = "unplayed_only"
     next_play_mode: str = "unplayed_only"
     playlist_loop_mode: str = "loop_list"
+    automation_command_buttons_follow_playback_controls: bool = False
+    automation_command_button_auto_release_mode: str = "immediate"
+    utility_sound_buttons_follow_playback_controls: bool = True
     candidate_error_action: str = "stop_playback"
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
     web_remote_ws_port: int = 5051
+    companion_satellite_host: str = "127.0.0.1"
+    companion_satellite_port: int = 16622
+    companion_satellite_enabled: bool = False
+    companion_bypass: bool = False
+    internal_bypass: bool = False
+    companion_satellite_columns: int = 8
+    companion_satellite_rows: int = 4
+    companion_satellite_render_mode: str = "bitmap"
+    companion_satellite_serial_suffix: str = field(default_factory=default_companion_satellite_serial_suffix)
+    companion_command_mode: str = "tcp"
+    companion_command_tcp_port: int = 16759
+    companion_command_udp_port: int = 16759
+    companion_command_http_port: int = 8000
+    companion_available_commands_filter_black_empty: bool = True
     timecode_audio_output_device: str = "none"
     timecode_midi_output_device: str = "__none__"
     timecode_mode: str = "follow_media"
@@ -595,6 +640,10 @@ class AppSettings:
     color_vocal_removed_indicator: str = "#8E7CFF"
     color_midi_indicator: str = "#FF9E4A"
     color_lyric_indicator: str = "#57C3A4"
+    color_automation_indicator: str = "#49C16D"
+    color_automation_indicator_bypassed: str = "#9A9A9A"
+    color_automation_script_indicator: str = "#2E8BFF"
+    color_automation_script_indicator_bypassed: str = "#708090"
     sound_button_text_color: str = "#000000"
     hotkey_new_set_1: str = "Ctrl+N"
     hotkey_new_set_2: str = ""
@@ -869,6 +918,8 @@ def save_settings(settings: AppSettings) -> None:
         "lyric_display_next_italic": "1" if settings.lyric_display_next_italic else "0",
         "search_lyric_on_add_sound_button": "1" if settings.search_lyric_on_add_sound_button else "0",
         "new_lyric_file_format": settings.new_lyric_file_format,
+        "warn_dual_automation_sources": "1" if settings.warn_dual_automation_sources else "0",
+        "automation_script_editor_show_lyric": "1" if settings.automation_script_editor_show_lyric else "0",
         "supported_audio_format_extensions": "\t".join(
             _normalize_supported_audio_format_extensions(settings.supported_audio_format_extensions)
         ),
@@ -934,10 +985,37 @@ def save_settings(settings: AppSettings) -> None:
         "rapid_fire_play_mode": settings.rapid_fire_play_mode,
         "next_play_mode": settings.next_play_mode,
         "playlist_loop_mode": settings.playlist_loop_mode,
+        "automation_command_buttons_follow_playback_controls": (
+            "1" if settings.automation_command_buttons_follow_playback_controls else "0"
+        ),
+        "automation_command_button_auto_release_mode": str(
+            settings.automation_command_button_auto_release_mode or "immediate"
+        ),
+        "utility_sound_buttons_follow_playback_controls": "1" if settings.utility_sound_buttons_follow_playback_controls else "0",
         "candidate_error_action": settings.candidate_error_action,
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
         "web_remote_ws_port": str(settings.web_remote_ws_port),
+        "companion_satellite_host": settings.companion_satellite_host,
+        "companion_satellite_port": str(settings.companion_satellite_port),
+        "companion_satellite_enabled": "1" if settings.companion_satellite_enabled else "0",
+        "companion_bypass": "1" if settings.companion_bypass else "0",
+        "internal_bypass": "1" if settings.internal_bypass else "0",
+        "companion_satellite_columns": str(settings.companion_satellite_columns),
+        "companion_satellite_rows": str(settings.companion_satellite_rows),
+        "companion_satellite_render_mode": _normalize_companion_satellite_render_mode(
+            settings.companion_satellite_render_mode
+        ),
+        "companion_satellite_serial_suffix": _normalize_companion_satellite_serial_suffix(
+            settings.companion_satellite_serial_suffix
+        ),
+        "companion_command_mode": _normalize_companion_command_mode(settings.companion_command_mode),
+        "companion_command_tcp_port": str(settings.companion_command_tcp_port),
+        "companion_command_udp_port": str(settings.companion_command_udp_port),
+        "companion_command_http_port": str(settings.companion_command_http_port),
+        "companion_available_commands_filter_black_empty": (
+            "1" if settings.companion_available_commands_filter_black_empty else "0"
+        ),
         "timecode_audio_output_device": settings.timecode_audio_output_device,
         "timecode_midi_output_device": settings.timecode_midi_output_device,
         "timecode_mode": settings.timecode_mode,
@@ -971,6 +1049,10 @@ def save_settings(settings: AppSettings) -> None:
         "color_vocal_removed_indicator": settings.color_vocal_removed_indicator,
         "color_midi_indicator": settings.color_midi_indicator,
         "color_lyric_indicator": settings.color_lyric_indicator,
+        "color_automation_indicator": settings.color_automation_indicator,
+        "color_automation_indicator_bypassed": settings.color_automation_indicator_bypassed,
+        "color_automation_script_indicator": settings.color_automation_script_indicator,
+        "color_automation_script_indicator_bypassed": settings.color_automation_script_indicator_bypassed,
         "sound_button_text_color": settings.sound_button_text_color,
         "hotkey_new_set_1": settings.hotkey_new_set_1,
         "hotkey_new_set_2": settings.hotkey_new_set_2,
@@ -1273,6 +1355,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
         new_lyric_file_format = "srt"
+    warn_dual_automation_sources = _get_bool(section, "warn_dual_automation_sources", True)
+    automation_script_editor_show_lyric = _get_bool(section, "automation_script_editor_show_lyric", False)
     supported_audio_format_extensions = _normalize_supported_audio_format_extensions(
         [item.strip() for item in str(section.get("supported_audio_format_extensions", "")).split("\t") if item.strip()]
     )
@@ -1304,11 +1388,53 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     playlist_loop_mode = str(section.get("playlist_loop_mode", "loop_list")).strip().lower()
     if playlist_loop_mode not in {"loop_list", "loop_single"}:
         playlist_loop_mode = "loop_list"
+    automation_command_buttons_follow_playback_controls = _get_bool(
+        section,
+        "automation_command_buttons_follow_playback_controls",
+        False,
+    )
+    automation_command_button_auto_release_mode = str(
+        section.get("automation_command_button_auto_release_mode", "immediate")
+    ).strip().lower()
+    if automation_command_button_auto_release_mode not in {"immediate", "down_only"}:
+        automation_command_button_auto_release_mode = "immediate"
+    utility_sound_buttons_follow_playback_controls = _get_bool(
+        section,
+        "utility_sound_buttons_follow_playback_controls",
+        True,
+    )
     candidate_error_action = str(section.get("candidate_error_action", "stop_playback")).strip().lower()
     if candidate_error_action not in {"stop_playback", "keep_playing"}:
         candidate_error_action = "stop_playback"
     web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
     web_remote_ws_port = _clamp_int(_get_int(section, "web_remote_ws_port", web_remote_port + 1), 1, 65535)
+    companion_satellite_host = str(section.get("companion_satellite_host", "127.0.0.1")).strip() or "127.0.0.1"
+    companion_satellite_port = _clamp_int(_get_int(section, "companion_satellite_port", 16622), 1, 65535)
+    legacy_companion_satellite_start_mode = str(section.get("companion_satellite_start_mode", "manual")).strip().lower()
+    companion_satellite_enabled = _get_bool(
+        section,
+        "companion_satellite_enabled",
+        legacy_companion_satellite_start_mode == "auto",
+    )
+    companion_bypass = _get_bool(section, "companion_bypass", False)
+    internal_bypass = _get_bool(section, "internal_bypass", False)
+    companion_satellite_columns = _clamp_int(_get_int(section, "companion_satellite_columns", 8), 1, 12)
+    companion_satellite_rows = _clamp_int(_get_int(section, "companion_satellite_rows", 4), 1, 8)
+    companion_satellite_render_mode = _normalize_companion_satellite_render_mode(
+        section.get("companion_satellite_render_mode", "bitmap")
+    )
+    companion_satellite_serial_suffix = _normalize_companion_satellite_serial_suffix(
+        section.get("companion_satellite_serial_suffix", default_companion_satellite_serial_suffix())
+    )
+    companion_command_mode = _normalize_companion_command_mode(section.get("companion_command_mode", "tcp"))
+    companion_command_tcp_port = _clamp_int(_get_int(section, "companion_command_tcp_port", 16759), 1, 65535)
+    companion_command_udp_port = _clamp_int(_get_int(section, "companion_command_udp_port", 16759), 1, 65535)
+    companion_command_http_port = _clamp_int(_get_int(section, "companion_command_http_port", 8000), 1, 65535)
+    companion_available_commands_filter_black_empty = _get_bool(
+        section,
+        "companion_available_commands_filter_black_empty",
+        True,
+    )
     timecode_audio_output_device = str(section.get("timecode_audio_output_device", "none")).strip()
     timecode_midi_output_device = str(section.get("timecode_midi_output_device", "__none__")).strip()
     timecode_mode = str(section.get("timecode_mode", "follow_media")).strip().lower()
@@ -1594,6 +1720,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         lyric_display_next_italic=lyric_display_next_italic,
         search_lyric_on_add_sound_button=search_lyric_on_add_sound_button,
         new_lyric_file_format=new_lyric_file_format,
+        warn_dual_automation_sources=warn_dual_automation_sources,
+        automation_script_editor_show_lyric=automation_script_editor_show_lyric,
         supported_audio_format_extensions=supported_audio_format_extensions,
         verify_sound_file_on_add=verify_sound_file_on_add,
         allow_other_unsupported_audio_files=allow_other_unsupported_audio_files,
@@ -1657,10 +1785,27 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         rapid_fire_play_mode=rapid_fire_play_mode,
         next_play_mode=next_play_mode,
         playlist_loop_mode=playlist_loop_mode,
+        automation_command_buttons_follow_playback_controls=automation_command_buttons_follow_playback_controls,
+        automation_command_button_auto_release_mode=automation_command_button_auto_release_mode,
+        utility_sound_buttons_follow_playback_controls=utility_sound_buttons_follow_playback_controls,
         candidate_error_action=candidate_error_action,
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
         web_remote_ws_port=web_remote_ws_port,
+        companion_satellite_host=companion_satellite_host,
+        companion_satellite_port=companion_satellite_port,
+        companion_satellite_enabled=companion_satellite_enabled,
+        companion_bypass=companion_bypass,
+        internal_bypass=internal_bypass,
+        companion_satellite_columns=companion_satellite_columns,
+        companion_satellite_rows=companion_satellite_rows,
+        companion_satellite_render_mode=companion_satellite_render_mode,
+        companion_satellite_serial_suffix=companion_satellite_serial_suffix,
+        companion_command_mode=companion_command_mode,
+        companion_command_tcp_port=companion_command_tcp_port,
+        companion_command_udp_port=companion_command_udp_port,
+        companion_command_http_port=companion_command_http_port,
+        companion_available_commands_filter_black_empty=companion_available_commands_filter_black_empty,
         timecode_audio_output_device=timecode_audio_output_device,
         timecode_midi_output_device=timecode_midi_output_device,
         timecode_mode=timecode_mode,
@@ -1695,6 +1840,19 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ),
         color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
         color_lyric_indicator=_coerce_hex(str(section.get("color_lyric_indicator", "#57C3A4")), "#57C3A4"),
+        color_automation_indicator=_coerce_hex(str(section.get("color_automation_indicator", "#49C16D")), "#49C16D"),
+        color_automation_indicator_bypassed=_coerce_hex(
+            str(section.get("color_automation_indicator_bypassed", "#9A9A9A")),
+            "#9A9A9A",
+        ),
+        color_automation_script_indicator=_coerce_hex(
+            str(section.get("color_automation_script_indicator", "#2E8BFF")),
+            "#2E8BFF",
+        ),
+        color_automation_script_indicator_bypassed=_coerce_hex(
+            str(section.get("color_automation_script_indicator_bypassed", "#708090")),
+            "#708090",
+        ),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
         hotkey_new_set_1=str(section.get("hotkey_new_set_1", "Ctrl+N")).strip(),
         hotkey_new_set_2=str(section.get("hotkey_new_set_2", "")).strip(),

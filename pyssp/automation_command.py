@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from pyssp.internal_automation import (
+    internal_automation_command_summary,
+    normalize_internal_automation_command_id,
+    normalize_internal_automation_params,
+)
+
 
 AUTOMATION_SOURCE_TYPE = "automation"
+AUTOMATION_COMMAND_SOURCE_COMPANION = "companion"
+AUTOMATION_COMMAND_SOURCE_INTERNAL = "internal"
 AUTOMATION_UNSUPPORTED_MARKER_TEXT = "Unsupported automation command button. A newer version of pySSP is required."
 AUTOMATION_AUTO_RELEASE_IMMEDIATE = "immediate"
 AUTOMATION_AUTO_RELEASE_DOWN_ONLY = "down_only"
@@ -102,9 +111,12 @@ SOUND_BUTTON_AUTOMATION_EVENT_LABELS = {
 
 @dataclass
 class AutomationCommandSpec:
+    source: str = AUTOMATION_COMMAND_SOURCE_COMPANION
     location: str = ""
     button_text: str = ""
     hold_to_release: bool = False
+    internal_command: str = ""
+    internal_params: dict[str, Any] | None = None
 
 
 @dataclass
@@ -154,31 +166,154 @@ def normalize_automation_location(raw: object) -> str:
 
 def normalize_automation_spec(raw: object) -> AutomationCommandSpec:
     if isinstance(raw, AutomationCommandSpec):
+        data = {
+            "source": raw.source,
+            "location": raw.location,
+            "button_text": raw.button_text,
+            "hold_to_release": raw.hold_to_release,
+            "internal_command": raw.internal_command,
+            "internal_params": raw.internal_params,
+        }
+    else:
+        data = dict(raw or {})
+    source = str(data.get("source", "") or "").strip().lower()
+    if source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
         return AutomationCommandSpec(
-            location=normalize_automation_location(raw.location),
-            button_text=str(raw.button_text or "").strip(),
-            hold_to_release=bool(raw.hold_to_release),
+            source=AUTOMATION_COMMAND_SOURCE_INTERNAL,
+            location="",
+            button_text="",
+            hold_to_release=False,
+            internal_command=normalize_internal_automation_command_id(data.get("internal_command", "")),
+            internal_params=normalize_internal_automation_params(
+                data.get("internal_command", ""),
+                data.get("internal_params", {}),
+            ),
         )
-    data = dict(raw or {})
     return AutomationCommandSpec(
+        source=AUTOMATION_COMMAND_SOURCE_COMPANION,
         location=normalize_automation_location(data.get("location", "")),
         button_text=str(data.get("button_text", "") or "").strip(),
         hold_to_release=bool(data.get("hold_to_release", False)),
+        internal_command="",
+        internal_params=None,
     )
 
 
 def automation_spec_to_dict(spec: Optional[AutomationCommandSpec]) -> dict[str, Any]:
     normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        return {
+            "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+            "location": "",
+            "button_text": "",
+            "hold_to_release": False,
+            "internal_command": normalized.internal_command,
+            "internal_params": dict(normalized.internal_params or {}),
+        }
     return {
+        "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
         "location": normalized.location,
         "button_text": normalized.button_text,
         "hold_to_release": bool(normalized.hold_to_release),
+        "internal_command": "",
+        "internal_params": {},
     }
 
 
 def automation_display_name(spec: Optional[AutomationCommandSpec]) -> str:
     normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        return internal_automation_command_summary(
+            normalized.internal_command,
+            normalized.internal_params or {},
+        )
     return normalized.button_text or normalized.location
+
+
+def automation_spec_is_internal(spec: Optional[AutomationCommandSpec]) -> bool:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    return normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL and bool(normalized.internal_command)
+
+
+def automation_spec_is_companion(spec: Optional[AutomationCommandSpec]) -> bool:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    return normalized.source == AUTOMATION_COMMAND_SOURCE_COMPANION and bool(normalized.location)
+
+
+def automation_spec_is_valid(spec: Optional[AutomationCommandSpec]) -> bool:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        return bool(normalized.internal_command)
+    return bool(normalized.location)
+
+
+def automation_spec_detail_text(spec: Optional[AutomationCommandSpec]) -> str:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        return normalized.internal_command
+    return normalized.location
+
+
+def automation_spec_from_set_fields(
+    *,
+    source: object = "",
+    location: object = "",
+    button_text: object = "",
+    hold_to_release: object = False,
+    internal_command: object = "",
+    internal_params_json: object = "",
+) -> AutomationCommandSpec:
+    source_token = str(source or "").strip().lower()
+    if source_token == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        params: dict[str, Any] = {}
+        raw_json = str(internal_params_json or "").strip()
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, dict):
+                    params = dict(parsed)
+            except Exception:
+                params = {}
+        return normalize_automation_spec(
+            {
+                "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                "internal_command": internal_command,
+                "internal_params": params,
+            }
+        )
+    return normalize_automation_spec(
+        {
+            "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
+            "location": location,
+            "button_text": button_text,
+            "hold_to_release": hold_to_release,
+        }
+    )
+
+
+def automation_spec_to_set_fields(spec: Optional[AutomationCommandSpec]) -> dict[str, str]:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+        return {
+            "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+            "location": "",
+            "button_text": "",
+            "hold_to_release": "0",
+            "internal_command": normalized.internal_command,
+            "internal_params_json": json.dumps(
+                dict(normalized.internal_params or {}),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+    return {
+        "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
+        "location": normalized.location,
+        "button_text": normalized.button_text,
+        "hold_to_release": "1" if normalized.hold_to_release else "0",
+        "internal_command": "",
+        "internal_params_json": "",
+    }
 
 
 def normalize_sound_button_automation_config(raw: object) -> Optional[SoundButtonAutomationConfig]:
@@ -267,10 +402,20 @@ def _normalize_optional_press_spec_list(raw: object) -> Optional[list[Automation
     normalized_items: list[AutomationCommandSpec] = []
     for item in items:
         normalized = normalize_automation_spec(item)
-        if not normalized.location:
+        if not automation_spec_is_valid(normalized):
+            continue
+        if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+            normalized_items.append(
+                AutomationCommandSpec(
+                    source=AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                    internal_command=normalized.internal_command,
+                    internal_params=dict(normalized.internal_params or {}),
+                )
+            )
             continue
         normalized_items.append(
             AutomationCommandSpec(
+                source=AUTOMATION_COMMAND_SOURCE_COMPANION,
                 location=normalized.location,
                 button_text=normalized.button_text,
                 hold_to_release=False,

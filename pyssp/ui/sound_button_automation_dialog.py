@@ -31,6 +31,8 @@ from pyssp.automation_command import (
     SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
     SoundButtonAutomationConfig,
     automation_display_name,
+    automation_spec_detail_text,
+    automation_spec_is_valid,
     normalize_automation_spec,
     normalize_sound_button_automation_config,
     sound_button_automation_event_label,
@@ -53,7 +55,9 @@ class _CommandListEditor(QGroupBox):
         self._open_picker = open_picker
         self._on_changed = on_changed
         self._commands: list[AutomationCommandSpec] = [
-            normalize_automation_spec(item) for item in list(commands or []) if normalize_automation_spec(item).location
+            normalize_automation_spec(item)
+            for item in list(commands or [])
+            if automation_spec_is_valid(normalize_automation_spec(item))
         ]
 
         root = QVBoxLayout(self)
@@ -90,11 +94,17 @@ class _CommandListEditor(QGroupBox):
         self._refresh_list()
 
     def commands(self) -> list[AutomationCommandSpec]:
-        return [normalize_automation_spec(item) for item in self._commands if normalize_automation_spec(item).location]
+        return [
+            normalize_automation_spec(item)
+            for item in self._commands
+            if automation_spec_is_valid(normalize_automation_spec(item))
+        ]
 
     def set_commands(self, commands: Optional[list[AutomationCommandSpec]]) -> None:
         self._commands = [
-            normalize_automation_spec(item) for item in list(commands or []) if normalize_automation_spec(item).location
+            normalize_automation_spec(item)
+            for item in list(commands or [])
+            if automation_spec_is_valid(normalize_automation_spec(item))
         ]
         self._refresh_list()
 
@@ -104,7 +114,7 @@ class _CommandListEditor(QGroupBox):
         for spec in self._commands:
             item = QListWidgetItem(automation_display_name(spec))
             item.setData(Qt.UserRole, normalize_automation_spec(spec))
-            detail = normalize_automation_spec(spec).location
+            detail = automation_spec_detail_text(spec)
             item.setToolTip(detail)
             self.list_widget.addItem(item)
         if self.list_widget.count() > 0:
@@ -123,7 +133,7 @@ class _CommandListEditor(QGroupBox):
 
     def _add_command(self) -> None:
         spec = self._open_picker(None)
-        if spec is None or not spec.location:
+        if spec is None or not automation_spec_is_valid(spec):
             return
         self._commands.append(normalize_automation_spec(spec))
         self._refresh_list()
@@ -135,7 +145,7 @@ class _CommandListEditor(QGroupBox):
         if row < 0 or row >= len(self._commands):
             return
         spec = self._open_picker(self._commands[row])
-        if spec is None or not spec.location:
+        if spec is None or not automation_spec_is_valid(spec):
             return
         self._commands[row] = normalize_automation_spec(spec)
         self._refresh_list()
@@ -224,24 +234,25 @@ class _AdvancedAutomationRowDialog(QDialog):
     def values(self) -> Optional[tuple[str, AutomationCommandSpec]]:
         event_name = str(self.trigger_combo.currentData() or "").strip().lower()
         spec = normalize_automation_spec(self._selected_spec)
-        if event_name not in SOUND_BUTTON_AUTOMATION_EVENTS or not spec.location:
+        if event_name not in SOUND_BUTTON_AUTOMATION_EVENTS or not automation_spec_is_valid(spec):
             return None
         return event_name, spec
 
     def _select_command(self) -> None:
-        spec = self._open_picker(self._selected_spec if self._selected_spec.location else None)
-        if spec is None or not spec.location:
+        spec = self._open_picker(self._selected_spec if automation_spec_is_valid(self._selected_spec) else None)
+        if spec is None or not automation_spec_is_valid(spec):
             return
         self._selected_spec = normalize_automation_spec(spec)
         self._refresh_command_label()
 
     def _refresh_command_label(self) -> None:
         spec = normalize_automation_spec(self._selected_spec)
-        if not spec.location:
+        if not automation_spec_is_valid(spec):
             self.command_label.setText(tr("No command selected."))
             return
         label = automation_display_name(spec)
-        self.command_label.setText(f"{label} ({spec.location})")
+        detail = automation_spec_detail_text(spec)
+        self.command_label.setText(f"{label} ({detail})" if detail else label)
 
 
 class _AdvancedAutomationTable(QGroupBox):
@@ -305,7 +316,7 @@ class _AdvancedAutomationTable(QGroupBox):
             (str(event_name or "").strip().lower(), normalize_automation_spec(spec))
             for event_name, spec in self._rows
             if str(event_name or "").strip().lower() in SOUND_BUTTON_AUTOMATION_EVENTS
-            and normalize_automation_spec(spec).location
+            and automation_spec_is_valid(normalize_automation_spec(spec))
         ]
 
     def set_rows(self, rows: Optional[list[tuple[str, AutomationCommandSpec]]]) -> None:
@@ -326,7 +337,7 @@ class _AdvancedAutomationTable(QGroupBox):
         for event_name, spec in replacement_rows:
             normalized_event = str(event_name or "").strip().lower()
             normalized_spec = normalize_automation_spec(spec)
-            if normalized_event in event_set and normalized_spec.location:
+            if normalized_event in event_set and automation_spec_is_valid(normalized_spec):
                 normalized_replacements.setdefault(normalized_event, []).append((normalized_event, normalized_spec))
         updated_rows: list[tuple[str, AutomationCommandSpec]] = []
         inserted_events: set[str] = set()
@@ -349,7 +360,7 @@ class _AdvancedAutomationTable(QGroupBox):
     def _append_row(self, event_name: str, spec: AutomationCommandSpec) -> None:
         normalized_event = str(event_name or "").strip().lower()
         normalized_spec = normalize_automation_spec(spec)
-        if normalized_event not in SOUND_BUTTON_AUTOMATION_EVENTS or not normalized_spec.location:
+        if normalized_event not in SOUND_BUTTON_AUTOMATION_EVENTS or not automation_spec_is_valid(normalized_spec):
             return
         self._rows.append((normalized_event, normalized_spec))
 
@@ -365,7 +376,7 @@ class _AdvancedAutomationTable(QGroupBox):
             command_text = automation_display_name(spec)
             command_item = QTableWidgetItem(command_text)
             command_item.setData(Qt.UserRole, normalize_automation_spec(spec))
-            command_item.setToolTip(normalize_automation_spec(spec).location)
+            command_item.setToolTip(automation_spec_detail_text(spec))
             command_item.setFlags(command_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, trigger_item)
             self.table.setItem(row, 1, command_item)
@@ -610,7 +621,7 @@ class SoundButtonAutomationDialog(QDialog):
             return None
         _caption, _notes, selected_spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
         normalized = normalize_automation_spec(selected_spec)
-        if not normalized.location:
+        if not automation_spec_is_valid(normalized):
             return None
         return normalized
 
@@ -696,6 +707,6 @@ class SoundButtonAutomationDialog(QDialog):
         for event_name in SOUND_BUTTON_AUTOMATION_EVENTS:
             for spec in list(getattr(normalized, event_name, None) or []):
                 normalized_spec = normalize_automation_spec(spec)
-                if normalized_spec.location:
+                if automation_spec_is_valid(normalized_spec):
                     rows.append((event_name, normalized_spec))
         return rows

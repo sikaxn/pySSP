@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
     AutomationCommandSpec,
     automation_display_name,
+    automation_spec_is_valid,
     automation_spec_to_dict,
     normalize_automation_spec,
 )
@@ -17,6 +19,7 @@ AUTOMATION_SCRIPT_EXTENSION = ".pysspautoscript"
 AUTOMATION_SCRIPT_FORMAT = "pysspautoscript"
 AUTOMATION_SCRIPT_VERSION = 1
 AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND = "companion_command"
+AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND = "internal_command"
 
 
 @dataclass
@@ -46,13 +49,33 @@ def normalize_automation_script_action(raw: object) -> Optional[AutomationScript
         data = dict(raw or {})
         action_type = str(data.get("type", "") or "").strip().lower()
         payload = data.get("payload")
-    if action_type != AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND:
+    if action_type not in {
+        AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+        AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
+    }:
         return None
     normalized_payload = normalize_automation_spec(payload or {})
-    if not normalized_payload.location:
+    if action_type == AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND:
+        normalized_payload = normalize_automation_spec(
+            {
+                "source": "companion",
+                "location": normalized_payload.location,
+                "button_text": normalized_payload.button_text,
+                "hold_to_release": False,
+            }
+        )
+    else:
+        normalized_payload = normalize_automation_spec(
+            {
+                "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                "internal_command": normalized_payload.internal_command,
+                "internal_params": normalized_payload.internal_params,
+            }
+        )
+    if not automation_spec_is_valid(normalized_payload):
         return None
     return AutomationScriptAction(
-        type=AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+        type=action_type,
         payload=normalized_payload,
     )
 
@@ -122,7 +145,7 @@ def automation_script_action_to_dict(action: AutomationScriptAction) -> dict[str
     if normalized is None or normalized.payload is None:
         return {}
     return {
-        "type": AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+        "type": normalized.type,
         "payload": automation_spec_to_dict(normalized.payload),
     }
 
@@ -192,7 +215,7 @@ def automation_script_cue_command_summary(cue: Optional[AutomationScriptCue]) ->
     labels = []
     for action in list(normalized.actions or []):
         spec = normalize_automation_spec(getattr(action, "payload", None) or {})
-        if spec.location:
+        if automation_spec_is_valid(spec):
             labels.append(automation_script_command_display_name(spec))
     return ", ".join(labels)
 

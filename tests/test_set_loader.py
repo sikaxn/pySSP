@@ -428,6 +428,42 @@ def test_load_set_sound_button_simple_automation_round_trip_fields(tmp_path):
     assert slot.sound_button_automation.bypassed is True
 
 
+def test_load_set_internal_automation_slot_fields(tmp_path):
+    set_path = tmp_path / "internal_automation.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                f"c1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%",
+                f"n1={AUTOMATION_UNSUPPORTED_MARKER_TEXT}",
+                "t1= ",
+                "activity1=7",
+                "co1=clBtnFace",
+                "pysspsourcetype1=automation",
+                "pysspautomationsource1=internal",
+                "pysspautomationinternalcommand1=volume_set",
+                "pysspautomationinternalparams1={\"level\":70}",
+                "pysspautomationtitle1=Set Volume 70%",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.automation_spec is not None
+    assert slot.automation_spec.source == "internal"
+    assert slot.automation_spec.internal_command == "volume_set"
+    assert slot.automation_spec.internal_params == {"level": 70}
+    assert slot.title == "Set Volume 70%"
+
+
 def test_load_set_legacy_unsupported_automation_marker_stays_marker_without_pyssp_metadata(tmp_path):
     set_path = tmp_path / "automation_legacy_marker.set"
     set_path.write_text(

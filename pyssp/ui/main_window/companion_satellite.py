@@ -4,14 +4,18 @@ import threading
 
 from .shared import *
 from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_COMPANION,
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
     AUTOMATION_AUTO_RELEASE_IMMEDIATE,
     AUTOMATION_SOURCE_TYPE,
     AutomationCommandSpec,
+    automation_spec_is_valid,
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
 from pyssp.automation_script import (
     AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+    AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
     AutomationScript,
     AutomationScriptAction,
     load_automation_script,
@@ -56,21 +60,57 @@ class CompanionSatelliteMixin:
     def _build_automation_script_specs(self, actions: list[AutomationScriptAction]) -> list[AutomationCommandSpec]:
         specs: list[AutomationCommandSpec] = []
         for action in list(actions or []):
-            if str(getattr(action, "type", "") or "").strip() != AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND:
+            action_type = str(getattr(action, "type", "") or "").strip()
+            if action_type not in {
+                AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+                AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
+            }:
                 continue
             payload_spec = normalize_automation_spec(getattr(action, "payload", None) or {})
-            if not payload_spec.location:
-                continue
-            specs.append(
-                normalize_automation_spec(
+            if action_type == AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND:
+                payload_spec = normalize_automation_spec(
                     {
+                        "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                        "internal_command": payload_spec.internal_command,
+                        "internal_params": payload_spec.internal_params,
+                    }
+                )
+            else:
+                payload_spec = normalize_automation_spec(
+                    {
+                        "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
                         "location": payload_spec.location,
-                        "button_text": str(payload_spec.button_text or "").strip(),
+                        "button_text": payload_spec.button_text,
                         "hold_to_release": False,
                     }
                 )
-            )
-        return [spec for spec in specs if spec.location]
+            if not automation_spec_is_valid(payload_spec):
+                continue
+            specs.append(payload_spec)
+        return [spec for spec in specs if automation_spec_is_valid(spec)]
+
+    def _execute_automation_command_spec(self, spec: AutomationCommandSpec, action: str = "press") -> bool:
+        normalized = normalize_automation_spec(spec)
+        if normalized.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+            return bool(self._execute_internal_automation_spec(normalized))
+        if not normalized.location:
+            return False
+        return self._send_companion_location_command_async(normalized.location, action)
+
+    def _execute_automation_command_specs(self, specs: list[AutomationCommandSpec]) -> bool:
+        normalized_specs = [
+            normalize_automation_spec(spec)
+            for spec in list(specs or [])
+            if automation_spec_is_valid(normalize_automation_spec(spec))
+        ]
+        if not normalized_specs:
+            return False
+        if all(spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION for spec in normalized_specs):
+            return self._send_companion_command_specs_async(normalized_specs)
+        executed = False
+        for spec in normalized_specs:
+            executed = self._execute_automation_command_spec(spec) or executed
+        return executed
 
     def _prime_automation_script_player(self, player: ExternalMediaPlayer, slot_key: Optional[Tuple[str, int, int]]) -> None:
         pid = id(player)
@@ -156,7 +196,7 @@ class CompanionSatelliteMixin:
                 break
             specs = self._build_automation_script_specs(list(getattr(cue, "actions", []) or []))
             if specs:
-                self._send_companion_command_specs_async(specs)
+                self._execute_automation_command_specs(specs)
             state["current_index"] = next_index
             next_index += 1
         state["next_index"] = next_index
@@ -366,7 +406,7 @@ class CompanionSatelliteMixin:
         specs = list(getattr(config, event_name, None) or [])
         if not specs:
             return False
-        return self._send_companion_command_specs_async(specs)
+        return self._execute_automation_command_specs(specs)
 
     def _trigger_sound_button_automation_events(
         self,
@@ -500,7 +540,10 @@ class CompanionSatelliteMixin:
         if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
             return False
         spec = slot.automation_spec
-        if spec is None or (not spec.hold_to_release):
+        if spec is None:
+            return False
+        spec = normalize_automation_spec(spec)
+        if spec.source != AUTOMATION_COMMAND_SOURCE_COMPANION or (not spec.hold_to_release):
             return False
         if slot_key in self._automation_hold_active_keys:
             return True
@@ -518,11 +561,12 @@ class CompanionSatelliteMixin:
         if slot_key not in self._automation_hold_active_keys:
             return False
         spec = slot.automation_spec
+        spec = None if spec is None else normalize_automation_spec(spec)
         self._automation_hold_active_keys.discard(slot_key)
         self._automation_click_suppressed_slot_key = slot_key
         QTimer.singleShot(0, lambda: setattr(self, "_automation_click_suppressed_slot_key", None))
         self._set_automation_slot_active(slot_key, False)
-        if spec is None:
+        if spec is None or spec.source != AUTOMATION_COMMAND_SOURCE_COMPANION:
             return False
         if self._send_companion_location_command_async(spec.location, "up"):
             self._mark_automation_slot_played(slot_key)
@@ -548,13 +592,14 @@ class CompanionSatelliteMixin:
         if slot is None or slot.source_type != AUTOMATION_SOURCE_TYPE or slot.marker or not slot.assigned or slot.locked:
             return False
         spec = slot.automation_spec
-        if spec is None or not spec.location:
-            self._show_info_notice_banner(tr("Automation command location is missing."))
+        if spec is None or not automation_spec_is_valid(spec):
+            self._show_info_notice_banner(tr("Automation command is missing."))
             return False
+        spec = normalize_automation_spec(spec)
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
         if playlist_enabled and self.current_playlist_start is None:
             self.current_playlist_start = slot_index
-        if spec.hold_to_release and (not auto_release):
+        if spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION and spec.hold_to_release and (not auto_release):
             if not self._send_companion_location_command_async(spec.location, "down"):
                 return False
             self._flash_automation_slot(slot_key, duration_ms=600)
@@ -562,7 +607,7 @@ class CompanionSatelliteMixin:
             if continue_playlist_after_automation:
                 self._continue_playlist_after_automation_trigger(slot_key)
             return True
-        if spec.hold_to_release:
+        if spec.source == AUTOMATION_COMMAND_SOURCE_COMPANION and spec.hold_to_release:
             if not self._send_companion_location_command_async(spec.location, "down"):
                 return False
             self._flash_automation_slot(slot_key)
@@ -571,7 +616,7 @@ class CompanionSatelliteMixin:
             if continue_playlist_after_automation:
                 self._continue_playlist_after_automation_trigger(slot_key)
             return True
-        if not self._send_companion_location_command_async(spec.location, "press"):
+        if not self._execute_automation_command_spec(spec, "press"):
             return False
         self._flash_automation_slot(slot_key)
         self._mark_automation_slot_played(slot_key)

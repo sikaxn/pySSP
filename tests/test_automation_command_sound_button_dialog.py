@@ -89,3 +89,32 @@ def test_manual_location_mode_uses_page_row_column_text_boxes(qapp):
         assert spec.button_text == ""
     finally:
         _cleanup(dialog, qapp)
+
+
+def test_internal_command_tab_returns_internal_spec(qapp):
+    dialog = AutomationCommandSoundButtonDialog(
+        caption="",
+        notes="",
+        companion_payload=_payload(),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        dialog.source_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        for row in range(dialog.internal_command_list.count()):
+            item = dialog.internal_command_list.item(row)
+            if item is not None and item.data(256) == "volume_set":
+                dialog.internal_command_list.setCurrentRow(row)
+                break
+        dialog.internal_volume_spin.setValue(75)
+        qapp.processEvents()
+
+        caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
+
+        assert spec.source == "internal"
+        assert spec.internal_command == "volume_set"
+        assert spec.internal_params == {"level": 75}
+        assert caption == "Set Volume 75%"
+    finally:
+        _cleanup(dialog, qapp)

@@ -10,20 +10,26 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QRadioButton,
     QSlider,
+    QSpinBox,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -33,9 +39,18 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.audio_engine import ExternalMediaPlayer, is_audio_preloaded, request_audio_preload
-from pyssp.automation_command import AutomationCommandSpec, normalize_automation_spec
+from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_COMPANION,
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
+    AutomationCommandSpec,
+    automation_display_name,
+    automation_spec_detail_text,
+    automation_spec_is_valid,
+    normalize_automation_spec,
+)
 from pyssp.automation_script import (
     AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+    AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND,
     AutomationScript,
     AutomationScriptAction,
     AutomationScriptCue,
@@ -50,6 +65,7 @@ from pyssp.companion_available_commands import (
     list_companion_available_commands,
 )
 from pyssp.i18n import localize_widget_tree, tr
+from pyssp.internal_automation import list_internal_automation_commands, normalize_internal_automation_params
 from pyssp.lyrics import LyricLine, parse_lyric_file
 from pyssp.ui.waveform_view import CueRangeIndicator, WaveformRefreshController
 
@@ -262,13 +278,13 @@ class AutomationScriptEditorDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        command_group = QGroupBox(tr("Companion Command"), self)
+        command_group = QGroupBox(tr("Automation Command"), self)
         command_layout = QVBoxLayout(command_group)
         command_layout.setContentsMargins(8, 8, 8, 8)
         command_layout.setSpacing(6)
 
         self._command_panel_hint_label = QLabel(
-            tr("3. Pick a Companion command on the right, then add it into the selected cue.")
+            tr("3. Pick either a Companion command or an internal pySSP command on the right, then add it into the selected cue.")
         )
         self._command_panel_hint_label.setWordWrap(True)
         self._command_panel_hint_label.setStyleSheet("QLabel{font-weight:600;}")
@@ -278,6 +294,14 @@ class AutomationScriptEditorDialog(QDialog):
         self._selected_command_label = QLabel("-")
         command_form.addRow(tr("Selected Command"), self._selected_command_label)
         command_layout.addLayout(command_form)
+
+        self._command_source_tabs = QTabWidget(self)
+        command_layout.addWidget(self._command_source_tabs, 1)
+
+        companion_tab = QWidget(self)
+        companion_tab_layout = QVBoxLayout(companion_tab)
+        companion_tab_layout.setContentsMargins(0, 0, 0, 0)
+        companion_tab_layout.setSpacing(6)
 
         mode_row = QWidget(self)
         mode_layout = QHBoxLayout(mode_row)
@@ -289,7 +313,7 @@ class AutomationScriptEditorDialog(QDialog):
         self._location_mode_group.addButton(self._manual_location_radio)
         mode_layout.addWidget(self._pick_from_list_radio)
         mode_layout.addWidget(self._manual_location_radio)
-        command_layout.addWidget(mode_row)
+        companion_tab_layout.addWidget(mode_row)
 
         manual_row = QWidget(self)
         manual_layout = QHBoxLayout(manual_row)
@@ -305,10 +329,10 @@ class AutomationScriptEditorDialog(QDialog):
             edit.setValidator(numeric_validator)
             edit.setMaxLength(4)
             manual_layout.addWidget(edit)
-        command_layout.addWidget(manual_row)
+        companion_tab_layout.addWidget(manual_row)
 
         self._hold_to_release_checkbox = QCheckBox(tr("Respect press-down / release-up input"))
-        command_layout.addWidget(self._hold_to_release_checkbox)
+        companion_tab_layout.addWidget(self._hold_to_release_checkbox)
 
         filters_row = QGridLayout()
         self._hide_black_empty_checkbox = QCheckBox(tr("Hide Black Empty Buttons"))
@@ -321,13 +345,13 @@ class AutomationScriptEditorDialog(QDialog):
         filters_row.addWidget(self._hide_navigation_checkbox, 0, 1)
         filters_row.addWidget(QLabel(tr("Search:")), 1, 0)
         filters_row.addWidget(self._search_edit, 1, 1)
-        command_layout.addLayout(filters_row)
+        companion_tab_layout.addLayout(filters_row)
 
         self._command_help_label = QLabel(
             tr("Pick a Companion Available Command below. If your command is missing, open Available Commands or Virtual Satellite first so pySSP can learn it.")
         )
         self._command_help_label.setWordWrap(True)
-        command_layout.addWidget(self._command_help_label)
+        companion_tab_layout.addWidget(self._command_help_label)
 
         self._command_table = QTableWidget(self)
         self._command_table.setColumnCount(3)
@@ -338,11 +362,91 @@ class AutomationScriptEditorDialog(QDialog):
         self._command_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._command_table.verticalHeader().setVisible(False)
         self._command_table.horizontalHeader().setStretchLastSection(True)
-        command_layout.addWidget(self._command_table, 1)
+        companion_tab_layout.addWidget(self._command_table, 1)
 
         self._command_text_label = QLabel("")
         self._command_text_label.setWordWrap(True)
-        command_layout.addWidget(self._command_text_label)
+        companion_tab_layout.addWidget(self._command_text_label)
+        self._command_source_tabs.addTab(companion_tab, tr("Companion"))
+
+        internal_tab = QWidget(self)
+        internal_tab_layout = QHBoxLayout(internal_tab)
+        internal_tab_layout.setContentsMargins(0, 0, 0, 0)
+        internal_tab_layout.setSpacing(8)
+        self._internal_command_list = QListWidget(self)
+        internal_tab_layout.addWidget(self._internal_command_list, 1)
+        internal_form_panel = QWidget(self)
+        internal_form_panel_layout = QVBoxLayout(internal_form_panel)
+        internal_form_panel_layout.setContentsMargins(0, 0, 0, 0)
+        internal_form_panel_layout.setSpacing(6)
+        self._internal_summary_label = QLabel("-")
+        self._internal_summary_label.setWordWrap(True)
+        internal_form_panel_layout.addWidget(self._internal_summary_label)
+        self._internal_form = QFormLayout()
+        internal_form_panel_layout.addLayout(self._internal_form)
+        self._internal_mode_combo = QComboBox(self)
+        self._internal_mode_combo.addItem(tr("Show"), "show")
+        self._internal_mode_combo.addItem(tr("Blank"), "blank")
+        self._internal_mode_combo.addItem(tr("Toggle"), "toggle")
+        self._internal_toggle_mode_combo = QComboBox(self)
+        self._internal_toggle_mode_combo.addItem(tr("Enable"), "enable")
+        self._internal_toggle_mode_combo.addItem(tr("Disable"), "disable")
+        self._internal_toggle_mode_combo.addItem(tr("Toggle"), "toggle")
+        self._internal_fade_kind_combo = QComboBox(self)
+        self._internal_fade_kind_combo.addItem(tr("Fade In"), "fadein")
+        self._internal_fade_kind_combo.addItem(tr("Fade Out"), "fadeout")
+        self._internal_fade_kind_combo.addItem(tr("Crossfade"), "crossfade")
+        self._internal_reset_scope_combo = QComboBox(self)
+        self._internal_reset_scope_combo.addItem(tr("Current"), "current")
+        self._internal_reset_scope_combo.addItem(tr("All"), "all")
+        self._internal_nav_target_combo = QComboBox(self)
+        self._internal_nav_target_combo.addItem(tr("Group"), "group")
+        self._internal_nav_target_combo.addItem(tr("Page"), "page")
+        self._internal_nav_target_combo.addItem(tr("Sound Button"), "sound_button")
+        self._internal_nav_direction_combo = QComboBox(self)
+        self._internal_nav_direction_combo.addItem(tr("Next"), "next")
+        self._internal_nav_direction_combo.addItem(tr("Previous"), "prev")
+        self._internal_target_edit = QLineEdit(self)
+        self._internal_target_edit.setPlaceholderText("A-1-1")
+        self._internal_volume_spin = QSpinBox(self)
+        self._internal_volume_spin.setRange(0, 100)
+        self._internal_volume_spin.setSuffix("%")
+        self._internal_seek_mode_combo = QComboBox(self)
+        self._internal_seek_mode_combo.addItem(tr("Percent"), "percent")
+        self._internal_seek_mode_combo.addItem(tr("Time"), "time")
+        self._internal_seek_percent_spin = QDoubleSpinBox(self)
+        self._internal_seek_percent_spin.setRange(0.0, 100.0)
+        self._internal_seek_percent_spin.setDecimals(1)
+        self._internal_seek_percent_spin.setSuffix("%")
+        self._internal_seek_time_edit = QLineEdit(self)
+        self._internal_alert_mode_combo = QComboBox(self)
+        self._internal_alert_mode_combo.addItem(tr("Show Alert"), "show")
+        self._internal_alert_mode_combo.addItem(tr("Clear Alert"), "clear")
+        self._internal_alert_text_edit = QPlainTextEdit(self)
+        self._internal_alert_text_edit.setMaximumHeight(84)
+        self._internal_alert_keep_checkbox = QCheckBox(tr("Keep on screen until cleared"), self)
+        self._internal_alert_keep_checkbox.setChecked(True)
+        self._internal_alert_seconds_spin = QSpinBox(self)
+        self._internal_alert_seconds_spin.setRange(1, 600)
+        self._internal_alert_seconds_spin.setValue(10)
+        self._internal_form.addRow(tr("Mode"), self._internal_mode_combo)
+        self._internal_form.addRow(tr("Toggle Mode"), self._internal_toggle_mode_combo)
+        self._internal_form.addRow(tr("Fade Type"), self._internal_fade_kind_combo)
+        self._internal_form.addRow(tr("Scope"), self._internal_reset_scope_combo)
+        self._internal_form.addRow(tr("Target"), self._internal_nav_target_combo)
+        self._internal_form.addRow(tr("Direction"), self._internal_nav_direction_combo)
+        self._internal_form.addRow(tr("Button / Page"), self._internal_target_edit)
+        self._internal_form.addRow(tr("Volume"), self._internal_volume_spin)
+        self._internal_form.addRow(tr("Seek Mode"), self._internal_seek_mode_combo)
+        self._internal_form.addRow(tr("Seek Percent"), self._internal_seek_percent_spin)
+        self._internal_form.addRow(tr("Seek Time"), self._internal_seek_time_edit)
+        self._internal_form.addRow(tr("Alert Action"), self._internal_alert_mode_combo)
+        self._internal_form.addRow(tr("Alert Text"), self._internal_alert_text_edit)
+        self._internal_form.addRow("", self._internal_alert_keep_checkbox)
+        self._internal_form.addRow(tr("Seconds"), self._internal_alert_seconds_spin)
+        internal_form_panel_layout.addStretch(1)
+        internal_tab_layout.addWidget(internal_form_panel, 1)
+        self._command_source_tabs.addTab(internal_tab, tr("Internal"))
         right_layout.addWidget(command_group, 1)
         splitter.addWidget(right_panel)
         splitter.setSizes([900, 360])
@@ -382,12 +486,31 @@ class AutomationScriptEditorDialog(QDialog):
         self._manual_row_edit.textChanged.connect(self._sync_selected_command)
         self._manual_column_edit.textChanged.connect(self._sync_selected_command)
         self._hold_to_release_checkbox.toggled.connect(self._sync_selected_command)
+        self._command_source_tabs.currentChanged.connect(self._sync_selected_command)
+        self._internal_command_list.currentRowChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_toggle_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_fade_kind_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_reset_scope_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_nav_target_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_nav_direction_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_edit.textChanged.connect(self._sync_selected_command)
+        self._internal_volume_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
+        self._internal_seek_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_seek_percent_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
+        self._internal_seek_time_edit.textChanged.connect(self._sync_selected_command)
+        self._internal_alert_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_alert_text_edit.textChanged.connect(self._sync_selected_command)
+        self._internal_alert_keep_checkbox.toggled.connect(self._sync_selected_command)
+        self._internal_alert_seconds_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
 
         self._apply_command_filters()
+        self._populate_internal_command_list()
         if self._command_table.rowCount() > 0:
             self._pick_from_list_radio.setChecked(True)
         else:
             self._manual_location_radio.setChecked(True)
+        self._command_source_tabs.setCurrentIndex(0)
         self._on_location_mode_changed()
         self._refresh_cue_indicator()
         self._refresh_transport_times(0)
@@ -791,7 +914,7 @@ class AutomationScriptEditorDialog(QDialog):
         selected_is_lyric = bool(selected and selected.get("kind") == "lyric")
         selected_command_row = self._selected_command_index_in_cue()
         cue_command_count = 0 if cue is None else len(list(cue.actions or []))
-        can_add_command = cue is not None and bool(self._build_selected_command_spec().location)
+        can_add_command = cue is not None and automation_spec_is_valid(self._build_selected_command_spec())
         self._delete_btn.setEnabled(cue is not None)
         self._add_selected_lyric_btn.setEnabled(selected_is_lyric)
         self._add_selected_command_btn.setEnabled(can_add_command)
@@ -842,7 +965,7 @@ class AutomationScriptEditorDialog(QDialog):
                 if query in f"{entry.get('page', '')}/{entry.get('row', '')}/{entry.get('column', '')}".lower()
                 or query in str(entry.get("text", "") or "").lower()
             ]
-        previous_location = self._build_selected_command_spec().location
+        previous_location = self._selected_command_location_from_table()
         self._command_table.setSortingEnabled(False)
         self._command_table.setRowCount(len(rows))
         selected_row = -1
@@ -900,7 +1023,126 @@ class AutomationScriptEditorDialog(QDialog):
             return ""
         return str(item.data(Qt.UserRole) or item.text() or "").strip()
 
+    def _populate_internal_command_list(self) -> None:
+        self._internal_command_list.clear()
+        for entry in list_internal_automation_commands():
+            item = QListWidgetItem(f"{entry.get('category', '')}: {entry.get('label', '')}")
+            item.setData(Qt.UserRole, str(entry.get("id", "") or "").strip())
+            self._internal_command_list.addItem(item)
+        if self._internal_command_list.count() > 0 and self._internal_command_list.currentRow() < 0:
+            self._internal_command_list.setCurrentRow(0)
+
+    def _selected_internal_command_id(self) -> str:
+        item = self._internal_command_list.currentItem()
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or "").strip().lower()
+
+    def _selected_internal_params(self, command_id: str) -> dict:
+        params: dict[str, object] = {}
+        if command_id == "lyric_display":
+            params["mode"] = self._internal_mode_combo.currentData()
+        elif command_id in {"vocal_removed", "talk", "playlist", "playlist_shuffle", "multiplay"}:
+            params["mode"] = self._internal_toggle_mode_combo.currentData()
+        elif command_id == "fade":
+            params["kind"] = self._internal_fade_kind_combo.currentData()
+            params["mode"] = self._internal_toggle_mode_combo.currentData()
+        elif command_id == "resetpage":
+            params["scope"] = self._internal_reset_scope_combo.currentData()
+        elif command_id == "navigate":
+            params["target"] = self._internal_nav_target_combo.currentData()
+            params["direction"] = self._internal_nav_direction_combo.currentData()
+        elif command_id == "play":
+            params["button_id"] = self._internal_target_edit.text().strip()
+        elif command_id == "goto":
+            params["target"] = self._internal_target_edit.text().strip()
+        elif command_id == "volume_set":
+            params["level"] = int(self._internal_volume_spin.value())
+        elif command_id == "seek":
+            params["seek_mode"] = self._internal_seek_mode_combo.currentData()
+            if params["seek_mode"] == "time":
+                params["time"] = self._internal_seek_time_edit.text().strip()
+            else:
+                params["percent"] = float(self._internal_seek_percent_spin.value())
+        elif command_id == "alert":
+            params["alert_mode"] = self._internal_alert_mode_combo.currentData()
+            params["text"] = self._internal_alert_text_edit.toPlainText().strip()
+            params["keep"] = bool(self._internal_alert_keep_checkbox.isChecked())
+            params["seconds"] = int(self._internal_alert_seconds_spin.value())
+        return normalize_internal_automation_params(command_id, params)
+
+    def _refresh_internal_form_visibility(self) -> None:
+        command_id = self._selected_internal_command_id()
+        is_internal = self._command_source_tabs.currentIndex() == 1
+        widgets = [
+            self._internal_mode_combo,
+            self._internal_toggle_mode_combo,
+            self._internal_fade_kind_combo,
+            self._internal_reset_scope_combo,
+            self._internal_nav_target_combo,
+            self._internal_nav_direction_combo,
+            self._internal_target_edit,
+            self._internal_volume_spin,
+            self._internal_seek_mode_combo,
+            self._internal_seek_percent_spin,
+            self._internal_seek_time_edit,
+            self._internal_alert_mode_combo,
+            self._internal_alert_text_edit,
+            self._internal_alert_keep_checkbox,
+            self._internal_alert_seconds_spin,
+        ]
+        for widget in widgets:
+            label = self._internal_form.labelForField(widget)
+            if label is not None:
+                label.setVisible(False)
+            widget.setVisible(False)
+        if not is_internal:
+            return
+        def _show(widget):
+            label = self._internal_form.labelForField(widget)
+            if label is not None:
+                label.setVisible(True)
+            widget.setVisible(True)
+        if command_id == "lyric_display":
+            _show(self._internal_mode_combo)
+        elif command_id in {"vocal_removed", "talk", "playlist", "playlist_shuffle", "multiplay"}:
+            _show(self._internal_toggle_mode_combo)
+        elif command_id == "fade":
+            _show(self._internal_fade_kind_combo)
+            _show(self._internal_toggle_mode_combo)
+        elif command_id == "resetpage":
+            _show(self._internal_reset_scope_combo)
+        elif command_id == "navigate":
+            _show(self._internal_nav_target_combo)
+            _show(self._internal_nav_direction_combo)
+        elif command_id in {"play", "goto"}:
+            _show(self._internal_target_edit)
+        elif command_id == "volume_set":
+            _show(self._internal_volume_spin)
+        elif command_id == "seek":
+            _show(self._internal_seek_mode_combo)
+            if self._internal_seek_mode_combo.currentData() == "time":
+                _show(self._internal_seek_time_edit)
+            else:
+                _show(self._internal_seek_percent_spin)
+        elif command_id == "alert":
+            _show(self._internal_alert_mode_combo)
+            if self._internal_alert_mode_combo.currentData() == "show":
+                _show(self._internal_alert_text_edit)
+                _show(self._internal_alert_keep_checkbox)
+                if not self._internal_alert_keep_checkbox.isChecked():
+                    _show(self._internal_alert_seconds_spin)
+
     def _build_selected_command_spec(self) -> AutomationCommandSpec:
+        if self._command_source_tabs.currentIndex() == 1:
+            command_id = self._selected_internal_command_id()
+            return normalize_automation_spec(
+                {
+                    "source": AUTOMATION_COMMAND_SOURCE_INTERNAL,
+                    "internal_command": command_id,
+                    "internal_params": self._selected_internal_params(command_id),
+                }
+            )
         if self._manual_location_radio.isChecked():
             parts = [
                 str(self._manual_page_edit.text() or "").strip(),
@@ -914,6 +1156,7 @@ class AutomationScriptEditorDialog(QDialog):
             button_text = self._selected_command_text_from_table()
         return normalize_automation_spec(
             {
+                "source": AUTOMATION_COMMAND_SOURCE_COMPANION,
                 "location": location,
                 "button_text": button_text,
                 "hold_to_release": bool(self._hold_to_release_checkbox.isChecked()),
@@ -922,8 +1165,12 @@ class AutomationScriptEditorDialog(QDialog):
 
     def _sync_selected_command(self) -> None:
         spec = self._build_selected_command_spec()
-        self._selected_command_label.setText(spec.location or "-")
-        if spec.button_text:
+        self._refresh_internal_form_visibility()
+        self._selected_command_label.setText(automation_display_name(spec) or "-")
+        if spec.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+            self._internal_summary_label.setText(automation_display_name(spec) or "-")
+            self._command_text_label.setText(automation_spec_detail_text(spec))
+        elif spec.button_text:
             self._command_text_label.setText(spec.button_text)
         elif self._manual_location_radio.isChecked():
             self._command_text_label.setText(tr("Manual location entry"))
@@ -932,7 +1179,7 @@ class AutomationScriptEditorDialog(QDialog):
         self._refresh_action_buttons()
 
     def _on_location_mode_changed(self) -> None:
-        use_picker = self._pick_from_list_radio.isChecked()
+        use_picker = self._pick_from_list_radio.isChecked() and self._command_source_tabs.currentIndex() == 0
         self._hide_black_empty_checkbox.setEnabled(use_picker)
         self._hide_navigation_checkbox.setEnabled(use_picker)
         self._search_edit.setEnabled(use_picker)
@@ -949,15 +1196,22 @@ class AutomationScriptEditorDialog(QDialog):
         if cue is None:
             return
         spec = self._build_selected_command_spec()
-        if not spec.location:
+        if not automation_spec_is_valid(spec):
             return
         action = AutomationScriptAction(
-            type=AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+            type=(
+                AUTOMATION_SCRIPT_ACTION_TYPE_INTERNAL_COMMAND
+                if spec.source == AUTOMATION_COMMAND_SOURCE_INTERNAL
+                else AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND
+            ),
             payload=normalize_automation_spec(spec),
         )
         cue.actions = list(cue.actions or []) + [action]
         if not str(cue.comment or "").strip():
-            cue.comment = str(spec.button_text or spec.location or "").strip()
+            if spec.source == AUTOMATION_COMMAND_SOURCE_INTERNAL:
+                cue.comment = str(automation_script_command_display_name(spec) or "").strip()
+            else:
+                cue.comment = str(spec.button_text or spec.location or "").strip()
         self._rebuild_table(selected_time_ms=int(cue.time_ms), selected_command_index=len(list(cue.actions or [])) - 1)
 
     def _remove_selected_command(self) -> None:

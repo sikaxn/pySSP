@@ -13,6 +13,8 @@ from pyssp.automation_command import (
     SOUND_BUTTON_AUTOMATION_EVENTS,
     SOUND_BUTTON_AUTOMATION_EVENT_TOKENS,
     SoundButtonAutomationConfig,
+    automation_display_name,
+    automation_spec_from_set_fields,
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
@@ -319,12 +321,13 @@ def _parse_automation_slot_from_section(
     source_type = str(section.get(f"pysspsourcetype{slot_index}", "")).strip().lower()
     if source_type != AUTOMATION_SOURCE_TYPE:
         return None
-    spec = normalize_automation_spec(
-        {
-            "location": section.get(f"pysspautomationlocation{slot_index}", "").strip(),
-            "button_text": section.get(f"pysspautomationtext{slot_index}", "").strip(),
-            "hold_to_release": str(section.get(f"pysspautomationhold{slot_index}", "0")).strip() in {"1", "true", "True"},
-        }
+    spec = automation_spec_from_set_fields(
+        source=section.get(f"pysspautomationsource{slot_index}", "").strip(),
+        location=section.get(f"pysspautomationlocation{slot_index}", "").strip(),
+        button_text=section.get(f"pysspautomationtext{slot_index}", "").strip(),
+        hold_to_release=str(section.get(f"pysspautomationhold{slot_index}", "0")).strip() in {"1", "true", "True"},
+        internal_command=section.get(f"pysspautomationinternalcommand{slot_index}", "").strip(),
+        internal_params_json=section.get(f"pysspautomationinternalparams{slot_index}", "").strip(),
     )
     title = _normalize_set_path_string(section.get(f"pysspautomationtitle{slot_index}", "").strip())
     notes = _normalize_set_path_string(section.get(f"pysspautomationnotes{slot_index}", "").strip())
@@ -335,7 +338,7 @@ def _parse_automation_slot_from_section(
         source_type=AUTOMATION_SOURCE_TYPE,
         file_path="",
         vocal_removed_file="",
-        title=title or spec.button_text or spec.location or AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+        title=title or automation_display_name(spec) or AUTOMATION_UNSUPPORTED_MARKER_TEXT,
         notes=notes,
         lyric_file="",
         automation_script_path="",
@@ -386,17 +389,18 @@ def _parse_sound_button_automation_from_section(
             count = 0
         items: list[dict[str, object]] = []
         for command_index in range(1, count + 1):
-            location = str(section.get(f"pyssp{token}location{slot_index}_{command_index}", "") or "").strip()
-            text = str(section.get(f"pyssp{token}text{slot_index}_{command_index}", "") or "").strip()
-            if not location:
-                continue
-            items.append(
-                {
-                    "location": location,
-                    "button_text": text,
-                    "hold_to_release": False,
-                }
+            spec = automation_spec_from_set_fields(
+                source=section.get(f"pyssp{token}source{slot_index}_{command_index}", "").strip(),
+                location=section.get(f"pyssp{token}location{slot_index}_{command_index}", "").strip(),
+                button_text=section.get(f"pyssp{token}text{slot_index}_{command_index}", "").strip(),
+                hold_to_release=False,
+                internal_command=section.get(f"pyssp{token}internalcommand{slot_index}_{command_index}", "").strip(),
+                internal_params_json=section.get(f"pyssp{token}internalparams{slot_index}_{command_index}", "").strip(),
             )
+            normalized_spec = normalize_automation_spec(spec)
+            if not (normalized_spec.location or normalized_spec.internal_command):
+                continue
+            items.append(normalized_spec)
         data[event_name] = items
     return normalize_sound_button_automation_config(data)
 

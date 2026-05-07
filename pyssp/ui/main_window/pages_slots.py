@@ -10,6 +10,9 @@ from pyssp.automation_command import (
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
     AutomationCommandSpec,
     automation_display_name,
+    automation_spec_from_set_fields,
+    automation_spec_is_valid,
+    automation_spec_to_set_fields,
     normalize_automation_spec,
     normalize_sound_button_automation_config,
     SOUND_BUTTON_AUTOMATION_EVENT_TOKENS,
@@ -384,15 +387,25 @@ class PagesSlotsMixin:
             if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
                 title = clean_set_value(slot.title or automation_display_name(slot.automation_spec))
                 notes = clean_set_value(slot.notes)
+                fields = automation_spec_to_set_fields(slot.automation_spec)
                 lines.append(f"c{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%")
                 lines.append(f"n{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}")
                 lines.append(f"t{slot_index}= ")
                 lines.append(f"activity{slot_index}=7")
                 lines.append(f"co{slot_index}=clBtnFace")
                 lines.append(f"pysspsourcetype{slot_index}={AUTOMATION_SOURCE_TYPE}")
-                lines.append(f"pysspautomationlocation{slot_index}={slot.automation_spec.location}")
-                lines.append(f"pysspautomationtext{slot_index}={clean_set_value(slot.automation_spec.button_text)}")
-                lines.append(f"pysspautomationhold{slot_index}={'1' if slot.automation_spec.hold_to_release else '0'}")
+                lines.append(f"pysspautomationsource{slot_index}={fields['source']}")
+                if fields["location"]:
+                    lines.append(f"pysspautomationlocation{slot_index}={fields['location']}")
+                if fields["button_text"]:
+                    lines.append(f"pysspautomationtext{slot_index}={clean_set_value(fields['button_text'])}")
+                lines.append(f"pysspautomationhold{slot_index}={fields['hold_to_release']}")
+                if fields["internal_command"]:
+                    lines.append(f"pysspautomationinternalcommand{slot_index}={clean_set_value(fields['internal_command'])}")
+                if fields["internal_params_json"]:
+                    lines.append(
+                        f"pysspautomationinternalparams{slot_index}={clean_set_value(fields['internal_params_json'])}"
+                    )
                 lines.append(f"pysspautomationtitle{slot_index}={title}")
                 lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
                 if notes:
@@ -1552,12 +1565,13 @@ class PagesSlotsMixin:
         source_type = str(section.get(f"pysspsourcetype{index}", "")).strip().lower()
         if source_type != AUTOMATION_SOURCE_TYPE:
             return None
-        spec = normalize_automation_spec(
-            {
-                "location": section.get(f"pysspautomationlocation{index}", "").strip(),
-                "button_text": section.get(f"pysspautomationtext{index}", "").strip(),
-                "hold_to_release": str(section.get(f"pysspautomationhold{index}", "0")).strip() in {"1", "true", "True"},
-            }
+        spec = automation_spec_from_set_fields(
+            source=section.get(f"pysspautomationsource{index}", "").strip(),
+            location=section.get(f"pysspautomationlocation{index}", "").strip(),
+            button_text=section.get(f"pysspautomationtext{index}", "").strip(),
+            hold_to_release=str(section.get(f"pysspautomationhold{index}", "0")).strip() in {"1", "true", "True"},
+            internal_command=section.get(f"pysspautomationinternalcommand{index}", "").strip(),
+            internal_params_json=section.get(f"pysspautomationinternalparams{index}", "").strip(),
         )
         played = str(section.get(f"pysspautomationplayed{index}", "0")).strip() in {"1", "true", "True"}
         return SoundButtonData(
@@ -1672,11 +1686,17 @@ class PagesSlotsMixin:
                 count = 0
             items: list[dict[str, object]] = []
             for command_index in range(1, count + 1):
-                location = str(section.get(f"pyssp{token}location{slot_index}_{command_index}", "") or "").strip()
-                text = str(section.get(f"pyssp{token}text{slot_index}_{command_index}", "") or "").strip()
-                if not location:
+                normalized = automation_spec_from_set_fields(
+                    source=section.get(f"pyssp{token}source{slot_index}_{command_index}", "").strip(),
+                    location=section.get(f"pyssp{token}location{slot_index}_{command_index}", "") or "",
+                    button_text=section.get(f"pyssp{token}text{slot_index}_{command_index}", "") or "",
+                    hold_to_release=False,
+                    internal_command=section.get(f"pyssp{token}internalcommand{slot_index}_{command_index}", "").strip(),
+                    internal_params_json=section.get(f"pyssp{token}internalparams{slot_index}_{command_index}", "").strip(),
+                )
+                if not automation_spec_is_valid(normalized):
                     continue
-                items.append({"location": location, "button_text": text, "hold_to_release": False})
+                items.append(normalized)
             data[event_name] = items
         return normalize_sound_button_automation_config(data)
 
@@ -1695,12 +1715,23 @@ class PagesSlotsMixin:
             lines.append(f"pyssp{token}count{slot_index}={len(specs)}")
             for command_index, spec in enumerate(specs, start=1):
                 normalized = normalize_automation_spec(spec)
-                if not normalized.location:
+                if not automation_spec_is_valid(normalized):
                     continue
-                lines.append(f"pyssp{token}location{slot_index}_{command_index}={normalized.location}")
-                if normalized.button_text:
+                fields = automation_spec_to_set_fields(normalized)
+                lines.append(f"pyssp{token}source{slot_index}_{command_index}={fields['source']}")
+                if fields["location"]:
+                    lines.append(f"pyssp{token}location{slot_index}_{command_index}={fields['location']}")
+                if fields["button_text"]:
                     lines.append(
-                        f"pyssp{token}text{slot_index}_{command_index}={clean_set_value(normalized.button_text)}"
+                        f"pyssp{token}text{slot_index}_{command_index}={clean_set_value(fields['button_text'])}"
+                    )
+                if fields["internal_command"]:
+                    lines.append(
+                        f"pyssp{token}internalcommand{slot_index}_{command_index}={clean_set_value(fields['internal_command'])}"
+                    )
+                if fields["internal_params_json"]:
+                    lines.append(
+                        f"pyssp{token}internalparams{slot_index}_{command_index}={clean_set_value(fields['internal_params_json'])}"
                     )
 
     def _append_automation_script_set_lines(self, lines: List[str], slot_index: int, slot: SoundButtonData) -> None:
@@ -1991,8 +2022,8 @@ class PagesSlotsMixin:
             )
             return
         spec = normalize_automation_spec(automation_spec)
-        if not spec.location:
-            self._show_info_notice_banner(tr("Automation command location is required."))
+        if not automation_spec_is_valid(spec):
+            self._show_info_notice_banner(tr("Automation command is required."))
             return
         slot.source_type = AUTOMATION_SOURCE_TYPE
         slot.file_path = ""

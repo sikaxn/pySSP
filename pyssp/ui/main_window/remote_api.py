@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from pyssp.automation_command import (
+    AUTOMATION_COMMAND_SOURCE_INTERNAL,
+    AutomationCommandSpec,
+    normalize_automation_spec,
+)
+from pyssp.internal_automation import internal_automation_dispatch
+
 from .shared import *
 from .constants import *
 from .helpers import *
@@ -7,6 +14,24 @@ from .widgets import *
 
 
 class RemoteApiMixin:
+    def _execute_internal_automation_spec(self, spec: Optional[AutomationCommandSpec]) -> bool:
+        normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+        if normalized.source != AUTOMATION_COMMAND_SOURCE_INTERNAL or not normalized.internal_command:
+            return False
+        command, params = internal_automation_dispatch(
+            normalized.internal_command,
+            normalized.internal_params or {},
+        )
+        if not command:
+            return False
+        result = self._handle_web_remote_command(command, params)
+        if bool(result.get("ok", False)):
+            return True
+        error = dict(result.get("error", {}) or {})
+        message = str(error.get("message", "") or command).strip() or command
+        self._show_info_notice_banner(f"{tr('Automation command failed')}: {message}")
+        return False
+
     def _api_success(self, result: Optional[dict] = None, status: int = 200) -> dict:
         return {"ok": True, "status": status, "result": result or {}}
 

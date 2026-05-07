@@ -7,6 +7,8 @@ from .widgets import *
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
+    automation_display_name,
+    automation_spec_to_set_fields,
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
@@ -1413,17 +1415,29 @@ class ActionsInputMixin:
                             lines.append(f"co{slot_index}=clBtnFace")
                             continue
                         if slot.source_type == AUTOMATION_SOURCE_TYPE and slot.automation_spec is not None:
-                            title = clean_set_value(slot.title or slot.automation_spec.button_text or slot.automation_spec.location)
+                            title = clean_set_value(slot.title or automation_display_name(slot.automation_spec))
                             notes = clean_set_value(slot.notes or "")
+                            fields = automation_spec_to_set_fields(slot.automation_spec)
                             lines.append(f"c{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}%%")
                             lines.append(f"n{slot_index}={AUTOMATION_UNSUPPORTED_MARKER_TEXT}")
                             lines.append(f"t{slot_index}= ")
                             lines.append(f"activity{slot_index}=7")
                             lines.append(f"co{slot_index}=clBtnFace")
                             lines.append(f"pysspsourcetype{slot_index}={AUTOMATION_SOURCE_TYPE}")
-                            lines.append(f"pysspautomationlocation{slot_index}={slot.automation_spec.location}")
-                            lines.append(f"pysspautomationtext{slot_index}={clean_set_value(slot.automation_spec.button_text)}")
-                            lines.append(f"pysspautomationhold{slot_index}={'1' if slot.automation_spec.hold_to_release else '0'}")
+                            lines.append(f"pysspautomationsource{slot_index}={fields['source']}")
+                            if fields["location"]:
+                                lines.append(f"pysspautomationlocation{slot_index}={fields['location']}")
+                            if fields["button_text"]:
+                                lines.append(f"pysspautomationtext{slot_index}={clean_set_value(fields['button_text'])}")
+                            lines.append(f"pysspautomationhold{slot_index}={fields['hold_to_release']}")
+                            if fields["internal_command"]:
+                                lines.append(
+                                    f"pysspautomationinternalcommand{slot_index}={clean_set_value(fields['internal_command'])}"
+                                )
+                            if fields["internal_params_json"]:
+                                lines.append(
+                                    f"pysspautomationinternalparams{slot_index}={clean_set_value(fields['internal_params_json'])}"
+                                )
                             lines.append(f"pysspautomationtitle{slot_index}={title}")
                             lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
                             if notes:

@@ -136,6 +136,7 @@ from pyssp.library_archive import (
     PageSelectionItem,
     UnpackLibraryDialog,
     build_archive_audio_entries,
+    build_archive_automation_script_entries,
     build_archive_lyric_entries,
     build_archive_vocal_removed_entries,
     build_manifest,
@@ -184,6 +185,7 @@ from pyssp.ui.cue_point_dialog import CuePointDialog
 from pyssp.ui.edit_sound_button_dialog import EditSoundButtonDialog
 from pyssp.ui.lyric_editor_dialog import LyricEditorDialog
 from pyssp.ui.lyric_navigator import LyricNavigatorWindow
+from pyssp.ui.automation_script_navigator import AutomationScriptNavigatorWindow
 from pyssp.ui.options_dialog import OptionsDialog
 from pyssp.ui.link_lyric_dialog import LinkLyricDialog
 from pyssp.ui.lyric_display import LyricDisplayWindow

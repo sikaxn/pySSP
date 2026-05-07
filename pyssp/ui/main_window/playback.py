@@ -294,6 +294,7 @@ class PlaybackMixin:
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
         self.player.mediaLoadFinished.connect(self._on_player_media_load_finished)
+        self.player_b.positionChanged.connect(self._on_secondary_position_changed)
         self.player_b.mediaLoadFinished.connect(self._on_player_media_load_finished)
 
     def _dispose_audio_players(self) -> None:
@@ -612,6 +613,7 @@ class PlaybackMixin:
         extra_player = self._audio_service.create_player(self)
         extra_player.setNotifyInterval(90)
         extra_player.setDSPConfig(self._dsp_config)
+        extra_player.positionChanged.connect(lambda _pos, p=extra_player: self._process_automation_script_player(p))
         extra_player.mediaLoadFinished.connect(self._on_player_media_load_finished)
         slot_pct = self._slot_volume_pct(slot)
         finish_multi = lambda p=extra_player, s=slot, key=playing_key, pct=slot_pct: self._finish_multi_loaded_playback(
@@ -1064,6 +1066,7 @@ class PlaybackMixin:
         self.now_playing_label.set_now_playing_html(tr("NOW PLAYING:"), value_html)
 
     def _on_position_changed(self, pos: int) -> None:
+        self._process_automation_script_player(self.player)
         display_pos = self._transport_display_ms_for_absolute(pos)
         if not self._is_scrubbing:
             self.seek_slider.setValue(display_pos)
@@ -1079,6 +1082,9 @@ class PlaybackMixin:
         self._refresh_main_jog_meta(display_pos, total_ms)
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+
+    def _on_secondary_position_changed(self, _pos: int) -> None:
+        self._process_automation_script_player(self.player_b)
 
     def _on_duration_changed(self, duration: int) -> None:
         self.current_duration_ms = duration
@@ -1828,9 +1834,11 @@ class PlaybackMixin:
                     title=slot.title,
                     notes=slot.notes,
                     lyric_file=slot.lyric_file,
+                    automation_script_path=slot.automation_script_path,
                     duration_ms=slot.duration_ms,
                     automation_spec=None if slot.automation_spec is None else normalize_automation_spec(slot.automation_spec),
                     sound_button_automation=normalize_sound_button_automation_config(slot.sound_button_automation),
+                    automation_script_bypassed=bool(slot.automation_script_bypassed),
                     utility_spec=None if slot.utility_spec is None else normalize_utility_spec(slot.utility_spec),
                     custom_color=slot.custom_color,
                     played=slot.played,
@@ -1926,6 +1934,10 @@ class PlaybackMixin:
         self._player_started_map[id(player)] = time.monotonic()
         if slot_key is not None:
             self._playback_runtime.mark_started(player, slot_key)
+            self._prime_automation_script_player(player, slot_key)
+            slot = self._slot_for_key(slot_key)
+            if slot is not None:
+                self._warn_dual_automation_sources_if_needed(slot)
 
     def _set_player_slot_key(self, player: ExternalMediaPlayer, slot_key: Tuple[str, int, int]) -> None:
         pid = id(player)
@@ -1942,6 +1954,7 @@ class PlaybackMixin:
         pid = id(player)
         key = self._player_slot_key_map.pop(pid, None)
         self._playback_runtime.clear(player)
+        self._automation_script_runtime.pop(pid, None)
         if key is not None:
             self._active_playing_keys.discard(key)
         self._clear_player_cue_behavior_override(player)
@@ -1953,6 +1966,7 @@ class PlaybackMixin:
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
         self._playback_runtime.clear_all()
+        self._automation_script_runtime.clear()
         self._active_playing_keys.clear()
         self._player_end_override_ms.clear()
         self._player_ignore_cue_end.clear()
@@ -2282,6 +2296,10 @@ class PlaybackMixin:
             self.player.stateChanged.disconnect(self._on_state_changed)
         except TypeError:
             pass
+        try:
+            self.player_b.positionChanged.disconnect(self._on_secondary_position_changed)
+        except TypeError:
+            pass
         self.player, self.player_b = self.player_b, self.player
         self._player_slot_volume_pct, self._player_b_slot_volume_pct = (
             self._player_b_slot_volume_pct,
@@ -2290,4 +2308,5 @@ class PlaybackMixin:
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
+        self.player_b.positionChanged.connect(self._on_secondary_position_changed)
 

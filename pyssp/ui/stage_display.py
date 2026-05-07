@@ -20,6 +20,8 @@ STAGE_DISPLAY_GADGET_SPECS: List[Tuple[str, str]] = [
     ("progress_bar", "Progress Bar"),
     ("song_name", "Song Name"),
     ("lyric", "Lyric"),
+    ("automation_comment_current", "Automation Comment Current"),
+    ("automation_comment_next", "Automation Comment Next"),
     ("next_song", "Next Song"),
 ]
 STAGE_DISPLAY_GADGET_KEYS = [key for key, _label in STAGE_DISPLAY_GADGET_SPECS]
@@ -117,12 +119,34 @@ def default_stage_display_gadgets() -> Dict[str, Dict[str, int | bool | str]]:
             "hide_text": False,
             "hide_border": False,
         },
-        "next_song": {
+        "automation_comment_current": {
             "x": 500,
             "y": 7700,
             "w": 9000,
-            "h": 1300,
+            "h": 800,
             "z": 7,
+            "visible": False,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "automation_comment_next": {
+            "x": 500,
+            "y": 8550,
+            "w": 9000,
+            "h": 800,
+            "z": 8,
+            "visible": False,
+            "orientation": "vertical",
+            "hide_text": False,
+            "hide_border": False,
+        },
+        "next_song": {
+            "x": 500,
+            "y": 9400,
+            "w": 9000,
+            "h": 600,
+            "z": 9,
             "visible": True,
             "orientation": "vertical",
             "hide_text": False,
@@ -699,6 +723,8 @@ class StageDisplayWindow(QWidget):
         progress_percent: int,
         song_name: str,
         lyric: str,
+        automation_comment_current: str,
+        automation_comment_next: str,
         next_song: str,
         progress_text: str = "",
         progress_style: str = "",
@@ -712,12 +738,14 @@ class StageDisplayWindow(QWidget):
             "progress_bar": progress_text or f"{max(0, min(100, int(progress_percent)))}%",
             "song_name": song_name,
             "lyric": lyric,
+            "automation_comment_current": automation_comment_current,
+            "automation_comment_next": automation_comment_next,
             "next_song": next_song,
         }
         for key, value in values.items():
             widget = self._canvas._widgets.get(key)
             if widget is not None:
-                if key == "lyric":
+                if key in {"lyric", "automation_comment_current", "automation_comment_next"}:
                     widget.value_label.setText(str(value or ""))
                 else:
                     widget.value_label.setText(str(value or "-"))

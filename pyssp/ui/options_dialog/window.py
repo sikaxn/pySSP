@@ -115,6 +115,7 @@ class OptionsDialog(
         "lyric_display_next_italic": False,
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
+        "warn_dual_automation_sources": True,
         "supported_audio_format_extensions": [],
         "verify_sound_file_on_add": True,
         "allow_other_unsupported_audio_files": False,
@@ -216,6 +217,10 @@ class OptionsDialog(
             "vocal_removed_indicator": "#8E7CFF",
             "midi_indicator": "#FF9E4A",
             "lyric_indicator": "#57C3A4",
+            "automation_indicator": "#49C16D",
+            "automation_indicator_bypassed": "#9A9A9A",
+            "automation_script_indicator": "#2E8BFF",
+            "automation_script_indicator_bypassed": "#708090",
         },
         "sound_button_text_color": "#000000",
         "hotkeys": {
@@ -391,6 +396,7 @@ class OptionsDialog(
         lyric_display_next_italic: bool,
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
+        warn_dual_automation_sources: bool,
         supported_audio_format_extensions: List[str],
         verify_sound_file_on_add: bool,
         allow_other_unsupported_audio_files: bool,
@@ -694,6 +700,7 @@ class OptionsDialog(
             if str(new_lyric_file_format or "").strip().lower() in {"srt", "lrc"}
             else "srt"
         )
+        self._warn_dual_automation_sources = bool(warn_dual_automation_sources)
         self._stage_display_font_family = str(stage_display_font_family or "").strip()
         self._stage_display_font_size = max(10, int(stage_display_font_size))
         self._stage_display_lyric_font_family = str(stage_display_lyric_font_family or "").strip()
@@ -839,6 +846,7 @@ class OptionsDialog(
                 lyric_display_show_not_playing_message=self._lyric_display_show_not_playing_message,
                 search_lyric_on_add_sound_button=self._search_lyric_on_add_sound_button,
                 new_lyric_file_format=self._new_lyric_file_format,
+                warn_dual_automation_sources=self._warn_dual_automation_sources,
                 lyric_display_font_family=self._lyric_display_font_family,
                 lyric_display_font_size=self._lyric_display_font_size,
                 lyric_display_previous_line_count=self._lyric_display_previous_line_count,

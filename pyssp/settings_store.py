@@ -522,6 +522,7 @@ class AppSettings:
     lyric_display_next_italic: bool = False
     search_lyric_on_add_sound_button: bool = True
     new_lyric_file_format: str = "srt"
+    warn_dual_automation_sources: bool = True
     supported_audio_format_extensions: list[str] = field(default_factory=default_supported_audio_format_extensions)
     verify_sound_file_on_add: bool = True
     allow_other_unsupported_audio_files: bool = False
@@ -636,6 +637,10 @@ class AppSettings:
     color_vocal_removed_indicator: str = "#8E7CFF"
     color_midi_indicator: str = "#FF9E4A"
     color_lyric_indicator: str = "#57C3A4"
+    color_automation_indicator: str = "#49C16D"
+    color_automation_indicator_bypassed: str = "#9A9A9A"
+    color_automation_script_indicator: str = "#2E8BFF"
+    color_automation_script_indicator_bypassed: str = "#708090"
     sound_button_text_color: str = "#000000"
     hotkey_new_set_1: str = "Ctrl+N"
     hotkey_new_set_2: str = ""
@@ -910,6 +915,7 @@ def save_settings(settings: AppSettings) -> None:
         "lyric_display_next_italic": "1" if settings.lyric_display_next_italic else "0",
         "search_lyric_on_add_sound_button": "1" if settings.search_lyric_on_add_sound_button else "0",
         "new_lyric_file_format": settings.new_lyric_file_format,
+        "warn_dual_automation_sources": "1" if settings.warn_dual_automation_sources else "0",
         "supported_audio_format_extensions": "\t".join(
             _normalize_supported_audio_format_extensions(settings.supported_audio_format_extensions)
         ),
@@ -1038,6 +1044,10 @@ def save_settings(settings: AppSettings) -> None:
         "color_vocal_removed_indicator": settings.color_vocal_removed_indicator,
         "color_midi_indicator": settings.color_midi_indicator,
         "color_lyric_indicator": settings.color_lyric_indicator,
+        "color_automation_indicator": settings.color_automation_indicator,
+        "color_automation_indicator_bypassed": settings.color_automation_indicator_bypassed,
+        "color_automation_script_indicator": settings.color_automation_script_indicator,
+        "color_automation_script_indicator_bypassed": settings.color_automation_script_indicator_bypassed,
         "sound_button_text_color": settings.sound_button_text_color,
         "hotkey_new_set_1": settings.hotkey_new_set_1,
         "hotkey_new_set_2": settings.hotkey_new_set_2,
@@ -1340,6 +1350,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
         new_lyric_file_format = "srt"
+    warn_dual_automation_sources = _get_bool(section, "warn_dual_automation_sources", True)
     supported_audio_format_extensions = _normalize_supported_audio_format_extensions(
         [item.strip() for item in str(section.get("supported_audio_format_extensions", "")).split("\t") if item.strip()]
     )
@@ -1702,6 +1713,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         lyric_display_next_italic=lyric_display_next_italic,
         search_lyric_on_add_sound_button=search_lyric_on_add_sound_button,
         new_lyric_file_format=new_lyric_file_format,
+        warn_dual_automation_sources=warn_dual_automation_sources,
         supported_audio_format_extensions=supported_audio_format_extensions,
         verify_sound_file_on_add=verify_sound_file_on_add,
         allow_other_unsupported_audio_files=allow_other_unsupported_audio_files,
@@ -1819,6 +1831,19 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ),
         color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
         color_lyric_indicator=_coerce_hex(str(section.get("color_lyric_indicator", "#57C3A4")), "#57C3A4"),
+        color_automation_indicator=_coerce_hex(str(section.get("color_automation_indicator", "#49C16D")), "#49C16D"),
+        color_automation_indicator_bypassed=_coerce_hex(
+            str(section.get("color_automation_indicator_bypassed", "#9A9A9A")),
+            "#9A9A9A",
+        ),
+        color_automation_script_indicator=_coerce_hex(
+            str(section.get("color_automation_script_indicator", "#2E8BFF")),
+            "#2E8BFF",
+        ),
+        color_automation_script_indicator_bypassed=_coerce_hex(
+            str(section.get("color_automation_script_indicator_bypassed", "#708090")),
+            "#708090",
+        ),
         sound_button_text_color=_coerce_hex(str(section.get("sound_button_text_color", "#000000")), "#000000"),
         hotkey_new_set_1=str(section.get("hotkey_new_set_1", "Ctrl+N")).strip(),
         hotkey_new_set_2=str(section.get("hotkey_new_set_2", "")).strip(),

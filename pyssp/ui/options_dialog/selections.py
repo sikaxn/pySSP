@@ -107,6 +107,9 @@ class SelectionMixin:
         value = str(self.new_lyric_file_format_combo.currentData() or "srt").strip().lower()
         return value if value in {"srt", "lrc"} else "srt"
 
+    def selected_warn_dual_automation_sources(self) -> bool:
+        return bool(self.warn_dual_automation_sources_checkbox.isChecked())
+
     def selected_supported_audio_format_extensions(self) -> List[str]:
         text = str(self.supported_audio_format_extensions_value.text() or "").strip()
         if (not text) or text in {"(none detected)", tr("(none detected)")}:

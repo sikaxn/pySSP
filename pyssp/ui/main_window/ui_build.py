@@ -87,9 +87,9 @@ class UiBuildMixin:
         self.button_legend_label = QWidget()
         self.button_legend_label.setContentsMargins(0, 0, 0, 0)
         self.button_legend_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._button_legend_layout = QHBoxLayout(self.button_legend_label)
+        self._button_legend_layout = QVBoxLayout(self.button_legend_label)
         self._button_legend_layout.setContentsMargins(2, 0, 2, 0)
-        self._button_legend_layout.setSpacing(12)
+        self._button_legend_layout.setSpacing(2)
         self._refresh_button_legend_label()
         self.button_legend_label.setVisible(bool(self.show_colour_legend))
         root_layout.addWidget(self.button_legend_label)
@@ -123,9 +123,15 @@ class UiBuildMixin:
             if widget is not None:
                 widget.deleteLater()
 
+        title_row = QWidget()
+        title_layout = QHBoxLayout(title_row)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(8)
         title = QLabel(tr("Button Legend:"))
         title.setStyleSheet("color:#666666; font-size:9pt; font-weight:600;")
-        self._button_legend_layout.addWidget(title)
+        title_layout.addWidget(title)
+        title_layout.addStretch(1)
+        self._button_legend_layout.addWidget(title_row)
 
         items = [
             (self.state_colors["playing"], tr("Now Playing")),
@@ -137,32 +143,43 @@ class UiBuildMixin:
             (self.state_colors["lyric_indicator"], tr("Lyric Stripe")),
             (self.state_colors["automation_indicator"], tr("Automation Stripe")),
             (self.state_colors["automation_indicator_bypassed"], tr("Automation Bypassed Stripe")),
+            (self.state_colors["automation_script_indicator"], tr("Automation Script Stripe")),
+            (
+                self.state_colors["automation_script_indicator_bypassed"],
+                tr("Automation Script Bypassed Stripe"),
+            ),
             (TIMECODE_SLOT_INDICATOR_COLOR, tr("Timecode Stripe")),
             (self.state_colors["midi_indicator"], tr("MIDI Top Stripe")),
         ]
-        for color, label_text in items:
-            item_widget = QWidget()
-            item_layout = QHBoxLayout(item_widget)
-            item_layout.setContentsMargins(0, 0, 0, 0)
-            item_layout.setSpacing(4)
+        split_index = (len(items) + 1) // 2
+        for row_items in (items[:split_index], items[split_index:]):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(12)
+            for color, label_text in row_items:
+                item_widget = QWidget()
+                item_layout = QHBoxLayout(item_widget)
+                item_layout.setContentsMargins(0, 0, 0, 0)
+                item_layout.setSpacing(4)
 
-            dot = QLabel("")
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(
-                "QLabel{"
-                f"background:{str(color or '#000000')};"
-                "border:1px solid #666666;"
-                "border-radius:5px;"
-                "}"
-            )
-            text = QLabel(label_text)
-            text.setStyleSheet("color:#666666; font-size:9pt;")
+                dot = QLabel("")
+                dot.setFixedSize(10, 10)
+                dot.setStyleSheet(
+                    "QLabel{"
+                    f"background:{str(color or '#000000')};"
+                    "border:1px solid #666666;"
+                    "border-radius:5px;"
+                    "}"
+                )
+                text = QLabel(label_text)
+                text.setStyleSheet("color:#666666; font-size:9pt;")
 
-            item_layout.addWidget(dot)
-            item_layout.addWidget(text)
-            self._button_legend_layout.addWidget(item_widget)
-
-        self._button_legend_layout.addStretch(1)
+                item_layout.addWidget(dot)
+                item_layout.addWidget(text)
+                row_layout.addWidget(item_widget)
+            row_layout.addStretch(1)
+            self._button_legend_layout.addWidget(row_widget)
 
     def _build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -386,6 +403,14 @@ class UiBuildMixin:
         list_sound_device_midi_mapping_action.triggered.connect(self._list_sound_device_midi_mappings)
         tools_menu.addAction(list_sound_device_midi_mapping_action)
 
+        scan_sound_button_automation_scripts_action = QAction("Scan Sound Button Automation Scripts", self)
+        scan_sound_button_automation_scripts_action.triggered.connect(self._scan_sound_button_automation_scripts)
+        tools_menu.addAction(scan_sound_button_automation_scripts_action)
+
+        remove_all_linked_automation_scripts_action = QAction("Remove All Linked Automation Scripts", self)
+        remove_all_linked_automation_scripts_action.triggered.connect(self._remove_all_linked_automation_scripts)
+        tools_menu.addAction(remove_all_linked_automation_scripts_action)
+
         launchpad_cheatsheet_action = QAction("Launchpad Cheat Sheet", self)
         launchpad_cheatsheet_action.triggered.connect(self._show_launchpad_cheatsheet)
         tools_menu.addAction(launchpad_cheatsheet_action)
@@ -403,6 +428,10 @@ class UiBuildMixin:
         available_commands_action.triggered.connect(self._open_companion_available_commands)
         companion_menu.addAction(available_commands_action)
         self._menu_actions["companion_available_commands"] = available_commands_action
+        automation_script_navigator_action = QAction("Automation Script Navigator", self)
+        automation_script_navigator_action.triggered.connect(self._open_automation_script_navigator)
+        companion_menu.addAction(automation_script_navigator_action)
+        self._menu_actions["automation_script_navigator"] = automation_script_navigator_action
         bypass_action = QAction("Bypass", self)
         bypass_action.setCheckable(True)
         bypass_action.setChecked(bool(self.companion_bypass))

@@ -39,9 +39,11 @@ class SoundButtonData:
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
+    automation_script_path: str = ""
     duration_ms: int = 0
     automation_spec: Optional[AutomationCommandSpec] = None
     sound_button_automation: Optional[SoundButtonAutomationConfig] = None
+    automation_script_bypassed: bool = False
     utility_spec: Optional[UtilitySoundSpec] = None
     custom_color: Optional[str] = None
     highlighted: bool = False

@@ -1369,11 +1369,13 @@ class ActionsInputMixin:
         slot_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         vocal_removed_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         lyric_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
+        automation_script_path_overrides: Optional[Dict[Tuple[str, int, int], str]] = None,
         skipped_slots: Optional[set[Tuple[str, int, int]]] = None,
     ) -> List[str]:
         overrides = slot_path_overrides or {}
         vocal_removed_overrides = vocal_removed_path_overrides or {}
         lyric_overrides = lyric_path_overrides or {}
+        automation_script_overrides = automation_script_path_overrides or {}
         skipped = skipped_slots or set()
         lines: List[str] = [
             "[Main]",
@@ -1459,6 +1461,13 @@ class ActionsInputMixin:
                                     f"pyssputilitylyric{slot_index}="
                                     f"{clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))}"
                                 )
+                            automation_script_path = clean_set_value(
+                                automation_script_overrides.get(slot_key, slot.automation_script_path)
+                            )
+                            if automation_script_path:
+                                lines.append(f"pysspautoscript{slot_index}={automation_script_path}")
+                            if bool(slot.automation_script_bypassed):
+                                lines.append(f"pysspautoscriptbypass{slot_index}=1")
                             if slot.utility_spec.mode == "waveform":
                                 lines.append(f"pyssputilitywaveform{slot_index}={slot.utility_spec.waveform_type}")
                                 lines.append(f"pyssputilityfreq{slot_index}={slot.utility_spec.frequency_hz:g}")
@@ -1519,6 +1528,13 @@ class ActionsInputMixin:
                         lyric_file = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                         if lyric_file:
                             lines.append(f"pyssplyric{slot_index}={lyric_file}")
+                        automation_script_path = clean_set_value(
+                            automation_script_overrides.get(slot_key, slot.automation_script_path)
+                        )
+                        if automation_script_path:
+                            lines.append(f"pysspautoscript{slot_index}={automation_script_path}")
+                        if bool(slot.automation_script_bypassed):
+                            lines.append(f"pysspautoscriptbypass{slot_index}=1")
                         cue_start, cue_end = self._cue_time_fields_for_set(slot)
                         if cue_start is not None:
                             lines.append(f"pysspcuestart{slot_index}={cue_start}")
@@ -1585,9 +1601,11 @@ class ActionsInputMixin:
                         title=src.title,
                         notes=src.notes,
                         lyric_file=src.lyric_file,
+                        automation_script_path=src.automation_script_path,
                         duration_ms=src.duration_ms,
                         automation_spec=None if src.automation_spec is None else normalize_automation_spec(src.automation_spec),
                         sound_button_automation=normalize_sound_button_automation_config(src.sound_button_automation),
+                        automation_script_bypassed=bool(src.automation_script_bypassed),
                         utility_spec=None if src.utility_spec is None else normalize_utility_spec(src.utility_spec),
                         custom_color=src.custom_color,
                         played=src.played,
@@ -1680,6 +1698,7 @@ class ActionsInputMixin:
             lyric_display_next_italic=self.lyric_display_role_italic["next"],
             search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
             new_lyric_file_format=self.new_lyric_file_format,
+            warn_dual_automation_sources=self.warn_dual_automation_sources,
             supported_audio_format_extensions=self.supported_audio_format_extensions,
             verify_sound_file_on_add=self.verify_sound_file_on_add,
             allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
@@ -1783,6 +1802,8 @@ class ActionsInputMixin:
                 "lyric_indicator": self.state_colors["lyric_indicator"],
                 "automation_indicator": self.state_colors["automation_indicator"],
                 "automation_indicator_bypassed": self.state_colors["automation_indicator_bypassed"],
+                "automation_script_indicator": self.state_colors["automation_script_indicator"],
+                "automation_script_indicator_bypassed": self.state_colors["automation_script_indicator_bypassed"],
             },
             sound_button_text_color=self.sound_button_text_color,
             hotkeys=self.hotkeys,
@@ -1924,6 +1945,7 @@ class ActionsInputMixin:
         self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
+        self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()
@@ -2008,6 +2030,14 @@ class ActionsInputMixin:
         self.state_colors["automation_indicator_bypassed"] = selected_colors.get(
             "automation_indicator_bypassed",
             self.state_colors["automation_indicator_bypassed"],
+        )
+        self.state_colors["automation_script_indicator"] = selected_colors.get(
+            "automation_script_indicator",
+            self.state_colors["automation_script_indicator"],
+        )
+        self.state_colors["automation_script_indicator_bypassed"] = selected_colors.get(
+            "automation_script_indicator_bypassed",
+            self.state_colors["automation_script_indicator_bypassed"],
         )
         self.sound_button_text_color = dialog.selected_sound_button_text_color()
         self.hotkeys = dialog.selected_hotkeys()
@@ -2152,6 +2182,8 @@ class ActionsInputMixin:
         self._refresh_timecode_panel()
         self._update_timecode_multiplay_warning_banner()
         self._refresh_group_buttons()
+        if getattr(self, "_button_legend_layout", None) is not None:
+            self._refresh_button_legend_label()
         self._refresh_sound_grid()
         if self.current_playing is None:
             self._update_now_playing_label("")

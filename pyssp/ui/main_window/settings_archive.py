@@ -201,6 +201,7 @@ class SettingsArchiveMixin:
 
         include_settings = bool(dialog.include_settings_checkbox.isChecked())
         include_lyrics = bool(dialog.pack_lyrics_checkbox.isChecked())
+        include_automation_scripts = bool(dialog.pack_automation_scripts_checkbox.isChecked())
         maintain_structure = bool(dialog.maintain_structure_checkbox.isChecked())
         settings_source = None
         if include_settings:
@@ -227,7 +228,26 @@ class SettingsArchiveMixin:
         lyric_entry_by_path = {
             os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_lyric_entries
         }
-        total_steps = len(planned_audio_entries) + len(planned_vocal_removed_entries) + len(planned_lyric_entries) + 2 + (1 if settings_source else 0)
+        automation_script_path_usage = (
+            self._collect_pack_automation_script_path_usage(selected_pages) if include_automation_scripts else {}
+        )
+        automation_script_ordered_paths = [item["source_path"] for item in automation_script_path_usage.values()]
+        planned_automation_script_entries = (
+            build_archive_automation_script_entries(automation_script_ordered_paths, maintain_structure)
+            if include_automation_scripts
+            else []
+        )
+        automation_script_entry_by_path = {
+            os.path.normcase(os.path.abspath(entry.source_path)): entry for entry in planned_automation_script_entries
+        }
+        total_steps = (
+            len(planned_audio_entries)
+            + len(planned_vocal_removed_entries)
+            + len(planned_lyric_entries)
+            + len(planned_automation_script_entries)
+            + 2
+            + (1 if settings_source else 0)
+        )
         progress = QProgressDialog(tr("Packing audio library..."), tr("Cancel"), 0, max(1, total_steps), self)
         progress.setWindowTitle(tr("Pack Audio Library"))
         progress.setWindowModality(Qt.WindowModal)
@@ -238,9 +258,11 @@ class SettingsArchiveMixin:
         packed_audio_entries: List[object] = []
         packed_vocal_removed_entries: List[object] = []
         packed_lyric_entries: List[object] = []
+        packed_automation_script_entries: List[object] = []
         slot_path_overrides: Dict[Tuple[str, int, int], str] = {}
         vocal_removed_path_overrides: Dict[Tuple[str, int, int], str] = {}
         lyric_path_overrides: Dict[Tuple[str, int, int], str] = {}
+        automation_script_path_overrides: Dict[Tuple[str, int, int], str] = {}
         skipped_slots: set[Tuple[str, int, int]] = set()
         report_rows: List[PackReportRow] = []
         try:
@@ -342,12 +364,36 @@ class SettingsArchiveMixin:
                             f"{tr('Processed')} {os.path.basename(source_path)}",
                         )
 
+                    for normalized_path, path_info in automation_script_path_usage.items():
+                        if progress.wasCanceled():
+                            raise ArchiveOperationCancelled()
+                        source_path = str(path_info["source_path"])
+                        if not os.path.exists(source_path):
+                            continue
+                        progress.setLabelText(f"{tr('Verifying and packing')} {os.path.basename(source_path)}...")
+                        entry = automation_script_entry_by_path.get(normalized_path)
+                        if entry is None:
+                            raise RuntimeError(f"Missing automation script archive entry for {source_path}")
+                        archive.write(source_path, arcname=entry.archive_member)
+                        packed_automation_script_entries.append(entry)
+                        for slot_info in path_info["slots"]:
+                            slot_key = (slot_info["group"], slot_info["page"], slot_info["slot"])
+                            automation_script_path_overrides[slot_key] = entry.set_path
+                        step += 1
+                        self._update_archive_progress(
+                            progress,
+                            step,
+                            total_steps,
+                            f"{tr('Processed')} {os.path.basename(source_path)}",
+                        )
+
                     temp_set_path = os.path.join(temp_dir, set_member_name)
                     pack_lines = self._build_set_file_lines(
                         selected_pages=selected_pages,
                         slot_path_overrides=slot_path_overrides,
                         vocal_removed_path_overrides=vocal_removed_path_overrides,
                         lyric_path_overrides=lyric_path_overrides,
+                        automation_script_path_overrides=automation_script_path_overrides,
                         skipped_slots=skipped_slots,
                     )
                     self._write_set_payload(temp_set_path, pack_lines)
@@ -368,6 +414,7 @@ class SettingsArchiveMixin:
                         bool(settings_source),
                         vocal_removed_entries=packed_vocal_removed_entries,
                         lyric_entries=packed_lyric_entries,
+                        automation_script_entries=packed_automation_script_entries,
                     )
                     write_manifest(archive, manifest)
                     step += 1
@@ -418,6 +465,7 @@ class SettingsArchiveMixin:
                 destination_dir=destination_dir,
                 maintain_directory_structure=values.maintain_directory_structure,
                 unpack_lyrics=values.unpack_lyrics,
+                unpack_automation_scripts=values.unpack_automation_scripts,
                 progress_callback=lambda current, total, label: self._update_archive_progress(
                     progress, current, total, label
                 ),
@@ -427,16 +475,22 @@ class SettingsArchiveMixin:
                 result.audio_path_map
                 or result.vocal_removed_path_map
                 or result.lyric_path_map
+                or result.automation_script_path_map
                 or (bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics))
+                or (bool(result.manifest.get("automation_script_entries")) and (not values.unpack_automation_scripts))
             ):
                 rewrite_packed_set_paths(
                     result.extracted_set_path,
                     result.audio_path_map,
                     vocal_removed_replacements=result.vocal_removed_path_map,
                     lyric_replacements=result.lyric_path_map,
+                    automation_script_replacements=result.automation_script_path_map,
                     clear_missing_vocal_removed=False,
                     clear_missing_lyrics=(
                         bool(result.manifest.get("lyric_entries")) and (not values.unpack_lyrics)
+                    ),
+                    clear_missing_automation_scripts=(
+                        bool(result.manifest.get("automation_script_entries")) and (not values.unpack_automation_scripts)
                     ),
                 )
         except ArchiveOperationCancelled:
@@ -551,6 +605,28 @@ class SettingsArchiveMixin:
                 normalized = os.path.normcase(os.path.abspath(lyric_path))
                 if normalized not in usage:
                     usage[normalized] = {"source_path": lyric_path, "slots": []}
+                usage[normalized]["slots"].append(
+                    {
+                        "group": group,
+                        "page": page_index,
+                        "slot": slot_index,
+                        "location": location,
+                        "title": slot.title.strip() or "",
+                    }
+                )
+        return usage
+
+    def _collect_pack_automation_script_path_usage(self, selected_pages: set[Tuple[str, int]]) -> Dict[str, dict]:
+        usage: Dict[str, dict] = {}
+        for group, page_index in sorted(selected_pages):
+            location = self._page_display_name(group, page_index)
+            for slot_index, slot in enumerate(self.data[group][page_index]):
+                script_path = str(slot.automation_script_path or "").strip()
+                if not script_path:
+                    continue
+                normalized = os.path.normcase(os.path.abspath(script_path))
+                if normalized not in usage:
+                    usage[normalized] = {"source_path": script_path, "slots": []}
                 usage[normalized]["slots"].append(
                     {
                         "group": group,
@@ -1314,6 +1390,13 @@ class SettingsArchiveMixin:
         self.settings.color_vocal_removed_indicator = self.state_colors["vocal_removed_indicator"]
         self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
         self.settings.color_lyric_indicator = self.state_colors["lyric_indicator"]
+        self.settings.color_automation_indicator = self.state_colors["automation_indicator"]
+        self.settings.color_automation_indicator_bypassed = self.state_colors["automation_indicator_bypassed"]
+        self.settings.color_automation_script_indicator = self.state_colors["automation_script_indicator"]
+        self.settings.color_automation_script_indicator_bypassed = (
+            self.state_colors["automation_script_indicator_bypassed"]
+        )
+        self.settings.warn_dual_automation_sources = bool(self.warn_dual_automation_sources)
         self.settings.sound_button_text_color = self.sound_button_text_color
         self.settings.hotkey_new_set_1 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[0]
         self.settings.hotkey_new_set_2 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[1]

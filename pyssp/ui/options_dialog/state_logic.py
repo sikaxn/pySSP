@@ -831,6 +831,7 @@ class StateLogicMixin:
             str(d.get("new_lyric_file_format", "srt")),
             "srt",
         )
+        self.warn_dual_automation_sources_checkbox.setChecked(bool(d.get("warn_dual_automation_sources", True)))
         self._populate_display_font_combo(
             self.lyric_display_font_family_combo,
             str(d.get("lyric_display_font_family", bundled_display_font_family())),

@@ -10,6 +10,12 @@ from pyssp.automation_command import (
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
+from pyssp.automation_script import (
+    AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND,
+    AutomationScript,
+    AutomationScriptAction,
+    load_automation_script,
+)
 
 from pyssp.companion_remote_control import send_companion_location_command
 from pyssp.companion_satellite import CompanionSatelliteClient
@@ -25,6 +31,163 @@ class _CompanionSatelliteBridge(QObject):
 
 
 class CompanionSatelliteMixin:
+    def _load_automation_script_cached(self, path: str) -> tuple[Optional[AutomationScript], str]:
+        normalized_path = str(path or "").strip()
+        if not normalized_path:
+            return None, "Missing automation script path."
+        if not os.path.exists(normalized_path):
+            return None, f"Automation script not found: {normalized_path}"
+        try:
+            mtime = os.path.getmtime(normalized_path)
+        except OSError as exc:
+            return None, str(exc)
+        cached = self._automation_script_cache.get(normalized_path)
+        if cached is not None and abs(float(cached.get("mtime", -1.0)) - float(mtime)) < 0.0001:
+            return cached.get("script"), str(cached.get("error", "") or "")
+        try:
+            script = load_automation_script(normalized_path)
+            error = ""
+        except Exception as exc:
+            script = None
+            error = str(exc)
+        self._automation_script_cache[normalized_path] = {"mtime": mtime, "script": script, "error": error}
+        return script, error
+
+    def _build_automation_script_specs(self, actions: list[AutomationScriptAction]) -> list[AutomationCommandSpec]:
+        specs: list[AutomationCommandSpec] = []
+        for action in list(actions or []):
+            if str(getattr(action, "type", "") or "").strip() != AUTOMATION_SCRIPT_ACTION_TYPE_COMPANION_COMMAND:
+                continue
+            payload = dict(getattr(action, "payload", {}) or {})
+            location = str(payload.get("location", "") or "").strip()
+            if not location:
+                continue
+            specs.append(
+                normalize_automation_spec(
+                    {
+                        "location": location,
+                        "button_text": str(payload.get("button_text", "") or "").strip(),
+                        "hold_to_release": False,
+                    }
+                )
+            )
+        return [spec for spec in specs if spec.location]
+
+    def _prime_automation_script_player(self, player: ExternalMediaPlayer, slot_key: Optional[Tuple[str, int, int]]) -> None:
+        pid = id(player)
+        self._automation_script_runtime.pop(pid, None)
+        if slot_key is None:
+            return
+        slot = self._slot_for_key(slot_key)
+        if slot is None or not self._slot_has_automation_script(slot) or bool(slot.automation_script_bypassed):
+            return
+        script_path = str(slot.automation_script_path or "").strip()
+        script, error = self._load_automation_script_cached(script_path)
+        if script is None:
+            if error:
+                self._show_info_notice_banner(f"{tr('Automation script failed')}: {error}")
+            return
+        try:
+            position_ms = max(0, int(player.position()))
+        except Exception:
+            position_ms = 0
+        next_index = 0
+        current_index = -1
+        for idx, cue in enumerate(list(script.cues or [])):
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms <= position_ms:
+                current_index = idx
+                next_index = idx + 1
+            else:
+                break
+        self._automation_script_runtime[pid] = {
+            "slot_key": slot_key,
+            "path": script_path,
+            "script": script,
+            "next_index": next_index,
+            "current_index": current_index,
+            "last_position_ms": position_ms,
+        }
+
+    def _resync_automation_script_player_for_position(self, player: ExternalMediaPlayer, position_ms: int) -> None:
+        state = self._automation_script_runtime.get(id(player))
+        if not state:
+            return
+        script = state.get("script")
+        if script is None:
+            return
+        next_index = 0
+        current_index = -1
+        for idx, cue in enumerate(list(script.cues or [])):
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms <= position_ms:
+                current_index = idx
+                next_index = idx + 1
+            else:
+                break
+        state["next_index"] = next_index
+        state["current_index"] = current_index
+        state["last_position_ms"] = max(0, int(position_ms))
+
+    def _process_automation_script_player(self, player: ExternalMediaPlayer) -> None:
+        state = self._automation_script_runtime.get(id(player))
+        if not state:
+            return
+        slot_key = state.get("slot_key")
+        slot = self._slot_for_key(slot_key) if slot_key is not None else None
+        if slot is None or bool(slot.automation_script_bypassed):
+            return
+        script = state.get("script")
+        if script is None:
+            return
+        try:
+            position_ms = max(0, int(player.position()))
+        except Exception:
+            return
+        last_position_ms = max(0, int(state.get("last_position_ms", 0)))
+        if position_ms < last_position_ms or abs(position_ms - last_position_ms) > 1500:
+            self._resync_automation_script_player_for_position(player, position_ms)
+            return
+        cues = list(script.cues or [])
+        next_index = max(0, int(state.get("next_index", 0)))
+        while next_index < len(cues):
+            cue = cues[next_index]
+            cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
+            if cue_time_ms > position_ms:
+                break
+            specs = self._build_automation_script_specs(list(getattr(cue, "actions", []) or []))
+            if specs:
+                self._send_companion_command_specs_async(specs)
+            state["current_index"] = next_index
+            next_index += 1
+        state["next_index"] = next_index
+        state["last_position_ms"] = position_ms
+
+    def _automation_script_comments_for_slot_key(
+        self,
+        slot_key: Optional[Tuple[str, int, int]],
+        player: Optional[ExternalMediaPlayer] = None,
+    ) -> tuple[str, str]:
+        if slot_key is None:
+            return "", ""
+        slot = self._slot_for_key(slot_key)
+        if slot is None or not self._slot_has_automation_script(slot):
+            return "", ""
+        script, _error = self._load_automation_script_cached(str(slot.automation_script_path or "").strip())
+        if script is None:
+            return "", ""
+        state = self._automation_script_runtime.get(id(player)) if player is not None else None
+        current_index = int(state.get("current_index", -1)) if state else -1
+        next_index = int(state.get("next_index", 0)) if state else 0
+        current_comment = ""
+        next_comment = ""
+        cues = list(script.cues or [])
+        if 0 <= current_index < len(cues):
+            current_comment = str(getattr(cues[current_index], "comment", "") or "").strip()
+        if 0 <= next_index < len(cues):
+            next_comment = str(getattr(cues[next_index], "comment", "") or "").strip()
+        return current_comment, next_comment
+
     def _open_companion_available_commands(self) -> None:
         dialog = self._companion_available_commands_dialog
         if dialog is None:

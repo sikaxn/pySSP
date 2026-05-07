@@ -42,9 +42,11 @@ class SetSlotData:
     title: str = ""
     notes: str = ""
     lyric_file: str = ""
+    automation_script_path: str = ""
     duration_ms: int = 0
     automation_spec: Optional[AutomationCommandSpec] = None
     sound_button_automation: Optional[SoundButtonAutomationConfig] = None
+    automation_script_bypassed: bool = False
     utility_spec: Optional[UtilitySoundSpec] = None
     copied_to_cue: bool = False
     custom_color: Optional[str] = None
@@ -137,6 +139,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             sound_hotkey = _parse_sound_hotkey(section.get(f"h{i}", "").strip())
             sound_midi_hotkey = _parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip())
             lyric_file = _normalize_set_path_string(section.get(f"pyssplyric{i}", "").strip())
+            automation_script_path = _normalize_set_path_string(section.get(f"pysspautoscript{i}", "").strip())
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -166,9 +169,11 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 title=title,
                 notes=notes,
                 lyric_file=lyric_file,
+                automation_script_path=automation_script_path,
                 duration_ms=duration,
                 automation_spec=None,
                 sound_button_automation=_parse_sound_button_automation_from_section(section, i),
+                automation_script_bypassed=str(section.get(f"pysspautoscriptbypass{i}", "0")).strip() in {"1", "true", "True"},
                 utility_spec=None,
                 copied_to_cue=copied,
                 custom_color=custom_color,
@@ -268,6 +273,7 @@ def _parse_utility_slot_from_section(
     title = _normalize_set_path_string(section.get(f"pyssputilitytitle{slot_index}", "").strip())
     notes = _normalize_set_path_string(section.get(f"pyssputilitynotes{slot_index}", "").strip())
     lyric_file = _normalize_set_path_string(section.get(f"pyssputilitylyric{slot_index}", "").strip())
+    automation_script_path = _normalize_set_path_string(section.get(f"pysspautoscript{slot_index}", "").strip())
     activity_code = section.get(f"activity{slot_index}", "").strip()
     played = str(section.get(f"pyssputilityplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
     cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(
@@ -283,9 +289,11 @@ def _parse_utility_slot_from_section(
         title=title or UTILITY_UNSUPPORTED_MARKER_TEXT,
         notes=notes,
         lyric_file=lyric_file,
+        automation_script_path=automation_script_path,
         duration_ms=spec.duration_ms,
         automation_spec=None,
         sound_button_automation=_parse_sound_button_automation_from_section(section, slot_index),
+        automation_script_bypassed=str(section.get(f"pysspautoscriptbypass{slot_index}", "0")).strip() in {"1", "true", "True"},
         utility_spec=spec,
         copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
         custom_color=parse_delphi_color(section.get(f"co{slot_index}", "").strip()),
@@ -330,9 +338,11 @@ def _parse_automation_slot_from_section(
         title=title or spec.button_text or spec.location or AUTOMATION_UNSUPPORTED_MARKER_TEXT,
         notes=notes,
         lyric_file="",
+        automation_script_path="",
         duration_ms=0,
         automation_spec=spec,
         sound_button_automation=None,
+        automation_script_bypassed=False,
         utility_spec=None,
         copied_to_cue=section.get(f"ci{slot_index}", "").strip().upper() == "Y",
         custom_color=custom_color,

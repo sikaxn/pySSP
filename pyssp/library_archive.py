@@ -68,6 +68,7 @@ class UnpackDialogResult:
     open_set_after_unpack: bool
     maintain_directory_structure: bool
     unpack_lyrics: bool
+    unpack_automation_scripts: bool
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class UnpackResult:
     audio_path_map: dict[str, str]
     vocal_removed_path_map: dict[str, str]
     lyric_path_map: dict[str, str]
+    automation_script_path_map: dict[str, str]
     manifest: dict
 
 
@@ -130,6 +132,10 @@ class PackAudioLibraryDialog(QDialog):
         self.pack_lyrics_checkbox = QCheckBox(tr("Pack lyric"), self)
         self.pack_lyrics_checkbox.setChecked(True)
         layout.addWidget(self.pack_lyrics_checkbox)
+
+        self.pack_automation_scripts_checkbox = QCheckBox(tr("Pack automation scripts"), self)
+        self.pack_automation_scripts_checkbox.setChecked(True)
+        layout.addWidget(self.pack_automation_scripts_checkbox)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
@@ -199,6 +205,10 @@ class UnpackLibraryDialog(QDialog):
         self.unpack_lyrics_checkbox.setChecked(True)
         layout.addWidget(self.unpack_lyrics_checkbox)
 
+        self.unpack_automation_scripts_checkbox = QCheckBox(tr("Unpack automation scripts"), self)
+        self.unpack_automation_scripts_checkbox.setChecked(True)
+        layout.addWidget(self.unpack_automation_scripts_checkbox)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -238,6 +248,7 @@ class UnpackLibraryDialog(QDialog):
             open_set_after_unpack=bool(self.open_set_checkbox.isChecked()),
             maintain_directory_structure=bool(self.maintain_structure_checkbox.isChecked()),
             unpack_lyrics=bool(self.unpack_lyrics_checkbox.isChecked()),
+            unpack_automation_scripts=bool(self.unpack_automation_scripts_checkbox.isChecked()),
         )
 
 
@@ -310,6 +321,13 @@ def build_archive_lyric_entries(file_paths: list[str], maintain_directory_struct
     return _build_archive_entries(file_paths, maintain_directory_structure, root_prefix="lyric")
 
 
+def build_archive_automation_script_entries(
+    file_paths: list[str],
+    maintain_directory_structure: bool,
+) -> list[PackedAudioEntry]:
+    return _build_archive_entries(file_paths, maintain_directory_structure, root_prefix="automation_script")
+
+
 def _build_archive_entries(
     file_paths: list[str],
     maintain_directory_structure: bool,
@@ -340,9 +358,11 @@ def build_manifest(
     settings_included: bool,
     vocal_removed_entries: Optional[list[PackedAudioEntry]] = None,
     lyric_entries: Optional[list[PackedAudioEntry]] = None,
+    automation_script_entries: Optional[list[PackedAudioEntry]] = None,
 ) -> dict:
     vocal_removed_entries = vocal_removed_entries or []
     lyric_entries = lyric_entries or []
+    automation_script_entries = automation_script_entries or []
     return {
         "format": "pyssppak",
         "version": 2,
@@ -372,6 +392,14 @@ def build_manifest(
             }
             for entry in lyric_entries
         ],
+        "automation_script_entries": [
+            {
+                "source_name": os.path.basename(entry.source_path),
+                "archive_member": entry.archive_member,
+                "set_path": entry.set_path,
+            }
+            for entry in automation_script_entries
+        ],
     }
 
 
@@ -397,6 +425,7 @@ def unpack_pyssppak(
     destination_dir: str,
     maintain_directory_structure: bool,
     unpack_lyrics: bool = True,
+    unpack_automation_scripts: bool = True,
     progress_callback=None,
     is_cancelled=None,
 ) -> UnpackResult:
@@ -406,17 +435,30 @@ def unpack_pyssppak(
         manifest.get("vocal_removed_entries", []) if isinstance(manifest.get("vocal_removed_entries"), list) else []
     )
     lyric_entries = manifest.get("lyric_entries", []) if isinstance(manifest.get("lyric_entries"), list) else []
+    automation_script_entries = (
+        manifest.get("automation_script_entries", [])
+        if isinstance(manifest.get("automation_script_entries"), list)
+        else []
+    )
     set_member = str(manifest.get("set_member") or "")
     settings_member = str(manifest.get("settings_member") or "")
     if not set_member:
         raise ValueError("Package manifest is missing the packed .set entry.")
 
     os.makedirs(destination_dir, exist_ok=True)
-    total = 1 + len(audio_entries) + len(vocal_removed_entries) + ((len(lyric_entries)) if unpack_lyrics else 0) + (1 if settings_member else 0)
+    total = (
+        1
+        + len(audio_entries)
+        + len(vocal_removed_entries)
+        + (len(lyric_entries) if unpack_lyrics else 0)
+        + (len(automation_script_entries) if unpack_automation_scripts else 0)
+        + (1 if settings_member else 0)
+    )
     step = 0
     audio_path_map: dict[str, str] = {}
     vocal_removed_path_map: dict[str, str] = {}
     lyric_path_map: dict[str, str] = {}
+    automation_script_path_map: dict[str, str] = {}
     used_targets: set[str] = set()
 
     with zipfile.ZipFile(package_path, "r") as archive:
@@ -472,6 +514,21 @@ def unpack_pyssppak(
                 step += 1
                 _report_progress(progress_callback, step, total, f"Extracting {os.path.basename(extracted_lyric_path)}...")
 
+        if unpack_automation_scripts:
+            for item in automation_script_entries:
+                _check_cancelled(is_cancelled)
+                if not isinstance(item, dict):
+                    continue
+                archive_member = str(item.get("archive_member") or "")
+                set_path = str(item.get("set_path") or archive_member)
+                if not archive_member:
+                    continue
+                target_path = build_unpack_target_path(destination_dir, archive_member, maintain_directory_structure, used_targets)
+                extracted_script_path = _extract_to_file(archive, archive_member, target_path)
+                automation_script_path_map[set_path] = extracted_script_path
+                step += 1
+                _report_progress(progress_callback, step, total, f"Extracting {os.path.basename(extracted_script_path)}...")
+
         extracted_settings_path = ""
         if settings_member:
             _check_cancelled(is_cancelled)
@@ -489,6 +546,7 @@ def unpack_pyssppak(
         audio_path_map=audio_path_map,
         vocal_removed_path_map=vocal_removed_path_map,
         lyric_path_map=lyric_path_map,
+        automation_script_path_map=automation_script_path_map,
         manifest=manifest,
     )
 
@@ -524,13 +582,16 @@ def rewrite_packed_set_paths(
     replacements: dict[str, str],
     vocal_removed_replacements: Optional[dict[str, str]] = None,
     lyric_replacements: Optional[dict[str, str]] = None,
+    automation_script_replacements: Optional[dict[str, str]] = None,
     clear_missing_vocal_removed: bool = False,
     clear_missing_lyrics: bool = False,
+    clear_missing_automation_scripts: bool = False,
 ) -> None:
     text, encoding = _read_text_with_fallback(set_file_path)
     lines = text.splitlines(True)
     vocal_removed_replacements = vocal_removed_replacements or {}
     lyric_replacements = lyric_replacements or {}
+    automation_script_replacements = automation_script_replacements or {}
     output: list[str] = []
     for line in lines:
         updated = line
@@ -553,6 +614,12 @@ def rewrite_packed_set_paths(
                 if replacement:
                     updated = f"{key}={replacement}{line_ending}"
                 elif clear_missing_lyrics:
+                    updated = f"{key}={line_ending}"
+            elif re.fullmatch(r"pysspautoscript\d+", key.strip(), re.IGNORECASE):
+                replacement = automation_script_replacements.get(raw_value)
+                if replacement:
+                    updated = f"{key}={replacement}{line_ending}"
+                elif clear_missing_automation_scripts:
                     updated = f"{key}={line_ending}"
         output.append(updated)
     with open(set_file_path, "w", encoding=encoding, newline="") as fh:

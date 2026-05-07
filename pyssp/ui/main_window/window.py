@@ -469,6 +469,7 @@ class MainWindow(
             list(getattr(self.settings, "supported_audio_format_extensions", []))
         )
         self.verify_sound_file_on_add = bool(getattr(self.settings, "verify_sound_file_on_add", True))
+        self.warn_dual_automation_sources = bool(getattr(self.settings, "warn_dual_automation_sources", True))
         self.allow_other_unsupported_audio_files = bool(
             getattr(self.settings, "allow_other_unsupported_audio_files", False)
         )
@@ -491,6 +492,12 @@ class MainWindow(
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
             "automation_indicator": getattr(self.settings, "color_automation_indicator", "#49C16D"),
             "automation_indicator_bypassed": getattr(self.settings, "color_automation_indicator_bypassed", "#9A9A9A"),
+            "automation_script_indicator": getattr(self.settings, "color_automation_script_indicator", "#2E8BFF"),
+            "automation_script_indicator_bypassed": getattr(
+                self.settings,
+                "color_automation_script_indicator_bypassed",
+                "#708090",
+            ),
         }
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":
@@ -784,6 +791,8 @@ class MainWindow(
         self._automation_active_keys: set[Tuple[str, int, int]] = set()
         self._automation_hold_active_keys: set[Tuple[str, int, int]] = set()
         self._automation_click_suppressed_slot_key: Optional[Tuple[str, int, int]] = None
+        self._automation_script_cache: Dict[str, dict] = {}
+        self._automation_script_runtime: Dict[int, dict] = {}
         self._ssp_unit_cache: Dict[str, Tuple[int, int]] = {}
         self._drag_source_key: Optional[Tuple[str, int, int]] = None
         self._drag_target_slot_key: Optional[Tuple[str, int, int]] = None
@@ -859,6 +868,7 @@ class MainWindow(
         self._stage_lyric_cache_error: str = ""
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
+        self._automation_script_navigator_window: Optional[AutomationScriptNavigatorWindow] = None
         self._lyric_force_blank = False
         self._lyric_blank_toggle_action: Optional[QAction] = None
         self._hover_slot_index: Optional[int] = None

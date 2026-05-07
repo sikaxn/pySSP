@@ -29,6 +29,14 @@ class ColorsPageMixin:
         self._add_state_color_row(indicator_form, "vocal_removed_indicator", "Vocal Removed Indicator")
         self._add_state_color_row(indicator_form, "midi_indicator", "MIDI Indicator")
         self._add_state_color_row(indicator_form, "lyric_indicator", "Lyric Indicator")
+        self._add_state_color_row(indicator_form, "automation_indicator", "Automation Indicator")
+        self._add_state_color_row(indicator_form, "automation_indicator_bypassed", "Automation Bypassed Indicator")
+        self._add_state_color_row(indicator_form, "automation_script_indicator", "Automation Script Indicator")
+        self._add_state_color_row(
+            indicator_form,
+            "automation_script_indicator_bypassed",
+            "Automation Script Bypassed Indicator",
+        )
         self.sound_text_color_btn = QPushButton()
         self.sound_text_color_btn.clicked.connect(self._pick_sound_text_color)
         self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)

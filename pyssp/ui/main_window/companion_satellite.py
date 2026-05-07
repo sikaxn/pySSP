@@ -744,8 +744,16 @@ class CompanionSatelliteMixin:
         if label is None:
             return
         state = str(self._companion_satellite_last_status[0] or "").strip().lower()
-        bypassed = bool(getattr(self, "companion_bypass", False))
-        text = tr("SAT (Bypassed)") if bypassed else "SAT"
+        companion_bypassed = bool(getattr(self, "companion_bypass", False))
+        internal_bypassed = bool(getattr(self, "internal_bypass", False))
+        if companion_bypassed and internal_bypassed:
+            text = tr("SAT (All Bypassed)")
+        elif companion_bypassed:
+            text = tr("SAT (Companion Bypassed)")
+        elif internal_bypassed:
+            text = tr("SAT (Internal Bypassed)")
+        else:
+            text = "SAT"
         if state == "connected":
             style = "QLabel{font-size:9pt;font-weight:bold;color:#165A20;background:#CFF3D6;border:1px solid #2E9B47;border-radius:8px;padding:0 6px;}"
         elif state in {"connecting", "reconnecting"}:
@@ -755,8 +763,13 @@ class CompanionSatelliteMixin:
         label.setText(text)
         label.setStyleSheet(style)
         message = str(self._companion_satellite_last_status[1] or "").strip()
-        if bypassed:
-            message = tr("Companion remote commands are bypassed.") + (f" {message}" if message else "")
+        bypass_messages: list[str] = []
+        if companion_bypassed:
+            bypass_messages.append(tr("Companion remote commands are bypassed."))
+        if internal_bypassed:
+            bypass_messages.append(tr("Internal automation commands are bypassed."))
+        if bypass_messages:
+            message = " ".join(bypass_messages) + (f" {message}" if message else "")
         tooltip = message or (
             tr("Connected") if state == "connected" else tr("Connecting") if state in {"connecting", "reconnecting"} else tr("Not Connected")
         )
@@ -773,7 +786,26 @@ class CompanionSatelliteMixin:
         btn = self.control_buttons.get("Companion Bypass")
         if btn is not None and btn.isChecked() != self.companion_bypass:
             btn.setChecked(self.companion_bypass)
+        navigator = getattr(self, "_automation_script_navigator_window", None)
+        if navigator is not None:
+            navigator.set_companion_bypass(self.companion_bypass)
         self._sync_control_button_instances("Companion Bypass")
+        self._update_companion_satellite_status_indicator()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _toggle_internal_bypass(self, checked: bool) -> None:
+        self.internal_bypass = bool(checked)
+        action = self._menu_actions.get("internal_bypass")
+        if action is not None and action.isChecked() != self.internal_bypass:
+            action.setChecked(self.internal_bypass)
+        btn = self.control_buttons.get("Internal Bypass")
+        if btn is not None and btn.isChecked() != self.internal_bypass:
+            btn.setChecked(self.internal_bypass)
+        navigator = getattr(self, "_automation_script_navigator_window", None)
+        if navigator is not None:
+            navigator.set_internal_bypass(self.internal_bypass)
+        self._sync_control_button_instances("Internal Bypass")
         self._update_companion_satellite_status_indicator()
         if not self._suspend_settings_save:
             self._save_settings()

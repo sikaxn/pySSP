@@ -88,19 +88,19 @@ class CompanionSatelliteWindow(QWidget):
         self.navigation_layout.setContentsMargins(0, 0, 0, 0)
         self.navigation_layout.setSpacing(8)
         self.page_up_button = QToolButton(self.navigation_widget)
-        self.page_up_button.setText("Page Up")
+        self.page_up_button.setText(tr("Page Up"))
         self.page_up_button.clicked.connect(lambda: self.navigationRequested.emit("PAGEUP"))
         self.navigation_layout.addWidget(self.page_up_button)
         self.page_down_button = QToolButton(self.navigation_widget)
-        self.page_down_button.setText("Page Down")
+        self.page_down_button.setText(tr("Page Down"))
         self.page_down_button.clicked.connect(lambda: self.navigationRequested.emit("PAGEDOWN"))
         self.navigation_layout.addWidget(self.page_down_button)
         self.home_button = QToolButton(self.navigation_widget)
-        self.home_button.setText("Home")
+        self.home_button.setText(tr("Home"))
         self.home_button.clicked.connect(lambda: self.navigationRequested.emit("HOME"))
         self.navigation_layout.addWidget(self.home_button)
         self.navigation_layout.addStretch(1)
-        self.current_page_label = QLabel("Page -")
+        self.current_page_label = QLabel(tr("Page -"))
         self.navigation_layout.addWidget(self.current_page_label)
         root.addWidget(self.navigation_widget)
 
@@ -256,7 +256,7 @@ class CompanionSatelliteWindow(QWidget):
 
     def _refresh_current_page_label(self) -> None:
         page = self.current_page()
-        self.current_page_label.setText(f"Page {page}" if page is not None else "Page -")
+        self.current_page_label.setText(f"{tr('Page')} {page}" if page is not None else tr("Page -"))
 
     def _pixmap(self, bitmap: bytes) -> QPixmap:
         pixel_count = max(1, len(bitmap) // 3)

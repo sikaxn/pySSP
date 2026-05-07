@@ -36,7 +36,7 @@ UTILITY_WAVEFORMS = {
 @dataclass(frozen=True)
 class UtilitySoundSpec:
     mode: str = UTILITY_MODE_BLANK
-    duration_ms: int = 1000
+    duration_ms: int = 60000
     waveform_type: str = UTILITY_WAVEFORM_SINE
     frequency_hz: float = 440.0
     tempo_bpm: float = 120.0
@@ -48,7 +48,7 @@ def clamp_utility_duration_ms(value: object) -> int:
     try:
         raw = int(value)
     except Exception:
-        raw = 1000
+        raw = 60000
     return max(1, min(24 * 60 * 60 * 1000, raw))
 
 
@@ -103,7 +103,7 @@ def normalize_utility_spec(raw: object) -> UtilitySoundSpec:
         tempo_bpm = 120.0
     return UtilitySoundSpec(
         mode=normalize_utility_mode(payload.get("mode", UTILITY_MODE_BLANK)),
-        duration_ms=clamp_utility_duration_ms(payload.get("duration_ms", 1000)),
+        duration_ms=clamp_utility_duration_ms(payload.get("duration_ms", 60000)),
         waveform_type=normalize_utility_waveform(payload.get("waveform_type", UTILITY_WAVEFORM_SINE)),
         frequency_hz=max(1.0, min(24000.0, frequency_hz)),
         tempo_bpm=max(1.0, min(999.0, tempo_bpm)),

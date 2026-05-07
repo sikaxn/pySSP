@@ -154,6 +154,7 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
     "Play List",
     "Search",
     "Companion Bypass",
+    "Internal Bypass",
     "Vocal Removed",
 ]
 WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
@@ -598,6 +599,7 @@ class AppSettings:
     companion_satellite_port: int = 16622
     companion_satellite_enabled: bool = False
     companion_bypass: bool = False
+    internal_bypass: bool = False
     companion_satellite_columns: int = 8
     companion_satellite_rows: int = 4
     companion_satellite_render_mode: str = "bitmap"
@@ -998,6 +1000,7 @@ def save_settings(settings: AppSettings) -> None:
         "companion_satellite_port": str(settings.companion_satellite_port),
         "companion_satellite_enabled": "1" if settings.companion_satellite_enabled else "0",
         "companion_bypass": "1" if settings.companion_bypass else "0",
+        "internal_bypass": "1" if settings.internal_bypass else "0",
         "companion_satellite_columns": str(settings.companion_satellite_columns),
         "companion_satellite_rows": str(settings.companion_satellite_rows),
         "companion_satellite_render_mode": _normalize_companion_satellite_render_mode(
@@ -1414,6 +1417,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         legacy_companion_satellite_start_mode == "auto",
     )
     companion_bypass = _get_bool(section, "companion_bypass", False)
+    internal_bypass = _get_bool(section, "internal_bypass", False)
     companion_satellite_columns = _clamp_int(_get_int(section, "companion_satellite_columns", 8), 1, 12)
     companion_satellite_rows = _clamp_int(_get_int(section, "companion_satellite_rows", 4), 1, 8)
     companion_satellite_render_mode = _normalize_companion_satellite_render_mode(
@@ -1792,6 +1796,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         companion_satellite_port=companion_satellite_port,
         companion_satellite_enabled=companion_satellite_enabled,
         companion_bypass=companion_bypass,
+        internal_bypass=internal_bypass,
         companion_satellite_columns=companion_satellite_columns,
         companion_satellite_rows=companion_satellite_rows,
         companion_satellite_render_mode=companion_satellite_render_mode,

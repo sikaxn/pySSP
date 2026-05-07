@@ -275,6 +275,9 @@ class SelectionMixin:
     def selected_companion_bypass(self) -> bool:
         return bool(self.companion_bypass_checkbox.isChecked())
 
+    def selected_internal_bypass(self) -> bool:
+        return bool(self.internal_bypass_checkbox.isChecked())
+
     def selected_companion_satellite_columns(self) -> int:
         return max(1, min(12, int(self.companion_satellite_columns_spin.value())))
 

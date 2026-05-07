@@ -184,6 +184,7 @@ class OptionsDialog(
         "companion_satellite_port": 16622,
         "companion_satellite_enabled": False,
         "companion_bypass": False,
+        "internal_bypass": False,
         "companion_satellite_columns": 8,
         "companion_satellite_rows": 4,
         "companion_satellite_render_mode": "bitmap",
@@ -466,6 +467,7 @@ class OptionsDialog(
         companion_satellite_port: int,
         companion_satellite_enabled: bool,
         companion_bypass: bool,
+        internal_bypass: bool,
         companion_satellite_columns: int,
         companion_satellite_rows: int,
         companion_satellite_render_mode: str,
@@ -567,6 +569,7 @@ class OptionsDialog(
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Options")
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setModal(True)
         self._apply_responsive_dialog_size()
 
@@ -756,6 +759,7 @@ class OptionsDialog(
         self._companion_satellite_port = max(1, min(65535, int(companion_satellite_port)))
         self._companion_satellite_enabled = bool(companion_satellite_enabled)
         self._companion_bypass = bool(companion_bypass)
+        self._internal_bypass = bool(internal_bypass)
         self._companion_satellite_columns = max(1, min(12, int(companion_satellite_columns)))
         self._companion_satellite_rows = max(1, min(8, int(companion_satellite_rows)))
         self._companion_satellite_render_mode = (
@@ -968,6 +972,7 @@ class OptionsDialog(
                 port=self._companion_satellite_port,
                 enabled=self._companion_satellite_enabled,
                 bypass=self._companion_bypass,
+                internal_bypass=self._internal_bypass,
                 columns=self._companion_satellite_columns,
                 rows=self._companion_satellite_rows,
                 render_mode=self._companion_satellite_render_mode,

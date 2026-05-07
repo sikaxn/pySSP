@@ -18,6 +18,9 @@ class RemoteApiMixin:
         normalized = normalize_automation_spec(spec or AutomationCommandSpec())
         if normalized.source != AUTOMATION_COMMAND_SOURCE_INTERNAL or not normalized.internal_command:
             return False
+        if bool(getattr(self, "internal_bypass", False)):
+            self._show_info_notice_banner(tr("Internal commands are bypassed. Command will not run."))
+            return False
         command, params = internal_automation_dispatch(
             normalized.internal_command,
             normalized.internal_params or {},

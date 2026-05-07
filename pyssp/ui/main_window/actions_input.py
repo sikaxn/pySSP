@@ -1790,6 +1790,7 @@ class ActionsInputMixin:
             companion_satellite_port=self.companion_satellite_port,
             companion_satellite_enabled=self.companion_satellite_enabled,
             companion_bypass=self.companion_bypass,
+            internal_bypass=self.internal_bypass,
             companion_satellite_columns=self.companion_satellite_columns,
             companion_satellite_rows=self.companion_satellite_rows,
             companion_satellite_render_mode=self.companion_satellite_render_mode,
@@ -2167,6 +2168,7 @@ class ActionsInputMixin:
         self.companion_satellite_port = dialog.selected_companion_satellite_port()
         self.companion_satellite_enabled = dialog.selected_companion_satellite_enabled()
         self._toggle_companion_bypass(dialog.selected_companion_bypass())
+        self._toggle_internal_bypass(dialog.selected_internal_bypass())
         self.companion_satellite_columns = dialog.selected_companion_satellite_columns()
         self.companion_satellite_rows = dialog.selected_companion_satellite_rows()
         self.companion_satellite_render_mode = dialog.selected_companion_satellite_render_mode()

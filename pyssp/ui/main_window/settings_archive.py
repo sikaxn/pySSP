@@ -1346,6 +1346,7 @@ class SettingsArchiveMixin:
         self.settings.companion_satellite_port = self.companion_satellite_port
         self.settings.companion_satellite_enabled = self.companion_satellite_enabled
         self.settings.companion_bypass = bool(self.companion_bypass)
+        self.settings.internal_bypass = bool(self.internal_bypass)
         self.settings.companion_satellite_columns = self.companion_satellite_columns
         self.settings.companion_satellite_rows = self.companion_satellite_rows
         self.settings.companion_satellite_render_mode = self.companion_satellite_render_mode

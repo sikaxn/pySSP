@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -220,6 +221,9 @@ def _build_dialog(**overrides):
         companion_bypass=bool(
             overrides.get("companion_bypass", defaults["companion_bypass"])
         ),
+        internal_bypass=bool(
+            overrides.get("internal_bypass", defaults["internal_bypass"])
+        ),
         companion_satellite_columns=int(
             overrides.get("companion_satellite_columns", defaults["companion_satellite_columns"])
         ),
@@ -427,6 +431,16 @@ def _build_dialog(**overrides):
         initial_page=overrides.get("initial_page"),
         parent=None,
     )
+
+
+def test_options_dialog_allows_maximize(qapp):
+    dialog = _build_dialog()
+    try:
+        assert bool(dialog.windowFlags() & Qt.WindowMaximizeButtonHint)
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
 
 
 @pytest.fixture(autouse=True)
@@ -851,6 +865,7 @@ def test_companion_satellite_options_round_trip(qapp):
         companion_satellite_port=17777,
         companion_satellite_enabled=True,
         companion_bypass=True,
+        internal_bypass=True,
         companion_satellite_columns=7,
         companion_satellite_rows=4,
         companion_satellite_render_mode="styled",
@@ -865,6 +880,7 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_port() == 17777
     assert dialog.selected_companion_satellite_enabled() is True
     assert dialog.selected_companion_bypass() is True
+    assert dialog.selected_internal_bypass() is True
     assert dialog.selected_companion_satellite_columns() == 7
     assert dialog.selected_companion_satellite_rows() == 4
     assert dialog.selected_companion_satellite_render_mode() == "styled"
@@ -877,6 +893,7 @@ def test_companion_satellite_options_round_trip(qapp):
     dialog.companion_satellite_port_spin.setValue(16622)
     dialog.companion_satellite_enabled_checkbox.setChecked(False)
     dialog.companion_bypass_checkbox.setChecked(False)
+    dialog.internal_bypass_checkbox.setChecked(False)
     dialog.companion_satellite_columns_spin.setValue(5)
     dialog.companion_satellite_rows_spin.setValue(3)
     dialog.companion_satellite_render_mode_combo.setCurrentIndex(
@@ -891,6 +908,7 @@ def test_companion_satellite_options_round_trip(qapp):
     assert dialog.selected_companion_satellite_port() == 16622
     assert dialog.selected_companion_satellite_enabled() is False
     assert dialog.selected_companion_bypass() is False
+    assert dialog.selected_internal_bypass() is False
     assert dialog.selected_companion_satellite_columns() == 5
     assert dialog.selected_companion_satellite_rows() == 3
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
@@ -906,6 +924,7 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
     assert dialog.companion_satellite_columns_spin.value() == 8
     assert dialog.companion_satellite_rows_spin.value() == 4
     assert dialog.selected_companion_bypass() is False
+    assert dialog.selected_internal_bypass() is False
     assert dialog.selected_companion_satellite_render_mode() == "bitmap"
     assert dialog.selected_companion_satellite_serial_suffix() == default_companion_satellite_serial_suffix()
     assert dialog.selected_companion_command_mode() == "tcp"

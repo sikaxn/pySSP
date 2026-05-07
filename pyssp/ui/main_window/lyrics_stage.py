@@ -291,6 +291,12 @@ class LyricsStageMixin:
         if self._automation_script_navigator_window is None:
             self._automation_script_navigator_window = AutomationScriptNavigatorWindow(
                 on_seek_to_ms=self._seek_to_lyric_timestamp,
+                show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
+                on_show_lyric_changed=self._set_automation_script_editor_show_lyric,
+                companion_bypass=bool(getattr(self, "companion_bypass", False)),
+                internal_bypass=bool(getattr(self, "internal_bypass", False)),
+                on_companion_bypass_changed=self._toggle_companion_bypass,
+                on_internal_bypass_changed=self._toggle_internal_bypass,
                 language=self.ui_language,
                 parent=self,
             )
@@ -354,6 +360,8 @@ class LyricsStageMixin:
                 script_path=script_path,
                 lyric_path=lyric_path_for_script,
                 position_ms=position_ms,
+                companion_bypass=bool(getattr(self, "companion_bypass", False)),
+                internal_bypass=bool(getattr(self, "internal_bypass", False)),
                 force=force,
             )
 

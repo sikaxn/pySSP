@@ -4,7 +4,17 @@ import os
 from typing import Callable, List, Optional
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from pyssp.automation_script import (
     AutomationScriptCue,
@@ -20,6 +30,12 @@ class AutomationScriptNavigatorWindow(QWidget):
         self,
         *,
         on_seek_to_ms: Callable[[int], None],
+        show_lyric_default: bool = False,
+        on_show_lyric_changed: Optional[Callable[[bool], None]] = None,
+        companion_bypass: bool = False,
+        internal_bypass: bool = False,
+        on_companion_bypass_changed: Optional[Callable[[bool], None]] = None,
+        on_internal_bypass_changed: Optional[Callable[[bool], None]] = None,
         language: str = "en",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -29,6 +45,9 @@ class AutomationScriptNavigatorWindow(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose, True)
 
         self._on_seek_to_ms = on_seek_to_ms
+        self._on_show_lyric_changed = on_show_lyric_changed
+        self._on_companion_bypass_changed = on_companion_bypass_changed
+        self._on_internal_bypass_changed = on_internal_bypass_changed
         self._cache_script_path: str = ""
         self._cache_script_mtime: float = -1.0
         self._cache_lyric_path: str = ""
@@ -37,40 +56,67 @@ class AutomationScriptNavigatorWindow(QWidget):
         self._cache_error: str = ""
         self._rows: List[dict] = []
         self._current_script_path: str = ""
+        self._current_lyric_path: str = ""
         self._active_row = -1
         self._track_active = False
+        self._show_lyric = bool(show_lyric_default)
+        self._last_position_ms = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
+        controls_row = QHBoxLayout()
+        self._show_lyric_checkbox = QCheckBox(tr("Show lyric alongside automation cues"))
+        self._show_lyric_checkbox.setChecked(self._show_lyric)
+        self._show_lyric_checkbox.toggled.connect(self._on_show_lyric_toggled)
+        controls_row.addWidget(self._show_lyric_checkbox)
+        controls_row.addStretch(1)
+
+        self._companion_bypass_button = QPushButton(tr("Companion Bypass"))
+        self._companion_bypass_button.setCheckable(True)
+        self._companion_bypass_button.toggled.connect(self._on_companion_bypass_toggled)
+        controls_row.addWidget(self._companion_bypass_button)
+
+        self._internal_bypass_button = QPushButton(tr("Internal Bypass"))
+        self._internal_bypass_button.setCheckable(True)
+        self._internal_bypass_button.toggled.connect(self._on_internal_bypass_toggled)
+        controls_row.addWidget(self._internal_bypass_button)
+        root.addLayout(controls_row)
+
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         root.addWidget(self._status_label)
 
-        self._table = QTableWidget(0, 4, self)
-        self._table.setHorizontalHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
-        self._table.verticalHeader().setVisible(False)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SingleSelection)
-        self._table.cellClicked.connect(self._on_cell_clicked)
-        root.addWidget(self._table, 1)
+        self._tree = QTreeWidget(self)
+        self._tree.setColumnCount(4)
+        self._tree.setHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
+        self._tree.setRootIsDecorated(True)
+        self._tree.setItemsExpandable(True)
+        self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._tree.itemClicked.connect(self._on_item_clicked)
+        root.addWidget(self._tree, 1)
 
+        self.set_companion_bypass(companion_bypass)
+        self.set_internal_bypass(internal_bypass)
         localize_widget_tree(self, language)
 
     def retranslate_ui(self, language: str = "en") -> None:
         self.setWindowTitle(tr("Automation Script Navigator"))
-        self._table.setHorizontalHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
+        self._tree.setHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
+        self._show_lyric_checkbox.setText(tr("Show lyric alongside automation cues"))
+        self._companion_bypass_button.setText(tr("Companion Bypass"))
+        self._internal_bypass_button.setText(tr("Internal Bypass"))
         localize_widget_tree(self, language)
 
     def clear(self) -> None:
         self._track_active = False
         self._rows = []
         self._current_script_path = ""
+        self._current_lyric_path = ""
         self._active_row = -1
         self._status_label.setText("")
-        self._table.setRowCount(0)
+        self._tree.clear()
 
     def update_playback_state(
         self,
@@ -79,24 +125,33 @@ class AutomationScriptNavigatorWindow(QWidget):
         script_path: str,
         lyric_path: str = "",
         position_ms: int,
+        companion_bypass: Optional[bool] = None,
+        internal_bypass: Optional[bool] = None,
         force: bool = False,
     ) -> None:
         self._track_active = bool(has_active_track)
+        self._last_position_ms = max(0, int(position_ms))
+        if companion_bypass is not None:
+            self.set_companion_bypass(companion_bypass)
+        if internal_bypass is not None:
+            self.set_internal_bypass(internal_bypass)
         if not has_active_track:
             self.clear()
             return
 
         path = str(script_path or "").strip()
         lyric_file_path = str(lyric_path or "").strip()
+        self._current_script_path = path
+        self._current_lyric_path = lyric_file_path
         if not path and not lyric_file_path:
             self._status_label.setText(tr("No automation script assigned for this sound."))
             self._rows = []
-            self._table.setRowCount(0)
+            self._tree.clear()
             return
         if path and not os.path.exists(path):
             self._status_label.setText(tr("Automation script not found:\n{path}").format(path=path))
             self._rows = []
-            self._table.setRowCount(0)
+            self._tree.clear()
             return
         if lyric_file_path and not os.path.exists(lyric_file_path):
             lyric_file_path = ""
@@ -106,34 +161,105 @@ class AutomationScriptNavigatorWindow(QWidget):
             self._status_label.setText(error)
             self._rows = []
             self._current_script_path = ""
-            self._table.setRowCount(0)
+            self._tree.clear()
             return
+        visible_rows = [
+            row for row in list(rows)
+            if self._show_lyric or str(row.get("kind", "") or "") == "cue"
+        ]
         status_lines = []
         if path:
             status_lines.append(path)
-        if lyric_file_path:
+        if lyric_file_path and self._show_lyric:
             status_lines.append(lyric_file_path)
         self._status_label.setText("\n".join(status_lines))
-        if force or self._rows != rows or self._current_script_path != path:
-            self._rows = list(rows)
+        if force or self._rows != visible_rows or self._current_script_path != path:
+            self._rows = list(visible_rows)
             self._current_script_path = path
-            self._table.setRowCount(0)
+            self._tree.clear()
             for row_idx, row in enumerate(self._rows):
-                self._table.insertRow(row_idx)
-                ts_item = QTableWidgetItem(self._format_timestamp(int(row["time_ms"])))
-                ts_item.setFlags(ts_item.flags() & ~Qt.ItemIsEditable)
-                type_item = QTableWidgetItem(tr("Cue") if row["kind"] == "cue" else tr("Lyric"))
-                type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
-                comment_item = QTableWidgetItem(str(row.get("comment", "") or ""))
-                comment_item.setFlags(comment_item.flags() & ~Qt.ItemIsEditable)
-                command_item = QTableWidgetItem(str(row.get("commands", "") or ""))
-                command_item.setFlags(command_item.flags() & ~Qt.ItemIsEditable)
-                self._table.setItem(row_idx, 0, ts_item)
-                self._table.setItem(row_idx, 1, type_item)
-                self._table.setItem(row_idx, 2, comment_item)
-                self._table.setItem(row_idx, 3, command_item)
+                item = QTreeWidgetItem(
+                    [
+                        self._format_timestamp(int(row["time_ms"])),
+                        tr("Cue") if row["kind"] == "cue" else tr("Lyric"),
+                        str(row.get("comment", "") or ""),
+                        str(row.get("commands", "") or ""),
+                    ]
+                )
+                item.setData(0, Qt.UserRole, row_idx)
+                self._tree.addTopLevelItem(item)
+                for child in list(row.get("children", []) or []):
+                    child_item = QTreeWidgetItem(
+                        [
+                            "",
+                            tr("Command"),
+                            str(child.get("comment", "") or ""),
+                            str(child.get("commands", "") or ""),
+                        ]
+                    )
+                    child_item.setData(0, Qt.UserRole, row_idx)
+                    item.addChild(child_item)
 
         self._highlight_row(self._row_index_for_position(position_ms))
+
+    def set_companion_bypass(self, bypassed: bool) -> None:
+        self._companion_bypass_button.blockSignals(True)
+        self._companion_bypass_button.setChecked(bool(bypassed))
+        self._companion_bypass_button.blockSignals(False)
+        self._refresh_toggle_button_style(
+            self._companion_bypass_button,
+            active_color="#D86A6A",
+            inactive_color="#3E8E63",
+        )
+
+    def set_internal_bypass(self, bypassed: bool) -> None:
+        self._internal_bypass_button.blockSignals(True)
+        self._internal_bypass_button.setChecked(bool(bypassed))
+        self._internal_bypass_button.blockSignals(False)
+        self._refresh_toggle_button_style(
+            self._internal_bypass_button,
+            active_color="#CC8A32",
+            inactive_color="#2F7DAF",
+        )
+
+    def _on_show_lyric_toggled(self, checked: bool) -> None:
+        self._show_lyric = bool(checked)
+        if self._on_show_lyric_changed is not None:
+            self._on_show_lyric_changed(self._show_lyric)
+        self._cache_lyric_path = ""
+        self._cache_lyric_mtime = -1.0
+        self._cache_rows = []
+        self.update_playback_state(
+            has_active_track=self._track_active,
+            script_path=self._current_script_path,
+            lyric_path=self._current_lyric_path,
+            position_ms=self._last_position_ms,
+            force=True,
+        )
+
+    def _on_companion_bypass_toggled(self, checked: bool) -> None:
+        self._refresh_toggle_button_style(self._companion_bypass_button, "#D86A6A", "#3E8E63")
+        if self._on_companion_bypass_changed is not None:
+            self._on_companion_bypass_changed(bool(checked))
+
+    def _on_internal_bypass_toggled(self, checked: bool) -> None:
+        self._refresh_toggle_button_style(self._internal_bypass_button, "#CC8A32", "#2F7DAF")
+        if self._on_internal_bypass_changed is not None:
+            self._on_internal_bypass_changed(bool(checked))
+
+    @staticmethod
+    def _refresh_toggle_button_style(button: QPushButton, active_color: str, inactive_color: str) -> None:
+        bg = active_color if button.isChecked() else inactive_color
+        button.setStyleSheet(
+            "QPushButton{"
+            f"background:{bg};"
+            "color:#FFFFFF;"
+            "font-weight:bold;"
+            "padding:4px 10px;"
+            "border:1px solid #4A4A4A;"
+            "border-radius:4px;"
+            "}"
+        )
 
     def _load_rows(self, script_path: str, lyric_path: str) -> tuple[List[dict], str]:
         try:
@@ -162,6 +288,19 @@ class AutomationScriptNavigatorWindow(QWidget):
                             "time_ms": int(cue.time_ms),
                             "comment": str(cue.comment or ""),
                             "commands": automation_script_cue_command_summary(cue),
+                            "children": [
+                                {
+                                    "comment": "",
+                                    "commands": automation_script_cue_command_summary(
+                                        AutomationScriptCue(
+                                            time_ms=int(cue.time_ms),
+                                            comment="",
+                                            actions=[action],
+                                        )
+                                    ),
+                                }
+                                for action in list(cue.actions or [])
+                            ],
                         }
                     )
             if lyric_path:
@@ -172,6 +311,7 @@ class AutomationScriptNavigatorWindow(QWidget):
                             "time_ms": int(line.start_ms),
                             "comment": str(line.text or ""),
                             "commands": tr("Reference"),
+                            "children": [],
                         }
                     )
             rows.sort(key=lambda entry: (int(entry["time_ms"]), 0 if entry["kind"] == "cue" else 1))
@@ -190,19 +330,20 @@ class AutomationScriptNavigatorWindow(QWidget):
     def _highlight_row(self, row: int) -> None:
         if row < 0 or row >= len(self._rows):
             self._active_row = -1
-            self._table.clearSelection()
+            self._tree.clearSelection()
             return
         if row == self._active_row:
             return
         self._active_row = row
-        self._table.selectRow(row)
-        item = self._table.item(row, 0)
+        item = self._tree.topLevelItem(row)
         if item is not None:
-            self._table.scrollToItem(item, QTableWidget.PositionAtCenter)
+            self._tree.setCurrentItem(item)
+            self._tree.scrollToItem(item, QTreeWidget.PositionAtCenter)
 
-    def _on_cell_clicked(self, row: int, _column: int) -> None:
+    def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         if not self._track_active:
             return
+        row = int(item.data(0, Qt.UserRole) or -1)
         if row < 0 or row >= len(self._rows):
             return
         self._on_seek_to_ms(max(0, int(self._rows[row]["time_ms"])))

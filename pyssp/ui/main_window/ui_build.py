@@ -428,12 +428,18 @@ class UiBuildMixin:
         automation_script_navigator_action.triggered.connect(self._open_automation_script_navigator)
         companion_menu.addAction(automation_script_navigator_action)
         self._menu_actions["automation_script_navigator"] = automation_script_navigator_action
-        bypass_action = QAction(tr("Bypass"), self)
+        bypass_action = QAction(tr("Bypass Companion Commands"), self)
         bypass_action.setCheckable(True)
         bypass_action.setChecked(bool(self.companion_bypass))
         bypass_action.triggered.connect(self._toggle_companion_bypass)
         companion_menu.addAction(bypass_action)
         self._menu_actions["companion_bypass"] = bypass_action
+        internal_bypass_action = QAction(tr("Bypass Internal Commands"), self)
+        internal_bypass_action.setCheckable(True)
+        internal_bypass_action.setChecked(bool(self.internal_bypass))
+        internal_bypass_action.triggered.connect(self._toggle_internal_bypass)
+        companion_menu.addAction(internal_bypass_action)
+        self._menu_actions["internal_bypass"] = internal_bypass_action
         companion_menu.addSeparator()
         open_companion_satellite_options_action = QAction(tr("Open Automation Setup"), self)
         open_companion_satellite_options_action.triggered.connect(self._open_companion_satellite_options)
@@ -1067,7 +1073,11 @@ class UiBuildMixin:
                 btn.setCheckable(True)
                 btn.setChecked(bool(self.companion_bypass))
                 btn.clicked.connect(self._toggle_companion_bypass)
-            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed", "Companion Bypass"}:
+            elif text == "Internal Bypass":
+                btn.setCheckable(True)
+                btn.setChecked(bool(self.internal_bypass))
+                btn.clicked.connect(self._toggle_internal_bypass)
+            if text in {"Pause", "STOP", "Next", "Loop", "Reset Page", "Talk", "Cue", "Play List", "Shuffle", "Rapid Fire", "Multi-Play", "Button Drag", "Vocal Removed", "Companion Bypass", "Internal Bypass"}:
                 self.control_buttons[text] = btn
             self._main_control_buttons_ui[text] = btn
             btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))

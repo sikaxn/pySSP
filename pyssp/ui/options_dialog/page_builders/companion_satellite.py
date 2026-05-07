@@ -11,6 +11,7 @@ class CompanionSatellitePageMixin:
         port: int,
         enabled: bool,
         bypass: bool,
+        internal_bypass: bool,
         columns: int,
         rows: int,
         render_mode: str,
@@ -41,6 +42,10 @@ class CompanionSatellitePageMixin:
         self.companion_bypass_checkbox = QCheckBox(tr("Bypass Companion remote commands"))
         self.companion_bypass_checkbox.setChecked(bool(bypass))
         form.addRow(tr("Companion Bypass:"), self.companion_bypass_checkbox)
+
+        self.internal_bypass_checkbox = QCheckBox(tr("Bypass internal pySSP automation commands"))
+        self.internal_bypass_checkbox.setChecked(bool(internal_bypass))
+        form.addRow(tr("Internal Bypass:"), self.internal_bypass_checkbox)
 
         self.warn_dual_automation_sources_checkbox = QCheckBox(
             tr("Warn when both Sound Button Automation and Automation Script are linked to the same sound button")
@@ -141,6 +146,12 @@ class CompanionSatellitePageMixin:
         )
         bypass_note.setWordWrap(True)
         form.addRow("", bypass_note)
+
+        internal_bypass_note = QLabel(
+            tr("When bypass is enabled, internal automation commands do not execute inside pySSP.")
+        )
+        internal_bypass_note.setWordWrap(True)
+        form.addRow("", internal_bypass_note)
 
         layout.addLayout(form)
         note = QLabel(

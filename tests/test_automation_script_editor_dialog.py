@@ -136,3 +136,50 @@ def test_automation_script_editor_hides_lyrics_by_default_and_persists_toggle(qa
         dialog.close()
         dialog.deleteLater()
         qapp.processEvents()
+
+
+def test_automation_script_editor_allows_editing_and_shifting_cue_timestamp(qapp, tmp_path):
+    path = tmp_path / "demo.pysspautoscript"
+    dialog = AutomationScriptEditorDialog(
+        script_path=str(path),
+        audio_path="",
+        audio_source="",
+        title="Demo",
+        lyric_path="",
+        companion_payload={"updated_at": "", "pages": {}},
+    )
+    try:
+        dialog.show()
+        qapp.processEvents()
+
+        cue = dialog._ensure_cue(1500)
+        dialog._rebuild_table(selected_time_ms=1500)
+        qapp.processEvents()
+
+        cue = dialog._selected_cue()
+        assert cue is not None
+        assert cue.time_ms == 1500
+        assert dialog._cue_timestamp_edit.text() == "00:00:01,500"
+
+        dialog._cue_timestamp_edit.setText("00:00:02,250")
+        dialog._on_cue_timestamp_edited()
+        qapp.processEvents()
+
+        cue = dialog._selected_cue()
+        assert cue is not None
+        assert cue.time_ms == 2250
+        assert dialog._cue_timestamp_edit.text() == "00:00:02,250"
+
+        dialog._cue_shift_forward_btn.click()
+        qapp.processEvents()
+        assert dialog._selected_cue().time_ms == 2750
+        assert dialog._cue_timestamp_edit.text() == "00:00:02,750"
+
+        dialog._cue_shift_back_btn.click()
+        qapp.processEvents()
+        assert dialog._selected_cue().time_ms == 2250
+        assert dialog._cue_timestamp_edit.text() == "00:00:02,250"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()

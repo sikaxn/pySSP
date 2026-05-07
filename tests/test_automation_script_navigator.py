@@ -50,7 +50,12 @@ def test_automation_script_navigator_merges_lyrics_and_cues(qapp, tmp_path):
     lyric_path.write_text("[00:01.00]Verse one\n", encoding="utf-8")
 
     seeks: list[int] = []
-    window = AutomationScriptNavigatorWindow(on_seek_to_ms=seeks.append)
+    toggle_states: list[bool] = []
+    window = AutomationScriptNavigatorWindow(
+        on_seek_to_ms=seeks.append,
+        show_lyric_default=False,
+        on_show_lyric_changed=toggle_states.append,
+    )
     try:
         window.show()
         qapp.processEvents()
@@ -64,14 +69,25 @@ def test_automation_script_navigator_merges_lyrics_and_cues(qapp, tmp_path):
         )
         qapp.processEvents()
 
-        assert window._table.rowCount() == 2
-        assert window._table.item(0, 1).text() == "Lyric"
-        assert window._table.item(0, 2).text() == "Verse one"
-        assert window._table.item(1, 1).text() == "Cue"
-        assert window._table.item(1, 2).text() == "Intro"
-        assert window._table.item(1, 3).text() == "1/1/1 - Launch"
+        assert window._show_lyric_checkbox.isChecked() is False
+        assert window._tree.topLevelItemCount() == 1
+        assert window._tree.topLevelItem(0).text(1) == "Cue"
+        assert window._tree.topLevelItem(0).text(2) == "Intro"
 
-        window._on_cell_clicked(1, 0)
+        window._show_lyric_checkbox.setChecked(True)
+        qapp.processEvents()
+
+        assert toggle_states == [True]
+        assert window._tree.topLevelItemCount() == 2
+        assert window._tree.topLevelItem(0).text(1) == "Lyric"
+        assert window._tree.topLevelItem(0).text(2) == "Verse one"
+        assert window._tree.topLevelItem(1).text(1) == "Cue"
+        assert window._tree.topLevelItem(1).text(2) == "Intro"
+        assert window._tree.topLevelItem(1).text(3) == "1/1/1 - Launch"
+        assert window._tree.topLevelItem(1).childCount() == 1
+        assert window._tree.topLevelItem(1).child(0).text(1) == "Command"
+
+        window._on_item_clicked(window._tree.topLevelItem(1), 0)
         assert seeks == [1500]
     finally:
         window.close()

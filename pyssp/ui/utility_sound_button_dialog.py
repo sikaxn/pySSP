@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from PyQt5.QtCore import Qt
@@ -11,7 +12,6 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -114,29 +114,19 @@ class UtilitySoundButtonDialog(QDialog):
         form.addRow(tr("Mode"), self.mode_combo)
 
         duration_row = QWidget()
-        duration_layout = QGridLayout(duration_row)
+        duration_layout = QHBoxLayout(duration_row)
         duration_layout.setContentsMargins(0, 0, 0, 0)
-        duration_layout.setHorizontalSpacing(6)
-        self.hours_spin = self._make_spin(0, 24)
-        self.minutes_spin = self._make_spin(0, 59)
-        self.seconds_spin = self._make_spin(0, 59)
-        self.millis_spin = self._make_spin(0, 999)
-        total_ms = max(1, int(spec.duration_ms))
-        hours, rem = divmod(total_ms, 3600 * 1000)
-        minutes, rem = divmod(rem, 60 * 1000)
-        seconds, millis = divmod(rem, 1000)
-        self.hours_spin.setValue(min(24, hours))
-        self.minutes_spin.setValue(minutes)
-        self.seconds_spin.setValue(seconds)
-        self.millis_spin.setValue(millis)
-        duration_layout.addWidget(QLabel("HH"), 0, 0)
-        duration_layout.addWidget(self.hours_spin, 0, 1)
-        duration_layout.addWidget(QLabel("MM"), 0, 2)
-        duration_layout.addWidget(self.minutes_spin, 0, 3)
-        duration_layout.addWidget(QLabel("SS"), 0, 4)
-        duration_layout.addWidget(self.seconds_spin, 0, 5)
-        duration_layout.addWidget(QLabel("ms"), 0, 6)
-        duration_layout.addWidget(self.millis_spin, 0, 7)
+        duration_layout.setSpacing(6)
+        self.duration_edit = UtilityDurationEdit(spec.duration_ms, self)
+        self.duration_up_btn = QPushButton("▲")
+        self.duration_down_btn = QPushButton("▼")
+        self.duration_up_btn.setToolTip("+1s")
+        self.duration_down_btn.setToolTip("-1s")
+        self.duration_up_btn.clicked.connect(lambda _=False: self._nudge_duration_ms(1000))
+        self.duration_down_btn.clicked.connect(lambda _=False: self._nudge_duration_ms(-1000))
+        duration_layout.addWidget(self.duration_edit, 1)
+        duration_layout.addWidget(self.duration_up_btn)
+        duration_layout.addWidget(self.duration_down_btn)
         form.addRow(tr("Duration"), duration_row)
 
         self.waveform_type_combo = QComboBox()
@@ -256,10 +246,7 @@ class UtilitySoundButtonDialog(QDialog):
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
         duration_ms = (
-            (int(self.hours_spin.value()) * 3600 * 1000)
-            + (int(self.minutes_spin.value()) * 60 * 1000)
-            + (int(self.seconds_spin.value()) * 1000)
-            + int(self.millis_spin.value())
+            self.duration_edit.duration_ms() if self.duration_edit.duration_ms() is not None else 60000
         )
         spec = normalize_utility_spec(
             {
@@ -376,6 +363,12 @@ class UtilitySoundButtonDialog(QDialog):
         spin.setRange(int(low), int(high))
         return spin
 
+    def _nudge_duration_ms(self, delta_ms: int) -> None:
+        current = self.duration_edit.duration_ms()
+        if current is None:
+            current = 60000
+        self.duration_edit.set_duration_ms(max(1, int(current) + int(delta_ms)))
+
     @staticmethod
     def _set_combo_data(combo: QComboBox, value: object, fallback: object) -> None:
         target = value
@@ -387,3 +380,60 @@ class UtilitySoundButtonDialog(QDialog):
             if combo.itemData(idx) == fallback:
                 combo.setCurrentIndex(idx)
                 return
+
+
+class UtilityDurationEdit(QLineEdit):
+    _PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}:\d{3}$")
+
+    def __init__(self, duration_ms: Optional[int] = None, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("HH:MM:SS:mmm")
+        self.setAlignment(Qt.AlignCenter)
+        self.set_duration_ms(60000 if duration_ms is None else duration_ms)
+
+    @classmethod
+    def parse_duration_ms(cls, value: str) -> Optional[int]:
+        text = str(value or "").strip()
+        if not text:
+            return 60000
+        if not cls._PATTERN.fullmatch(text):
+            return None
+        hh, mm, ss, ms = text.split(":")
+        hour = int(hh)
+        minute = int(mm)
+        second = int(ss)
+        millis = int(ms)
+        if minute > 59 or second > 59:
+            return None
+        return max(1, (((hour * 60 + minute) * 60 + second) * 1000) + millis)
+
+    @classmethod
+    def format_duration_ms(cls, duration_ms: Optional[int]) -> str:
+        total = max(1, int(duration_ms or 60000))
+        hours = total // 3600000
+        minutes = (total // 60000) % 60
+        seconds = (total // 1000) % 60
+        millis = total % 1000
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{millis:03d}"
+
+    def set_duration_ms(self, duration_ms: Optional[int]) -> None:
+        self.setText(self.format_duration_ms(duration_ms))
+
+    def duration_ms(self) -> Optional[int]:
+        return self.parse_duration_ms(self.text())
+
+    def keyPressEvent(self, event) -> None:
+        key = int(event.key())
+        if key in {Qt.Key_Up, Qt.Key_Down}:
+            current = self.duration_ms()
+            if current is None:
+                current = 60000
+            delta = 1000 if key == Qt.Key_Up else -1000
+            self.set_duration_ms(max(1, current + delta))
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        parsed = self.duration_ms()
+        self.set_duration_ms(60000 if parsed is None else parsed)
+        super().focusOutEvent(event)

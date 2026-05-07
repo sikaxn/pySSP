@@ -70,6 +70,11 @@ from pyssp.lyrics import LyricLine, parse_lyric_file
 from pyssp.ui.waveform_view import CueRangeIndicator, WaveformRefreshController
 
 
+_TARGET_GROUPS = list("ABCDEFGHIJ") + ["Q"]
+_TARGET_PAGE_COUNT = 18
+_TARGET_SLOTS_PER_PAGE = 48
+
+
 class AutomationScriptEditorDialog(QDialog):
     def __init__(
         self,
@@ -203,13 +208,6 @@ class AutomationScriptEditorDialog(QDialog):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
-        self._timeline_hint_label = QLabel(
-            tr("1. Build the timeline here. Select a cue or lyric row, then edit the selected cue just below in this same panel.")
-        )
-        self._timeline_hint_label.setWordWrap(True)
-        self._timeline_hint_label.setStyleSheet("QLabel{font-weight:600;}")
-        left_layout.addWidget(self._timeline_hint_label)
-
         self._timeline_tree = QTreeWidget(self)
         self._timeline_tree.setColumnCount(4)
         self._timeline_tree.setHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
@@ -240,8 +238,20 @@ class AutomationScriptEditorDialog(QDialog):
         cue_layout.setSpacing(6)
 
         cue_form = QFormLayout()
-        self._cue_timestamp_label = QLabel("-")
-        cue_form.addRow(tr("Timestamp"), self._cue_timestamp_label)
+        timestamp_row = QWidget(self)
+        timestamp_row_layout = QHBoxLayout(timestamp_row)
+        timestamp_row_layout.setContentsMargins(0, 0, 0, 0)
+        timestamp_row_layout.setSpacing(6)
+        self._cue_timestamp_edit = QLineEdit(self)
+        self._cue_timestamp_edit.setPlaceholderText("00:00:00,000")
+        self._cue_timestamp_edit.setMaximumWidth(150)
+        self._cue_shift_back_btn = QPushButton(tr("-0.5s"), self)
+        self._cue_shift_forward_btn = QPushButton(tr("+0.5s"), self)
+        timestamp_row_layout.addWidget(self._cue_timestamp_edit)
+        timestamp_row_layout.addWidget(self._cue_shift_back_btn)
+        timestamp_row_layout.addWidget(self._cue_shift_forward_btn)
+        timestamp_row_layout.addStretch(1)
+        cue_form.addRow(tr("Timestamp"), timestamp_row)
         comment_row = QWidget(self)
         comment_row_layout = QHBoxLayout(comment_row)
         comment_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -282,13 +292,6 @@ class AutomationScriptEditorDialog(QDialog):
         command_layout = QVBoxLayout(command_group)
         command_layout.setContentsMargins(8, 8, 8, 8)
         command_layout.setSpacing(6)
-
-        self._command_panel_hint_label = QLabel(
-            tr("3. Pick either a Companion command or an internal pySSP command on the right, then add it into the selected cue.")
-        )
-        self._command_panel_hint_label.setWordWrap(True)
-        self._command_panel_hint_label.setStyleSheet("QLabel{font-weight:600;}")
-        command_layout.addWidget(self._command_panel_hint_label)
 
         command_form = QFormLayout()
         self._selected_command_label = QLabel("-")
@@ -406,8 +409,23 @@ class AutomationScriptEditorDialog(QDialog):
         self._internal_nav_direction_combo = QComboBox(self)
         self._internal_nav_direction_combo.addItem(tr("Next"), "next")
         self._internal_nav_direction_combo.addItem(tr("Previous"), "prev")
+        self._internal_target_input_mode_combo = QComboBox(self)
+        self._internal_target_input_mode_combo.addItem(tr("List"), "list")
+        self._internal_target_input_mode_combo.addItem(tr("Text Box"), "text")
+        self._internal_target_kind_combo = QComboBox(self)
+        self._internal_target_kind_combo.addItem(tr("Button"), "button")
+        self._internal_target_kind_combo.addItem(tr("Page"), "page")
         self._internal_target_edit = QLineEdit(self)
         self._internal_target_edit.setPlaceholderText("A-1-1")
+        self._internal_target_group_combo = QComboBox(self)
+        for group in _TARGET_GROUPS:
+            self._internal_target_group_combo.addItem(group, group)
+        self._internal_target_page_combo = QComboBox(self)
+        for page_number in range(1, _TARGET_PAGE_COUNT + 1):
+            self._internal_target_page_combo.addItem(str(page_number), page_number)
+        self._internal_target_slot_combo = QComboBox(self)
+        for slot_number in range(1, _TARGET_SLOTS_PER_PAGE + 1):
+            self._internal_target_slot_combo.addItem(str(slot_number), slot_number)
         self._internal_volume_spin = QSpinBox(self)
         self._internal_volume_spin.setRange(0, 100)
         self._internal_volume_spin.setSuffix("%")
@@ -435,7 +453,12 @@ class AutomationScriptEditorDialog(QDialog):
         self._internal_form.addRow(tr("Scope"), self._internal_reset_scope_combo)
         self._internal_form.addRow(tr("Target"), self._internal_nav_target_combo)
         self._internal_form.addRow(tr("Direction"), self._internal_nav_direction_combo)
+        self._internal_form.addRow(tr("Target Input"), self._internal_target_input_mode_combo)
+        self._internal_form.addRow(tr("Target Type"), self._internal_target_kind_combo)
         self._internal_form.addRow(tr("Button / Page"), self._internal_target_edit)
+        self._internal_form.addRow(tr("Group"), self._internal_target_group_combo)
+        self._internal_form.addRow(tr("Page"), self._internal_target_page_combo)
+        self._internal_form.addRow(tr("Button"), self._internal_target_slot_combo)
         self._internal_form.addRow(tr("Volume"), self._internal_volume_spin)
         self._internal_form.addRow(tr("Seek Mode"), self._internal_seek_mode_combo)
         self._internal_form.addRow(tr("Seek Percent"), self._internal_seek_percent_spin)
@@ -471,6 +494,9 @@ class AutomationScriptEditorDialog(QDialog):
         self._add_current_btn.clicked.connect(self._add_cue_at_current)
         self._add_selected_lyric_btn.clicked.connect(self._add_cue_at_selected_lyric)
         self._delete_btn.clicked.connect(self._delete_selected_cue)
+        self._cue_timestamp_edit.editingFinished.connect(self._on_cue_timestamp_edited)
+        self._cue_shift_back_btn.clicked.connect(lambda _=False: self._shift_selected_cue_time(-500))
+        self._cue_shift_forward_btn.clicked.connect(lambda _=False: self._shift_selected_cue_time(500))
         self._cue_comment_edit.textChanged.connect(self._on_cue_comment_changed)
         self._add_selected_command_btn.clicked.connect(self._add_selected_command_to_current_cue)
         self._remove_command_btn.clicked.connect(self._remove_selected_command)
@@ -494,7 +520,12 @@ class AutomationScriptEditorDialog(QDialog):
         self._internal_reset_scope_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_nav_target_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_nav_direction_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_input_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_kind_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_target_edit.textChanged.connect(self._sync_selected_command)
+        self._internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self._internal_target_slot_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_volume_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
         self._internal_seek_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self._internal_seek_percent_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
@@ -896,7 +927,10 @@ class AutomationScriptEditorDialog(QDialog):
         self._updating_cue_form = True
         try:
             enabled = cue is not None
-            self._cue_timestamp_label.setText("-" if cue is None else self._format_timestamp(int(cue.time_ms)))
+            self._cue_timestamp_edit.setEnabled(enabled)
+            self._cue_timestamp_edit.setText("" if cue is None else self._format_timestamp(int(cue.time_ms)))
+            self._cue_shift_back_btn.setEnabled(enabled)
+            self._cue_shift_forward_btn.setEnabled(enabled)
             self._cue_comment_edit.setEnabled(enabled)
             self._cue_comment_edit.setText("" if cue is None else str(cue.comment or ""))
             self._cue_hint_label.setText(
@@ -950,6 +984,44 @@ class AutomationScriptEditorDialog(QDialog):
             return
         cue.comment = str(text or "").strip()
         self._refresh_selected_cue_row()
+
+    def _on_cue_timestamp_edited(self) -> None:
+        if self._updating_cue_form:
+            return
+        cue = self._selected_cue()
+        if cue is None:
+            return
+        parsed = self._parse_timestamp(self._cue_timestamp_edit.text())
+        if parsed is None:
+            self._refresh_cue_editor()
+            return
+        self._move_cue_to_time(cue, parsed)
+
+    def _shift_selected_cue_time(self, delta_ms: int) -> None:
+        cue = self._selected_cue()
+        if cue is None:
+            return
+        self._move_cue_to_time(cue, max(0, int(cue.time_ms) + int(delta_ms)))
+
+    def _move_cue_to_time(self, cue: AutomationScriptCue, target_ms: int) -> None:
+        target_ms = max(0, int(target_ms))
+        source_ms = int(cue.time_ms)
+        if target_ms == source_ms:
+            self._refresh_cue_editor()
+            return
+        destination = self._cue_for_time(target_ms)
+        if destination is not None and destination is not cue:
+            destination.actions = list(destination.actions or []) + list(cue.actions or [])
+            if not str(destination.comment or "").strip():
+                destination.comment = str(cue.comment or "").strip()
+            self._script.cues = [
+                existing for existing in list(self._script.cues or []) if existing is not cue
+            ]
+            self._rebuild_table(selected_time_ms=target_ms)
+            return
+        cue.time_ms = target_ms
+        self._script.cues = sorted(list(self._script.cues or []), key=lambda item: int(item.time_ms))
+        self._rebuild_table(selected_time_ms=target_ms)
 
     def _apply_command_filters(self) -> None:
         rows = list_companion_available_commands(self._companion_payload)
@@ -1053,9 +1125,9 @@ class AutomationScriptEditorDialog(QDialog):
             params["target"] = self._internal_nav_target_combo.currentData()
             params["direction"] = self._internal_nav_direction_combo.currentData()
         elif command_id == "play":
-            params["button_id"] = self._internal_target_edit.text().strip()
+            params["button_id"] = self._selected_internal_target_value(command_id)
         elif command_id == "goto":
-            params["target"] = self._internal_target_edit.text().strip()
+            params["target"] = self._selected_internal_target_value(command_id)
         elif command_id == "volume_set":
             params["level"] = int(self._internal_volume_spin.value())
         elif command_id == "seek":
@@ -1081,7 +1153,12 @@ class AutomationScriptEditorDialog(QDialog):
             self._internal_reset_scope_combo,
             self._internal_nav_target_combo,
             self._internal_nav_direction_combo,
+            self._internal_target_input_mode_combo,
+            self._internal_target_kind_combo,
             self._internal_target_edit,
+            self._internal_target_group_combo,
+            self._internal_target_page_combo,
+            self._internal_target_slot_combo,
             self._internal_volume_spin,
             self._internal_seek_mode_combo,
             self._internal_seek_percent_spin,
@@ -1116,7 +1193,16 @@ class AutomationScriptEditorDialog(QDialog):
             _show(self._internal_nav_target_combo)
             _show(self._internal_nav_direction_combo)
         elif command_id in {"play", "goto"}:
-            _show(self._internal_target_edit)
+            _show(self._internal_target_input_mode_combo)
+            if self._internal_target_input_mode_combo.currentData() == "text":
+                _show(self._internal_target_edit)
+            else:
+                if command_id == "goto":
+                    _show(self._internal_target_kind_combo)
+                _show(self._internal_target_group_combo)
+                _show(self._internal_target_page_combo)
+                if command_id == "play" or self._internal_target_kind_combo.currentData() == "button":
+                    _show(self._internal_target_slot_combo)
         elif command_id == "volume_set":
             _show(self._internal_volume_spin)
         elif command_id == "seek":
@@ -1190,6 +1276,66 @@ class AutomationScriptEditorDialog(QDialog):
         if use_picker and self._command_table.rowCount() > 0 and self._command_table.currentRow() < 0:
             self._command_table.selectRow(0)
         self._sync_selected_command()
+
+    def _selected_internal_target_value(self, command_id: str) -> str:
+        if self._internal_target_input_mode_combo.currentData() == "text":
+            return self._internal_target_edit.text().strip()
+        group = str(self._internal_target_group_combo.currentData() or "A").strip().upper()
+        page = int(self._internal_target_page_combo.currentData() or 1)
+        slot = int(self._internal_target_slot_combo.currentData() or 1)
+        if command_id == "goto" and self._internal_target_kind_combo.currentData() == "page":
+            return f"{group}-{page}"
+        return f"{group}-{page}-{slot}"
+
+    def _apply_internal_target_value(self, command_id: str, value: str) -> None:
+        text = str(value or "").strip()
+        self._internal_target_edit.setText(text)
+        parsed = self._parse_internal_target_value(command_id, text)
+        if parsed is None:
+            self._internal_target_input_mode_combo.setCurrentIndex(
+                max(0, self._internal_target_input_mode_combo.findData("text"))
+            )
+            return
+        group, page, slot, target_kind = parsed
+        self._internal_target_input_mode_combo.setCurrentIndex(
+            max(0, self._internal_target_input_mode_combo.findData("list"))
+        )
+        self._internal_target_kind_combo.setCurrentIndex(
+            max(0, self._internal_target_kind_combo.findData(target_kind))
+        )
+        self._internal_target_group_combo.setCurrentIndex(
+            max(0, self._internal_target_group_combo.findData(group))
+        )
+        self._internal_target_page_combo.setCurrentIndex(
+            max(0, self._internal_target_page_combo.findData(page))
+        )
+        if slot is not None:
+            self._internal_target_slot_combo.setCurrentIndex(
+                max(0, self._internal_target_slot_combo.findData(slot))
+            )
+
+    @staticmethod
+    def _parse_internal_target_value(command_id: str, value: str) -> Optional[tuple[str, int, Optional[int], str]]:
+        parts = [part.strip() for part in str(value or "").strip().upper().split("-") if part.strip()]
+        if command_id == "play":
+            if len(parts) != 3:
+                return None
+            group, page_text, slot_text = parts
+            if group not in _TARGET_GROUPS or not page_text.isdigit() or not slot_text.isdigit():
+                return None
+            return group, int(page_text), int(slot_text), "button"
+        if command_id == "goto":
+            if len(parts) == 2:
+                group, page_text = parts
+                if group not in _TARGET_GROUPS or not page_text.isdigit():
+                    return None
+                return group, int(page_text), None, "page"
+            if len(parts) == 3:
+                group, page_text, slot_text = parts
+                if group not in _TARGET_GROUPS or not page_text.isdigit() or not slot_text.isdigit():
+                    return None
+                return group, int(page_text), int(slot_text), "button"
+        return None
 
     def _add_selected_command_to_current_cue(self) -> None:
         cue = self._selected_cue()
@@ -1296,3 +1442,26 @@ class AutomationScriptEditorDialog(QDialog):
         seconds = (value // 1000) % 60
         millis = value % 1000
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+    @staticmethod
+    def _parse_timestamp(value: str) -> Optional[int]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text.replace(".", ",")
+        parts = normalized.split(",")
+        if len(parts) != 2:
+            return None
+        time_part, millis_part = parts
+        millis_part = millis_part.strip()
+        clock_parts = [part.strip() for part in time_part.strip().split(":")]
+        if len(clock_parts) != 3:
+            return None
+        if not millis_part.isdigit() or len(millis_part) != 3:
+            return None
+        if not all(part.isdigit() for part in clock_parts):
+            return None
+        hours, minutes, seconds = [int(part) for part in clock_parts]
+        if minutes > 59 or seconds > 59:
+            return None
+        return (((hours * 60 + minutes) * 60 + seconds) * 1000) + int(millis_part)

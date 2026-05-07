@@ -61,6 +61,11 @@ from pyssp.midi_control import (
 from pyssp.ui.edit_sound_button_dialog import SoundHotkeyEdit
 
 
+_TARGET_GROUPS = list("ABCDEFGHIJ") + ["Q"]
+_TARGET_PAGE_COUNT = 18
+_TARGET_SLOTS_PER_PAGE = 48
+
+
 class AutomationCommandSoundButtonDialog(QDialog):
     def __init__(
         self,
@@ -276,8 +281,23 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_nav_direction_combo = QComboBox(self)
         self.internal_nav_direction_combo.addItem(tr("Next"), "next")
         self.internal_nav_direction_combo.addItem(tr("Previous"), "prev")
+        self.internal_target_input_mode_combo = QComboBox(self)
+        self.internal_target_input_mode_combo.addItem(tr("List"), "list")
+        self.internal_target_input_mode_combo.addItem(tr("Text Box"), "text")
+        self.internal_target_kind_combo = QComboBox(self)
+        self.internal_target_kind_combo.addItem(tr("Button"), "button")
+        self.internal_target_kind_combo.addItem(tr("Page"), "page")
         self.internal_target_edit = QLineEdit(self)
         self.internal_target_edit.setPlaceholderText("A-1-1")
+        self.internal_target_group_combo = QComboBox(self)
+        for group in _TARGET_GROUPS:
+            self.internal_target_group_combo.addItem(group, group)
+        self.internal_target_page_combo = QComboBox(self)
+        for page_number in range(1, _TARGET_PAGE_COUNT + 1):
+            self.internal_target_page_combo.addItem(str(page_number), page_number)
+        self.internal_target_slot_combo = QComboBox(self)
+        for slot_number in range(1, _TARGET_SLOTS_PER_PAGE + 1):
+            self.internal_target_slot_combo.addItem(str(slot_number), slot_number)
         self.internal_volume_spin = QSpinBox(self)
         self.internal_volume_spin.setRange(0, 100)
         self.internal_volume_spin.setSuffix("%")
@@ -307,7 +327,12 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_form.addRow(tr("Scope"), self.internal_reset_scope_combo)
         self.internal_form.addRow(tr("Target"), self.internal_nav_target_combo)
         self.internal_form.addRow(tr("Direction"), self.internal_nav_direction_combo)
+        self.internal_form.addRow(tr("Target Input"), self.internal_target_input_mode_combo)
+        self.internal_form.addRow(tr("Target Type"), self.internal_target_kind_combo)
         self.internal_form.addRow(tr("Button / Page"), self.internal_target_edit)
+        self.internal_form.addRow(tr("Group"), self.internal_target_group_combo)
+        self.internal_form.addRow(tr("Page"), self.internal_target_page_combo)
+        self.internal_form.addRow(tr("Button"), self.internal_target_slot_combo)
         self.internal_form.addRow(tr("Volume"), self.internal_volume_spin)
         self.internal_form.addRow(tr("Seek Mode"), self.internal_seek_mode_combo)
         self.internal_form.addRow(tr("Seek Percent"), self.internal_seek_percent_spin)
@@ -343,7 +368,12 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_reset_scope_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_nav_target_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_nav_direction_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_target_input_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_target_kind_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_target_edit.textChanged.connect(self._sync_selected_command)
+        self.internal_target_group_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_target_page_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_target_slot_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_volume_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
         self.internal_seek_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
         self.internal_seek_percent_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
@@ -600,9 +630,9 @@ class AutomationCommandSoundButtonDialog(QDialog):
             params["target"] = self.internal_nav_target_combo.currentData()
             params["direction"] = self.internal_nav_direction_combo.currentData()
         elif command_id == "play":
-            params["button_id"] = self.internal_target_edit.text().strip()
+            params["button_id"] = self._selected_internal_target_value(command_id)
         elif command_id == "goto":
-            params["target"] = self.internal_target_edit.text().strip()
+            params["target"] = self._selected_internal_target_value(command_id)
         elif command_id == "volume_set":
             params["level"] = int(self.internal_volume_spin.value())
         elif command_id == "seek":
@@ -628,7 +658,12 @@ class AutomationCommandSoundButtonDialog(QDialog):
             self.internal_reset_scope_combo,
             self.internal_nav_target_combo,
             self.internal_nav_direction_combo,
+            self.internal_target_input_mode_combo,
+            self.internal_target_kind_combo,
             self.internal_target_edit,
+            self.internal_target_group_combo,
+            self.internal_target_page_combo,
+            self.internal_target_slot_combo,
             self.internal_volume_spin,
             self.internal_seek_mode_combo,
             self.internal_seek_percent_spin,
@@ -663,7 +698,16 @@ class AutomationCommandSoundButtonDialog(QDialog):
             _show(self.internal_nav_target_combo)
             _show(self.internal_nav_direction_combo)
         elif command_id in {"play", "goto"}:
-            _show(self.internal_target_edit)
+            _show(self.internal_target_input_mode_combo)
+            if self.internal_target_input_mode_combo.currentData() == "text":
+                _show(self.internal_target_edit)
+            else:
+                if command_id == "goto":
+                    _show(self.internal_target_kind_combo)
+                _show(self.internal_target_group_combo)
+                _show(self.internal_target_page_combo)
+                if command_id == "play" or self.internal_target_kind_combo.currentData() == "button":
+                    _show(self.internal_target_slot_combo)
         elif command_id == "volume_set":
             _show(self.internal_volume_spin)
         elif command_id == "seek":
@@ -696,7 +740,10 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_reset_scope_combo.setCurrentIndex(max(0, self.internal_reset_scope_combo.findData(params.get("scope", "current"))))
         self.internal_nav_target_combo.setCurrentIndex(max(0, self.internal_nav_target_combo.findData(params.get("target", "page"))))
         self.internal_nav_direction_combo.setCurrentIndex(max(0, self.internal_nav_direction_combo.findData(params.get("direction", "next"))))
-        self.internal_target_edit.setText(str(params.get("button_id", params.get("target", "")) or ""))
+        self._apply_internal_target_value(
+            normalized.internal_command,
+            str(params.get("button_id", params.get("target", "")) or ""),
+        )
         self.internal_volume_spin.setValue(int(params.get("level", 0) or 0))
         self.internal_seek_mode_combo.setCurrentIndex(max(0, self.internal_seek_mode_combo.findData(params.get("seek_mode", "percent"))))
         self.internal_seek_percent_spin.setValue(float(params.get("percent", 0.0) or 0.0))
@@ -705,6 +752,66 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_alert_text_edit.setPlainText(str(params.get("text", "") or ""))
         self.internal_alert_keep_checkbox.setChecked(bool(params.get("keep", True)))
         self.internal_alert_seconds_spin.setValue(int(params.get("seconds", 10) or 10))
+
+    def _selected_internal_target_value(self, command_id: str) -> str:
+        if self.internal_target_input_mode_combo.currentData() == "text":
+            return self.internal_target_edit.text().strip()
+        group = str(self.internal_target_group_combo.currentData() or "A").strip().upper()
+        page = int(self.internal_target_page_combo.currentData() or 1)
+        slot = int(self.internal_target_slot_combo.currentData() or 1)
+        if command_id == "goto" and self.internal_target_kind_combo.currentData() == "page":
+            return f"{group}-{page}"
+        return f"{group}-{page}-{slot}"
+
+    def _apply_internal_target_value(self, command_id: str, value: str) -> None:
+        text = str(value or "").strip()
+        self.internal_target_edit.setText(text)
+        parsed = self._parse_internal_target_value(command_id, text)
+        if parsed is None:
+            self.internal_target_input_mode_combo.setCurrentIndex(
+                max(0, self.internal_target_input_mode_combo.findData("text"))
+            )
+            return
+        group, page, slot, target_kind = parsed
+        self.internal_target_input_mode_combo.setCurrentIndex(
+            max(0, self.internal_target_input_mode_combo.findData("list"))
+        )
+        self.internal_target_kind_combo.setCurrentIndex(
+            max(0, self.internal_target_kind_combo.findData(target_kind))
+        )
+        self.internal_target_group_combo.setCurrentIndex(
+            max(0, self.internal_target_group_combo.findData(group))
+        )
+        self.internal_target_page_combo.setCurrentIndex(
+            max(0, self.internal_target_page_combo.findData(page))
+        )
+        if slot is not None:
+            self.internal_target_slot_combo.setCurrentIndex(
+                max(0, self.internal_target_slot_combo.findData(slot))
+            )
+
+    @staticmethod
+    def _parse_internal_target_value(command_id: str, value: str) -> Optional[tuple[str, int, Optional[int], str]]:
+        parts = [part.strip() for part in str(value or "").strip().upper().split("-") if part.strip()]
+        if command_id == "play":
+            if len(parts) != 3:
+                return None
+            group, page_text, slot_text = parts
+            if group not in _TARGET_GROUPS or not page_text.isdigit() or not slot_text.isdigit():
+                return None
+            return group, int(page_text), int(slot_text), "button"
+        if command_id == "goto":
+            if len(parts) == 2:
+                group, page_text = parts
+                if group not in _TARGET_GROUPS or not page_text.isdigit():
+                    return None
+                return group, int(page_text), None, "page"
+            if len(parts) == 3:
+                group, page_text, slot_text = parts
+                if group not in _TARGET_GROUPS or not page_text.isdigit() or not slot_text.isdigit():
+                    return None
+                return group, int(page_text), int(slot_text), "button"
+        return None
 
     def _refresh_custom_color_button(self) -> None:
         if self._custom_color:

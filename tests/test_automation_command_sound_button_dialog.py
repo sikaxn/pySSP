@@ -118,3 +118,81 @@ def test_internal_command_tab_returns_internal_spec(qapp):
         assert caption == "Set Volume 75%"
     finally:
         _cleanup(dialog, qapp)
+
+
+def test_internal_play_command_supports_list_target_picker(qapp):
+    dialog = AutomationCommandSoundButtonDialog(
+        caption="",
+        notes="",
+        companion_payload=_payload(),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        dialog.source_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        for row in range(dialog.internal_command_list.count()):
+            item = dialog.internal_command_list.item(row)
+            if item is not None and item.data(256) == "play":
+                dialog.internal_command_list.setCurrentRow(row)
+                break
+        dialog.internal_target_input_mode_combo.setCurrentIndex(
+            max(0, dialog.internal_target_input_mode_combo.findData("list"))
+        )
+        dialog.internal_target_group_combo.setCurrentIndex(
+            max(0, dialog.internal_target_group_combo.findData("B"))
+        )
+        dialog.internal_target_page_combo.setCurrentIndex(
+            max(0, dialog.internal_target_page_combo.findData(3))
+        )
+        dialog.internal_target_slot_combo.setCurrentIndex(
+            max(0, dialog.internal_target_slot_combo.findData(5))
+        )
+        qapp.processEvents()
+
+        _caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
+
+        assert spec.source == "internal"
+        assert spec.internal_command == "play"
+        assert spec.internal_params == {"button_id": "b-3-5"}
+    finally:
+        _cleanup(dialog, qapp)
+
+
+def test_internal_goto_command_supports_list_page_picker(qapp):
+    dialog = AutomationCommandSoundButtonDialog(
+        caption="",
+        notes="",
+        companion_payload=_payload(),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        dialog.source_tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        for row in range(dialog.internal_command_list.count()):
+            item = dialog.internal_command_list.item(row)
+            if item is not None and item.data(256) == "goto":
+                dialog.internal_command_list.setCurrentRow(row)
+                break
+        dialog.internal_target_input_mode_combo.setCurrentIndex(
+            max(0, dialog.internal_target_input_mode_combo.findData("list"))
+        )
+        dialog.internal_target_kind_combo.setCurrentIndex(
+            max(0, dialog.internal_target_kind_combo.findData("page"))
+        )
+        dialog.internal_target_group_combo.setCurrentIndex(
+            max(0, dialog.internal_target_group_combo.findData("C"))
+        )
+        dialog.internal_target_page_combo.setCurrentIndex(
+            max(0, dialog.internal_target_page_combo.findData(7))
+        )
+        qapp.processEvents()
+
+        _caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
+
+        assert spec.source == "internal"
+        assert spec.internal_command == "goto"
+        assert spec.internal_params == {"target": "c-7"}
+    finally:
+        _cleanup(dialog, qapp)

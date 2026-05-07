@@ -809,6 +809,10 @@ class StateLogicMixin:
         self.companion_command_tcp_port_spin.setValue(int(d.get("companion_command_tcp_port", 16759)))
         self.companion_command_udp_port_spin.setValue(int(d.get("companion_command_udp_port", 16759)))
         self.companion_command_http_port_spin.setValue(int(d.get("companion_command_http_port", 8000)))
+        self.warn_dual_automation_sources_checkbox.setChecked(bool(d.get("warn_dual_automation_sources", True)))
+        self.automation_script_editor_show_lyric_checkbox.setChecked(
+            bool(d.get("automation_script_editor_show_lyric", False))
+        )
 
     def _restore_lyric_defaults(self) -> None:
         d = self._DEFAULTS

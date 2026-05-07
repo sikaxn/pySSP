@@ -1699,6 +1699,7 @@ class ActionsInputMixin:
             search_lyric_on_add_sound_button=self.search_lyric_on_add_sound_button,
             new_lyric_file_format=self.new_lyric_file_format,
             warn_dual_automation_sources=self.warn_dual_automation_sources,
+            automation_script_editor_show_lyric=self.automation_script_editor_show_lyric,
             supported_audio_format_extensions=self.supported_audio_format_extensions,
             verify_sound_file_on_add=self.verify_sound_file_on_add,
             allow_other_unsupported_audio_files=self.allow_other_unsupported_audio_files,
@@ -1946,6 +1947,7 @@ class ActionsInputMixin:
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
         self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()
+        self.automation_script_editor_show_lyric = dialog.selected_automation_script_editor_show_lyric()
         self.supported_audio_format_extensions = dialog.selected_supported_audio_format_extensions()
         self.verify_sound_file_on_add = dialog.selected_verify_sound_file_on_add()
         self.allow_other_unsupported_audio_files = dialog.selected_allow_other_unsupported_audio_files()

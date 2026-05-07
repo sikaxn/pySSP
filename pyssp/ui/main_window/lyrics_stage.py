@@ -343,13 +343,16 @@ class LyricsStageMixin:
             self._automation_script_navigator_window.isVisible() or force
         ):
             script_path = ""
+            lyric_path_for_script = ""
             if self.current_playing is not None:
                 slot = self._slot_for_key(self.current_playing)
                 if slot is not None:
                     script_path = str(slot.automation_script_path or "").strip()
+                    lyric_path_for_script = str(slot.lyric_file or "").strip()
             self._automation_script_navigator_window.update_playback_state(
                 has_active_track=has_active_track,
                 script_path=script_path,
+                lyric_path=lyric_path_for_script,
                 position_ms=position_ms,
                 force=force,
             )

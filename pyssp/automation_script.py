@@ -193,8 +193,15 @@ def automation_script_cue_command_summary(cue: Optional[AutomationScriptCue]) ->
     for action in list(normalized.actions or []):
         spec = normalize_automation_spec(getattr(action, "payload", None) or {})
         if spec.location:
-            labels.append(automation_display_name(spec))
+            labels.append(automation_script_command_display_name(spec))
     return ", ".join(labels)
+
+
+def automation_script_command_display_name(spec: Optional[AutomationCommandSpec]) -> str:
+    normalized = normalize_automation_spec(spec or AutomationCommandSpec())
+    if normalized.location and normalized.button_text:
+        return f"{normalized.location} - {normalized.button_text}"
+    return automation_display_name(normalized)
 
 
 def find_automation_script_cue_indices(

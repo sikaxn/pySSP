@@ -118,6 +118,12 @@ def _build_dialog(**overrides):
         warn_dual_automation_sources=bool(
             overrides.get("warn_dual_automation_sources", defaults["warn_dual_automation_sources"])
         ),
+        automation_script_editor_show_lyric=bool(
+            overrides.get(
+                "automation_script_editor_show_lyric",
+                defaults["automation_script_editor_show_lyric"],
+            )
+        ),
         supported_audio_format_extensions=overrides.get("supported_audio_format_extensions", []),
         verify_sound_file_on_add=bool(overrides.get("verify_sound_file_on_add", True)),
         allow_other_unsupported_audio_files=bool(overrides.get("allow_other_unsupported_audio_files", False)),
@@ -906,6 +912,17 @@ def test_companion_satellite_defaults_use_machine_serial_and_8x4(qapp):
     assert dialog.selected_companion_command_tcp_port() == 16759
     assert dialog.selected_companion_command_udp_port() == 16759
     assert dialog.selected_companion_command_http_port() == 8000
+    assert dialog.selected_automation_script_editor_show_lyric() is False
+
+
+def test_companion_satellite_editor_lyric_visibility_round_trip(qapp):
+    dialog = _build_dialog(
+        initial_page="Automation",
+        automation_script_editor_show_lyric=True,
+    )
+    assert dialog.selected_automation_script_editor_show_lyric() is True
+    dialog.automation_script_editor_show_lyric_checkbox.setChecked(False)
+    assert dialog.selected_automation_script_editor_show_lyric() is False
 
 
 def test_options_pages_are_wrapped_in_scroll_areas(qapp):

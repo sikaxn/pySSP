@@ -470,6 +470,9 @@ class MainWindow(
         )
         self.verify_sound_file_on_add = bool(getattr(self.settings, "verify_sound_file_on_add", True))
         self.warn_dual_automation_sources = bool(getattr(self.settings, "warn_dual_automation_sources", True))
+        self.automation_script_editor_show_lyric = bool(
+            getattr(self.settings, "automation_script_editor_show_lyric", False)
+        )
         self.allow_other_unsupported_audio_files = bool(
             getattr(self.settings, "allow_other_unsupported_audio_files", False)
         )

@@ -110,6 +110,9 @@ class SelectionMixin:
     def selected_warn_dual_automation_sources(self) -> bool:
         return bool(self.warn_dual_automation_sources_checkbox.isChecked())
 
+    def selected_automation_script_editor_show_lyric(self) -> bool:
+        return bool(self.automation_script_editor_show_lyric_checkbox.isChecked())
+
     def selected_supported_audio_format_extensions(self) -> List[str]:
         text = str(self.supported_audio_format_extensions_value.text() or "").strip()
         if (not text) or text in {"(none detected)", tr("(none detected)")}:

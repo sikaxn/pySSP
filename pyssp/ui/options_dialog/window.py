@@ -116,6 +116,7 @@ class OptionsDialog(
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
         "warn_dual_automation_sources": True,
+        "automation_script_editor_show_lyric": False,
         "supported_audio_format_extensions": [],
         "verify_sound_file_on_add": True,
         "allow_other_unsupported_audio_files": False,
@@ -397,6 +398,7 @@ class OptionsDialog(
         search_lyric_on_add_sound_button: bool,
         new_lyric_file_format: str,
         warn_dual_automation_sources: bool,
+        automation_script_editor_show_lyric: bool,
         supported_audio_format_extensions: List[str],
         verify_sound_file_on_add: bool,
         allow_other_unsupported_audio_files: bool,
@@ -701,6 +703,7 @@ class OptionsDialog(
             else "srt"
         )
         self._warn_dual_automation_sources = bool(warn_dual_automation_sources)
+        self._automation_script_editor_show_lyric = bool(automation_script_editor_show_lyric)
         self._stage_display_font_family = str(stage_display_font_family or "").strip()
         self._stage_display_font_size = max(10, int(stage_display_font_size))
         self._stage_display_lyric_font_family = str(stage_display_lyric_font_family or "").strip()
@@ -974,6 +977,7 @@ class OptionsDialog(
                 command_udp_port=self._companion_command_udp_port,
                 command_http_port=self._companion_command_http_port,
                 warn_dual_automation_sources=self._warn_dual_automation_sources,
+                automation_script_editor_show_lyric=self._automation_script_editor_show_lyric,
             ),
         )
         self.page_list.currentRowChanged.connect(self.stack.setCurrentIndex)

@@ -20,6 +20,7 @@ class CompanionSatellitePageMixin:
         command_udp_port: int,
         command_http_port: int,
         warn_dual_automation_sources: bool,
+        automation_script_editor_show_lyric: bool,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -46,6 +47,12 @@ class CompanionSatellitePageMixin:
         )
         self.warn_dual_automation_sources_checkbox.setChecked(bool(warn_dual_automation_sources))
         form.addRow(tr("Automation Warning:"), self.warn_dual_automation_sources_checkbox)
+
+        self.automation_script_editor_show_lyric_checkbox = QCheckBox(
+            tr("Show lyric by default in Automation Script Editor")
+        )
+        self.automation_script_editor_show_lyric_checkbox.setChecked(bool(automation_script_editor_show_lyric))
+        form.addRow(tr("Automation Script Editor:"), self.automation_script_editor_show_lyric_checkbox)
 
         self.companion_satellite_columns_spin = QSpinBox()
         self.companion_satellite_columns_spin.setRange(1, 12)

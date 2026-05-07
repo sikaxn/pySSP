@@ -1647,6 +1647,7 @@ class SettingsArchiveMixin:
         self.settings.lyric_display_next_italic = bool(self.lyric_display_role_italic.get("next", False))
         self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
         self.settings.new_lyric_file_format = self.new_lyric_file_format
+        self.settings.automation_script_editor_show_lyric = bool(self.automation_script_editor_show_lyric)
         self.settings.supported_audio_format_extensions = list(self.supported_audio_format_extensions)
         self.settings.verify_sound_file_on_add = bool(self.verify_sound_file_on_add)
         self.settings.allow_other_unsupported_audio_files = bool(self.allow_other_unsupported_audio_files)

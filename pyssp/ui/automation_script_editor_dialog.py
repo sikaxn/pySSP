@@ -26,6 +26,8 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +40,7 @@ from pyssp.automation_script import (
     AutomationScriptAction,
     AutomationScriptCue,
     automation_script_cue_command_summary,
+    automation_script_command_display_name,
     load_automation_script,
     save_automation_script,
 )
@@ -64,6 +67,8 @@ class AutomationScriptEditorDialog(QDialog):
         cue_end_ms: Optional[int] = None,
         companion_payload: Optional[dict] = None,
         hide_black_empty: bool = True,
+        show_lyric_default: bool = False,
+        on_show_lyric_changed: Optional[Callable[[bool], None]] = None,
         language: str = "en",
         stop_host_playback: Optional[Callable[[], None]] = None,
         parent=None,
@@ -81,6 +86,8 @@ class AutomationScriptEditorDialog(QDialog):
         self._cue_end_ms = None if cue_end_ms is None else max(0, int(cue_end_ms))
         self._companion_payload = dict(companion_payload or {"pages": {}, "updated_at": ""})
         self._hide_black_empty = bool(hide_black_empty)
+        self._show_lyric_default = bool(show_lyric_default)
+        self._on_show_lyric_changed = on_show_lyric_changed
         self._duration_ms = 0
         self._is_scrubbing = False
         self._is_loading_media = False
@@ -119,14 +126,14 @@ class AutomationScriptEditorDialog(QDialog):
         self._player.mediaLoadFinished.connect(self._on_media_load_finished)
 
         transport = QHBoxLayout()
-        self._play_btn = QPushButton("Play")
-        self._stop_btn = QPushButton("Stop")
+        self._play_btn = QPushButton(tr("Play"))
+        self._stop_btn = QPushButton(tr("Stop"))
         transport.addWidget(self._play_btn)
         transport.addWidget(self._stop_btn)
         transport.addStretch(1)
-        self._total_label = QLabel("Total 00:00:00")
-        self._elapsed_label = QLabel("Elapsed 00:00:00")
-        self._remaining_label = QLabel("Remaining 00:00:00")
+        self._total_label = QLabel(f"{tr('Total')} 00:00:00")
+        self._elapsed_label = QLabel(f"{tr('Elapsed')} 00:00:00")
+        self._remaining_label = QLabel(f"{tr('Remaining')} 00:00:00")
         transport.addWidget(self._total_label)
         transport.addWidget(self._elapsed_label)
         transport.addWidget(self._remaining_label)
@@ -165,7 +172,7 @@ class AutomationScriptEditorDialog(QDialog):
 
         toggle_row = QHBoxLayout()
         self._show_lyric_checkbox = QCheckBox(tr("Show lyric alongside automation cues"))
-        self._show_lyric_checkbox.setChecked(bool(self._lyric_lines))
+        self._show_lyric_checkbox.setChecked(bool(self._lyric_lines) and self._show_lyric_default)
         self._show_lyric_checkbox.setEnabled(bool(self._lyric_lines))
         toggle_row.addWidget(self._show_lyric_checkbox)
         toggle_row.addStretch(1)
@@ -181,22 +188,21 @@ class AutomationScriptEditorDialog(QDialog):
         left_layout.setSpacing(8)
 
         self._timeline_hint_label = QLabel(
-            tr("1. Pick a cue or lyric time here. This top list is your timing map.")
+            tr("1. Build the timeline here. Select a cue or lyric row, then edit the selected cue just below in this same panel.")
         )
         self._timeline_hint_label.setWordWrap(True)
-        self._timeline_hint_label.setStyleSheet(
-            "QLabel{background:#EAF3FF;border:1px solid #9DBEE8;border-radius:4px;padding:6px;font-weight:600;}"
-        )
+        self._timeline_hint_label.setStyleSheet("QLabel{font-weight:600;}")
         left_layout.addWidget(self._timeline_hint_label)
 
-        self._table = QTableWidget(0, 4, self)
-        self._table.setHorizontalHeaderLabels([tr("Timestamp"), tr("Comment"), tr("Commands"), tr("Lyric")])
-        self._table.verticalHeader().setVisible(False)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SingleSelection)
-        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        left_layout.addWidget(self._table, 3)
+        self._timeline_tree = QTreeWidget(self)
+        self._timeline_tree.setColumnCount(4)
+        self._timeline_tree.setHeaderLabels([tr("Timestamp"), tr("Type"), tr("Comment / Lyric"), tr("Commands")])
+        self._timeline_tree.setRootIsDecorated(True)
+        self._timeline_tree.setItemsExpandable(True)
+        self._timeline_tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._timeline_tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._timeline_tree.header().setStretchLastSection(True)
+        left_layout.addWidget(self._timeline_tree, 3)
 
         actions = QHBoxLayout()
         self._add_current_btn = QPushButton(tr("Add Cue At Current Timestamp"))
@@ -208,19 +214,14 @@ class AutomationScriptEditorDialog(QDialog):
         actions.addStretch(1)
         left_layout.addLayout(actions)
 
-        cue_group = QGroupBox(tr("Automation Cue"), self)
-        cue_layout = QVBoxLayout(cue_group)
-        cue_layout.setContentsMargins(8, 8, 8, 8)
+        self._cue_editor_panel = QWidget(self)
+        self._cue_editor_panel.setObjectName("automationCueEditorPanel")
+        self._cue_editor_panel.setStyleSheet(
+            "#automationCueEditorPanel{border-top:1px solid #C8D6E6;padding-top:6px;}"
+        )
+        cue_layout = QVBoxLayout(self._cue_editor_panel)
+        cue_layout.setContentsMargins(0, 6, 0, 0)
         cue_layout.setSpacing(6)
-
-        self._cue_editor_hint_label = QLabel(
-            tr("2. Edit the selected cue here. Add comments only if they help the operator.")
-        )
-        self._cue_editor_hint_label.setWordWrap(True)
-        self._cue_editor_hint_label.setStyleSheet(
-            "QLabel{background:#EEF9EC;border:1px solid #9BC78C;border-radius:4px;padding:6px;font-weight:600;}"
-        )
-        cue_layout.addWidget(self._cue_editor_hint_label)
 
         cue_form = QFormLayout()
         self._cue_timestamp_label = QLabel("-")
@@ -235,15 +236,6 @@ class AutomationScriptEditorDialog(QDialog):
         comment_row_layout.addStretch(1)
         cue_form.addRow(tr("Comment"), comment_row)
         cue_layout.addLayout(cue_form)
-
-        self._cue_commands_table = QTableWidget(0, 3, self)
-        self._cue_commands_table.setHorizontalHeaderLabels([tr("Location"), tr("Button"), tr("Input")])
-        self._cue_commands_table.verticalHeader().setVisible(False)
-        self._cue_commands_table.horizontalHeader().setStretchLastSection(True)
-        self._cue_commands_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._cue_commands_table.setSelectionMode(QTableWidget.SingleSelection)
-        self._cue_commands_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        cue_layout.addWidget(self._cue_commands_table, 1)
 
         cue_button_row = QHBoxLayout()
         self._add_selected_command_btn = QPushButton(tr("Add Selected Command To Cue"))
@@ -260,8 +252,8 @@ class AutomationScriptEditorDialog(QDialog):
         self._cue_hint_label = QLabel(tr("Select a cue row to edit it. Cues without commands are not saved."))
         self._cue_hint_label.setWordWrap(True)
         cue_layout.addWidget(self._cue_hint_label)
-        cue_group.setMaximumHeight(300)
-        left_layout.addWidget(cue_group, 1)
+        self._cue_editor_panel.setMaximumHeight(150)
+        left_layout.addWidget(self._cue_editor_panel, 0)
 
         splitter.addWidget(left_panel)
 
@@ -279,9 +271,7 @@ class AutomationScriptEditorDialog(QDialog):
             tr("3. Pick a Companion command on the right, then add it into the selected cue.")
         )
         self._command_panel_hint_label.setWordWrap(True)
-        self._command_panel_hint_label.setStyleSheet(
-            "QLabel{background:#FFF4E5;border:1px solid #E0B26C;border-radius:4px;padding:6px;font-weight:600;}"
-        )
+        self._command_panel_hint_label.setStyleSheet("QLabel{font-weight:600;}")
         command_layout.addWidget(self._command_panel_hint_label)
 
         command_form = QFormLayout()
@@ -371,14 +361,13 @@ class AutomationScriptEditorDialog(QDialog):
         self._slider.sliderPressed.connect(self._on_slider_pressed)
         self._slider.sliderReleased.connect(self._on_slider_released)
         self._slider.valueChanged.connect(self._on_slider_value_changed)
-        self._show_lyric_checkbox.toggled.connect(self._rebuild_table)
-        self._table.cellClicked.connect(self._on_table_clicked)
-        self._table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self._show_lyric_checkbox.toggled.connect(self._on_show_lyric_toggled)
+        self._timeline_tree.itemClicked.connect(self._on_tree_clicked)
+        self._timeline_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         self._add_current_btn.clicked.connect(self._add_cue_at_current)
         self._add_selected_lyric_btn.clicked.connect(self._add_cue_at_selected_lyric)
         self._delete_btn.clicked.connect(self._delete_selected_cue)
         self._cue_comment_edit.textChanged.connect(self._on_cue_comment_changed)
-        self._cue_commands_table.itemSelectionChanged.connect(self._refresh_action_buttons)
         self._add_selected_command_btn.clicked.connect(self._add_selected_command_to_current_cue)
         self._remove_command_btn.clicked.connect(self._remove_selected_command)
         self._move_command_up_btn.clicked.connect(lambda _=False: self._move_selected_command(-1))
@@ -463,7 +452,7 @@ class AutomationScriptEditorDialog(QDialog):
 
     def _set_loading_state(self, loading: bool) -> None:
         self._is_loading_media = bool(loading)
-        self._cue_indicator.set_loading(self._is_loading_media, "Loading audio waveform...")
+        self._cue_indicator.set_loading(self._is_loading_media, tr("Loading audio waveform..."))
         ready = not self._is_loading_media
         self._play_btn.setEnabled(ready)
         self._stop_btn.setEnabled(ready)
@@ -493,7 +482,7 @@ class AutomationScriptEditorDialog(QDialog):
             return
         elapsed = max(0.0, time.perf_counter() - self._load_wait_started)
         dot_count = int(elapsed * 3.0) % 4
-        self._cue_indicator.set_loading(True, "Loading audio waveform" + ("." * dot_count))
+        self._cue_indicator.set_loading(True, tr("Loading audio waveform") + ("." * dot_count))
         if self._audio_path and is_audio_preloaded(self._audio_path):
             self._load_poll_timer.stop()
             self._finalize_media_load()
@@ -528,7 +517,7 @@ class AutomationScriptEditorDialog(QDialog):
         self._refresh_cue_indicator()
 
     def _on_state_changed(self, _state: int) -> None:
-        self._play_btn.setText("Pause" if self._player.state() == ExternalMediaPlayer.PlayingState else "Play")
+        self._play_btn.setText(tr("Pause") if self._player.state() == ExternalMediaPlayer.PlayingState else tr("Play"))
 
     def _on_position_changed(self, position: int) -> None:
         position_ms = max(0, int(position))
@@ -541,9 +530,9 @@ class AutomationScriptEditorDialog(QDialog):
         total = max(0, int(self._duration_ms))
         position_value = max(0, min(total, int(position_ms)))
         remaining = max(0, total - position_value)
-        self._total_label.setText(f"Total {self._format_clock_time(total)}")
-        self._elapsed_label.setText(f"Elapsed {self._format_clock_time(position_value)}")
-        self._remaining_label.setText(f"Remaining {self._format_clock_time(remaining)}")
+        self._total_label.setText(f"{tr('Total')} {self._format_clock_time(total)}")
+        self._elapsed_label.setText(f"{tr('Elapsed')} {self._format_clock_time(position_value)}")
+        self._remaining_label.setText(f"{tr('Remaining')} {self._format_clock_time(remaining)}")
 
     def _refresh_cue_indicator(self) -> None:
         self._cue_indicator.set_values(self._duration_ms, self._cue_start_ms, self._cue_end_ms)
@@ -575,18 +564,40 @@ class AutomationScriptEditorDialog(QDialog):
             self._refresh_transport_times(max(0, int(value)))
             self._highlight_row_for_position(max(0, int(value)))
 
+    def _selected_tree_item(self) -> Optional[QTreeWidgetItem]:
+        item = self._timeline_tree.currentItem()
+        return item if isinstance(item, QTreeWidgetItem) else None
+
+    def _on_show_lyric_toggled(self, checked: bool) -> None:
+        if callable(self._on_show_lyric_changed):
+            try:
+                self._on_show_lyric_changed(bool(checked))
+            except Exception:
+                pass
+        self._rebuild_table()
+
     def _selected_row_data(self) -> Optional[dict]:
-        row = int(self._table.currentRow())
-        if row < 0 or row >= len(self._display_rows):
+        item = self._selected_tree_item()
+        if item is None:
             return None
-        return self._display_rows[row]
+        data = item.data(0, Qt.UserRole)
+        return data if isinstance(data, dict) else None
 
     def _selected_cue(self) -> Optional[AutomationScriptCue]:
         selected = self._selected_row_data()
-        if not selected or selected.get("kind") != "cue":
+        if not selected:
             return None
         cue = selected.get("cue")
         return cue if isinstance(cue, AutomationScriptCue) else None
+
+    def _selected_command_index_in_cue(self) -> int:
+        selected = self._selected_row_data()
+        if not selected or selected.get("kind") != "command":
+            return -1
+        try:
+            return max(-1, int(selected.get("action_index", -1)))
+        except Exception:
+            return -1
 
     def _cue_for_time(self, time_ms: int) -> Optional[AutomationScriptCue]:
         target_ms = max(0, int(time_ms))
@@ -605,11 +616,26 @@ class AutomationScriptEditorDialog(QDialog):
         self._script.cues = sorted(current_cues, key=lambda item: int(item.time_ms))
         return cue
 
-    def _rebuild_table(self, selected_time_ms: Optional[int] = None) -> None:
-        if selected_time_ms is None:
-            selected_cue = self._selected_cue()
-            if selected_cue is not None:
-                selected_time_ms = int(selected_cue.time_ms)
+    def _rebuild_table(self, selected_time_ms: Optional[int] = None, selected_command_index: int = -1) -> None:
+        selected = self._selected_row_data()
+        if selected_time_ms is None and selected is not None:
+            try:
+                selected_time_ms = int(selected.get("time_ms", -1))
+            except Exception:
+                selected_time_ms = None
+        if selected_command_index < 0 and selected and selected.get("kind") == "command":
+            selected_command_index = self._selected_command_index_in_cue()
+        expanded_times: set[int] = set()
+        for index in range(self._timeline_tree.topLevelItemCount()):
+            item = self._timeline_tree.topLevelItem(index)
+            if item is None or not item.isExpanded():
+                continue
+            data = item.data(0, Qt.UserRole)
+            if isinstance(data, dict) and data.get("kind") == "cue":
+                try:
+                    expanded_times.add(int(data.get("time_ms", -1)))
+                except Exception:
+                    pass
         self._display_rows = []
         for cue in list(self._script.cues or []):
             self._display_rows.append({"kind": "cue", "time_ms": int(cue.time_ms), "cue": cue, "lyric": ""})
@@ -624,54 +650,100 @@ class AutomationScriptEditorDialog(QDialog):
                     }
                 )
         self._display_rows.sort(key=lambda item: (int(item["time_ms"]), 0 if item["kind"] == "cue" else 1))
-        self._table.blockSignals(True)
-        self._table.setRowCount(0)
-        selected_row = -1
-        for row_idx, row in enumerate(self._display_rows):
-            self._table.insertRow(row_idx)
-            ts_item = QTableWidgetItem(self._format_timestamp(int(row["time_ms"])))
-            ts_item.setFlags(ts_item.flags() & ~Qt.ItemIsEditable)
+        self._timeline_tree.blockSignals(True)
+        self._timeline_tree.clear()
+        selected_item: Optional[QTreeWidgetItem] = None
+        for row in self._display_rows:
             cue = row.get("cue")
             if cue is not None:
                 comment = str(getattr(cue, "comment", "") or "")
                 commands = automation_script_cue_command_summary(cue)
-                lyric = self._lyric_text_for_time(int(row["time_ms"]))
-                if selected_time_ms is not None and int(cue.time_ms) == int(selected_time_ms):
-                    selected_row = row_idx
+                item = QTreeWidgetItem(
+                    [
+                        self._format_timestamp(int(row["time_ms"])),
+                        tr("Cue"),
+                        comment,
+                        commands,
+                    ]
+                )
+                item.setData(0, Qt.UserRole, dict(row))
+                self._tint_tree_item(item, QColor("#F2F8FF"))
+                for action_index, action in enumerate(list(cue.actions or [])):
+                    spec = normalize_automation_spec(getattr(action, "payload", None) or {})
+                    child = QTreeWidgetItem(
+                        [
+                            "",
+                            tr("Command"),
+                            automation_script_command_display_name(spec),
+                            tr("Press / Release") if bool(spec.hold_to_release) else tr("Normal"),
+                        ]
+                    )
+                    child.setData(
+                        0,
+                        Qt.UserRole,
+                        {
+                            "kind": "command",
+                            "time_ms": int(cue.time_ms),
+                            "cue": cue,
+                            "action_index": action_index,
+                        },
+                    )
+                    self._tint_tree_item(child, QColor("#FFF8EB"))
+                    item.addChild(child)
+                    if (
+                        selected_time_ms is not None
+                        and int(cue.time_ms) == int(selected_time_ms)
+                        and int(selected_command_index) == action_index
+                    ):
+                        selected_item = child
+                if selected_time_ms is not None and int(cue.time_ms) == int(selected_time_ms) and selected_item is None:
+                    selected_item = item
+                if int(cue.time_ms) in expanded_times or selected_item is not None and selected_item.parent() is item:
+                    item.setExpanded(True)
             else:
-                comment = ""
-                commands = ""
-                lyric = str(row.get("lyric", "") or "")
-            comment_item = QTableWidgetItem(comment)
-            command_item = QTableWidgetItem(commands)
-            lyric_item = QTableWidgetItem(lyric)
-            for item in (comment_item, command_item, lyric_item):
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            self._table.setItem(row_idx, 0, ts_item)
-            self._table.setItem(row_idx, 1, comment_item)
-            self._table.setItem(row_idx, 2, command_item)
-            self._table.setItem(row_idx, 3, lyric_item)
-        self._table.blockSignals(False)
-        if selected_row >= 0:
-            self._table.selectRow(selected_row)
+                item = QTreeWidgetItem(
+                    [
+                        self._format_timestamp(int(row["time_ms"])),
+                        tr("Lyric"),
+                        str(row.get("lyric", "") or ""),
+                        tr("Reference"),
+                    ]
+                )
+                item.setData(0, Qt.UserRole, dict(row))
+                self._tint_tree_item(item, QColor("#F2FBF2"))
+                if selected_item is None and selected_time_ms is not None and int(row["time_ms"]) == int(selected_time_ms):
+                    selected_item = item
+            self._timeline_tree.addTopLevelItem(item)
+        self._timeline_tree.blockSignals(False)
+        if selected_item is not None:
+            self._timeline_tree.setCurrentItem(selected_item)
         self._highlight_row_for_position(max(0, int(self._slider.value())))
         self._refresh_cue_editor()
         self._refresh_action_buttons()
 
+    def _tint_tree_item(self, item: QTreeWidgetItem, color: QColor) -> None:
+        for column in range(item.columnCount()):
+            item.setBackground(column, color)
+
     def _set_active_row(self, row: int) -> None:
         previous = self._active_row
-        self._active_row = row if 0 <= row < self._table.rowCount() else -1
+        self._active_row = row if 0 <= row < self._timeline_tree.topLevelItemCount() else -1
         for row_index in {previous, self._active_row}:
             if row_index < 0:
                 continue
-            for column in range(self._table.columnCount()):
-                item = self._table.item(row_index, column)
-                if item is None:
-                    continue
-                if row_index == self._active_row:
-                    item.setBackground(Qt.yellow)
-                else:
-                    item.setBackground(Qt.white)
+            item = self._timeline_tree.topLevelItem(row_index)
+            if item is None:
+                continue
+            kind = ""
+            data = item.data(0, Qt.UserRole)
+            if isinstance(data, dict):
+                kind = str(data.get("kind", "") or "")
+            if row_index == self._active_row:
+                self._tint_tree_item(item, QColor(Qt.yellow))
+            elif kind == "cue":
+                self._tint_tree_item(item, QColor("#F2F8FF"))
+            else:
+                self._tint_tree_item(item, QColor("#F2FBF2"))
 
     def _highlight_row_for_position(self, position_ms: int) -> None:
         if not self._display_rows:
@@ -685,13 +757,14 @@ class AutomationScriptEditorDialog(QDialog):
                 break
         self._set_active_row(row)
 
-    def _on_table_clicked(self, row: int, _column: int) -> None:
-        if row < 0 or row >= len(self._display_rows):
+    def _on_tree_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        data = item.data(0, Qt.UserRole)
+        if not isinstance(data, dict):
             return
-        target_ms = max(0, int(self._display_rows[row]["time_ms"]))
+        target_ms = max(0, int(data.get("time_ms", 0)))
         self._player.setPosition(target_ms)
 
-    def _on_table_selection_changed(self) -> None:
+    def _on_tree_selection_changed(self) -> None:
         self._refresh_cue_editor()
         self._refresh_action_buttons()
 
@@ -703,26 +776,10 @@ class AutomationScriptEditorDialog(QDialog):
             self._cue_timestamp_label.setText("-" if cue is None else self._format_timestamp(int(cue.time_ms)))
             self._cue_comment_edit.setEnabled(enabled)
             self._cue_comment_edit.setText("" if cue is None else str(cue.comment or ""))
-            self._cue_commands_table.setEnabled(enabled)
-            self._cue_commands_table.setRowCount(0)
-            if cue is not None:
-                for row_index, action in enumerate(list(cue.actions or [])):
-                    spec = normalize_automation_spec(getattr(action, "payload", None) or {})
-                    self._cue_commands_table.insertRow(row_index)
-                    location_item = QTableWidgetItem(str(spec.location or ""))
-                    button_item = QTableWidgetItem(str(spec.button_text or ""))
-                    input_item = QTableWidgetItem(
-                        tr("Press / Release") if bool(spec.hold_to_release) else tr("Normal")
-                    )
-                    for item in (location_item, button_item, input_item):
-                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    self._cue_commands_table.setItem(row_index, 0, location_item)
-                    self._cue_commands_table.setItem(row_index, 1, button_item)
-                    self._cue_commands_table.setItem(row_index, 2, input_item)
             self._cue_hint_label.setText(
                 tr("Select a cue row to edit it. Cues without commands are not saved.")
                 if cue is None
-                else tr("This cue is edited inline. Use the right panel to add Companion commands.")
+                else tr("This cue is edited inline. Expand its row above to inspect the command stack.")
             )
         finally:
             self._updating_cue_form = False
@@ -732,7 +789,7 @@ class AutomationScriptEditorDialog(QDialog):
         selected = self._selected_row_data()
         cue = self._selected_cue()
         selected_is_lyric = bool(selected and selected.get("kind") == "lyric")
-        selected_command_row = int(self._cue_commands_table.currentRow())
+        selected_command_row = self._selected_command_index_in_cue()
         cue_command_count = 0 if cue is None else len(list(cue.actions or []))
         can_add_command = cue is not None and bool(self._build_selected_command_spec().location)
         self._delete_btn.setEnabled(cue is not None)
@@ -769,11 +826,7 @@ class AutomationScriptEditorDialog(QDialog):
         if cue is None:
             return
         cue.comment = str(text or "").strip()
-        row = int(self._table.currentRow())
-        if row >= 0:
-            item = self._table.item(row, 1)
-            if item is not None:
-                item.setText(cue.comment)
+        self._refresh_selected_cue_row()
 
     def _apply_command_filters(self) -> None:
         rows = list_companion_available_commands(self._companion_payload)
@@ -903,12 +956,13 @@ class AutomationScriptEditorDialog(QDialog):
             payload=normalize_automation_spec(spec),
         )
         cue.actions = list(cue.actions or []) + [action]
-        self._refresh_cue_editor()
-        self._refresh_selected_cue_row()
+        if not str(cue.comment or "").strip():
+            cue.comment = str(spec.button_text or spec.location or "").strip()
+        self._rebuild_table(selected_time_ms=int(cue.time_ms), selected_command_index=len(list(cue.actions or [])) - 1)
 
     def _remove_selected_command(self) -> None:
         cue = self._selected_cue()
-        row = int(self._cue_commands_table.currentRow())
+        row = self._selected_command_index_in_cue()
         if cue is None or row < 0:
             return
         actions = list(cue.actions or [])
@@ -916,12 +970,11 @@ class AutomationScriptEditorDialog(QDialog):
             return
         actions.pop(row)
         cue.actions = actions
-        self._refresh_cue_editor()
-        self._refresh_selected_cue_row()
+        self._rebuild_table(selected_time_ms=int(cue.time_ms), selected_command_index=min(row, len(actions) - 1))
 
     def _move_selected_command(self, delta: int) -> None:
         cue = self._selected_cue()
-        row = int(self._cue_commands_table.currentRow())
+        row = self._selected_command_index_in_cue()
         if cue is None or row < 0:
             return
         actions = list(cue.actions or [])
@@ -930,21 +983,24 @@ class AutomationScriptEditorDialog(QDialog):
             return
         actions[row], actions[new_index] = actions[new_index], actions[row]
         cue.actions = actions
-        self._refresh_cue_editor()
-        self._cue_commands_table.selectRow(new_index)
-        self._refresh_selected_cue_row()
+        self._rebuild_table(selected_time_ms=int(cue.time_ms), selected_command_index=new_index)
 
     def _refresh_selected_cue_row(self) -> None:
         cue = self._selected_cue()
-        row = int(self._table.currentRow())
-        if cue is None or row < 0:
+        if cue is None:
             return
-        comment_item = self._table.item(row, 1)
-        if comment_item is not None:
-            comment_item.setText(str(cue.comment or ""))
-        command_item = self._table.item(row, 2)
-        if command_item is not None:
-            command_item.setText(automation_script_cue_command_summary(cue))
+        for index in range(self._timeline_tree.topLevelItemCount()):
+            item = self._timeline_tree.topLevelItem(index)
+            if item is None:
+                continue
+            data = item.data(0, Qt.UserRole)
+            if not isinstance(data, dict) or data.get("kind") != "cue":
+                continue
+            if int(data.get("time_ms", -1)) != int(cue.time_ms):
+                continue
+            item.setText(2, str(cue.comment or ""))
+            item.setText(3, automation_script_cue_command_summary(cue))
+            break
         self._refresh_action_buttons()
 
     def _save(self) -> None:

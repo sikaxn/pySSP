@@ -523,6 +523,7 @@ class AppSettings:
     search_lyric_on_add_sound_button: bool = True
     new_lyric_file_format: str = "srt"
     warn_dual_automation_sources: bool = True
+    automation_script_editor_show_lyric: bool = False
     supported_audio_format_extensions: list[str] = field(default_factory=default_supported_audio_format_extensions)
     verify_sound_file_on_add: bool = True
     allow_other_unsupported_audio_files: bool = False
@@ -916,6 +917,7 @@ def save_settings(settings: AppSettings) -> None:
         "search_lyric_on_add_sound_button": "1" if settings.search_lyric_on_add_sound_button else "0",
         "new_lyric_file_format": settings.new_lyric_file_format,
         "warn_dual_automation_sources": "1" if settings.warn_dual_automation_sources else "0",
+        "automation_script_editor_show_lyric": "1" if settings.automation_script_editor_show_lyric else "0",
         "supported_audio_format_extensions": "\t".join(
             _normalize_supported_audio_format_extensions(settings.supported_audio_format_extensions)
         ),
@@ -1351,6 +1353,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if new_lyric_file_format not in {"srt", "lrc"}:
         new_lyric_file_format = "srt"
     warn_dual_automation_sources = _get_bool(section, "warn_dual_automation_sources", True)
+    automation_script_editor_show_lyric = _get_bool(section, "automation_script_editor_show_lyric", False)
     supported_audio_format_extensions = _normalize_supported_audio_format_extensions(
         [item.strip() for item in str(section.get("supported_audio_format_extensions", "")).split("\t") if item.strip()]
     )
@@ -1714,6 +1717,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         search_lyric_on_add_sound_button=search_lyric_on_add_sound_button,
         new_lyric_file_format=new_lyric_file_format,
         warn_dual_automation_sources=warn_dual_automation_sources,
+        automation_script_editor_show_lyric=automation_script_editor_show_lyric,
         supported_audio_format_extensions=supported_audio_format_extensions,
         verify_sound_file_on_add=verify_sound_file_on_add,
         allow_other_unsupported_audio_files=allow_other_unsupported_audio_files,

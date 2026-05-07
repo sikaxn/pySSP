@@ -2586,6 +2586,8 @@ class PagesSlotsMixin:
             cue_end_ms=slot.cue_end_ms,
             companion_payload=load_companion_available_commands(),
             hide_black_empty=bool(self.companion_available_commands_filter_black_empty),
+            show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
+            on_show_lyric_changed=self._set_automation_script_editor_show_lyric,
             language=self.ui_language,
             stop_host_playback=self._hard_stop_all,
             parent=self,
@@ -2597,6 +2599,16 @@ class PagesSlotsMixin:
         self._warn_dual_automation_sources_if_needed(slot)
         self._refresh_sound_grid()
         self._refresh_stage_display()
+
+    def _set_automation_script_editor_show_lyric(self, visible: bool) -> None:
+        value = bool(visible)
+        if bool(getattr(self, "automation_script_editor_show_lyric", False)) == value:
+            return
+        self.automation_script_editor_show_lyric = value
+        try:
+            self._save_settings()
+        except Exception:
+            pass
 
     def _is_page_created(self, group: str, page_index: int) -> bool:
         if self.cue_mode:

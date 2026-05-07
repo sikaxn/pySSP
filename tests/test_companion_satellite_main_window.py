@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 
 from pyssp.settings_store import AppSettings
 from pyssp.automation_command import AutomationCommandSpec
@@ -23,6 +23,26 @@ def qapp():
     return app
 
 
+@pytest.fixture(autouse=True)
+def _stub_midi_polling_thread(monkeypatch):
+    _patch_dummy_midi_thread(monkeypatch)
+    monkeypatch.setattr(mw, "MidiOutput", _DummyMidiOutput)
+    yield
+    app = QApplication.instance()
+    if app is not None:
+        for widget in list(app.topLevelWidgets()):
+            if isinstance(widget, QWidget):
+                try:
+                    widget.close()
+                except Exception:
+                    pass
+                try:
+                    widget.deleteLater()
+                except Exception:
+                    pass
+        app.processEvents()
+
+
 def _cleanup_window(window, qapp: QApplication) -> None:
     try:
         satellite_window = getattr(window, "_companion_satellite_window", None)
@@ -31,11 +51,68 @@ def _cleanup_window(window, qapp: QApplication) -> None:
     except Exception:
         pass
     try:
+        automation_script_navigator = getattr(window, "_automation_script_navigator_window", None)
+        if automation_script_navigator is not None:
+            automation_script_navigator.close()
+    except Exception:
+        pass
+    try:
+        shutdown = getattr(window, "_shutdown_runtime_threads", None)
+        if callable(shutdown):
+            shutdown()
+    except Exception:
+        pass
+    try:
         window.hide()
-        QMainWindow.close(window)
+        window.close()
     except Exception:
         pass
     qapp.processEvents()
+
+
+class _DummySignal:
+    def connect(self, *_args, **_kwargs):
+        return None
+
+
+class _DummyMidiPollingThread:
+    def __init__(self, *_args, **_kwargs):
+        self.midi_event = _DummySignal()
+        self.launchpad_event = _DummySignal()
+        self.status_changed = _DummySignal()
+
+    def start(self):
+        return None
+
+    def stop(self):
+        return None
+
+    def wait(self, *_args, **_kwargs):
+        return True
+
+    def isRunning(self):
+        return False
+
+
+class _DummyMidiOutput:
+    def close(self):
+        return None
+
+    def open(self, *_args, **_kwargs):
+        return True
+
+    def is_open(self):
+        return False
+
+    def send(self, *_args, **_kwargs):
+        return None
+
+    def send_sysex(self, *_args, **_kwargs):
+        return None
+
+
+def _patch_dummy_midi_thread(monkeypatch) -> None:
+    monkeypatch.setattr(mw, "MidiPollingThread", _DummyMidiPollingThread)
 
 
 def test_main_window_exposes_companion_menu_actions(qapp, monkeypatch):

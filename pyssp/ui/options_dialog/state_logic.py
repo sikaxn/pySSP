@@ -784,7 +784,15 @@ class StateLogicMixin:
         d = self._DEFAULTS
         self.web_remote_enabled_checkbox.setChecked(bool(d["web_remote_enabled"]))
         self.web_remote_port_spin.setValue(int(d["web_remote_port"]))
+        self.web_remote_https_enabled_checkbox.setChecked(bool(d.get("web_remote_https_enabled", False)))
+        self.web_remote_enforce_https_checkbox.setChecked(bool(d.get("web_remote_enforce_https", False)))
+        self.web_remote_require_authentication_checkbox.setChecked(bool(d.get("web_remote_require_authentication", False)))
+        self.web_remote_username_edit.setText(str(d.get("web_remote_username", "admin")))
+        self.web_remote_password_edit.setText(str(d.get("web_remote_password", "")))
+        self.web_remote_guest_view_checkbox.setChecked(bool(d.get("web_remote_guest_view_enabled", False)))
         self._update_web_remote_page_labels(int(self.web_remote_port_spin.value()))
+        self._update_web_remote_auth_controls()
+        self._update_web_remote_https_controls()
 
     def _restore_companion_satellite_defaults(self) -> None:
         d = self._DEFAULTS

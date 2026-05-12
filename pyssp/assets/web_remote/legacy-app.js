@@ -284,8 +284,8 @@
     const root = document.getElementById('tracksView');
     if(!tracks || tracks.length===0){ root.innerHTML = '<div class="track">None</div>'; return; }
     root.innerHTML = tracks.map(t =>
-      `<div class="track"><strong>${t.button_id}</strong> - ${t.title || '(untitled)'}<br>` +
-      `Remaining: ${t.remaining} (${t.remaining_ms} ms)</div>`
+      `<div class="track"><strong>${escapeHtml(t.button_id)}</strong> - ${escapeHtml(t.title || '(untitled)')}<br>` +
+      `Remaining: ${escapeHtml(t.remaining)} (${escapeHtml(t.remaining_ms)} ms)</div>`
     ).join('');
   }
 

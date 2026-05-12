@@ -2,6 +2,12 @@
  * LED Banner Caption JS (single- or two-line, auto-scaling, crossfade, stable size)
  ******************************************************************************/
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
+}
+
 window.bannerFontMax = Infinity;   // global font memory (consistent size)
 
 window.OpenLP = {
@@ -161,11 +167,9 @@ window.OpenLP = {
         rawText.includes("<img");
 
       if (!hasImage) {
-        const lines = rawText
-          .replace(/\r/g, "")
-          .split("\n")
-          .map(line => line.trim())
-          .filter(line => line !== "");
+        const lines = String(slide.html || "")
+          ? String(slide.html || "").split(/<br\s*\/?>/i).map(line => String(line || "").trim()).filter(line => line !== "")
+          : escapeHtml(rawText).replace(/\r/g, "").split("\n").map(line => line.trim()).filter(line => line !== "");
 
         const clipped = lines.slice(0, 2);
         if (clipped.length > 0) newHtml = clipped.join("<br>");
@@ -261,7 +265,7 @@ window.OpenLP = {
       "display": "inline-block",
       "text-align": "center"
     });
-    measure.html(text || "");
+    measure.html(String(text || ""));
 
     const box = () => measure[0].getBoundingClientRect();
 

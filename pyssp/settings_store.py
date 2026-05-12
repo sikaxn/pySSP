@@ -595,6 +595,14 @@ class AppSettings:
     web_remote_enabled: bool = False
     web_remote_port: int = 5050
     web_remote_ws_port: int = 5051
+    web_remote_https_enabled: bool = False
+    web_remote_https_port: int = 5052
+    web_remote_wss_port: int = 5053
+    web_remote_enforce_https: bool = False
+    web_remote_require_authentication: bool = False
+    web_remote_username: str = "admin"
+    web_remote_password: str = ""
+    web_remote_guest_view_enabled: bool = False
     companion_satellite_host: str = "127.0.0.1"
     companion_satellite_port: int = 16622
     companion_satellite_enabled: bool = False
@@ -996,6 +1004,14 @@ def save_settings(settings: AppSettings) -> None:
         "web_remote_enabled": "1" if settings.web_remote_enabled else "0",
         "web_remote_port": str(settings.web_remote_port),
         "web_remote_ws_port": str(settings.web_remote_ws_port),
+        "web_remote_https_enabled": "1" if settings.web_remote_https_enabled else "0",
+        "web_remote_https_port": str(settings.web_remote_https_port),
+        "web_remote_wss_port": str(settings.web_remote_wss_port),
+        "web_remote_enforce_https": "1" if settings.web_remote_enforce_https else "0",
+        "web_remote_require_authentication": "1" if settings.web_remote_require_authentication else "0",
+        "web_remote_username": _encode_ascii_setting(settings.web_remote_username),
+        "web_remote_password": _encode_ascii_setting(settings.web_remote_password),
+        "web_remote_guest_view_enabled": "1" if settings.web_remote_guest_view_enabled else "0",
         "companion_satellite_host": settings.companion_satellite_host,
         "companion_satellite_port": str(settings.companion_satellite_port),
         "companion_satellite_enabled": "1" if settings.companion_satellite_enabled else "0",
@@ -1406,8 +1422,18 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     candidate_error_action = str(section.get("candidate_error_action", "stop_playback")).strip().lower()
     if candidate_error_action not in {"stop_playback", "keep_playing"}:
         candidate_error_action = "stop_playback"
-    web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65535)
+    web_remote_port = _clamp_int(_get_int(section, "web_remote_port", 5050), 1, 65532)
     web_remote_ws_port = _clamp_int(_get_int(section, "web_remote_ws_port", web_remote_port + 1), 1, 65535)
+    web_remote_https_enabled = _get_bool(section, "web_remote_https_enabled", False)
+    web_remote_https_port = _clamp_int(_get_int(section, "web_remote_https_port", web_remote_port + 2), 1, 65535)
+    web_remote_wss_port = _clamp_int(_get_int(section, "web_remote_wss_port", web_remote_port + 3), 1, 65535)
+    web_remote_enforce_https = _get_bool(section, "web_remote_enforce_https", False)
+    web_remote_require_authentication = _get_bool(section, "web_remote_require_authentication", False)
+    web_remote_username = _decode_ascii_setting(str(section.get("web_remote_username", '"admin"'))).strip() or "admin"
+    web_remote_password = _decode_ascii_setting(str(section.get("web_remote_password", "")))
+    web_remote_guest_view_enabled = _get_bool(section, "web_remote_guest_view_enabled", False)
+    if web_remote_enforce_https:
+        web_remote_https_enabled = True
     companion_satellite_host = str(section.get("companion_satellite_host", "127.0.0.1")).strip() or "127.0.0.1"
     companion_satellite_port = _clamp_int(_get_int(section, "companion_satellite_port", 16622), 1, 65535)
     legacy_companion_satellite_start_mode = str(section.get("companion_satellite_start_mode", "manual")).strip().lower()
@@ -1792,6 +1818,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         web_remote_enabled=_get_bool(section, "web_remote_enabled", False),
         web_remote_port=web_remote_port,
         web_remote_ws_port=web_remote_ws_port,
+        web_remote_https_enabled=web_remote_https_enabled,
+        web_remote_https_port=web_remote_https_port,
+        web_remote_wss_port=web_remote_wss_port,
+        web_remote_enforce_https=web_remote_enforce_https,
+        web_remote_require_authentication=web_remote_require_authentication,
+        web_remote_username=web_remote_username,
+        web_remote_password=web_remote_password,
+        web_remote_guest_view_enabled=web_remote_guest_view_enabled,
         companion_satellite_host=companion_satellite_host,
         companion_satellite_port=companion_satellite_port,
         companion_satellite_enabled=companion_satellite_enabled,

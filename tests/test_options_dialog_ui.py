@@ -208,7 +208,31 @@ def _build_dialog(**overrides):
         candidate_error_action=defaults["candidate_error_action"],
         web_remote_enabled=defaults["web_remote_enabled"],
         web_remote_port=defaults["web_remote_port"],
-        web_remote_url=overrides.get("web_remote_url", "http://127.0.0.1:5050/"),
+        web_remote_http_url=overrides.get("web_remote_http_url", "http://127.0.0.1:5050/"),
+        web_remote_https_enabled=bool(
+            overrides.get("web_remote_https_enabled", defaults["web_remote_https_enabled"])
+        ),
+        web_remote_enforce_https=bool(
+            overrides.get("web_remote_enforce_https", defaults["web_remote_enforce_https"])
+        ),
+        web_remote_require_authentication=bool(
+            overrides.get(
+                "web_remote_require_authentication",
+                defaults["web_remote_require_authentication"],
+            )
+        ),
+        web_remote_username=str(
+            overrides.get("web_remote_username", defaults["web_remote_username"])
+        ),
+        web_remote_password=str(
+            overrides.get("web_remote_password", defaults["web_remote_password"])
+        ),
+        web_remote_guest_view_enabled=bool(
+            overrides.get(
+                "web_remote_guest_view_enabled",
+                defaults["web_remote_guest_view_enabled"],
+            )
+        ),
         companion_satellite_host=str(
             overrides.get("companion_satellite_host", defaults["companion_satellite_host"])
         ),
@@ -479,17 +503,69 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
 
 
 def test_web_remote_url_label_tracks_port_changes(qapp):
-    dialog = _build_dialog(web_remote_url="http://10.0.0.55:5050/")
+    dialog = _build_dialog(web_remote_http_url="http://10.0.0.55:5050/")
     assert "Python SSP module" in dialog.web_remote_companion_setup_value.text()
     assert dialog.web_remote_companion_ip_value.text() == "IP address: 10.0.0.55"
     assert dialog.web_remote_companion_port_value.text() == "Port: 5050"
     assert "same computer" in dialog.web_remote_companion_default_value.text()
+    assert "http://10.0.0.55:5050/" in dialog.web_remote_url_value.text()
+    assert "https://10.0.0.55:5052/" in dialog.web_remote_https_url_value.text()
+    assert dialog.web_remote_ws_port_value.text() == "5051"
+    assert dialog.web_remote_https_port_value.text() == "5052"
+    assert dialog.web_remote_wss_port_value.text() == "5053"
     dialog.web_remote_port_spin.setValue(6060)
     assert "http://10.0.0.55:6060/" in dialog.web_remote_url_value.text()
+    assert "https://10.0.0.55:6062/" in dialog.web_remote_https_url_value.text()
+    assert dialog.web_remote_ws_port_value.text() == "6061"
+    assert dialog.web_remote_https_port_value.text() == "6062"
+    assert dialog.web_remote_wss_port_value.text() == "6063"
     assert dialog.web_remote_companion_port_value.text() == "Port: 6060"
     assert dialog.web_remote_companion_default_value.text() == ""
     dialog.web_remote_enabled_checkbox.setChecked(True)
     assert dialog.web_remote_enabled_checkbox.isChecked() is True
+
+
+def test_web_remote_authentication_controls_follow_toggles(qapp):
+    dialog = _build_dialog(
+        web_remote_require_authentication=True,
+        web_remote_username="operator",
+        web_remote_password="secret",
+        web_remote_guest_view_enabled=True,
+        initial_page="Automation",
+    )
+    assert dialog.web_remote_require_authentication_checkbox.isChecked() is True
+    assert dialog.web_remote_username_edit.isEnabled() is True
+    assert dialog.web_remote_password_edit.isEnabled() is True
+    assert dialog.web_remote_guest_view_checkbox.isEnabled() is True
+    assert dialog.web_remote_guest_note_label.isHidden() is False
+    assert dialog.web_remote_username_edit.text() == "operator"
+    assert dialog.web_remote_password_edit.text() == "secret"
+
+    dialog.web_remote_guest_view_checkbox.setChecked(False)
+    assert dialog.web_remote_guest_note_label.isHidden() is True
+
+    dialog.web_remote_require_authentication_checkbox.setChecked(False)
+    assert dialog.web_remote_username_edit.isEnabled() is False
+    assert dialog.web_remote_password_edit.isEnabled() is False
+    assert dialog.web_remote_guest_view_checkbox.isEnabled() is False
+
+
+def test_web_remote_https_controls_follow_toggles(qapp):
+    dialog = _build_dialog(
+        web_remote_https_enabled=False,
+        web_remote_enforce_https=False,
+        initial_page="Automation",
+    )
+    assert dialog.web_remote_https_enabled_checkbox.isChecked() is False
+    assert dialog.web_remote_enforce_https_checkbox.isEnabled() is False
+
+    dialog.web_remote_https_enabled_checkbox.setChecked(True)
+    assert dialog.web_remote_enforce_https_checkbox.isEnabled() is True
+
+    dialog.web_remote_enforce_https_checkbox.setChecked(True)
+    dialog.web_remote_https_enabled_checkbox.setChecked(False)
+    assert dialog.web_remote_https_enabled_checkbox.isChecked() is True
+    assert dialog.web_remote_enforce_https_checkbox.isChecked() is True
 
 
 def test_hotkey_conflict_disables_ok_button(qapp):

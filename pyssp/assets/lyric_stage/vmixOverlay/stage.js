@@ -17,6 +17,12 @@
  * Temple Place, Suite 330, Boston, MA 02111-1307 USA                          *
  ******************************************************************************/
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
+}
+
 window.OpenLP = {
   basePath: function () {
     const path = (window.location.pathname || '').toLowerCase();
@@ -128,7 +134,7 @@ window.OpenLP = {
 
         data.forEach(function (item, index, array) {
           if (item.selected) {
-            $("#notes").html(item.notes);
+            $("#notes").text(item.notes || "");
 
             if (data.length > index + 1)
               OpenLP.nextSong = data[index + 1].title;
@@ -239,10 +245,9 @@ updateSlide: function () {
       rawText.includes("<img");
 
     if (!hasImage) {
-      const cleaned = rawText
-        .replace(/\r/g, "")
-        .replace(/\n/g, "<br>")
-        .trim();
+      const cleaned = (slide.html || "")
+        ? String(slide.html || "").trim()
+        : escapeHtml(rawText).replace(/\r/g, "").replace(/\n/g, "<br>").trim();
 
       if (cleaned !== "")
         newHtml = cleaned;
@@ -270,18 +275,17 @@ updateSlide: function () {
   if (OpenLP.currentSlide < OpenLP.currentSlides.length - 1) {
     for (var idx = OpenLP.currentSlide + 1; idx < OpenLP.currentSlides.length; idx++) {
       if (OpenLP.currentSlides[idx]["text"])
-        nextText += OpenLP.currentSlides[idx]["text"];
+        nextText += escapeHtml(OpenLP.currentSlides[idx]["text"]).replace(/\r/g, "").replace(/\n/g, "<br />");
       else
-        nextText += OpenLP.currentSlides[idx]["title"];
+        nextText += escapeHtml(OpenLP.currentSlides[idx]["title"]);
       nextText += "<br />";
     }
-    nextText = nextText.replace(/\n/g, "<br />");
     $("#nextslide").html(nextText);
   } else {
     nextText =
       "<p class=\"nextslide\">" +
-      $("#next-text").val() + ": " +
-      OpenLP.nextSong +
+      escapeHtml($("#next-text").val()) + ": " +
+      escapeHtml(OpenLP.nextSong) +
       "</p>";
     $("#nextslide").html(nextText);
   }

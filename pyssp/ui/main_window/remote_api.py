@@ -296,6 +296,11 @@ class RemoteApiMixin:
             "current_playing": self._format_button_key(self.current_playing).lower() if self.current_playing else None,
             "playing_tracks": playing_tracks,
             "web_remote_url": self._web_remote_open_url(),
+            "web_remote_http_url": self._web_remote_http_open_url(),
+            "web_remote_https_url": self._web_remote_https_open_url(),
+            "web_remote_https_enabled": bool(self.web_remote_https_enabled),
+            "web_remote_requires_authentication": bool(self.web_remote_require_authentication),
+            "web_remote_guest_view_enabled": bool(self.web_remote_guest_view_enabled),
             "lyric_display": "blank" if self._lyric_force_blank else "show",
         }
 
@@ -482,9 +487,23 @@ class RemoteApiMixin:
         self._local_ip_cache_at = now
         return resolved
 
-    def _web_remote_open_url(self) -> str:
+    def _web_remote_http_open_url(self) -> str:
         host = self._resolve_local_ip()
         return f"http://{host}:{self.web_remote_port}/"
+
+    def _web_remote_https_open_url(self) -> str:
+        host = self._resolve_local_ip()
+        return f"https://{host}:{self.web_remote_https_port}/"
+
+    def _web_remote_open_url(self) -> str:
+        if bool(getattr(self, "web_remote_https_enabled", False)):
+            return self._web_remote_https_open_url()
+        return self._web_remote_http_open_url()
+
+    def _preferred_web_remote_ws_port(self) -> int:
+        if bool(getattr(self, "web_remote_https_enabled", False)):
+            return int(self.web_remote_wss_port)
+        return int(self.web_remote_ws_port)
 
     def _api_select_location(self, group: str, page_index: Optional[int]) -> None:
         if group == "Q":
@@ -533,17 +552,15 @@ class RemoteApiMixin:
 
     def _apply_web_remote_state(self) -> None:
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.web_remote_https_port = int(self.web_remote_port) + 2
+        self.web_remote_wss_port = int(self.web_remote_port) + 3
+        if self.web_remote_enforce_https:
+            self.web_remote_https_enabled = True
         if not self.web_remote_enabled:
             self._stop_web_remote_service()
             self._update_web_remote_status_label()
             return
         if self._web_remote_server is not None and self._web_remote_server.is_running:
-            same_host = self._web_remote_server.host == self.web_remote_host
-            same_port = int(self._web_remote_server.port) == int(self.web_remote_port)
-            same_ws_port = int(self._web_remote_server.ws_port) == int(self.web_remote_ws_port)
-            if same_host and same_port and same_ws_port:
-                self._update_web_remote_status_label()
-                return
             self._stop_web_remote_service()
         self._start_web_remote_service()
         self._update_web_remote_status_label()
@@ -556,8 +573,16 @@ class RemoteApiMixin:
             self._set_web_remote_warning_banner(self._web_remote_port_conflict_text())
             return
         self.web_remote_ws_port = int(self.web_remote_port) + 1
-        if self._is_port_listening_by_other_process(self.web_remote_ws_port):
+        self.web_remote_https_port = int(self.web_remote_port) + 2
+        self.web_remote_wss_port = int(self.web_remote_port) + 3
+        if (not self.web_remote_enforce_https) and self._is_port_listening_by_other_process(self.web_remote_ws_port):
             self._set_web_remote_warning_banner(self._web_remote_ws_port_conflict_text())
+            return
+        if self.web_remote_https_enabled and self._is_port_listening_by_other_process(self.web_remote_https_port):
+            self._set_web_remote_warning_banner(self._web_remote_https_port_conflict_text())
+            return
+        if self.web_remote_https_enabled and self._is_port_listening_by_other_process(self.web_remote_wss_port):
+            self._set_web_remote_warning_banner(self._web_remote_wss_port_conflict_text())
             return
         try:
             self._web_remote_server = WebRemoteServer(
@@ -565,6 +590,14 @@ class RemoteApiMixin:
                 host=self.web_remote_host,
                 port=self.web_remote_port,
                 ws_port=self.web_remote_ws_port,
+                https_enabled=self.web_remote_https_enabled,
+                https_port=self.web_remote_https_port,
+                wss_port=self.web_remote_wss_port,
+                enforce_https=self.web_remote_enforce_https,
+                require_authentication=self.web_remote_require_authentication,
+                username=self.web_remote_username,
+                password=self.web_remote_password,
+                guest_view_enabled=self.web_remote_guest_view_enabled,
             )
             self._web_remote_server.start()
             self._set_web_remote_warning_banner("")
@@ -753,6 +786,20 @@ class RemoteApiMixin:
         return (
             f"{tr('WEB REMOTE WS PORT CONFLICT:')} {tr('Port')} {self.web_remote_ws_port} {tr('is already in use.')}\n"
             f"{tr('Change WS Port, disable Web Remote, or close the program using this port.')}\n"
+            f"{tr('Restart pySSP to resolve the issue.')}"
+        )
+
+    def _web_remote_https_port_conflict_text(self) -> str:
+        return (
+            f"{tr('WEB REMOTE HTTPS PORT CONFLICT:')} {tr('Port')} {self.web_remote_https_port} {tr('is already in use.')}\n"
+            f"{tr('Change port, disable HTTPS Web Remote, or close the program using this port.')}\n"
+            f"{tr('Restart pySSP to resolve the issue.')}"
+        )
+
+    def _web_remote_wss_port_conflict_text(self) -> str:
+        return (
+            f"{tr('WEB REMOTE WSS PORT CONFLICT:')} {tr('Port')} {self.web_remote_wss_port} {tr('is already in use.')}\n"
+            f"{tr('Change port, disable HTTPS Web Remote, or close the program using this port.')}\n"
             f"{tr('Restart pySSP to resolve the issue.')}"
         )
 

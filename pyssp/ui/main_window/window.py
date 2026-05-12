@@ -229,8 +229,20 @@ class MainWindow(
         )
         self.web_remote_enabled = self.settings.web_remote_enabled
         self.web_remote_host = "0.0.0.0"
-        self.web_remote_port = max(1, min(65534, int(self.settings.web_remote_port or 5050)))
+        self.web_remote_port = max(1, min(65532, int(self.settings.web_remote_port or 5050)))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.web_remote_https_enabled = bool(getattr(self.settings, "web_remote_https_enabled", False))
+        self.web_remote_https_port = int(self.web_remote_port) + 2
+        self.web_remote_wss_port = int(self.web_remote_port) + 3
+        self.web_remote_enforce_https = bool(getattr(self.settings, "web_remote_enforce_https", False))
+        if self.web_remote_enforce_https:
+            self.web_remote_https_enabled = True
+        self.web_remote_require_authentication = bool(
+            getattr(self.settings, "web_remote_require_authentication", False)
+        )
+        self.web_remote_username = str(getattr(self.settings, "web_remote_username", "admin") or "admin").strip() or "admin"
+        self.web_remote_password = str(getattr(self.settings, "web_remote_password", "") or "")
+        self.web_remote_guest_view_enabled = bool(getattr(self.settings, "web_remote_guest_view_enabled", False))
         self.companion_satellite_host = str(
             getattr(self.settings, "companion_satellite_host", "127.0.0.1") or "127.0.0.1"
         ).strip() or "127.0.0.1"

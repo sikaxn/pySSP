@@ -1342,6 +1342,14 @@ class SettingsArchiveMixin:
         self.settings.web_remote_enabled = self.web_remote_enabled
         self.settings.web_remote_port = self.web_remote_port
         self.settings.web_remote_ws_port = self.web_remote_ws_port
+        self.settings.web_remote_https_enabled = bool(self.web_remote_https_enabled)
+        self.settings.web_remote_https_port = self.web_remote_https_port
+        self.settings.web_remote_wss_port = self.web_remote_wss_port
+        self.settings.web_remote_enforce_https = bool(self.web_remote_enforce_https)
+        self.settings.web_remote_require_authentication = bool(self.web_remote_require_authentication)
+        self.settings.web_remote_username = self.web_remote_username
+        self.settings.web_remote_password = self.web_remote_password
+        self.settings.web_remote_guest_view_enabled = bool(self.web_remote_guest_view_enabled)
         self.settings.companion_satellite_host = self.companion_satellite_host
         self.settings.companion_satellite_port = self.companion_satellite_port
         self.settings.companion_satellite_enabled = self.companion_satellite_enabled

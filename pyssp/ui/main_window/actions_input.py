@@ -1785,7 +1785,13 @@ class ActionsInputMixin:
             candidate_error_action=self.candidate_error_action,
             web_remote_enabled=self.web_remote_enabled,
             web_remote_port=self.web_remote_port,
-            web_remote_url=self._web_remote_open_url(),
+            web_remote_http_url=self._web_remote_http_open_url(),
+            web_remote_https_enabled=self.web_remote_https_enabled,
+            web_remote_enforce_https=self.web_remote_enforce_https,
+            web_remote_require_authentication=self.web_remote_require_authentication,
+            web_remote_username=self.web_remote_username,
+            web_remote_password=self.web_remote_password,
+            web_remote_guest_view_enabled=self.web_remote_guest_view_enabled,
             companion_satellite_host=self.companion_satellite_host,
             companion_satellite_port=self.companion_satellite_port,
             companion_satellite_enabled=self.companion_satellite_enabled,
@@ -2162,8 +2168,18 @@ class ActionsInputMixin:
         self._apply_hotkeys()
         self._apply_launchpad_output_state()
         self.web_remote_enabled = dialog.web_remote_enabled_checkbox.isChecked()
-        self.web_remote_port = max(1, min(65534, int(dialog.web_remote_port_spin.value())))
+        self.web_remote_port = max(1, min(65532, int(dialog.web_remote_port_spin.value())))
         self.web_remote_ws_port = int(self.web_remote_port) + 1
+        self.web_remote_https_enabled = bool(dialog.web_remote_https_enabled_checkbox.isChecked())
+        self.web_remote_https_port = int(self.web_remote_port) + 2
+        self.web_remote_wss_port = int(self.web_remote_port) + 3
+        self.web_remote_enforce_https = bool(dialog.web_remote_enforce_https_checkbox.isChecked())
+        if self.web_remote_enforce_https:
+            self.web_remote_https_enabled = True
+        self.web_remote_require_authentication = bool(dialog.web_remote_require_authentication_checkbox.isChecked())
+        self.web_remote_username = str(dialog.web_remote_username_edit.text() or "").strip() or "admin"
+        self.web_remote_password = str(dialog.web_remote_password_edit.text() or "")
+        self.web_remote_guest_view_enabled = bool(dialog.web_remote_guest_view_checkbox.isChecked())
         self.companion_satellite_host = dialog.selected_companion_satellite_host()
         self.companion_satellite_port = dialog.selected_companion_satellite_port()
         self.companion_satellite_enabled = dialog.selected_companion_satellite_enabled()

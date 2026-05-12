@@ -3,6 +3,12 @@
  * + Image support: if slide has an image, show ONLY that image
  ******************************************************************************/
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
+}
+
 window.OpenLP = {
   basePath: function () {
     const path = (window.location.pathname || '').toLowerCase();
@@ -154,12 +160,12 @@ if (imgSrc.trim() !== "") {
   // Tell CSS we're in image mode
   $("#caption-container").addClass("image-mode");
 
-  linesElem.html(`
-    <div class="line line-current">
-      <img class="caption-image" src="${imgSrc}">
-    </div>
-  `);
-  titleElem.html(OpenLP.songTitle || "");
+  linesElem.empty().append(
+    $("<div>").addClass("line line-current").append(
+      $("<img>").addClass("caption-image").attr("src", imgSrc)
+    )
+  );
+  titleElem.text(OpenLP.songTitle || "");
   return;
 }
 // -------------------------------------
@@ -169,8 +175,10 @@ if (imgSrc.trim() !== "") {
     // Helper: fetch slide text
     function getText(idx) {
       if (!OpenLP.currentSlides[idx]) return "";
+      var html = OpenLP.currentSlides[idx]["html"] || "";
+      if (html) return String(html).trim();
       var t = OpenLP.currentSlides[idx]["text"] || "";
-      return t.replace(/\r/g, "").replace(/\n/g, "<br>").trim();
+      return escapeHtml(t).replace(/\r/g, "").replace(/\n/g, "<br>").trim();
     }
 
 // Ensure normal text mode layout
@@ -216,7 +224,7 @@ var collected = [];
     }
 
     linesElem.html(html);
-    titleElem.html(OpenLP.songTitle || "");
+    titleElem.text(OpenLP.songTitle || "");
   },
 
   updateClock: function () {

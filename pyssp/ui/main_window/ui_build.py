@@ -836,7 +836,7 @@ class UiBuildMixin:
         if not self._require_web_remote_enabled(tr("Web Lyric Display")):
             return
         base = self._web_remote_open_url().rstrip("/")
-        url = QUrl(f"{base}/lyric/{target}/?ws_port={int(self.web_remote_ws_port)}&ws_path=/ws")
+        url = QUrl(f"{base}/lyric/{target}/?ws_port={int(self._preferred_web_remote_ws_port())}&ws_path=/ws")
         if not QDesktopServices.openUrl(url):
             QMessageBox.warning(
                 self,

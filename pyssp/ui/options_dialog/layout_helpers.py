@@ -202,14 +202,31 @@ class LayoutHelpersMixin:
         return "cancel"
 
     def _build_web_remote_url_text(self, port: int) -> str:
-        return f"{self._web_remote_url_scheme}://{self._web_remote_url_host}:{port}/"
+        return f"http://{self._web_remote_url_host}:{port}/"
 
     @staticmethod
     def _build_web_remote_ws_port_text(port: int) -> str:
         token = int(port)
         if token >= 65535:
-            return "Unavailable (choose Web Remote port 65534 or lower)"
+            return "Unavailable (choose Web Remote port 65532 or lower)"
         return str(token + 1)
+
+    def _build_web_remote_https_url_text(self, port: int) -> str:
+        return f"https://{self._web_remote_url_host}:{port}/"
+
+    @staticmethod
+    def _build_web_remote_https_port_text(port: int) -> str:
+        token = int(port)
+        if token >= 65534:
+            return "Unavailable (choose Web Remote port 65532 or lower)"
+        return str(token + 2)
+
+    @staticmethod
+    def _build_web_remote_wss_port_text(port: int) -> str:
+        token = int(port)
+        if token >= 65533:
+            return "Unavailable (choose Web Remote port 65532 or lower)"
+        return str(token + 3)
 
     def _set_web_remote_url_label(self, url: str) -> None:
         self.web_remote_url_value.setText(f'<a href="{url}">{url}</a>')
@@ -217,9 +234,21 @@ class LayoutHelpersMixin:
     def _set_web_remote_ws_port_label(self, ws_port_text: str) -> None:
         self.web_remote_ws_port_value.setText(ws_port_text)
 
+    def _set_web_remote_https_url_label(self, url: str) -> None:
+        self.web_remote_https_url_value.setText(f'<a href="{url}">{url}</a>')
+
+    def _set_web_remote_https_port_label(self, https_port_text: str) -> None:
+        self.web_remote_https_port_value.setText(https_port_text)
+
+    def _set_web_remote_wss_port_label(self, wss_port_text: str) -> None:
+        self.web_remote_wss_port_value.setText(wss_port_text)
+
     def _update_web_remote_page_labels(self, port: int) -> None:
         self._set_web_remote_url_label(self._build_web_remote_url_text(port))
         self._set_web_remote_ws_port_label(self._build_web_remote_ws_port_text(port))
+        self._set_web_remote_https_url_label(self._build_web_remote_https_url_text(port + 2))
+        self._set_web_remote_https_port_label(self._build_web_remote_https_port_text(port))
+        self._set_web_remote_wss_port_label(self._build_web_remote_wss_port_text(port))
         self._set_web_remote_companion_text(port)
 
     def _set_web_remote_companion_text(self, port: int) -> None:

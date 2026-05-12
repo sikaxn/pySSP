@@ -1,6 +1,12 @@
 import json
+import base64
 
 from pyssp.web_remote import WebRemoteServer
+
+
+def _basic_auth(username: str, password: str = "") -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
 
 
 def _make_client(calls):
@@ -379,3 +385,86 @@ def test_lyric_payload_fallback_includes_single_blank_slide():
     assert len(slides) == 1
     assert slides[0]["selected"] is True
     assert slides[0]["text"] == "\u200b"
+
+
+def test_authentication_challenges_when_enabled():
+    calls = []
+
+    def dispatch(command, params):
+        calls.append((command, dict(params)))
+        return {"ok": True, "status": 200, "result": {"command": command, "params": params}}
+
+    server = WebRemoteServer(
+        dispatch=dispatch,
+        host="127.0.0.1",
+        port=5050,
+        require_authentication=True,
+        username="admin",
+        password="secret",
+    )
+    client = server._app.test_client()
+
+    response = client.get("/")
+    assert response.status_code == 401
+    assert "Basic" in response.headers.get("WWW-Authenticate", "")
+
+    response = client.get("/api/query")
+    assert response.status_code == 401
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "authentication_required"
+
+    response = client.get("/api/query", headers=_basic_auth("admin", "secret"))
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+
+def test_guest_access_is_view_only():
+    calls = []
+
+    def dispatch(command, params):
+        calls.append((command, dict(params)))
+        return {"ok": True, "status": 200, "result": {"command": command, "params": params}}
+
+    server = WebRemoteServer(
+        dispatch=dispatch,
+        host="127.0.0.1",
+        port=5050,
+        require_authentication=True,
+        username="admin",
+        password="secret",
+        guest_view_enabled=True,
+    )
+    client = server._app.test_client()
+    guest_headers = _basic_auth("guest", "")
+
+    response = client.get("/", headers=guest_headers)
+    assert response.status_code == 200
+
+    response = client.get("/api/query", headers=guest_headers)
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1][0] == "query_all"
+
+    response = client.post("/api/play/a-1-1", headers=guest_headers)
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "forbidden"
+
+
+def test_guest_ws_can_query_but_not_control():
+    calls = []
+    server = _make_server(calls)
+
+    query_response = _ws_api_request(server, path="/api/query", method="GET", req_id="guest-query")
+    assert query_response["status"] == 200
+
+    guest_control = server._handle_ws_message(
+        json.dumps({"type": "api_request", "id": "guest-play", "path": "/api/play/a-1-1", "method": "POST"}),
+        role="guest",
+    )
+    assert guest_control["type"] == "api_response"
+    assert guest_control["status"] == 403
+    assert guest_control["payload"]["ok"] is False
+    assert guest_control["payload"]["error"]["code"] == "forbidden"

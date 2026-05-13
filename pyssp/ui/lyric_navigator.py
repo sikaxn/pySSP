@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtWidgets import QHeaderView, QLabel, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.lyrics import LyricLine, parse_lyric_file
@@ -20,7 +20,8 @@ class LyricNavigatorWindow(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Lyric Navigator"))
-        self.resize(780, 560)
+        self.setMinimumWidth(300)
+        self.resize(500, 560)
 
         self._on_seek_to_ms = on_seek_to_ms
         self._cache_path: str = ""
@@ -33,23 +34,34 @@ class LyricNavigatorWindow(QWidget):
         self._track_active = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
+        self._status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         root.addWidget(self._status_label)
 
         self._table = QTableWidget(0, 2, self)
         self._table.setHorizontalHeaderLabels([tr("Timestamp"), tr("Lyric")])
         self._table.verticalHeader().setVisible(False)
-        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.horizontalHeader().setStretchLastSection(False)
+        self._table.horizontalHeader().setMinimumSectionSize(60)
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._table.setColumnWidth(0, 96)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
         self._table.cellClicked.connect(self._on_cell_clicked)
         root.addWidget(self._table, 1)
 
         localize_widget_tree(self, language)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(320, 260)
+
+    def sizeHint(self) -> QSize:
+        return QSize(480, 520)
 
     def retranslate_ui(self, language: str = "en") -> None:
         self.setWindowTitle(tr("Lyric Navigator"))

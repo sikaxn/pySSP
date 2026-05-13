@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -41,7 +44,8 @@ class AutomationScriptNavigatorWindow(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Automation Script Navigator"))
-        self.resize(860, 560)
+        self.setMinimumWidth(320)
+        self.resize(560, 560)
 
         self._on_seek_to_ms = on_seek_to_ms
         self._on_show_lyric_changed = on_show_lyric_changed
@@ -62,29 +66,32 @@ class AutomationScriptNavigatorWindow(QWidget):
         self._last_position_ms = 0
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        controls_row = QHBoxLayout()
+        controls_row = QGridLayout()
+        controls_row.setHorizontalSpacing(8)
+        controls_row.setVerticalSpacing(6)
         self._show_lyric_checkbox = QCheckBox(tr("Show lyric alongside automation cues"))
         self._show_lyric_checkbox.setChecked(self._show_lyric)
         self._show_lyric_checkbox.toggled.connect(self._on_show_lyric_toggled)
-        controls_row.addWidget(self._show_lyric_checkbox)
-        controls_row.addStretch(1)
+        controls_row.addWidget(self._show_lyric_checkbox, 0, 0, 1, 2)
+        controls_row.setColumnStretch(2, 1)
 
         self._companion_bypass_button = QPushButton(tr("Companion Bypass"))
         self._companion_bypass_button.setCheckable(True)
         self._companion_bypass_button.toggled.connect(self._on_companion_bypass_toggled)
-        controls_row.addWidget(self._companion_bypass_button)
+        controls_row.addWidget(self._companion_bypass_button, 1, 0)
 
         self._internal_bypass_button = QPushButton(tr("Internal Bypass"))
         self._internal_bypass_button.setCheckable(True)
         self._internal_bypass_button.toggled.connect(self._on_internal_bypass_toggled)
-        controls_row.addWidget(self._internal_bypass_button)
+        controls_row.addWidget(self._internal_bypass_button, 1, 1)
         root.addLayout(controls_row)
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
+        self._status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         root.addWidget(self._status_label)
 
         self._tree = QTreeWidget(self)
@@ -94,11 +101,26 @@ class AutomationScriptNavigatorWindow(QWidget):
         self._tree.setItemsExpandable(True)
         self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self._tree.itemClicked.connect(self._on_item_clicked)
+        self._tree.header().setStretchLastSection(False)
+        self._tree.header().setMinimumSectionSize(60)
+        self._tree.header().setSectionResizeMode(0, QHeaderView.Fixed)
+        self._tree.header().setSectionResizeMode(1, QHeaderView.Fixed)
+        self._tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._tree.header().setSectionResizeMode(3, QHeaderView.Interactive)
+        self._tree.setColumnWidth(0, 92)
+        self._tree.setColumnWidth(1, 84)
+        self._tree.setColumnWidth(3, 170)
         root.addWidget(self._tree, 1)
 
         self.set_companion_bypass(companion_bypass)
         self.set_internal_bypass(internal_bypass)
         localize_widget_tree(self, language)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(340, 280)
+
+    def sizeHint(self) -> QSize:
+        return QSize(540, 520)
 
     def retranslate_ui(self, language: str = "en") -> None:
         self.setWindowTitle(tr("Automation Script Navigator"))

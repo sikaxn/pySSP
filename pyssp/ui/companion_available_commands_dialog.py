@@ -1,8 +1,22 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QGridLayout,
+    QHeaderView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from pyssp.companion_available_commands import (
     is_black_empty_command,
@@ -20,27 +34,33 @@ class CompanionAvailableCommandsDialog(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Available Commands"))
-        self.resize(680, 500)
+        self.setMinimumWidth(300)
+        self.resize(520, 500)
 
         root = QVBoxLayout(self)
-        header = QHBoxLayout()
+        root.setContentsMargins(8, 8, 8, 8)
+
+        header = QGridLayout()
+        header.setHorizontalSpacing(8)
+        header.setVerticalSpacing(6)
         self.hide_black_empty_checkbox = QCheckBox(tr("Hide Black Empty Buttons"))
-        header.addWidget(self.hide_black_empty_checkbox, 0)
+        header.addWidget(self.hide_black_empty_checkbox, 0, 0)
         self.hide_navigation_checkbox = QCheckBox(tr("Hide Page Buttons"))
-        header.addWidget(self.hide_navigation_checkbox, 0)
+        header.addWidget(self.hide_navigation_checkbox, 0, 1)
         self.bypass_checkbox = QCheckBox(tr("Bypass"))
-        header.addWidget(self.bypass_checkbox, 0)
-        header.addStretch(1)
+        header.addWidget(self.bypass_checkbox, 0, 2)
+        header.setColumnStretch(3, 1)
         self.open_virtual_satellite_button = QPushButton(tr("Open Virtual Satellite"))
-        header.addWidget(self.open_virtual_satellite_button, 0)
+        header.addWidget(self.open_virtual_satellite_button, 1, 0, 1, 2)
         self.clear_button = QPushButton(tr("Clear List"))
-        header.addWidget(self.clear_button, 0)
+        header.addWidget(self.clear_button, 1, 2)
         root.addLayout(header)
 
         self.help_label = QLabel(
             tr("To add or update Available Commands, open Virtual Satellite and scroll pages with Page Up and Page Down. The list updates automatically as Companion sends changes.")
         )
         self.help_label.setWordWrap(True)
+        self.help_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         root.addWidget(self.help_label, 0)
 
         self.table = QTableWidget(self)
@@ -51,7 +71,13 @@ class CompanionAvailableCommandsDialog(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setMinimumSectionSize(60)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, 92)
+        self.table.setColumnWidth(1, 92)
         root.addWidget(self.table, 1)
 
         search_row = QHBoxLayout()
@@ -81,6 +107,12 @@ class CompanionAvailableCommandsDialog(QWidget):
         self.bypass_checkbox.toggled.connect(self.bypassToggled.emit)
 
         self._payload: dict = {"pages": {}, "updated_at": ""}
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(320, 260)
+
+    def sizeHint(self) -> QSize:
+        return QSize(500, 480)
 
     def set_bypass_checked(self, checked: bool) -> None:
         self.bypass_checkbox.blockSignals(True)
@@ -143,7 +175,8 @@ class CompanionAvailableCommandsDialog(QWidget):
                 button_item.setForeground(QColor(255 - color.red(), 255 - color.green(), 255 - color.blue()))
                 button_item.setToolTip(color_value)
             self.table.setItem(row_index, 2, button_item)
-        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(0, 92)
+        self.table.setColumnWidth(1, max(80, min(110, self.table.columnWidth(1))))
         self.table.setSortingEnabled(True)
 
     def selected_location(self) -> str:

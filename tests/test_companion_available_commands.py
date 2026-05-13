@@ -232,3 +232,17 @@ def test_companion_available_commands_dialog_search_filters_by_location_and_text
 
     dialog.search_edit.setText("")
     assert dialog.table.rowCount() == 2
+
+
+def test_companion_available_commands_dialog_uses_compact_width_defaults(qapp):
+    dialog = CompanionAvailableCommandsDialog()
+    try:
+        assert dialog.width() <= 520
+        assert dialog.minimumWidth() <= 320
+        assert dialog.sizeHint().width() <= 520
+        assert dialog.table.columnWidth(0) <= 100
+        assert dialog.table.columnWidth(1) <= 110
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()

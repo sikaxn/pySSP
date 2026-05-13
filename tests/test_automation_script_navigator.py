@@ -93,3 +93,18 @@ def test_automation_script_navigator_merges_lyrics_and_cues(qapp, tmp_path):
         window.close()
         window.deleteLater()
         qapp.processEvents()
+
+
+def test_automation_script_navigator_uses_compact_width_defaults(qapp):
+    window = AutomationScriptNavigatorWindow(on_seek_to_ms=lambda _ms: None)
+    try:
+        assert window.width() <= 560
+        assert window.minimumWidth() <= 340
+        assert window.sizeHint().width() <= 560
+        assert window._tree.columnWidth(0) <= 100
+        assert window._tree.columnWidth(1) <= 90
+        assert window._tree.columnWidth(3) <= 180
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()

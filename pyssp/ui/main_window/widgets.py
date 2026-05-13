@@ -17,6 +17,10 @@ from pyssp.utility_audio import (
 __all__ = [
     "SoundButtonData",
     "SoundButton",
+    "SOUND_BUTTON_LIST_COLUMN_KEYS",
+    "SOUND_BUTTON_LIST_COLUMN_LABELS",
+    "SoundButtonListHeaderRow",
+    "SoundButtonListRow",
     "NowPlayingLabel",
     "GroupButton",
     "ToolListWindow",
@@ -30,6 +34,33 @@ __all__ = [
     "MainThreadExecutor",
     "LockScreenOverlay",
 ]
+
+SOUND_BUTTON_LIST_COLUMN_KEYS: list[str] = [
+    "ram",
+    "index",
+    "title",
+    "notes",
+    "status",
+    "edit",
+    "cue",
+    "lyric",
+    "automation",
+    "script",
+    "timecode",
+]
+SOUND_BUTTON_LIST_COLUMN_LABELS: dict[str, str] = {
+    "ram": "RAM",
+    "index": "#",
+    "title": "Title",
+    "notes": "Notes",
+    "status": "Status",
+    "edit": "Edit",
+    "cue": "Cue",
+    "lyric": "Lyric",
+    "automation": "Automation",
+    "script": "Script",
+    "timecode": "Timecode",
+}
 
 @dataclass
 class SoundButtonData:
@@ -231,6 +262,375 @@ class SoundButton(QPushButton):
         y = max(2, self.height() - d - 3)
         p.drawEllipse(x, y, d, d)
         p.end()
+
+
+class _SoundButtonListColumnsMixin:
+    def _column_width(self, widths: Dict[str, int], key: str, fallback: int) -> int:
+        try:
+            return max(24, int(widths.get(key, fallback)))
+        except Exception:
+            return fallback
+
+
+class SoundButtonListHeaderRow(QFrame, _SoundButtonListColumnsMixin):
+    def __init__(self, host: "MainWindow"):
+        super().__init__(host)
+        self._host = host
+        self.column_labels: Dict[str, QLabel] = {}
+        self.setFrameShape(QFrame.StyledPanel)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+        for key in SOUND_BUTTON_LIST_COLUMN_KEYS:
+            label = QLabel(SOUND_BUTTON_LIST_COLUMN_LABELS[key], self)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("font-weight:bold;")
+            label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            self.column_labels[key] = label
+            layout.addWidget(label, 0)
+        self.apply_column_widths(getattr(host, "_sound_button_list_column_width_map", lambda: {})())
+
+    def apply_column_widths(self, widths: Dict[str, int]) -> None:
+        for key, label in self.column_labels.items():
+            width = self._column_width(widths, key, 72)
+            label.setFixedWidth(width)
+
+    def contextMenuEvent(self, event) -> None:
+        self._host._show_sound_button_list_header_menu(event.globalPos())
+        event.accept()
+
+
+class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
+    def __init__(self, slot_index: int, host: "MainWindow"):
+        super().__init__(host)
+        self._host = host
+        self.slot_index = slot_index
+        self._drag_start_pos = None
+        self._bottom_indicator_frames: List[QFrame] = []
+        self._title_text = ""
+        self._notes_text = ""
+        self._status_text = ""
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        self.top_indicator_bar = QFrame(self)
+        self.top_indicator_bar.setFixedHeight(6)
+        self.top_indicator_bar.hide()
+        outer_layout.addWidget(self.top_indicator_bar, 0)
+
+        center = QWidget(self)
+        layout = QHBoxLayout(center)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        self.ram_container = QWidget(center)
+        ram_layout = QHBoxLayout(self.ram_container)
+        ram_layout.setContentsMargins(0, 0, 0, 0)
+        ram_layout.setSpacing(0)
+        self.ram_dot = QFrame(self.ram_container)
+        self.ram_dot.setFixedSize(10, 10)
+        self.ram_dot.hide()
+        ram_layout.addWidget(self.ram_dot, 0, Qt.AlignCenter)
+        layout.addWidget(self.ram_container, 0)
+
+        self.index_label = QLabel("", self)
+        self.index_label.setAlignment(Qt.AlignCenter)
+        self.index_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.title_label = QLabel("", self)
+        self.title_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.notes_label = QLabel("", self)
+        self.notes_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.notes_label.setStyleSheet("color:#666666;")
+        self.status_label = QLabel("", self)
+        self.status_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        layout.addWidget(self.index_label, 0)
+        layout.addWidget(self.title_label, 0)
+        layout.addWidget(self.notes_label, 0)
+        layout.addWidget(self.status_label, 0)
+
+        self.edit_button = QPushButton("Edit", self)
+        self.cue_button = QPushButton("Cue", self)
+        self.lyric_button = QPushButton("Lyric", self)
+        self.automation_button = QPushButton("Automation", self)
+        self.script_button = QPushButton("Script", self)
+        self.timecode_button = QPushButton("Timecode", self)
+        for button in [
+            self.edit_button,
+            self.cue_button,
+            self.lyric_button,
+            self.automation_button,
+            self.script_button,
+            self.timecode_button,
+        ]:
+            button.setCursor(Qt.ArrowCursor)
+            button.setMinimumHeight(28)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            layout.addWidget(button, 0)
+
+        outer_layout.addWidget(center, 1)
+
+        self.bottom_indicator_widget = QWidget(self)
+        self.bottom_indicator_layout = QHBoxLayout(self.bottom_indicator_widget)
+        self.bottom_indicator_layout.setContentsMargins(0, 0, 0, 0)
+        self.bottom_indicator_layout.setSpacing(0)
+        self.bottom_indicator_widget.hide()
+        outer_layout.addWidget(self.bottom_indicator_widget, 0)
+
+        self.edit_button.clicked.connect(lambda _=False: self._host._edit_sound_button(self.slot_index))
+        self.cue_button.clicked.connect(lambda _=False: self._host._edit_slot_cue_points(self.slot_index))
+        self.lyric_button.clicked.connect(lambda _=False: self._host._edit_slot_lyric(self.slot_index))
+        self.automation_button.clicked.connect(lambda _=False: self._host._edit_sound_button_automation(self.slot_index))
+        self.script_button.clicked.connect(lambda _=False: self._host._edit_slot_automation_script(self.slot_index))
+        self.timecode_button.clicked.connect(lambda _=False: self._host._edit_slot_timecode_setup(self.slot_index))
+        self.apply_column_widths(getattr(host, "_sound_button_list_column_width_map", lambda: {})())
+
+    def apply_column_widths(self, widths: Dict[str, int]) -> None:
+        self.ram_container.setFixedWidth(self._column_width(widths, "ram", 24))
+        self.index_label.setFixedWidth(self._column_width(widths, "index", 52))
+        self.title_label.setFixedWidth(self._column_width(widths, "title", 220))
+        self.notes_label.setFixedWidth(self._column_width(widths, "notes", 190))
+        self.status_label.setFixedWidth(self._column_width(widths, "status", 170))
+        self.edit_button.setFixedWidth(self._column_width(widths, "edit", 72))
+        self.cue_button.setFixedWidth(self._column_width(widths, "cue", 64))
+        self.lyric_button.setFixedWidth(self._column_width(widths, "lyric", 72))
+        self.automation_button.setFixedWidth(self._column_width(widths, "automation", 96))
+        self.script_button.setFixedWidth(self._column_width(widths, "script", 72))
+        self.timecode_button.setFixedWidth(self._column_width(widths, "timecode", 96))
+        self._apply_elided_texts()
+
+    def _apply_elided_texts(self) -> None:
+        for label, text in [
+            (self.title_label, self._title_text),
+            (self.notes_label, self._notes_text),
+            (self.status_label, self._status_text),
+        ]:
+            width = max(10, label.width() - 6)
+            metrics = label.fontMetrics()
+            label.setText(metrics.elidedText(text, Qt.ElideRight, width))
+            label.setToolTip(text if text else "")
+
+    def _set_bottom_indicator_colors(self, colors: List[str]) -> None:
+        normalized = [str(color).strip() for color in colors if str(color).strip()]
+        while len(self._bottom_indicator_frames) < len(normalized):
+            frame = QFrame(self.bottom_indicator_widget)
+            frame.setFixedHeight(8)
+            frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self.bottom_indicator_layout.addWidget(frame, 1)
+            self._bottom_indicator_frames.append(frame)
+        while len(self._bottom_indicator_frames) > len(normalized):
+            frame = self._bottom_indicator_frames.pop()
+            self.bottom_indicator_layout.removeWidget(frame)
+            frame.deleteLater()
+        for frame, color in zip(self._bottom_indicator_frames, normalized):
+            frame.setStyleSheet(f"background:{color}; border:none;")
+            frame.show()
+        self.bottom_indicator_widget.setVisible(bool(normalized))
+
+    def sync_slot(self, slot_index: int, slot: SoundButtonData, *, selected: bool, playing: bool) -> None:
+        self.slot_index = int(slot_index)
+        self.index_label.setText(f"{self.slot_index + 1}")
+        self._title_text = slot.title.strip() if slot.title.strip() else ("(Empty)" if not slot.assigned else "")
+        self._notes_text = str(slot.notes or "").strip()
+        badges: List[str] = []
+        host = self._host
+        if slot.marker:
+            badges.append("Marker")
+        if slot.locked:
+            badges.append("Locked")
+        if slot.missing:
+            badges.append("Missing")
+        if playing:
+            badges.append("Playing")
+        elif slot.played:
+            badges.append("Played")
+        has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
+        if has_midi_hotkey:
+            badges.append("MIDI")
+        has_volume_override = (slot.volume_override_pct is not None) and slot.assigned and (not slot.marker)
+        if has_volume_override:
+            badges.append("Vol")
+        has_cue = bool(getattr(host, "_slot_has_custom_cue", lambda _slot: False)(slot)) and slot.assigned and (not slot.marker)
+        if has_cue:
+            badges.append("Cue")
+        has_linked_lyric = bool(str(slot.lyric_file or "").strip()) and slot.assigned and (not slot.marker)
+        if has_linked_lyric:
+            badges.append("Lyric")
+        has_sound_button_automation = bool(getattr(host, "_slot_has_sound_button_automation", lambda _slot: False)(slot))
+        if has_sound_button_automation:
+            badges.append("Automation")
+        has_automation_script = bool(getattr(host, "_slot_has_automation_script", lambda _slot: False)(slot))
+        if has_automation_script:
+            badges.append("Script")
+        has_custom_timecode = bool(getattr(host, "_slot_has_custom_timecode", lambda _slot: False)(slot)) and slot.assigned and (not slot.marker)
+        if has_custom_timecode:
+            badges.append("Timecode")
+        self._status_text = " | ".join(badges)
+        background = "#FFFFFF"
+        border = "#94B8BA"
+        slot_color = getattr(host, "_slot_color", None)
+        if callable(slot_color):
+            try:
+                background = str(slot_color(slot, self.slot_index) or background)
+            except Exception:
+                background = background
+        elif slot.custom_color:
+            background = slot.custom_color
+        drag_target_key = getattr(host, "_drag_target_slot_key", None)
+        current_key = (
+            getattr(host, "_view_group_key", lambda: "A")(),
+            int(getattr(host, "current_page", 0)),
+            self.slot_index,
+        )
+        if drag_target_key == current_key:
+            border = "#2FCBFF"
+        if selected:
+            border = "#FFE04A"
+        text_color = str(getattr(host, "sound_button_text_color", "#000000") or "#000000")
+        self.setStyleSheet(
+            "QFrame{"
+            f"background:{background};"
+            f"border:2px solid {border};"
+            "}"
+        )
+        self.ram_dot.setStyleSheet("background:#2ED573; border:none; border-radius:5px;")
+        ram_loaded = False
+        try:
+            ram_indicator_enabled = not bool(getattr(host, "_is_button_drag_enabled", lambda: False)())
+            effective_slot_file_path = getattr(host, "_effective_slot_file_path", None)
+            if ram_indicator_enabled and callable(effective_slot_file_path) and slot.assigned and (not slot.marker):
+                ram_loaded = bool(is_audio_preloaded(effective_slot_file_path(slot)))
+        except Exception:
+            ram_loaded = False
+        self.ram_dot.setVisible(ram_loaded)
+
+        top_color = str(getattr(host, "state_colors", {}).get("midi_indicator", "") or "")
+        if has_midi_hotkey and top_color:
+            self.top_indicator_bar.setStyleSheet(f"background:{top_color}; border:none;")
+            self.top_indicator_bar.show()
+        else:
+            self.top_indicator_bar.hide()
+
+        indicator_colors: List[str] = []
+        if has_cue:
+            indicator_colors.append(host.state_colors["cue_indicator"])
+        if has_volume_override:
+            indicator_colors.append(host.state_colors["volume_indicator"])
+        if bool(str(slot.vocal_removed_file or "").strip()) and slot.assigned and (not slot.marker):
+            indicator_colors.append(host.state_colors["vocal_removed_indicator"])
+        if has_linked_lyric:
+            indicator_colors.append(host.state_colors["lyric_indicator"])
+        if has_sound_button_automation:
+            indicator_colors.append(
+                host.state_colors["automation_indicator_bypassed"]
+                if bool(getattr(host, "_slot_sound_button_automation_bypassed", lambda _slot: False)(slot))
+                else host.state_colors["automation_indicator"]
+            )
+        if has_automation_script:
+            indicator_colors.append(
+                host.state_colors["automation_script_indicator_bypassed"]
+                if bool(slot.automation_script_bypassed)
+                else host.state_colors["automation_script_indicator"]
+            )
+        if has_custom_timecode:
+            indicator_colors.append(TIMECODE_SLOT_INDICATOR_COLOR)
+        self._set_bottom_indicator_colors(indicator_colors)
+
+        self.index_label.setStyleSheet(f"color:{text_color}; font-weight:bold;")
+        self.title_label.setStyleSheet(f"color:{text_color};")
+        self.notes_label.setStyleSheet(f"color:{text_color};")
+        self.status_label.setStyleSheet(f"color:{text_color};")
+        self._apply_elided_texts()
+        action_style = (
+            "QPushButton{"
+            f"color:{text_color};"
+            f"border:1px solid {border};"
+            "background:rgba(255,255,255,0.18);"
+            "padding:3px 8px;"
+            "}"
+            "QPushButton:pressed{"
+            "background:rgba(0,0,0,0.12);"
+            "}"
+        )
+        for button in [
+            self.edit_button,
+            self.cue_button,
+            self.lyric_button,
+            self.automation_button,
+            self.script_button,
+            self.timecode_button,
+        ]:
+            button.setStyleSheet(action_style)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self._host._on_sound_button_pressed(self.slot_index)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (
+            self._drag_start_pos is not None
+            and (event.buttons() & Qt.LeftButton)
+            and self._host._is_button_drag_enabled()
+        ):
+            if (event.pos() - self._drag_start_pos).manhattanLength() >= QApplication.startDragDistance():
+                self._host._start_sound_button_drag(self.slot_index)
+                self._drag_start_pos = None
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._host._on_sound_button_released(self.slot_index)
+        if event.button() == Qt.LeftButton:
+            self._host._on_sound_button_clicked(self.slot_index)
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        self._host._show_slot_menu(self.slot_index, event.pos())
+        event.accept()
+
+    def dragEnterEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_sound_file_drop(event.mimeData()):
+            self._host._set_sound_button_drop_target(self.slot_index)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_sound_file_drop(event.mimeData()):
+            self._host._set_sound_button_drop_target(self.slot_index)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._host._clear_sound_button_drop_target()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if not (self._host._can_accept_sound_button_drop(event.mimeData()) or self._host._can_accept_sound_file_drop(event.mimeData())):
+            self._host._clear_sound_button_drop_target()
+            event.ignore()
+            return
+        dropped = self._host._handle_sound_button_drop(self.slot_index, event.mimeData())
+        self._host._clear_sound_button_drop_target()
+        if dropped:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def enterEvent(self, event) -> None:
+        self._host._on_sound_button_hover(self.slot_index)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._host._on_sound_button_hover(None)
+        super().leaveEvent(event)
 
 
 class NowPlayingLabel(QWidget):

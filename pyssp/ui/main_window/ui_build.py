@@ -1719,26 +1719,215 @@ class UiBuildMixin:
         return panel
 
     def _build_sound_button_widget(self) -> QWidget:
-        grid_container = QFrame()
-        grid_container.setFrameShape(QFrame.StyledPanel)
-        grid_layout = QGridLayout(grid_container)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(1)
+        panel = QWidget()
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        for row in range(GRID_ROWS):
-            for col in range(GRID_COLS):
-                idx = row * GRID_COLS + col
-                button = SoundButton(idx, self)
-                button.pressed.connect(lambda slot=idx: self._on_sound_button_pressed(slot))
-                button.released.connect(lambda slot=idx: self._on_sound_button_released(slot))
-                button.clicked.connect(lambda _=False, slot=idx: self._on_sound_button_clicked(slot))
-                self.sound_buttons.append(button)
-                grid_layout.addWidget(button, row, col)
-        for row in range(GRID_ROWS):
-            grid_layout.setRowStretch(row, 1)
-        for col in range(GRID_COLS):
-            grid_layout.setColumnStretch(col, 1)
-        return grid_container
+        self.sound_button_stack = QStackedWidget(panel)
+        root.addWidget(self.sound_button_stack, 1)
+
+        self.sound_button_grid_widget = QFrame()
+        self.sound_button_grid_widget.setFrameShape(QFrame.StyledPanel)
+        self.sound_button_grid_layout = QGridLayout(self.sound_button_grid_widget)
+        self.sound_button_grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.sound_button_grid_layout.setSpacing(1)
+        self.sound_button_grid_scroll = QScrollArea(panel)
+        self.sound_button_grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_grid_scroll.setWidgetResizable(False)
+        self.sound_button_grid_scroll.setWidget(self.sound_button_grid_widget)
+        self.sound_button_stack.addWidget(self.sound_button_grid_scroll)
+
+        self.sound_button_list_widget = QWidget()
+        self.sound_button_list_layout = QVBoxLayout(self.sound_button_list_widget)
+        self.sound_button_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.sound_button_list_layout.setSpacing(2)
+        self.sound_button_list_header = SoundButtonListHeaderRow(self)
+        self.sound_button_list_layout.addWidget(self.sound_button_list_header)
+        self.sound_button_list_layout.addStretch(1)
+        self.sound_button_list_scroll = QScrollArea(panel)
+        self.sound_button_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_list_scroll.setWidgetResizable(True)
+        self.sound_button_list_scroll.setWidget(self.sound_button_list_widget)
+        self.sound_button_stack.addWidget(self.sound_button_list_scroll)
+
+        self._rebuild_sound_button_panel()
+        return panel
+
+    def _ensure_sound_button_widgets(self, count: int) -> None:
+        target = max(0, int(count))
+        while len(self.sound_buttons) < target:
+            idx = len(self.sound_buttons)
+            button = SoundButton(idx, self)
+            button.pressed.connect(lambda slot=idx: self._on_sound_button_pressed(slot))
+            button.released.connect(lambda slot=idx: self._on_sound_button_released(slot))
+            button.clicked.connect(lambda _=False, slot=idx: self._on_sound_button_clicked(slot))
+            self.sound_buttons.append(button)
+        while len(self.sound_button_list_rows) < target:
+            idx = len(self.sound_button_list_rows)
+            row = SoundButtonListRow(idx, self)
+            self.sound_button_list_rows.append(row)
+        self._apply_sound_button_list_column_widths()
+
+    def _sound_button_list_column_width_map(self) -> Dict[str, int]:
+        widths = normalize_sound_button_list_column_widths(
+            getattr(self, "sound_button_list_column_widths", list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
+        )
+        self.sound_button_list_column_widths = widths
+        return {
+            key: widths[idx]
+            for idx, key in enumerate(SOUND_BUTTON_LIST_COLUMN_KEYS)
+            if idx < len(widths)
+        }
+
+    def _sound_button_list_content_width(self) -> int:
+        widths = self._sound_button_list_column_width_map()
+        spacing = 6
+        outer_margins = 12
+        return outer_margins + sum(int(widths.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS) + (
+            max(0, len(SOUND_BUTTON_LIST_COLUMN_KEYS) - 1) * spacing
+        )
+
+    def _apply_sound_button_list_column_widths(self) -> None:
+        widths = self._sound_button_list_column_width_map()
+        if isinstance(self.sound_button_list_header, SoundButtonListHeaderRow):
+            self.sound_button_list_header.apply_column_widths(widths)
+        for row in getattr(self, "sound_button_list_rows", []):
+            if isinstance(row, SoundButtonListRow):
+                row.apply_column_widths(widths)
+        if self.sound_button_list_widget is not None:
+            self.sound_button_list_widget.setMinimumWidth(self._sound_button_list_content_width())
+
+    def _set_sound_button_list_column_widths(self, widths: object, *, persist: bool = True) -> None:
+        self.sound_button_list_column_widths = normalize_sound_button_list_column_widths(widths)
+        self._apply_sound_button_list_column_widths()
+        if persist:
+            save_settings = getattr(self, "_save_settings", None)
+            if callable(save_settings):
+                save_settings()
+
+    def _show_sound_button_list_header_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        adjust_action = QAction("Adjust Columns...", menu)
+        adjust_action.triggered.connect(self._open_sound_button_list_column_width_dialog)
+        menu.addAction(adjust_action)
+        reset_action = QAction("Reset Column Widths", menu)
+        reset_action.triggered.connect(
+            lambda _=False: self._set_sound_button_list_column_widths(list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
+        )
+        menu.addAction(reset_action)
+        menu.exec_(global_pos)
+
+    def _open_sound_button_list_column_width_dialog(self) -> None:
+        widths = self._sound_button_list_column_width_map()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("List View Column Widths")
+        layout = QVBoxLayout(dialog)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        editors: Dict[str, QSpinBox] = {}
+        for row_index, key in enumerate(SOUND_BUTTON_LIST_COLUMN_KEYS):
+            label = QLabel(SOUND_BUTTON_LIST_COLUMN_LABELS[key], dialog)
+            spin = QSpinBox(dialog)
+            spin.setRange(24, 800)
+            spin.setValue(int(widths.get(key, 72)))
+            editors[key] = spin
+            grid.addWidget(label, row_index, 0)
+            grid.addWidget(spin, row_index, 1)
+        layout.addLayout(grid)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        updated = [int(editors[key].value()) for key in SOUND_BUTTON_LIST_COLUMN_KEYS]
+        self._set_sound_button_list_column_widths(updated)
+
+    def _rebuild_sound_button_panel(self) -> None:
+        if self.sound_button_stack is None or self.sound_button_grid_layout is None or self.sound_button_list_layout is None:
+            return
+        total_slots = self._effective_page_slot_count(self._current_page_slots())
+        self._ensure_sound_button_widgets(total_slots)
+        columns = self._runtime_sound_button_grid_columns()
+        rows = self._runtime_sound_button_grid_rows()
+
+        self._clear_layout_only(self.sound_button_grid_layout)
+        for row in range(rows):
+            self.sound_button_grid_layout.setRowStretch(row, 1)
+        for col in range(columns):
+            self.sound_button_grid_layout.setColumnStretch(col, 1)
+        for idx in range(total_slots):
+            row = idx // columns
+            col = idx % columns
+            button = self.sound_buttons[idx]
+            button.slot_index = idx
+            self.sound_button_grid_layout.addWidget(button, row, col)
+            button.show()
+        self._update_sound_button_grid_geometry(total_slots, columns, rows)
+
+        while self.sound_button_list_layout.count():
+            item = self.sound_button_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+        self.sound_button_list_layout.setSpacing(2)
+        if self.sound_button_list_header is not None:
+            self.sound_button_list_layout.addWidget(self.sound_button_list_header)
+        page = self._current_page_slots()
+        hide_empty = bool(getattr(self, "sound_button_list_hide_empty", False))
+        for idx in range(total_slots):
+            slot = self._slot_at(page, idx)
+            if hide_empty and not slot.assigned and not slot.title and not slot.marker:
+                continue
+            row = self.sound_button_list_rows[idx]
+            row.slot_index = idx
+            self.sound_button_list_layout.addWidget(row)
+            row.show()
+        self.sound_button_list_layout.addStretch(1)
+        self._apply_sound_button_list_column_widths()
+
+        if str(getattr(self, "sound_button_view_mode", "grid")) == "list":
+            self.sound_button_stack.setCurrentWidget(self.sound_button_list_scroll)
+        else:
+            self.sound_button_stack.setCurrentWidget(self.sound_button_grid_scroll)
+
+    def _update_sound_button_grid_geometry(
+        self,
+        total_slots: Optional[int] = None,
+        columns: Optional[int] = None,
+        rows: Optional[int] = None,
+    ) -> None:
+        if self.sound_button_grid_widget is None or self.sound_button_grid_scroll is None:
+            return
+        resolved_total = self._effective_page_slot_count() if total_slots is None else max(1, int(total_slots))
+        resolved_columns = self._runtime_sound_button_grid_columns() if columns is None else max(1, int(columns))
+        resolved_visible_rows = self._runtime_sound_button_grid_rows() if rows is None else max(1, int(rows))
+        actual_rows = max(resolved_visible_rows, (resolved_total + resolved_columns - 1) // resolved_columns)
+        viewport_width = max(0, self.sound_button_grid_scroll.viewport().width())
+        grid_layout = self.sound_button_grid_layout
+        if grid_layout is None:
+            return
+        margins = grid_layout.contentsMargins()
+        spacing = max(0, int(grid_layout.horizontalSpacing()))
+        total_spacing = max(0, resolved_columns - 1) * spacing
+        min_button_width = 132
+        natural_width = margins.left() + margins.right() + total_spacing + (resolved_columns * min_button_width)
+        usable_width = max(0, viewport_width - margins.left() - margins.right() - total_spacing)
+        if viewport_width > 0 and viewport_width >= natural_width:
+            cell_width = max(min_button_width, usable_width // resolved_columns)
+        else:
+            cell_width = min_button_width
+        target_width = margins.left() + margins.right() + total_spacing + (resolved_columns * cell_width)
+        button_height = 84
+        for col in range(resolved_columns):
+            grid_layout.setColumnMinimumWidth(col, cell_width)
+        content_height = max(1, actual_rows) * button_height
+        self.sound_button_grid_widget.setMinimumSize(target_width, content_height)
+        self.sound_button_grid_widget.resize(target_width, content_height)
 
     def _build_main_button_widget(self) -> QWidget:
         panel = QWidget()
@@ -2179,6 +2368,9 @@ class UiBuildMixin:
     def resizeEvent(self, event) -> None:
         QMainWindow.resizeEvent(self, event)
         self._update_page_list_item_heights()
+        update_grid_geometry = getattr(self, "_update_sound_button_grid_geometry", None)
+        if callable(update_grid_geometry):
+            update_grid_geometry()
         if self._lock_screen_overlay is not None:
             self._lock_screen_overlay.sync_geometry(rebuild_targets=self._ui_locked)
 

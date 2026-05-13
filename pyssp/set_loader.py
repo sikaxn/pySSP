@@ -113,7 +113,13 @@ def load_set_file(file_path: str) -> SetLoadResult:
         page_playlist_enabled[group][page_index] = section.get("PagePlay", "F").strip().upper() == "T"
         page_shuffle_enabled[group][page_index] = section.get("PageShuffle", "F").strip().upper() == "T"
 
-        for i in range(1, SLOTS_PER_PAGE + 1):
+        slot_count_raw = str(section.get("pysspslotcount", "")).strip()
+        try:
+            slot_count = max(1, int(slot_count_raw)) if slot_count_raw else SLOTS_PER_PAGE
+        except ValueError:
+            slot_count = SLOTS_PER_PAGE
+        pages[group][page_index] = [SetSlotData() for _ in range(slot_count)]
+        for i in range(1, slot_count + 1):
             automation_slot = _parse_automation_slot_from_section(section, i)
             if automation_slot is not None:
                 pages[group][page_index][i - 1] = automation_slot

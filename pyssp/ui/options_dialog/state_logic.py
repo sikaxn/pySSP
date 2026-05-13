@@ -303,6 +303,19 @@ class StateLogicMixin:
 
     def _restore_window_layout_defaults(self) -> None:
         d = self._DEFAULTS
+        if hasattr(self, "sound_button_view_grid_radio"):
+            if str(d.get("sound_button_view_mode", "grid")) == "list":
+                self.sound_button_view_list_radio.setChecked(True)
+            else:
+                self.sound_button_view_grid_radio.setChecked(True)
+        if hasattr(self, "sound_button_grid_columns_spin"):
+            self.sound_button_grid_columns_spin.setValue(int(d.get("sound_button_grid_columns", 8)))
+        if hasattr(self, "sound_button_grid_rows_spin"):
+            self.sound_button_grid_rows_spin.setValue(int(d.get("sound_button_grid_rows", 6)))
+        if hasattr(self, "sound_button_page_slot_cap_spin"):
+            self.sound_button_page_slot_cap_spin.setValue(int(d.get("sound_button_page_slot_cap", 48)))
+        if hasattr(self, "sound_button_list_hide_empty_checkbox"):
+            self.sound_button_list_hide_empty_checkbox.setChecked(bool(d.get("sound_button_list_hide_empty", False)))
         self._window_layout = normalize_window_layout(d.get("window_layout"))
         if hasattr(self, "window_layout_main_editor"):
             self.window_layout_main_editor.set_items(list(self._window_layout.get("main", [])))

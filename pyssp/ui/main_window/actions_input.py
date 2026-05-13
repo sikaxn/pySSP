@@ -93,7 +93,7 @@ class ActionsInputMixin:
         slot_index = self._hover_slot_index
         if slot_index is None:
             return None
-        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+        if slot_index < 0 or slot_index >= self._effective_page_slot_count():
             return None
         group = self._view_group_key()
         key = (group, self.current_page, slot_index)
@@ -383,7 +383,12 @@ class ActionsInputMixin:
         group = str(match.get("group", ""))
         page = int(match.get("page", 0))
         slot = int(match.get("slot", -1))
-        if slot < 0 or slot >= SLOTS_PER_PAGE:
+        target_page = []
+        if group == "Q":
+            target_page = self.cue_page
+        elif group in self.data and 0 <= page < PAGE_COUNT:
+            target_page = self.data[group][page]
+        if slot < 0 or slot >= self._effective_page_slot_count(target_page):
             return
         if group == "Q":
             self._toggle_cue_mode(True)
@@ -394,7 +399,7 @@ class ActionsInputMixin:
             self._select_page(max(0, min(PAGE_COUNT - 1, page)))
         else:
             return
-        self.sound_buttons[slot].setFocus()
+        self._focus_sound_button_widget(slot)
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot)
         if flash:
             self._flash_slot_key = (self._view_group_key(), self.current_page, slot)
@@ -794,7 +799,7 @@ class ActionsInputMixin:
                 start = self.current_playlist_start
             if current_idx is not None:
                 start = current_idx + 1
-            for idx in range(start, SLOTS_PER_PAGE):
+            for idx in range(start, len(page)):
                 if idx in valid_slots:
                     return True
             return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
@@ -808,7 +813,7 @@ class ActionsInputMixin:
             start = self.current_playlist_start
         if current_idx is not None:
             start = current_idx + 1
-        for idx in range(start, SLOTS_PER_PAGE):
+        for idx in range(start, len(page)):
             if idx in unplayed_slots:
                 return True
         return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
@@ -822,7 +827,7 @@ class ActionsInputMixin:
         current_key = self._view_group_key()
         if self.current_playing and self.current_playing[0] == current_key and self.current_playing[1] == self.current_page:
             start_slot = self.current_playing[2]
-        for idx in range(start_slot + 1, SLOTS_PER_PAGE):
+        for idx in range(start_slot + 1, len(page)):
             slot = page[idx]
             if idx in blocked:
                 continue
@@ -839,7 +844,7 @@ class ActionsInputMixin:
         current_key = self._view_group_key()
         if self.current_playing and self.current_playing[0] == current_key and self.current_playing[1] == self.current_page:
             start_slot = self.current_playing[2]
-        for idx in range(start_slot + 1, SLOTS_PER_PAGE):
+        for idx in range(start_slot + 1, len(page)):
             slot = page[idx]
             if idx in blocked:
                 continue
@@ -852,8 +857,8 @@ class ActionsInputMixin:
         start_slot = -1
         if self.current_playing and self.current_playing[0] == self._view_group_key() and self.current_playing[1] == self.current_page:
             start_slot = self.current_playing[2]
-        for step in range(1, SLOTS_PER_PAGE + 1):
-            idx = (start_slot + step) % SLOTS_PER_PAGE
+        for step in range(1, len(page) + 1):
+            idx = (start_slot + step) % len(page)
             slot = page[idx]
             if self._slot_is_regular_playback_candidate(slot):
                 return idx
@@ -927,7 +932,7 @@ class ActionsInputMixin:
         if current_idx is not None:
             start = current_idx + 1
 
-        for idx in range(start, SLOTS_PER_PAGE):
+        for idx in range(start, len(page)):
             slot = page[idx]
             if self._slot_is_regular_playback_candidate(slot) and (any_available or (not slot.played)):
                 return idx
@@ -938,7 +943,7 @@ class ActionsInputMixin:
                     if slot.assigned:
                         slot.activity_code = "8"
                 self._set_dirty(True)
-            for idx in range(0, SLOTS_PER_PAGE):
+            for idx in range(0, len(page)):
                 slot = page[idx]
                 if self._slot_is_regular_playback_candidate(slot):
                     return idx
@@ -1245,8 +1250,9 @@ class ActionsInputMixin:
         self.settings.volume = value
 
     def _reset_set_data(self) -> None:
+        slot_count = self._runtime_sound_button_slot_cap()
         self.data = {
-            group: [[SoundButtonData() for _ in range(SLOTS_PER_PAGE)] for _ in range(PAGE_COUNT)]
+            group: [[SoundButtonData() for _ in range(slot_count)] for _ in range(PAGE_COUNT)]
             for group in GROUPS
         }
         if not hasattr(self, "_automation_active_keys"):
@@ -1286,7 +1292,7 @@ class ActionsInputMixin:
         self.current_set_path = ""
         self.settings.last_set_path = ""
         self._reset_set_data()
-        self.cue_page = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.cue_page = [SoundButtonData() for _ in range(self._runtime_sound_button_slot_cap())]
         self.cue_mode = False
         cue_btn = self.control_buttons.get("Cue")
         if cue_btn:
@@ -1398,6 +1404,9 @@ class ActionsInputMixin:
                 lines.append(f"PageShuffle={'T' if include_page and self.page_shuffle_enabled[group][page_index] else 'F'}")
                 lines.append(
                     f"PageColor={to_set_color_value(self.page_colors[group][page_index]) if include_page else 'clBtnFace'}"
+                )
+                lines.append(
+                    f"pysspslotcount={len(self.data[group][page_index]) if include_page else self._runtime_sound_button_slot_cap()}"
                 )
 
                 if include_page:
@@ -1606,8 +1615,10 @@ class ActionsInputMixin:
                 self.page_colors[group][page_index] = result.page_colors[group][page_index]
                 self.page_playlist_enabled[group][page_index] = result.page_playlist_enabled[group][page_index]
                 self.page_shuffle_enabled[group][page_index] = result.page_shuffle_enabled[group][page_index]
-                for slot_index in range(SLOTS_PER_PAGE):
-                    src = result.pages[group][page_index][slot_index]
+                src_page = list(result.pages[group][page_index])
+                self.data[group][page_index] = []
+                for slot_index, src in enumerate(src_page):
+                    self._ensure_slot_capacity_for_location(group, page_index, slot_index)
                     self.data[group][page_index][slot_index] = SoundButtonData(
                         source_type=src.source_type,
                         file_path=src.file_path,
@@ -1634,6 +1645,7 @@ class ActionsInputMixin:
                         sound_hotkey=src.sound_hotkey,
                         sound_midi_hotkey=src.sound_midi_hotkey,
                     )
+                self._ensure_page_slot_capacity(self.data[group][page_index], max(self._runtime_sound_button_slot_cap(), len(src_page)))
 
         self.current_set_path = file_path
         if restore_last_position and self.settings.last_group in GROUPS:
@@ -1894,6 +1906,11 @@ class ActionsInputMixin:
             stage_display_lyric_played_italic=self.stage_display_lyric_role_italic["played"],
             stage_display_lyric_current_italic=self.stage_display_lyric_role_italic["current"],
             stage_display_lyric_next_italic=self.stage_display_lyric_role_italic["next"],
+            sound_button_view_mode=self.sound_button_view_mode,
+            sound_button_grid_columns=self.sound_button_grid_columns,
+            sound_button_grid_rows=self.sound_button_grid_rows,
+            sound_button_page_slot_cap=self.sound_button_page_slot_cap,
+            sound_button_list_hide_empty=self.sound_button_list_hide_empty,
             window_layout=self.window_layout,
             lock_unlock_method=self.lock_unlock_method,
             lock_require_password=self.lock_require_password,
@@ -2142,7 +2159,16 @@ class ActionsInputMixin:
         self.stage_display_lyric_role_sizes = dialog.selected_stage_display_lyric_role_sizes()
         self.stage_display_lyric_role_bold = dialog.selected_stage_display_lyric_role_bold()
         self.stage_display_lyric_role_italic = dialog.selected_stage_display_lyric_role_italic()
+        self.sound_button_view_mode = dialog.selected_sound_button_view_mode()
+        self.sound_button_grid_columns = max(1, min(512, int(dialog.selected_sound_button_grid_columns())))
+        self.sound_button_grid_rows = max(1, min(512, int(dialog.selected_sound_button_grid_rows())))
+        self.sound_button_page_slot_cap = max(1, min(4096, int(dialog.selected_sound_button_page_slot_cap())))
+        self.sound_button_list_hide_empty = bool(dialog.selected_sound_button_list_hide_empty())
         self.window_layout = normalize_window_layout(dialog.selected_window_layout())
+        self._ensure_all_pages_match_runtime_slot_capacity()
+        rebuild_panel = getattr(self, "_rebuild_sound_button_panel", None)
+        if callable(rebuild_panel):
+            rebuild_panel()
         self._apply_top_control_layout()
         if self._stage_display_window is not None:
             self._stage_display_window.configure_gadgets(self.stage_display_gadgets)
@@ -2314,7 +2340,7 @@ class ActionsInputMixin:
             next_slot = candidates[0] if delta >= 0 else candidates[-1]
 
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, next_slot)
-        self.sound_buttons[next_slot].setFocus()
+        self._focus_sound_button_widget(next_slot)
         self._on_sound_button_hover(next_slot)
         self._refresh_sound_grid()
 
@@ -2377,7 +2403,7 @@ class ActionsInputMixin:
         self._play_slot(slot_index)
 
     def _quick_action_trigger(self, slot_index: int) -> None:
-        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+        if slot_index < 0 or slot_index >= self._effective_page_slot_count():
             return
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         self._play_slot(slot_index, allow_fade=self.fade_on_quick_action_hotkey)

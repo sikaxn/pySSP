@@ -160,6 +160,55 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
 WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
 WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]
 
+SOUND_BUTTON_VIEW_GRID = "grid"
+SOUND_BUTTON_VIEW_LIST = "list"
+DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS: list[int] = [24, 52, 220, 190, 170, 72, 64, 72, 96, 72, 96]
+
+
+def normalize_sound_button_view_mode(value: object) -> str:
+    token = str(value or "").strip().lower()
+    return token if token in {SOUND_BUTTON_VIEW_GRID, SOUND_BUTTON_VIEW_LIST} else SOUND_BUTTON_VIEW_GRID
+
+
+def clamp_sound_button_grid_columns(value: object) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = 8
+    return max(1, min(512, parsed))
+
+
+def clamp_sound_button_grid_rows(value: object) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = 6
+    return max(1, min(512, parsed))
+
+
+def clamp_sound_button_page_slot_cap(value: object) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = 48
+    return max(1, min(4096, parsed))
+
+
+def normalize_sound_button_list_column_widths(value: object) -> list[int]:
+    defaults = list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS)
+    if isinstance(value, (list, tuple)):
+        raw_values = list(value)
+    else:
+        raw_values = [part.strip() for part in str(value or "").split("\t")]
+    widths: list[int] = []
+    for idx, default in enumerate(defaults):
+        try:
+            parsed = int(raw_values[idx])
+        except Exception:
+            parsed = default
+        widths.append(max(24, min(800, parsed)))
+    return widths
+
 
 def default_window_layout() -> dict[str, object]:
     return {
@@ -633,6 +682,14 @@ class AppSettings:
     main_transport_timeline_mode: str = "cue_region"
     main_progress_display_mode: str = "progress_bar"
     main_progress_show_text: bool = True
+    sound_button_view_mode: str = SOUND_BUTTON_VIEW_GRID
+    sound_button_grid_columns: int = 8
+    sound_button_grid_rows: int = 6
+    sound_button_page_slot_cap: int = 48
+    sound_button_list_hide_empty: bool = False
+    sound_button_list_column_widths: list[int] = field(
+        default_factory=lambda: list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS)
+    )
     main_jog_outside_cue_action: str = "stop_immediately"
     color_empty: str = "#0B868A"
     color_unplayed: str = "#B0B0B0"
@@ -1054,6 +1111,14 @@ def save_settings(settings: AppSettings) -> None:
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
         "main_progress_display_mode": settings.main_progress_display_mode,
         "main_progress_show_text": "1" if settings.main_progress_show_text else "0",
+        "sound_button_view_mode": normalize_sound_button_view_mode(settings.sound_button_view_mode),
+        "sound_button_grid_columns": str(clamp_sound_button_grid_columns(settings.sound_button_grid_columns)),
+        "sound_button_grid_rows": str(clamp_sound_button_grid_rows(settings.sound_button_grid_rows)),
+        "sound_button_page_slot_cap": str(clamp_sound_button_page_slot_cap(settings.sound_button_page_slot_cap)),
+        "sound_button_list_hide_empty": "1" if settings.sound_button_list_hide_empty else "0",
+        "sound_button_list_column_widths": "\t".join(
+            str(value) for value in normalize_sound_button_list_column_widths(settings.sound_button_list_column_widths)
+        ),
         "main_jog_outside_cue_action": settings.main_jog_outside_cue_action,
         "color_empty": settings.color_empty,
         "color_unplayed": settings.color_unplayed,
@@ -1505,6 +1570,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if main_progress_display_mode not in {"progress_bar", "waveform"}:
         main_progress_display_mode = "progress_bar"
     main_progress_show_text = _get_bool(section, "main_progress_show_text", True)
+    sound_button_view_mode = normalize_sound_button_view_mode(section.get("sound_button_view_mode", SOUND_BUTTON_VIEW_GRID))
+    sound_button_grid_columns = clamp_sound_button_grid_columns(section.get("sound_button_grid_columns", 8))
+    sound_button_grid_rows = clamp_sound_button_grid_rows(section.get("sound_button_grid_rows", 6))
+    sound_button_page_slot_cap = clamp_sound_button_page_slot_cap(section.get("sound_button_page_slot_cap", 48))
+    sound_button_list_hide_empty = _get_bool(section, "sound_button_list_hide_empty", False)
+    sound_button_list_column_widths = normalize_sound_button_list_column_widths(
+        section.get("sound_button_list_column_widths", "")
+    )
     outside_action = str(section.get("main_jog_outside_cue_action", "stop_immediately")).strip().lower()
     if outside_action not in {
         "stop_immediately",
@@ -1882,6 +1955,12 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         main_transport_timeline_mode=timeline_mode_raw,
         main_progress_display_mode=main_progress_display_mode,
         main_progress_show_text=main_progress_show_text,
+        sound_button_view_mode=sound_button_view_mode,
+        sound_button_grid_columns=sound_button_grid_columns,
+        sound_button_grid_rows=sound_button_grid_rows,
+        sound_button_page_slot_cap=sound_button_page_slot_cap,
+        sound_button_list_hide_empty=sound_button_list_hide_empty,
+        sound_button_list_column_widths=sound_button_list_column_widths,
         main_jog_outside_cue_action=outside_action,
         color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),
         color_unplayed=_coerce_hex(str(section.get("color_unplayed", "#B0B0B0")), "#B0B0B0"),

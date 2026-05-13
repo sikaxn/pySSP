@@ -106,8 +106,8 @@ class RemoteApiMixin:
                 slot_number = int(parts[2])
             except ValueError:
                 return None, None, None, self._api_error("invalid_button", f"Invalid button value '{parts[2]}'.")
-            if slot_number < 1 or slot_number > SLOTS_PER_PAGE:
-                return None, None, None, self._api_error("invalid_button", f"Button must be 1..{SLOTS_PER_PAGE}.")
+            if slot_number < 1:
+                return None, None, None, self._api_error("invalid_button", "Button must be 1 or greater.")
             slot_index = slot_number - 1
 
         if require_slot and (page_index is None or slot_index is None):
@@ -119,8 +119,8 @@ class RemoteApiMixin:
 
     def _slot_for_location(self, group: str, page_index: int, slot_index: int) -> SoundButtonData:
         if group == "Q":
-            return self.cue_page[slot_index]
-        return self.data[group][page_index][slot_index]
+            return self._slot_at(self.cue_page, slot_index)
+        return self._slot_at(self.data[group][page_index], slot_index)
 
     def _api_slot_state(self, group: str, page_index: int, slot_index: int) -> dict:
         slot = self._slot_for_location(group, page_index, slot_index)
@@ -178,8 +178,10 @@ class RemoteApiMixin:
 
     def _api_page_buttons(self, group: str, page_index: int) -> List[dict]:
         page = self.cue_page if group == "Q" else self.data[group][page_index]
+        column_count = max(1, self._runtime_sound_button_grid_columns())
         output: List[dict] = []
-        for idx, slot in enumerate(page):
+        for idx in range(self._effective_page_slot_count(page)):
+            slot = self._slot_at(page, idx)
             key = (group, page_index, idx)
             marker_text = slot.title.strip() if slot.marker else ""
             if slot.marker:
@@ -192,8 +194,8 @@ class RemoteApiMixin:
                 {
                     "button_id": self._format_button_key(key).lower(),
                     "button": idx + 1,
-                    "row": (idx // GRID_COLS) + 1,
-                    "col": (idx % GRID_COLS) + 1,
+                    "row": (idx // column_count) + 1,
+                    "col": (idx % column_count) + 1,
                     "title": display_title,
                     "marker_text": marker_text,
                     "source_type": slot.source_type,
@@ -213,13 +215,17 @@ class RemoteApiMixin:
 
     def _slot_for_key(self, slot_key: Tuple[str, int, int]) -> Optional[SoundButtonData]:
         group, page_index, slot_index = slot_key
-        if slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+        if slot_index < 0:
             return None
         if group == "Q":
+            if slot_index >= len(self.cue_page):
+                return None
             return self.cue_page[slot_index]
         if group not in self.data:
             return None
         if page_index < 0 or page_index >= PAGE_COUNT:
+            return None
+        if slot_index >= len(self.data[group][page_index]):
             return None
         return self.data[group][page_index][slot_index]
 

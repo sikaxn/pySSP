@@ -431,6 +431,21 @@ def _build_dialog(**overrides):
                 defaults["stage_display_lyric_next_italic"],
             )
         ),
+        sound_button_view_mode=str(
+            overrides.get("sound_button_view_mode", defaults["sound_button_view_mode"])
+        ),
+        sound_button_grid_columns=int(
+            overrides.get("sound_button_grid_columns", defaults["sound_button_grid_columns"])
+        ),
+        sound_button_grid_rows=int(
+            overrides.get("sound_button_grid_rows", defaults["sound_button_grid_rows"])
+        ),
+        sound_button_page_slot_cap=int(
+            overrides.get("sound_button_page_slot_cap", defaults["sound_button_page_slot_cap"])
+        ),
+        sound_button_list_hide_empty=bool(
+            overrides.get("sound_button_list_hide_empty", defaults["sound_button_list_hide_empty"])
+        ),
         window_layout=overrides.get("window_layout", defaults["window_layout"]),
         ui_language=defaults["ui_language"],
         lock_allow_quit=bool(overrides.get("lock_allow_quit", defaults["lock_allow_quit"])),

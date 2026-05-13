@@ -53,6 +53,7 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QSlider,
     QShortcut,
+    QStackedWidget,
     QStyle,
     QSizePolicy,
     QToolButton,
@@ -99,12 +100,14 @@ from pyssp.set_loader import (
     parse_timecode_offset_ms,
 )
 from pyssp.settings_store import (
+    DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS,
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
     AppSettings,
     default_companion_satellite_serial_suffix,
     get_settings_path,
     load_settings,
+    normalize_sound_button_list_column_widths,
     normalize_window_layout,
     save_settings,
 )

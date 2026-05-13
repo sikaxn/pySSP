@@ -341,6 +341,16 @@ class MainWindow(
         if self.main_progress_display_mode not in {"progress_bar", "waveform"}:
             self.main_progress_display_mode = "progress_bar"
         self.main_progress_show_text = bool(getattr(self.settings, "main_progress_show_text", True))
+        self.sound_button_view_mode = str(getattr(self.settings, "sound_button_view_mode", "grid") or "grid").strip().lower()
+        if self.sound_button_view_mode not in {"grid", "list"}:
+            self.sound_button_view_mode = "grid"
+        self.sound_button_grid_columns = max(1, min(512, int(getattr(self.settings, "sound_button_grid_columns", 8) or 8)))
+        self.sound_button_grid_rows = max(1, min(512, int(getattr(self.settings, "sound_button_grid_rows", 6) or 6)))
+        self.sound_button_page_slot_cap = max(1, min(4096, int(getattr(self.settings, "sound_button_page_slot_cap", 48) or 48)))
+        self.sound_button_list_hide_empty = bool(getattr(self.settings, "sound_button_list_hide_empty", False))
+        self.sound_button_list_column_widths = normalize_sound_button_list_column_widths(
+            getattr(self.settings, "sound_button_list_column_widths", list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
+        )
         self._timecode_follow_frozen_ms = 0
         if self.timecode_mode == TIMECODE_MODE_FOLLOW_FREEZE:
             self._timecode_follow_frozen_ms = 0
@@ -755,13 +765,14 @@ class MainWindow(
         self.page_colors: Dict[str, List[Optional[str]]] = {}
         self.page_playlist_enabled: Dict[str, List[bool]] = {}
         self.page_shuffle_enabled: Dict[str, List[bool]] = {}
-        self.cue_page: List[SoundButtonData] = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.cue_page: List[SoundButtonData] = [SoundButtonData() for _ in range(self.sound_button_page_slot_cap)]
         self.cue_mode = False
         self.current_set_path = ""
         self._reset_set_data()
 
         self.group_buttons: Dict[str, QPushButton] = {}
         self.sound_buttons: List[SoundButton] = []
+        self.sound_button_list_rows: List[QWidget] = []
         self.page_list = QListWidget()
         self.group_status = QLabel("")
         self.page_status = QLabel("")
@@ -868,6 +879,14 @@ class MainWindow(
         self.group_dock: Optional[QDockWidget] = None
         self.page_dock: Optional[QDockWidget] = None
         self.sound_buttons_dock: Optional[QDockWidget] = None
+        self.sound_button_stack: Optional[QStackedWidget] = None
+        self.sound_button_grid_widget: Optional[QWidget] = None
+        self.sound_button_grid_layout: Optional[QGridLayout] = None
+        self.sound_button_grid_scroll: Optional[QScrollArea] = None
+        self.sound_button_list_widget: Optional[QWidget] = None
+        self.sound_button_list_layout: Optional[QVBoxLayout] = None
+        self.sound_button_list_scroll: Optional[QScrollArea] = None
+        self.sound_button_list_header: Optional[QWidget] = None
         self.status_display_dock: Optional[QDockWidget] = None
         self.main_button_dock: Optional[QDockWidget] = None
         self.fade_button_dock: Optional[QDockWidget] = None

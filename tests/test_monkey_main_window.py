@@ -2161,6 +2161,211 @@ def test_sound_button_automation_uses_stripe_and_legend_entry(qapp, monkeypatch,
 
 
 @pytest.mark.monkey
+def test_list_view_row_shows_ram_midi_and_split_automation_indicators(qapp, monkeypatch, tmp_path):
+    audio_path = tmp_path / "list_row_indicators.wav"
+    _write_dummy_wav(audio_path)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw, "is_audio_preloaded", lambda _path: True)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    settings.sound_button_view_mode = "list"
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.file_path = str(audio_path)
+        slot.title = "Indicator Track"
+        slot.duration_ms = 1200
+        slot.sound_midi_hotkey = "90:3C"
+        slot.volume_override_pct = 72
+        slot.cue_start_ms = 500
+        slot.vocal_removed_file = str(audio_path)
+        slot.lyric_file = str(tmp_path / "indicator.lrc")
+        slot.sound_button_automation = SoundButtonAutomationConfig(
+            mode=SOUND_BUTTON_AUTOMATION_MODE_SIMPLE,
+            on_become_playing=[AutomationCommandSpec(location="7/1/2", button_text="Macro")],
+        )
+        slot.automation_script_path = str(tmp_path / "indicator.pysspautoscript")
+        slot.timecode_offset_ms = 1000
+
+        window._refresh_sound_grid()
+        qapp.processEvents()
+
+        row = window.sound_button_list_rows[0]
+        assert row.ram_dot.isVisible() is True
+        assert row.top_indicator_bar.isVisible() is True
+        assert row.top_indicator_bar.styleSheet() == f"background:{window.state_colors['midi_indicator']}; border:none;"
+        assert [frame.styleSheet() for frame in row._bottom_indicator_frames] == [
+            f"background:{window.state_colors['cue_indicator']}; border:none;",
+            f"background:{window.state_colors['volume_indicator']}; border:none;",
+            f"background:{window.state_colors['vocal_removed_indicator']}; border:none;",
+            f"background:{window.state_colors['lyric_indicator']}; border:none;",
+            f"background:{window.state_colors['automation_indicator']}; border:none;",
+            f"background:{window.state_colors['automation_script_indicator']}; border:none;",
+            "background:#9C4DFF; border:none;",
+        ]
+        assert row.automation_button.text() == "Automation"
+        assert row.script_button.text() == "Script"
+        assert "Vol" in row.status_label.toolTip()
+        assert "Automation" in row.status_label.toolTip()
+        assert "Script" in row.status_label.toolTip()
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_list_view_header_and_rows_share_fixed_adjustable_column_widths(qapp, monkeypatch, tmp_path):
+    audio_path = tmp_path / "list_column_widths.wav"
+    _write_dummy_wav(audio_path)
+
+    class _DummyLtcSender:
+        def set_output(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _DummyMtcSender:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_device(self, *_args, **_kwargs):
+            return None
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+        def request_resync(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(mw, "LtcAudioOutput", _DummyLtcSender)
+    monkeypatch.setattr(mw, "MtcMidiOutput", _DummyMtcSender)
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw.MainWindow, "_apply_web_remote_state", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_restore_last_set_on_startup", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_poll_midi_inputs", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_timecode_mtc", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_meter", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_fades", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_preload_status_icon", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_tick_talk_blink", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_open_tips_window", lambda self, startup=False: None)
+    monkeypatch.setattr(mw, "set_output_device", lambda _name: True)
+    monkeypatch.setattr(mw, "configure_audio_preload_cache_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mw, "configure_waveform_disk_cache", lambda *args, **kwargs: "")
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(mw.MainWindow, "_hard_stop_all", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "_stop_web_remote_service", lambda self: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    settings.sound_button_view_mode = "list"
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.file_path = str(audio_path)
+        slot.title = "A Very Long Sound Button Title That Should Not Stretch The Column"
+        slot.notes = "A Very Long Notes Field That Should Stay Inside The Fixed Width"
+
+        window._refresh_sound_grid()
+        qapp.processEvents()
+
+        header = window.sound_button_list_header
+        row = window.sound_button_list_rows[0]
+        assert header is not None
+        assert header.column_labels["title"].text() == "Title"
+
+        window._set_sound_button_list_column_widths([24, 52, 310, 180, 160, 72, 64, 72, 96, 72, 96], persist=False)
+        qapp.processEvents()
+
+        assert header.column_labels["title"].minimumWidth() == 310
+        assert header.column_labels["title"].maximumWidth() == 310
+        assert row.title_label.minimumWidth() == 310
+        assert row.title_label.maximumWidth() == 310
+        assert row.title_label.toolTip() == "A Very Long Sound Button Title That Should Not Stretch The Column"
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
 def test_bypassed_sound_button_automation_uses_bypassed_stripe_and_suppresses_send(qapp, monkeypatch, tmp_path):
     audio_path = tmp_path / "automation_bypassed.wav"
     _write_dummy_wav(audio_path)

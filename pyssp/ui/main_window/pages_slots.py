@@ -260,7 +260,7 @@ class PagesSlotsMixin:
         )
         if answer != QMessageBox.Yes:
             return
-        self.data[self.current_group][page_index] = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.data[self.current_group][page_index] = [SoundButtonData() for _ in range(self._runtime_sound_button_slot_cap())]
         self.page_names[self.current_group][page_index] = ""
         self.page_colors[self.current_group][page_index] = None
         self.page_playlist_enabled[self.current_group][page_index] = False
@@ -376,6 +376,7 @@ class PagesSlotsMixin:
         lines.append(f"PageShuffle={'T' if self.page_shuffle_enabled[group][page_index] else 'F'}")
         lines.append(f"PageColor={to_set_color_value(self.page_colors[group][page_index])}")
         page = self.data[group][page_index]
+        lines.append(f"pysspslotcount={len(page)}")
         for slot_index, slot in enumerate(page, start=1):
             if not slot.assigned and not slot.title:
                 continue
@@ -541,8 +542,12 @@ class PagesSlotsMixin:
         page_color = parse_delphi_color(section.get("PageColor", "").strip())
         page_playlist_enabled = section.get("PagePlay", "F").strip().upper() == "T"
         page_shuffle_enabled = section.get("PageShuffle", "F").strip().upper() == "T"
-        slots = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
-        for i in range(1, SLOTS_PER_PAGE + 1):
+        slot_count = self._parse_non_negative_int(section.get("pysspslotcount", "").strip())
+        if slot_count is None:
+            slot_count = SLOTS_PER_PAGE
+        slot_count = max(1, slot_count)
+        slots = [SoundButtonData() for _ in range(slot_count)]
+        for i in range(1, slot_count + 1):
             automation_slot = self._parse_automation_slot_from_section(section, i)
             if automation_slot is not None:
                 slots[i - 1] = automation_slot
@@ -630,6 +635,9 @@ class PagesSlotsMixin:
 
     def _refresh_sound_grid(self) -> None:
         page = self._current_page_slots()
+        rebuild_panel = getattr(self, "_rebuild_sound_button_panel", None)
+        if callable(rebuild_panel):
+            rebuild_panel()
         ram_indicator_enabled = not self._is_button_drag_enabled()
         sound_bindings = self._collect_sound_button_hotkey_bindings() if self.sound_button_hotkey_enabled else {}
         blocked_sound_tokens = (
@@ -637,8 +645,13 @@ class PagesSlotsMixin:
             if self.sound_button_hotkey_enabled and self.sound_button_hotkey_priority == "system_first"
             else set()
         )
+        visible_count = self._effective_page_slot_count(page)
         for i, button in enumerate(self.sound_buttons):
-            slot = page[i]
+            if i >= visible_count:
+                button.hide()
+                continue
+            button.show()
+            slot = self._slot_at(page, i)
             button.set_ram_loaded(False)
             button.set_indicator_colors(None, [])
             if slot.marker:
@@ -714,6 +727,17 @@ class PagesSlotsMixin:
                 "padding:4px;"
                 "}"
             )
+        for i, row in enumerate(getattr(self, "sound_button_list_rows", [])):
+            if i >= visible_count:
+                row.hide()
+                continue
+            slot = self._slot_at(page, i)
+            row.sync_slot(
+                i,
+                slot,
+                selected=(self._hotkey_selected_slot_key == (self._view_group_key(), self.current_page, i)),
+                playing=((self._view_group_key(), self.current_page, i) in self._active_playing_keys),
+            )
         self._refresh_vocal_removed_warning_banner()
         self._update_status_totals()
         try:
@@ -759,7 +783,7 @@ class PagesSlotsMixin:
 
     def _on_sound_button_hover(self, slot_index: Optional[int]) -> None:
         self._hover_slot_index = None
-        if slot_index is not None and 0 <= slot_index < SLOTS_PER_PAGE:
+        if slot_index is not None and 0 <= slot_index < self._effective_page_slot_count():
             self._hover_slot_index = slot_index
         self._refresh_status_hover_label()
         self._refresh_stage_display()
@@ -768,7 +792,7 @@ class PagesSlotsMixin:
 
     def _refresh_status_hover_label(self) -> None:
         slot_index: Optional[int] = None
-        if self._hover_slot_index is not None and 0 <= self._hover_slot_index < SLOTS_PER_PAGE:
+        if self._hover_slot_index is not None and 0 <= self._hover_slot_index < self._effective_page_slot_count():
             slot_index = self._hover_slot_index
         elif (not self.cue_mode) and (not self.page_playlist_enabled[self.current_group][self.current_page]):
             slot_index = self._next_slot_for_next_action(blocked=None)
@@ -1097,7 +1121,7 @@ class PagesSlotsMixin:
         self._hotkey_selected_slot_key = (self._view_group_key(), self.current_page, slot_index)
         if not self._is_button_drag_enabled():
             page = self._current_page_slots()
-            slot = page[slot_index]
+            slot = self._slot_at(page, slot_index)
             if slot.source_type == AUTOMATION_SOURCE_TYPE:
                 self._trigger_automation_slot_click(slot_index)
             else:
@@ -1111,7 +1135,7 @@ class PagesSlotsMixin:
         if self._is_button_drag_enabled():
             return
         page = self._current_page_slots()
-        slot = page[slot_index]
+        slot = self._slot_at(page, slot_index)
         if slot.source_type == AUTOMATION_SOURCE_TYPE:
             self._trigger_automation_slot_press(slot_index)
 
@@ -1119,7 +1143,7 @@ class PagesSlotsMixin:
         if self._is_button_drag_enabled():
             return
         page = self._current_page_slots()
-        slot = page[slot_index]
+        slot = self._slot_at(page, slot_index)
         if slot.source_type == AUTOMATION_SOURCE_TYPE:
             self._trigger_automation_slot_release(slot_index)
 
@@ -1192,7 +1216,7 @@ class PagesSlotsMixin:
             slot = int(parts[2])
         except ValueError:
             return None
-        if page < 0 or page >= PAGE_COUNT or slot < 0 or slot >= SLOTS_PER_PAGE:
+        if page < 0 or page >= PAGE_COUNT or slot < 0:
             return None
         return (group, page, slot)
 
@@ -1217,9 +1241,12 @@ class PagesSlotsMixin:
     def _start_sound_button_drag(self, slot_index: int) -> None:
         if not self._is_button_drag_enabled() or self.cue_mode:
             return
+        if slot_index < 0 or slot_index >= self._effective_page_slot_count():
+            return
         source_key = (self.current_group, self.current_page, slot_index)
         if not self._is_page_created(source_key[0], source_key[1]):
             return
+        self._ensure_slot_capacity_for_location(source_key[0], source_key[1], source_key[2])
         source_slot = self.data[source_key[0]][source_key[1]][source_key[2]]
         if source_key in self._active_playing_keys:
             self._show_info_notice_banner("Cannot drag a currently playing button.")
@@ -1234,7 +1261,7 @@ class PagesSlotsMixin:
         self._clear_sound_button_drop_target()
 
     def _set_sound_button_drop_target(self, slot_index: Optional[int]) -> None:
-        if slot_index is None or slot_index < 0 or slot_index >= SLOTS_PER_PAGE:
+        if slot_index is None or slot_index < 0 or slot_index >= self._effective_page_slot_count():
             target = None
         else:
             target = (self.current_group, self.current_page, int(slot_index))
@@ -1297,6 +1324,8 @@ class PagesSlotsMixin:
         if source_key is not None:
             if self.cue_mode:
                 return False
+            self._ensure_slot_capacity_for_location(self.current_group, self.current_page, dest_slot_index)
+            self._ensure_slot_capacity_for_location(source_key[0], source_key[1], source_key[2])
             dest_key = (self.current_group, self.current_page, dest_slot_index)
             if dest_key == source_key:
                 return False
@@ -1365,15 +1394,17 @@ class PagesSlotsMixin:
 
     def _apply_page_payload(self, group: str, page_index: int, payload: dict) -> None:
         self.data[group][page_index] = [self._clone_slot(slot) for slot in payload.get("slots", [])]
-        if len(self.data[group][page_index]) < SLOTS_PER_PAGE:
-            self.data[group][page_index].extend(SoundButtonData() for _ in range(SLOTS_PER_PAGE - len(self.data[group][page_index])))
+        self._ensure_page_slot_capacity(
+            self.data[group][page_index],
+            max(self._runtime_sound_button_slot_cap(), len(self.data[group][page_index])),
+        )
         self.page_names[group][page_index] = str(payload.get("page_name", ""))
         self.page_colors[group][page_index] = payload.get("page_color")
         self.page_playlist_enabled[group][page_index] = bool(payload.get("playlist_enabled", False))
         self.page_shuffle_enabled[group][page_index] = bool(payload.get("shuffle_enabled", False))
 
     def _clear_page_payload(self, group: str, page_index: int) -> None:
-        self.data[group][page_index] = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.data[group][page_index] = [SoundButtonData() for _ in range(self._runtime_sound_button_slot_cap())]
         self.page_names[group][page_index] = ""
         self.page_colors[group][page_index] = None
         self.page_playlist_enabled[group][page_index] = False
@@ -2689,7 +2720,7 @@ class PagesSlotsMixin:
         )
 
     def _available_add_slot_indices(self, page: List[SoundButtonData], start_index: int) -> List[int]:
-        return [index for index in range(start_index, SLOTS_PER_PAGE) if self._slot_is_available_for_add(page[index])]
+        return [index for index in range(start_index, len(page)) if self._slot_is_available_for_add(page[index])]
 
     def _add_sound_files_to_slot(self, slot_index: int, file_paths: List[str]) -> bool:
         if not self.cue_mode and not self._is_page_created(self.current_group, self.current_page):
@@ -3529,3 +3560,54 @@ class PagesSlotsMixin:
         if self.cue_mode:
             return self.cue_page
         return self.data[self.current_group][self.current_page]
+
+    def _runtime_sound_button_slot_cap(self) -> int:
+        return max(1, int(getattr(self, "sound_button_page_slot_cap", SLOTS_PER_PAGE)))
+
+    def _runtime_sound_button_grid_columns(self) -> int:
+        return max(1, int(getattr(self, "sound_button_grid_columns", GRID_COLS)))
+
+    def _runtime_sound_button_grid_rows(self) -> int:
+        return max(1, int(getattr(self, "sound_button_grid_rows", GRID_ROWS)))
+
+    def _effective_page_slot_count(self, page: Optional[List[SoundButtonData]] = None, *, include_cap: bool = True) -> int:
+        slots = self._current_page_slots() if page is None else page
+        baseline = len(slots)
+        if include_cap:
+            baseline = max(baseline, self._runtime_sound_button_slot_cap())
+        return max(1, baseline)
+
+    def _empty_sound_button_slot(self) -> SoundButtonData:
+        return SoundButtonData()
+
+    def _ensure_page_slot_capacity(self, page: List[SoundButtonData], required_count: int) -> None:
+        target = max(0, int(required_count))
+        while len(page) < target:
+            page.append(self._empty_sound_button_slot())
+
+    def _ensure_slot_capacity_for_location(self, group: str, page_index: int, slot_index: int) -> None:
+        required_count = max(self._runtime_sound_button_slot_cap(), int(slot_index) + 1)
+        if group == "Q":
+            self._ensure_page_slot_capacity(self.cue_page, required_count)
+            return
+        if group not in self.data or page_index < 0 or page_index >= PAGE_COUNT:
+            return
+        self._ensure_page_slot_capacity(self.data[group][page_index], required_count)
+
+    def _slot_at(self, page: List[SoundButtonData], slot_index: int) -> SoundButtonData:
+        if 0 <= int(slot_index) < len(page):
+            return page[int(slot_index)]
+        return self._empty_sound_button_slot()
+
+    def _ensure_all_pages_match_runtime_slot_capacity(self) -> None:
+        required_count = self._runtime_sound_button_slot_cap()
+        for group in GROUPS:
+            for page_index in range(PAGE_COUNT):
+                self._ensure_page_slot_capacity(self.data[group][page_index], required_count)
+        self._ensure_page_slot_capacity(self.cue_page, required_count)
+
+    def _focus_sound_button_widget(self, slot_index: int) -> None:
+        if 0 <= int(slot_index) < len(getattr(self, "sound_buttons", [])):
+            self.sound_buttons[int(slot_index)].setFocus()
+        if 0 <= int(slot_index) < len(getattr(self, "sound_button_list_rows", [])):
+            self.sound_button_list_rows[int(slot_index)].setFocus()

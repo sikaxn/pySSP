@@ -430,6 +430,23 @@ class SelectionMixin:
             )
         return normalize_window_layout(deepcopy(self._window_layout))
 
+    def selected_sound_button_view_mode(self) -> str:
+        if hasattr(self, "sound_button_view_list_radio") and self.sound_button_view_list_radio.isChecked():
+            return "list"
+        return "grid"
+
+    def selected_sound_button_grid_columns(self) -> int:
+        return max(1, int(self.sound_button_grid_columns_spin.value()))
+
+    def selected_sound_button_grid_rows(self) -> int:
+        return max(1, int(self.sound_button_grid_rows_spin.value()))
+
+    def selected_sound_button_page_slot_cap(self) -> int:
+        return max(1, int(self.sound_button_page_slot_cap_spin.value()))
+
+    def selected_sound_button_list_hide_empty(self) -> bool:
+        return bool(self.sound_button_list_hide_empty_checkbox.isChecked())
+
     def selected_state_colors(self) -> Dict[str, str]:
         return dict(self.state_colors)
 

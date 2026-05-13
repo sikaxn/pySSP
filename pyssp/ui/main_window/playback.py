@@ -1104,7 +1104,7 @@ class PlaybackMixin:
             if group == "Q":
                 if 0 <= slot_index < len(self.cue_page):
                     self.cue_page[slot_index].duration_ms = duration
-            elif group in self.data and 0 <= page_index < PAGE_COUNT and 0 <= slot_index < SLOTS_PER_PAGE:
+            elif group in self.data and 0 <= page_index < PAGE_COUNT and 0 <= slot_index < len(self.data[group][page_index]):
                 self.data[group][page_index][slot_index].duration_ms = duration
             self._refresh_sound_grid()
         self._refresh_timecode_panel()
@@ -1858,7 +1858,7 @@ class PlaybackMixin:
         self._refresh_sound_grid()
 
     def _clear_cue_page(self) -> None:
-        self.cue_page = [SoundButtonData() for _ in range(SLOTS_PER_PAGE)]
+        self.cue_page = [SoundButtonData() for _ in range(self._runtime_sound_button_slot_cap())]
         self._set_dirty(True)
         self._refresh_sound_grid()
 

@@ -370,6 +370,11 @@ class OptionsDialog(
         "stage_display_lyric_current_italic": False,
         "stage_display_lyric_next_italic": False,
         "stage_display_gadgets": normalize_stage_display_gadgets(None),
+        "sound_button_view_mode": "grid",
+        "sound_button_grid_columns": 8,
+        "sound_button_grid_rows": 6,
+        "sound_button_page_slot_cap": 48,
+        "sound_button_list_hide_empty": False,
         "window_layout": default_window_layout(),
     }
     _DISPLAY_OPTION_SPECS = STAGE_DISPLAY_GADGET_SPECS
@@ -560,6 +565,11 @@ class OptionsDialog(
         stage_display_lyric_played_italic: bool,
         stage_display_lyric_current_italic: bool,
         stage_display_lyric_next_italic: bool,
+        sound_button_view_mode: str,
+        sound_button_grid_columns: int,
+        sound_button_grid_rows: int,
+        sound_button_page_slot_cap: int,
+        sound_button_list_hide_empty: bool,
         window_layout: Optional[Dict[str, object]],
         ui_language: str,
         lock_allow_quit: bool,
@@ -673,6 +683,15 @@ class OptionsDialog(
             if str(stage_display_text_source or "").strip().lower() in {"caption", "filename", "note"}
             else "caption"
         )
+        self._sound_button_view_mode = (
+            str(sound_button_view_mode or "").strip().lower()
+            if str(sound_button_view_mode or "").strip().lower() in {"grid", "list"}
+            else "grid"
+        )
+        self._sound_button_grid_columns = max(1, min(512, int(sound_button_grid_columns)))
+        self._sound_button_grid_rows = max(1, min(512, int(sound_button_grid_rows)))
+        self._sound_button_page_slot_cap = max(1, min(4096, int(sound_button_page_slot_cap)))
+        self._sound_button_list_hide_empty = bool(sound_button_list_hide_empty)
         self._window_layout = normalize_window_layout(window_layout)
         self._window_layout_drop_in_progress = False
         self._window_layout_capture_pending = False

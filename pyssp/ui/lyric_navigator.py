@@ -18,10 +18,9 @@ class LyricNavigatorWindow(QWidget):
         language: str = "en",
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent)
         self.setWindowTitle(tr("Lyric Navigator"))
         self.resize(780, 560)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
 
         self._on_seek_to_ms = on_seek_to_ms
         self._cache_path: str = ""

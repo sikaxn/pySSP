@@ -21,7 +21,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, pyqtSignal, pyqtSlot, QThread, QUrl
+from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, QByteArray, pyqtSignal, pyqtSlot, QThread, QUrl
 from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap, QPen, QIcon
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (

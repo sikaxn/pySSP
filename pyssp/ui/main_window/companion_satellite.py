@@ -229,25 +229,15 @@ class CompanionSatelliteMixin:
 
     def _open_companion_available_commands(self) -> None:
         dialog = self._companion_available_commands_dialog
-        if dialog is None:
-            dialog = CompanionAvailableCommandsDialog(self)
-            dialog.clear_button.clicked.connect(self._clear_companion_available_commands)
-            dialog.hide_black_empty_checkbox.toggled.connect(
-                self._set_companion_available_commands_filter_black_empty
-            )
-            dialog.hide_navigation_checkbox.toggled.connect(self._refresh_companion_available_commands_dialog)
-            dialog.bypassToggled.connect(self._toggle_companion_bypass)
-            dialog.locationCommandRequested.connect(self._send_companion_location_command_async)
-            dialog.openVirtualSatelliteRequested.connect(self._open_virtual_satellite)
-            self._companion_available_commands_dialog = dialog
+        if dialog is None or self.available_commands_dock is None:
+            return
         dialog.hide_black_empty_checkbox.blockSignals(True)
         dialog.hide_black_empty_checkbox.setChecked(bool(self.companion_available_commands_filter_black_empty))
         dialog.hide_black_empty_checkbox.blockSignals(False)
         dialog.set_bypass_checked(bool(self.companion_bypass))
         self._refresh_companion_available_commands_dialog()
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self.available_commands_dock.show()
+        self.available_commands_dock.raise_()
 
     def _refresh_companion_available_commands_dialog(self) -> None:
         dialog = self._companion_available_commands_dialog

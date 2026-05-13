@@ -9,14 +9,23 @@ from .widgets import *
 class TimecodeMixin:
     def _build_timecode_dock(self) -> None:
         self.timecode_dock = QDockWidget("Timecode", self)
+        self.timecode_dock.setObjectName("timecode_widget_dock")
         self.timecode_panel = TimecodePanel(self.timecode_dock)
         self.timecode_dock.setWidget(self.timecode_panel)
-        self.timecode_dock.setAllowedAreas(Qt.NoDockWidgetArea)
-        self.timecode_dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable)
-        self.timecode_dock.setVisible(bool(self.show_timecode_panel))
+        self.timecode_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        self.timecode_dock.setFeatures(
+            QDockWidget.DockWidgetClosable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetMovable
+        )
         self.addDockWidget(Qt.RightDockWidgetArea, self.timecode_dock)
-        self.timecode_dock.setFloating(True)
+        if bool(self.show_timecode_panel):
+            self.timecode_dock.show()
+        else:
+            self._park_hidden_dock(self.timecode_dock)
         self.timecode_dock.visibilityChanged.connect(self._on_timecode_dock_visibility_changed)
+        self.timecode_dock.dockLocationChanged.connect(lambda _area: self._schedule_dock_layout_save())
+        self.timecode_dock.topLevelChanged.connect(lambda _floating: self._schedule_dock_layout_save())
         self.timecode_panel.mode_combo.currentIndexChanged.connect(self._on_timecode_mode_changed)
         mode_idx = self.timecode_panel.mode_combo.findData(self.timecode_mode)
         self.timecode_panel.mode_combo.blockSignals(True)
@@ -47,13 +56,17 @@ class TimecodeMixin:
         action = self._menu_actions.get("timecode_panel")
         if action is not None:
             action.setChecked(bool(visible))
+        self._schedule_dock_layout_save()
         if not self._suspend_settings_save:
             self._save_settings()
 
     def _toggle_timecode_panel(self) -> None:
         if self.timecode_dock is None:
             return
-        self.timecode_dock.setVisible(not self.timecode_dock.isVisible())
+        if self.timecode_dock.isVisible():
+            self._park_hidden_dock(self.timecode_dock)
+            return
+        self.timecode_dock.show()
 
     def _is_timecode_output_enabled(self) -> bool:
         ltc_enabled = str(self.timecode_audio_output_device or "none").strip().lower() != "none"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout
+from PyQt5.QtWidgets import QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from pyssp.companion_available_commands import (
     is_black_empty_command,
@@ -12,7 +12,7 @@ from pyssp.companion_available_commands import (
 from pyssp.i18n import tr
 
 
-class CompanionAvailableCommandsDialog(QDialog):
+class CompanionAvailableCommandsDialog(QWidget):
     locationCommandRequested = pyqtSignal(str, str)
     openVirtualSatelliteRequested = pyqtSignal()
     bypassToggled = pyqtSignal(bool)

@@ -274,44 +274,20 @@ class LyricsStageMixin:
         self._sync_lyric_display_controls()
 
     def _open_lyric_navigator(self) -> None:
-        if self._lyric_navigator_window is None:
-            self._lyric_navigator_window = LyricNavigatorWindow(
-                on_seek_to_ms=self._seek_to_lyric_timestamp,
-                language=self.ui_language,
-                parent=self,
-            )
-            self._lyric_navigator_window.destroyed.connect(self._on_lyric_navigator_destroyed)
+        if self._lyric_navigator_window is None or self.lyric_navigator_dock is None:
+            return
         self._lyric_navigator_window.retranslate_ui(self.ui_language)
-        self._lyric_navigator_window.show()
-        self._lyric_navigator_window.raise_()
-        self._lyric_navigator_window.activateWindow()
+        self.lyric_navigator_dock.show()
+        self.lyric_navigator_dock.raise_()
         self._refresh_lyric_display(force=True)
 
     def _open_automation_script_navigator(self) -> None:
-        if self._automation_script_navigator_window is None:
-            self._automation_script_navigator_window = AutomationScriptNavigatorWindow(
-                on_seek_to_ms=self._seek_to_lyric_timestamp,
-                show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
-                on_show_lyric_changed=self._set_automation_script_editor_show_lyric,
-                companion_bypass=bool(getattr(self, "companion_bypass", False)),
-                internal_bypass=bool(getattr(self, "internal_bypass", False)),
-                on_companion_bypass_changed=self._toggle_companion_bypass,
-                on_internal_bypass_changed=self._toggle_internal_bypass,
-                language=self.ui_language,
-                parent=self,
-            )
-            self._automation_script_navigator_window.destroyed.connect(self._on_automation_script_navigator_destroyed)
+        if self._automation_script_navigator_window is None or self.automation_script_navigator_dock is None:
+            return
         self._automation_script_navigator_window.retranslate_ui(self.ui_language)
-        self._automation_script_navigator_window.show()
-        self._automation_script_navigator_window.raise_()
-        self._automation_script_navigator_window.activateWindow()
+        self.automation_script_navigator_dock.show()
+        self.automation_script_navigator_dock.raise_()
         self._refresh_lyric_display(force=True)
-
-    def _on_lyric_navigator_destroyed(self, _obj=None) -> None:
-        self._lyric_navigator_window = None
-
-    def _on_automation_script_navigator_destroyed(self, _obj=None) -> None:
-        self._automation_script_navigator_window = None
 
     def _seek_to_lyric_timestamp(self, position_ms: int) -> None:
         if self.current_playing is None:

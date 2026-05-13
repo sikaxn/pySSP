@@ -491,6 +491,10 @@ class MainWindow(
         )
         self.disable_path_safety = bool(getattr(self.settings, "disable_path_safety", False))
         self.window_layout = normalize_window_layout(getattr(self.settings, "window_layout", None))
+        self.window_layout_locked = bool(getattr(self.settings, "window_layout_locked", False))
+        self.dock_layout_state = str(getattr(self.settings, "dock_layout_state", "") or "").strip()
+        self.dock_dividers = [str(value).strip() for value in getattr(self.settings, "dock_dividers", []) if str(value).strip()]
+        self.standalone_docks = [str(value).strip() for value in getattr(self.settings, "standalone_docks", []) if str(value).strip()]
         self.state_colors = {
             "empty": self.settings.color_empty,
             "assigned": self.settings.color_unplayed,
@@ -859,8 +863,35 @@ class MainWindow(
         self._flash_slot_until = 0.0
         self._hotkey_selected_slot_key: Optional[Tuple[str, int, int]] = None
         self._pre_mute_volume: Optional[int] = None
+        self.notice_dock: Optional[QDockWidget] = None
+        self._dock_canvas: Optional[QWidget] = None
+        self.group_dock: Optional[QDockWidget] = None
+        self.page_dock: Optional[QDockWidget] = None
+        self.sound_buttons_dock: Optional[QDockWidget] = None
+        self.status_display_dock: Optional[QDockWidget] = None
+        self.main_button_dock: Optional[QDockWidget] = None
+        self.fade_button_dock: Optional[QDockWidget] = None
+        self.meter_volume_dock: Optional[QDockWidget] = None
+        self.time_transport_dock: Optional[QDockWidget] = None
+        self.lyric_navigator_dock: Optional[QDockWidget] = None
+        self.automation_script_navigator_dock: Optional[QDockWidget] = None
+        self.available_commands_dock: Optional[QDockWidget] = None
         self.timecode_dock: Optional[QDockWidget] = None
         self.timecode_panel: Optional[TimecodePanel] = None
+        self._divider_docks: Dict[str, QDockWidget] = {}
+        self._navigation_menu: Optional[QMenu] = None
+        self._navigation_group_menu: Optional[QMenu] = None
+        self._navigation_page_menu: Optional[QMenu] = None
+        self._navigation_group_actions: Dict[str, QAction] = {}
+        self._navigation_page_actions: Dict[int, QAction] = {}
+        self._window_menu: Optional[QMenu] = None
+        self._window_menu_static_action_count = 0
+        self._layout_lock_action: Optional[QAction] = None
+        self._remove_blank_space_action: Optional[QAction] = None
+        self._add_horizontal_divider_action: Optional[QAction] = None
+        self._add_vertical_divider_action: Optional[QAction] = None
+        self._clear_all_standalone_action: Optional[QAction] = None
+        self._dock_layout_save_pending = False
         self._mtc_sender = MtcMidiOutput(lambda: self.timecode_mtc_idle_behavior)
         self._ltc_sender = LtcAudioOutput()
         self._timecode_follow_anchor_ms = 0.0

@@ -3220,6 +3220,8 @@ class ActionsInputMixin:
                 if self._dirty:
                     event.ignore()
                     return
+        if not self._skip_save_on_close:
+            self._save_settings()
         self._hard_stop_all()
         try:
             self._ltc_sender.shutdown()
@@ -3272,6 +3274,4 @@ class ActionsInputMixin:
             pass
         self._stop_web_remote_service()
         self._stop_companion_satellite_client()
-        if not self._skip_save_on_close:
-            self._save_settings()
         QMainWindow.closeEvent(self, event)

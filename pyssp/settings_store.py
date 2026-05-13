@@ -864,6 +864,10 @@ class AppSettings:
     stage_display_lyric_current_italic: bool = False
     stage_display_lyric_next_italic: bool = False
     window_layout: dict[str, object] = field(default_factory=default_window_layout)
+    window_layout_locked: bool = False
+    dock_layout_state: str = ""
+    dock_dividers: list[str] = field(default_factory=list)
+    standalone_docks: list[str] = field(default_factory=list)
 
 
 def get_settings_path() -> Path:
@@ -1287,6 +1291,10 @@ def save_settings(settings: AppSettings) -> None:
             normalize_window_layout(settings.window_layout),
             separators=(",", ":"),
         ),
+        "window_layout_locked": "1" if settings.window_layout_locked else "0",
+        "dock_layout_state": str(settings.dock_layout_state or "").strip(),
+        "dock_dividers": json.dumps([str(value).strip() for value in list(settings.dock_dividers or []) if str(value).strip()]),
+        "standalone_docks": json.dumps([str(value).strip() for value in list(settings.standalone_docks or []) if str(value).strip()]),
     }
     with open(get_settings_path(), "w", encoding="utf-8") as fh:
         parser.write(fh)
@@ -1711,6 +1719,24 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         except Exception:
             parsed_window_layout = {}
     window_layout = normalize_window_layout(parsed_window_layout)
+    raw_dock_dividers = str(section.get("dock_dividers", "")).strip()
+    dock_dividers: list[str] = []
+    if raw_dock_dividers:
+        try:
+            decoded = json.loads(raw_dock_dividers)
+            if isinstance(decoded, list):
+                dock_dividers = [str(value).strip() for value in decoded if str(value).strip()]
+        except Exception:
+            dock_dividers = []
+    raw_standalone_docks = str(section.get("standalone_docks", "")).strip()
+    standalone_docks: list[str] = []
+    if raw_standalone_docks:
+        try:
+            decoded = json.loads(raw_standalone_docks)
+            if isinstance(decoded, list):
+                standalone_docks = [str(value).strip() for value in decoded if str(value).strip()]
+        except Exception:
+            standalone_docks = []
     return AppSettings(
         last_open_dir=str(section.get("last_open_dir", "")),
         last_save_dir=str(section.get("last_save_dir", "")),
@@ -2099,6 +2125,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_lyric_current_italic=stage_display_lyric_current_italic,
         stage_display_lyric_next_italic=stage_display_lyric_next_italic,
         window_layout=window_layout,
+        window_layout_locked=_get_bool(section, "window_layout_locked", False),
+        dock_layout_state=str(section.get("dock_layout_state", "")).strip(),
+        dock_dividers=dock_dividers,
+        standalone_docks=standalone_docks,
     )
 
 

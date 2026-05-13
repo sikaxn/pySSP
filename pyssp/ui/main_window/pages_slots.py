@@ -85,6 +85,7 @@ class PagesSlotsMixin:
                 button.setStyleSheet(
                     f"background: {self.inactive_group_color}; font-size: 18pt; font-weight: bold; border: 1px solid #8A8A8A;"
                 )
+        self._sync_navigation_menu_state()
 
     def _refresh_page_list(self) -> None:
         self.page_list.blockSignals(True)
@@ -117,6 +118,7 @@ class PagesSlotsMixin:
         self.page_list.setCurrentRow(self.current_page)
         self._update_page_list_item_heights()
         self.page_list.blockSignals(False)
+        self._sync_navigation_menu_state()
 
     def _update_page_list_item_heights(self) -> None:
         count = self.page_list.count()

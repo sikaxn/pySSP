@@ -5,16 +5,99 @@ from .constants import *
 from .helpers import *
 from .widgets import *
 
+DOCK_LAYOUT_STATE_VERSION = 3
+
 
 class UiBuildMixin:
     def _build_ui(self) -> None:
         self._build_menu_bar()
+        self.installEventFilter(self)
+        self.setDockNestingEnabled(True)
+        self.setDockOptions(
+            QMainWindow.AllowNestedDocks
+            | QMainWindow.AllowTabbedDocks
+            | QMainWindow.AnimatedDocks
+            | QMainWindow.GroupedDragging
+        )
+        self._build_dock_canvas()
+        self._apply_dock_drag_feedback_style()
 
-        root = QWidget()
-        self.setCentralWidget(root)
-        root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(8, 8, 8, 8)
-        root_layout.setSpacing(8)
+        self._build_notice_dock()
+        self.group_dock = self._create_panel_dock("Group", "group_widget_dock", self._build_group_widget())
+        self.page_dock = self._create_panel_dock("Pages", "page_widget_dock", self._build_page_widget())
+        self.sound_buttons_dock = self._create_panel_dock(
+            "Sound Buttons",
+            "sound_button_widget_dock",
+            self._build_sound_button_widget(),
+        )
+        self.status_display_dock = self._create_panel_dock(
+            "Status Display",
+            "status_display_widget_dock",
+            self._build_status_display_widget(),
+        )
+        self.main_button_dock = self._create_panel_dock(
+            "Main Buttons",
+            "main_button_widget_dock",
+            self._build_main_button_widget(),
+        )
+        self.fade_button_dock = self._create_panel_dock(
+            "Fade Buttons",
+            "fade_button_widget_dock",
+            self._build_fade_button_widget(),
+        )
+        self.meter_volume_dock = self._create_panel_dock(
+            "VU Meter and Volume",
+            "vu_meter_volume_widget_dock",
+            self._build_meter_volume_widget(),
+        )
+        self.time_transport_dock = self._create_panel_dock(
+            "Time and Transport",
+            "time_transport_widget_dock",
+            self._build_time_transport_widget(),
+        )
+
+        self._build_auxiliary_tool_docks()
+        self._build_saved_divider_docks()
+        self._build_timecode_dock()
+        self._apply_top_control_layout()
+        if not self._restore_saved_dock_layout():
+            self._apply_default_dock_layout()
+        self._build_window_menu()
+        self._sync_window_layout_lock_ui()
+
+    def _build_dock_canvas(self) -> None:
+        canvas = QWidget(self)
+        canvas.setObjectName("dock_canvas")
+        canvas.setContextMenuPolicy(Qt.CustomContextMenu)
+        canvas.customContextMenuRequested.connect(self._show_canvas_context_menu)
+        self.setCentralWidget(canvas)
+        canvas.hide()
+        self._dock_canvas = canvas
+
+    def _apply_dock_drag_feedback_style(self) -> None:
+        style = (
+            "QRubberBand{"
+            "border:2px solid #2E8BFF;"
+            "background:rgba(46,139,255,0.18);"
+            "}"
+            "QMainWindow::separator{"
+            "background:rgba(46,139,255,0.10);"
+            "width:6px;"
+            "height:6px;"
+            "}"
+            "QMainWindow::separator:hover{"
+            "background:rgba(46,139,255,0.30);"
+            "}"
+        )
+        current = str(self.styleSheet() or "").strip()
+        if style not in current:
+            self.setStyleSheet(f"{current}\n{style}".strip())
+
+    def _build_notice_dock(self) -> None:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         self.drag_mode_banner.setVisible(False)
         self.drag_mode_banner.setWordWrap(True)
@@ -22,67 +105,56 @@ class UiBuildMixin:
             "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.drag_mode_banner)
+        layout.addWidget(self.drag_mode_banner)
         self.timecode_multiplay_banner.setVisible(False)
         self.timecode_multiplay_banner.setWordWrap(True)
         self.timecode_multiplay_banner.setStyleSheet(
             "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.timecode_multiplay_banner)
+        layout.addWidget(self.timecode_multiplay_banner)
         self.web_remote_warning_banner.setVisible(False)
         self.web_remote_warning_banner.setWordWrap(True)
         self.web_remote_warning_banner.setStyleSheet(
             "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.web_remote_warning_banner)
+        layout.addWidget(self.web_remote_warning_banner)
         self.midi_connection_warning_banner.setVisible(False)
         self.midi_connection_warning_banner.setWordWrap(True)
         self.midi_connection_warning_banner.setStyleSheet(
             "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.midi_connection_warning_banner)
+        layout.addWidget(self.midi_connection_warning_banner)
         self.vocal_removed_warning_banner.setVisible(False)
         self.vocal_removed_warning_banner.setWordWrap(True)
         self.vocal_removed_warning_banner.setStyleSheet(
             "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.vocal_removed_warning_banner)
+        layout.addWidget(self.vocal_removed_warning_banner)
         self.playback_warning_banner.setVisible(False)
         self.playback_warning_banner.setWordWrap(True)
         self.playback_warning_banner.setStyleSheet(
             "QLabel{background:#EFE3FA; color:#3F205E; border:1px solid #7B3FB3; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.playback_warning_banner)
+        layout.addWidget(self.playback_warning_banner)
         self.save_notice_banner.setVisible(False)
         self.save_notice_banner.setWordWrap(True)
         self.save_notice_banner.setStyleSheet(
             "QLabel{background:#E4F7E7; color:#165A20; border:1px solid #2E9B47; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.save_notice_banner)
+        layout.addWidget(self.save_notice_banner)
         self.info_notice_banner.setVisible(False)
         self.info_notice_banner.setWordWrap(True)
         self.info_notice_banner.setStyleSheet(
             "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
             "padding:6px; font-weight:bold;}"
         )
-        root_layout.addWidget(self.info_notice_banner)
-
-        body_layout = QHBoxLayout()
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(8)
-        root_layout.addLayout(body_layout, 1)
-
-        left_panel = self._build_left_panel()
-        right_panel = self._build_right_panel()
-
-        body_layout.addWidget(left_panel, 1)
-        body_layout.addWidget(right_panel, 5)
+        layout.addWidget(self.info_notice_banner)
 
         self.button_legend_label = QWidget()
         self.button_legend_label.setContentsMargins(0, 0, 0, 0)
@@ -92,9 +164,606 @@ class UiBuildMixin:
         self._button_legend_layout.setSpacing(2)
         self._refresh_button_legend_label()
         self.button_legend_label.setVisible(bool(self.show_colour_legend))
-        root_layout.addWidget(self.button_legend_label)
+        layout.addWidget(self.button_legend_label)
 
-        self._build_timecode_dock()
+        self.notice_dock = QDockWidget("", self)
+        self.notice_dock.setObjectName("notice_widget_dock")
+        self.notice_dock.setAllowedAreas(Qt.TopDockWidgetArea)
+        self.notice_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        self.notice_dock.setTitleBarWidget(QWidget(self.notice_dock))
+        self.notice_dock.setWidget(panel)
+        self.addDockWidget(Qt.TopDockWidgetArea, self.notice_dock)
+
+    def _create_panel_dock(self, title: str, object_name: str, widget: QWidget, *, fixed: bool = False) -> QDockWidget:
+        dock = QDockWidget(title, self)
+        dock.setObjectName(object_name)
+        dock.setAllowedAreas(Qt.TopDockWidgetArea if fixed else Qt.AllDockWidgetAreas)
+        if fixed:
+            dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        else:
+            dock.setFeatures(self._dock_features_for(dock))
+        dock.setWidget(widget)
+        if not fixed:
+            dock.setContextMenuPolicy(Qt.CustomContextMenu)
+            dock.customContextMenuRequested.connect(lambda pos, target=dock: self._show_dock_context_menu(target, pos))
+            widget.setContextMenuPolicy(Qt.CustomContextMenu)
+            widget.customContextMenuRequested.connect(
+                lambda pos, target=dock, source=widget: self._show_dock_context_menu(target, pos, source_widget=source)
+            )
+            dock.dockLocationChanged.connect(lambda _area, target=dock: self._handle_dock_runtime_layout_change())
+            dock.topLevelChanged.connect(
+                lambda floating, target=dock: self._handle_dock_top_level_changed(target, bool(floating))
+            )
+            dock.visibilityChanged.connect(lambda _visible, target=dock: self._handle_dock_runtime_layout_change())
+        return dock
+
+    def _build_window_menu(self) -> None:
+        if self._window_menu is None:
+            self._window_menu = self.menuBar().addMenu("Window")
+        else:
+            self._window_menu.clear()
+
+        restore_default_action = QAction("Restore Default Layout", self)
+        restore_default_action.triggered.connect(self._restore_default_dock_layout)
+        self._window_menu.addAction(restore_default_action)
+
+        self._remove_blank_space_action = QAction("Remove Blank Space", self)
+        self._remove_blank_space_action.triggered.connect(self._remove_blank_dock_space)
+        self._window_menu.addAction(self._remove_blank_space_action)
+
+        self._add_horizontal_divider_action = QAction("Add Horizontal Divider", self)
+        self._add_horizontal_divider_action.triggered.connect(
+            lambda _=False: self._create_global_divider(Qt.Vertical)
+        )
+        self._window_menu.addAction(self._add_horizontal_divider_action)
+
+        self._add_vertical_divider_action = QAction("Add Vertical Divider", self)
+        self._add_vertical_divider_action.triggered.connect(
+            lambda _=False: self._create_global_divider(Qt.Horizontal)
+        )
+        self._window_menu.addAction(self._add_vertical_divider_action)
+
+        self._clear_all_standalone_action = QAction("Clear All Standalone Mode", self)
+        self._clear_all_standalone_action.triggered.connect(self._clear_all_standalone_modes)
+        self._window_menu.addAction(self._clear_all_standalone_action)
+
+        self._layout_lock_action = QAction("Lock Window Layout", self)
+        self._layout_lock_action.setCheckable(True)
+        self._layout_lock_action.triggered.connect(self._toggle_window_layout_lock)
+        self._window_menu.addAction(self._layout_lock_action)
+        self._window_menu.addSeparator()
+
+        for dock in self._window_menu_docks():
+            if dock is None:
+                continue
+            action = dock.toggleViewAction()
+            action.setText(dock.windowTitle())
+            self._window_menu.addAction(action)
+        self._sync_window_layout_lock_ui()
+
+    def _park_hidden_dock(self, dock: Optional[QDockWidget]) -> None:
+        if dock is None:
+            return
+        try:
+            if not dock.isFloating():
+                dock.setFloating(True)
+        except Exception:
+            pass
+        dock.hide()
+
+    def _window_menu_docks(self) -> List[QDockWidget]:
+        docks = [
+            self.group_dock,
+            self.page_dock,
+            self.sound_buttons_dock,
+            self.status_display_dock,
+            self.main_button_dock,
+            self.fade_button_dock,
+            self.meter_volume_dock,
+            self.time_transport_dock,
+            self.lyric_navigator_dock,
+            self.automation_script_navigator_dock,
+            self.available_commands_dock,
+            self.timecode_dock,
+        ]
+        docks.extend(self._divider_docks.get(name) for name in self.dock_dividers)
+        return [dock for dock in docks if dock is not None]
+
+    def _is_standalone_dock(self, dock: Optional[QDockWidget]) -> bool:
+        if dock is None:
+            return False
+        return str(dock.objectName() or "").strip() in set(self.standalone_docks)
+
+    def _show_dock_context_menu(
+        self,
+        dock: QDockWidget,
+        pos,
+        *,
+        source_widget: Optional[QWidget] = None,
+    ) -> None:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return
+        host = source_widget if source_widget is not None else dock
+        menu = QMenu(host)
+        standalone_action = QAction("Standalone Mode", menu)
+        standalone_action.setCheckable(True)
+        standalone_action.setChecked(self._is_standalone_dock(dock))
+        standalone_action.triggered.connect(
+            lambda checked=False, target=dock: self._set_dock_standalone_mode(target, bool(checked))
+        )
+        menu.addAction(standalone_action)
+        menu.addSeparator()
+        horizontal_divider_action = QAction("Create Horizontal Divider", menu)
+        horizontal_divider_action.triggered.connect(
+            lambda _=False, target=dock: self._create_divider_from_dock(target, Qt.Vertical)
+        )
+        menu.addAction(horizontal_divider_action)
+        vertical_divider_action = QAction("Create Vertical Divider", menu)
+        vertical_divider_action.triggered.connect(
+            lambda _=False, target=dock: self._create_divider_from_dock(target, Qt.Horizontal)
+        )
+        menu.addAction(vertical_divider_action)
+        menu.addSeparator()
+        restore_default_action = QAction("Restore Default Layout", menu)
+        restore_default_action.triggered.connect(self._restore_default_dock_layout)
+        menu.addAction(restore_default_action)
+        menu.exec_(host.mapToGlobal(pos))
+
+    def _show_canvas_context_menu(self, pos) -> None:
+        if self._dock_canvas is None or bool(getattr(self, "window_layout_locked", False)):
+            return
+        menu = QMenu(self._dock_canvas)
+        horizontal_divider_action = QAction("Create Horizontal Divider", menu)
+        horizontal_divider_action.triggered.connect(lambda _=False: self._create_global_divider(Qt.Vertical))
+        menu.addAction(horizontal_divider_action)
+        vertical_divider_action = QAction("Create Vertical Divider", menu)
+        vertical_divider_action.triggered.connect(lambda _=False: self._create_global_divider(Qt.Horizontal))
+        menu.addAction(vertical_divider_action)
+        menu.addSeparator()
+        remove_blank_space_action = QAction("Remove Blank Space", menu)
+        remove_blank_space_action.triggered.connect(self._remove_blank_dock_space)
+        menu.addAction(remove_blank_space_action)
+        menu.exec_(self._dock_canvas.mapToGlobal(pos))
+
+    def _build_saved_divider_docks(self) -> None:
+        for name in list(self.dock_dividers):
+            self._ensure_divider_dock(name)
+
+    def _build_auxiliary_tool_docks(self) -> None:
+        self._lyric_navigator_window = LyricNavigatorWindow(
+            on_seek_to_ms=self._seek_to_lyric_timestamp,
+            language=self.ui_language,
+            parent=self,
+        )
+        self.lyric_navigator_dock = self._create_panel_dock(
+            "Lyric Navigator",
+            "lyric_navigator_widget_dock",
+            self._lyric_navigator_window,
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self.lyric_navigator_dock)
+        self._park_hidden_dock(self.lyric_navigator_dock)
+
+        self._automation_script_navigator_window = AutomationScriptNavigatorWindow(
+            on_seek_to_ms=self._seek_to_lyric_timestamp,
+            show_lyric_default=bool(getattr(self, "automation_script_editor_show_lyric", False)),
+            on_show_lyric_changed=self._set_automation_script_editor_show_lyric,
+            companion_bypass=bool(getattr(self, "companion_bypass", False)),
+            internal_bypass=bool(getattr(self, "internal_bypass", False)),
+            on_companion_bypass_changed=self._toggle_companion_bypass,
+            on_internal_bypass_changed=self._toggle_internal_bypass,
+            language=self.ui_language,
+            parent=self,
+        )
+        self.automation_script_navigator_dock = self._create_panel_dock(
+            "Automation Script Navigator",
+            "automation_script_navigator_widget_dock",
+            self._automation_script_navigator_window,
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self.automation_script_navigator_dock)
+        self._park_hidden_dock(self.automation_script_navigator_dock)
+
+        self._companion_available_commands_dialog = CompanionAvailableCommandsDialog(self)
+        self._companion_available_commands_dialog.clear_button.clicked.connect(self._clear_companion_available_commands)
+        self._companion_available_commands_dialog.hide_black_empty_checkbox.toggled.connect(
+            self._set_companion_available_commands_filter_black_empty
+        )
+        self._companion_available_commands_dialog.hide_navigation_checkbox.toggled.connect(
+            self._refresh_companion_available_commands_dialog
+        )
+        self._companion_available_commands_dialog.bypassToggled.connect(self._toggle_companion_bypass)
+        self._companion_available_commands_dialog.locationCommandRequested.connect(
+            self._send_companion_location_command_async
+        )
+        self._companion_available_commands_dialog.openVirtualSatelliteRequested.connect(self._open_virtual_satellite)
+        self.available_commands_dock = self._create_panel_dock(
+            "Available Commands",
+            "available_commands_widget_dock",
+            self._companion_available_commands_dialog,
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self.available_commands_dock)
+        self._park_hidden_dock(self.available_commands_dock)
+
+    def _divider_title(self, object_name: str) -> str:
+        suffix = str(object_name or "").rsplit("_", 1)[-1]
+        return f"Divider {suffix}" if suffix.isdigit() else "Divider"
+
+    def _build_divider_widget(self, title: str) -> QWidget:
+        widget = QFrame()
+        widget.setFrameShape(QFrame.StyledPanel)
+        widget.setMinimumSize(36, 36)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        label = QLabel(title)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("color:#666666; font-size:9pt;")
+        layout.addStretch(1)
+        layout.addWidget(label)
+        layout.addStretch(1)
+        return widget
+
+    def _ensure_divider_dock(self, object_name: str) -> QDockWidget:
+        existing = self._divider_docks.get(object_name)
+        if existing is not None:
+            return existing
+        title = self._divider_title(object_name)
+        dock = self._create_panel_dock(title, object_name, self._build_divider_widget(title))
+        self._divider_docks[object_name] = dock
+        return dock
+
+    def _next_divider_object_name(self) -> str:
+        index = 1
+        existing = set(self.dock_dividers) | set(self._divider_docks.keys())
+        while True:
+            candidate = f"divider_widget_dock_{index}"
+            if candidate not in existing:
+                return candidate
+            index += 1
+
+    def _create_divider_from_dock(self, target: QDockWidget, orientation) -> None:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return
+        object_name = self._next_divider_object_name()
+        dock = self._ensure_divider_dock(object_name)
+        self.dock_dividers.append(object_name)
+        if target.isFloating():
+            dock.setFloating(True)
+            target_rect = target.geometry()
+            width = max(120, target_rect.width() // 3)
+            height = max(100, target_rect.height() // 3)
+            if orientation == Qt.Horizontal:
+                dock.setGeometry(target_rect.right() + 20, target_rect.top(), width, target_rect.height())
+            else:
+                dock.setGeometry(target_rect.left(), target_rect.bottom() + 20, target_rect.width(), height)
+            dock.show()
+        else:
+            area = self.dockWidgetArea(target)
+            if area == Qt.NoDockWidgetArea:
+                area = Qt.RightDockWidgetArea
+            self.addDockWidget(area, dock)
+            self.splitDockWidget(target, dock, orientation)
+            dock.show()
+        self._build_window_menu()
+        self._handle_dock_runtime_layout_change()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _create_global_divider(self, orientation) -> None:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return
+        object_name = self._next_divider_object_name()
+        dock = self._ensure_divider_dock(object_name)
+        self.dock_dividers.append(object_name)
+        if orientation == Qt.Vertical:
+            area = Qt.BottomDockWidgetArea
+        else:
+            area = Qt.RightDockWidgetArea
+        self.addDockWidget(area, dock)
+        dock.show()
+        self._build_window_menu()
+        self._handle_dock_runtime_layout_change()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _create_divider_on_canvas(self, orientation) -> None:
+        self._create_global_divider(orientation)
+
+    def _remove_all_divider_docks(self) -> None:
+        for name, dock in list(self._divider_docks.items()):
+            try:
+                self.removeDockWidget(dock)
+            except Exception:
+                pass
+            dock.hide()
+            dock.deleteLater()
+        self._divider_docks.clear()
+        self.dock_dividers = []
+
+    def _all_known_docks(self) -> List[QDockWidget]:
+        docks = [
+            self.notice_dock,
+            self.group_dock,
+            self.page_dock,
+            self.sound_buttons_dock,
+            self.status_display_dock,
+            self.main_button_dock,
+            self.fade_button_dock,
+            self.meter_volume_dock,
+            self.time_transport_dock,
+            self.lyric_navigator_dock,
+            self.automation_script_navigator_dock,
+            self.available_commands_dock,
+            self.timecode_dock,
+        ]
+        docks.extend(self._divider_docks.values())
+        return [dock for dock in docks if dock is not None]
+
+    def _clear_active_dock_layout(self) -> None:
+        for dock in self._all_known_docks():
+            if dock is None:
+                continue
+            try:
+                self.removeDockWidget(dock)
+            except Exception:
+                pass
+        if self.notice_dock is not None:
+            self.addDockWidget(Qt.TopDockWidgetArea, self.notice_dock)
+        self._sync_dock_canvas_visibility()
+
+    def _core_layout_docks(self) -> List[QDockWidget]:
+        return [
+            self.group_dock,
+            self.page_dock,
+            self.sound_buttons_dock,
+            self.status_display_dock,
+            self.main_button_dock,
+            self.fade_button_dock,
+            self.meter_volume_dock,
+            self.time_transport_dock,
+        ]
+
+    def _apply_default_dock_layout(self) -> None:
+        self._clear_active_dock_layout()
+        for dock in self._core_layout_docks():
+            if dock is not None:
+                dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+                dock.setFloating(False)
+                dock.show()
+        for dock in [self.lyric_navigator_dock, self.automation_script_navigator_dock, self.available_commands_dock]:
+            if dock is not None:
+                self._park_hidden_dock(dock)
+        if self.timecode_dock is not None:
+            if self.show_timecode_panel:
+                self.timecode_dock.setFloating(False)
+                self.timecode_dock.show()
+            else:
+                self._park_hidden_dock(self.timecode_dock)
+
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.group_dock)
+        self.splitDockWidget(self.group_dock, self.main_button_dock, Qt.Horizontal)
+        self.splitDockWidget(self.group_dock, self.page_dock, Qt.Vertical)
+        self.splitDockWidget(self.main_button_dock, self.sound_buttons_dock, Qt.Vertical)
+        self.splitDockWidget(self.main_button_dock, self.fade_button_dock, Qt.Horizontal)
+        self.splitDockWidget(self.main_button_dock, self.status_display_dock, Qt.Vertical)
+        self.splitDockWidget(self.fade_button_dock, self.meter_volume_dock, Qt.Vertical)
+        self.splitDockWidget(self.meter_volume_dock, self.time_transport_dock, Qt.Vertical)
+
+        self._apply_default_dock_sizes()
+        changed = False
+        for dock in self._core_layout_docks():
+            if dock is not None and dock.isFloating():
+                dock.setFloating(False)
+                changed = True
+        if changed:
+            self._apply_default_dock_sizes()
+        self._sync_dock_canvas_visibility()
+
+    def _apply_default_dock_sizes(self) -> None:
+        self.resizeDocks(
+            [self.group_dock, self.main_button_dock],
+            [180, 1180],
+            Qt.Horizontal,
+        )
+        self.resizeDocks([self.group_dock, self.page_dock], [85, 655], Qt.Vertical)
+        self.resizeDocks([self.main_button_dock, self.fade_button_dock], [860, 260], Qt.Horizontal)
+        self.resizeDocks([self.main_button_dock, self.status_display_dock], [170, 80], Qt.Vertical)
+        self.resizeDocks(
+            [self.fade_button_dock, self.meter_volume_dock, self.time_transport_dock],
+            [55, 75, 120],
+            Qt.Vertical,
+        )
+        self.resizeDocks([self.main_button_dock, self.sound_buttons_dock], [250, 650], Qt.Vertical)
+
+    def _restore_saved_dock_layout(self) -> bool:
+        raw = str(getattr(self, "dock_layout_state", "") or "").strip()
+        if not raw:
+            return False
+        try:
+            state = QByteArray.fromBase64(raw.encode("ascii"))
+        except Exception:
+            return False
+        if state.isEmpty():
+            return False
+        restored = bool(self.restoreState(state, DOCK_LAYOUT_STATE_VERSION))
+        if restored:
+            self._sync_dock_canvas_visibility()
+            return True
+        self.dock_layout_state = ""
+        return False
+
+    def _capture_dock_layout_state(self) -> str:
+        try:
+            encoded = self.saveState(DOCK_LAYOUT_STATE_VERSION).toBase64()
+            return bytes(encoded).decode("ascii")
+        except Exception:
+            return ""
+
+    def _sync_live_dock_layout_state(self) -> None:
+        self._dock_layout_save_pending = False
+        self.dock_layout_state = self._capture_dock_layout_state()
+
+    def _visible_docked_docks(self) -> List[QDockWidget]:
+        return [
+            dock
+            for dock in self._all_known_docks()
+            if dock is not None and dock is not self.notice_dock and dock.isVisible() and not dock.isFloating()
+        ]
+
+    def _sync_dock_canvas_visibility(self) -> None:
+        if self._dock_canvas is None:
+            return
+        if self._visible_docked_docks():
+            self._dock_canvas.hide()
+        else:
+            self._dock_canvas.show()
+
+    def _handle_dock_top_level_changed(self, dock: Optional[QDockWidget], floating: bool) -> None:
+        if dock is not None and floating and dock.isVisible():
+            name = str(dock.objectName() or "").strip()
+            if name and name not in self.standalone_docks:
+                self.standalone_docks = [*self.standalone_docks, name]
+                self._apply_dock_mode(dock)
+        self._handle_dock_runtime_layout_change()
+
+    def _handle_dock_runtime_layout_change(self) -> None:
+        self._sync_dock_canvas_visibility()
+        self._schedule_dock_layout_save()
+
+    def _remove_blank_dock_space(self) -> None:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return
+        self._sync_dock_canvas_visibility()
+        self._sync_live_dock_layout_state()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _schedule_dock_layout_save(self) -> None:
+        if self._suspend_settings_save or self._dock_layout_save_pending:
+            return
+        self._dock_layout_save_pending = True
+        QTimer.singleShot(0, self._commit_dock_layout_state)
+
+    def _commit_dock_layout_state(self) -> None:
+        self._sync_live_dock_layout_state()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _restore_default_dock_layout(self) -> None:
+        self._remove_all_divider_docks()
+        self.show_timecode_panel = False
+        self.standalone_docks = []
+        if self.timecode_dock is not None:
+            self.timecode_dock.hide()
+        self.dock_layout_state = ""
+        self._apply_default_dock_layout()
+        self.standalone_docks = []
+        self._apply_saved_dock_modes()
+        self._build_window_menu()
+        self._handle_dock_runtime_layout_change()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _dock_features_for(self, dock: Optional[QDockWidget]) -> QDockWidget.DockWidgetFeatures:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return QDockWidget.NoDockWidgetFeatures
+        if self._is_standalone_dock(dock):
+            return QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
+        return (
+            QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable
+        )
+
+    def _apply_saved_dock_modes(self) -> None:
+        for dock in self._window_menu_docks():
+            if dock is None:
+                continue
+            self._apply_dock_mode(dock)
+
+    def _apply_dock_mode(self, dock: QDockWidget) -> None:
+        standalone = self._is_standalone_dock(dock)
+        if standalone:
+            dock.setAllowedAreas(Qt.NoDockWidgetArea)
+            if not dock.isFloating():
+                dock.setFloating(True)
+        else:
+            dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        dock.setFeatures(self._dock_features_for(dock))
+
+    def _set_dock_standalone_mode(self, dock: Optional[QDockWidget], enabled: bool) -> None:
+        if dock is None or bool(getattr(self, "window_layout_locked", False)):
+            return
+        name = str(dock.objectName() or "").strip()
+        if not name:
+            return
+        updated = [value for value in self.standalone_docks if value != name]
+        if enabled:
+            updated.append(name)
+        self.standalone_docks = updated
+        self._apply_dock_mode(dock)
+        self._handle_dock_runtime_layout_change()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _clear_all_standalone_modes(self) -> None:
+        if bool(getattr(self, "window_layout_locked", False)):
+            return
+        if not self.standalone_docks:
+            return
+        self.standalone_docks = []
+        self._apply_saved_dock_modes()
+        self._handle_dock_runtime_layout_change()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _sync_window_layout_lock_ui(self) -> None:
+        for dock in self._window_menu_docks():
+            if dock is None:
+                continue
+            self._apply_dock_mode(dock)
+        if self._dock_canvas is not None:
+            self._dock_canvas.setContextMenuPolicy(
+                Qt.NoContextMenu if bool(self.window_layout_locked) else Qt.CustomContextMenu
+            )
+        locked = bool(self.window_layout_locked)
+        for action in [
+            getattr(self, "_remove_blank_space_action", None),
+            getattr(self, "_add_horizontal_divider_action", None),
+            getattr(self, "_add_vertical_divider_action", None),
+            getattr(self, "_clear_all_standalone_action", None),
+        ]:
+            if action is not None:
+                action.setEnabled(not locked)
+        if self._layout_lock_action is not None:
+            self._layout_lock_action.blockSignals(True)
+            self._layout_lock_action.setChecked(bool(self.window_layout_locked))
+            self._layout_lock_action.blockSignals(False)
+
+    def _toggle_window_layout_lock(self, checked: bool) -> None:
+        self.window_layout_locked = bool(checked)
+        self._sync_window_layout_lock_ui()
+        if not self._suspend_settings_save:
+            self._save_settings()
+
+    def _is_separator_drag_event(self, pos) -> bool:
+        try:
+            point = pos if hasattr(pos, "x") and hasattr(pos, "y") else None
+            if point is None:
+                return False
+            if self.childAt(point) is not None:
+                return False
+            docks = self._visible_docked_docks()
+            if len(docks) < 2:
+                return False
+            tolerance = 8
+            for dock in docks:
+                rect = dock.geometry()
+                if abs(point.x() - rect.right()) <= tolerance and rect.top() - tolerance <= point.y() <= rect.bottom() + tolerance:
+                    return True
+                if abs(point.y() - rect.bottom()) <= tolerance and rect.left() - tolerance <= point.x() <= rect.right() + tolerance:
+                    return True
+            return False
+        except Exception:
+            return False
 
     def _apply_language(self) -> None:
         set_current_language(self.ui_language)
@@ -304,6 +973,7 @@ class UiBuildMixin:
         self._lyric_blank_toggle_action.triggered.connect(lambda checked=False: self._set_lyric_force_blank(bool(checked)))
         display_menu.addAction(self._lyric_blank_toggle_action)
         self._sync_lyric_display_controls()
+        self._build_navigation_menu()
 
         search_action = QAction("Search", self)
         search_action.triggered.connect(self._open_find_dialog)
@@ -503,6 +1173,80 @@ class UiBuildMixin:
             self.lock_screen_button = self._create_lock_screen_button(self.menuBar(), auto_raise=True)
             self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
         self._apply_hotkeys()
+
+    def _build_navigation_menu(self) -> None:
+        if self._navigation_menu is None:
+            self._navigation_menu = self.menuBar().addMenu("Navigation")
+        else:
+            self._navigation_menu.clear()
+
+        previous_group_action = QAction("Previous Group", self)
+        previous_group_action.triggered.connect(lambda _=False: self._hotkey_select_group_delta(-1))
+        self._navigation_menu.addAction(previous_group_action)
+
+        next_group_action = QAction("Next Group", self)
+        next_group_action.triggered.connect(lambda _=False: self._hotkey_select_group_delta(1))
+        self._navigation_menu.addAction(next_group_action)
+
+        self._navigation_menu.addSeparator()
+
+        previous_page_action = QAction("Previous Page", self)
+        previous_page_action.triggered.connect(lambda _=False: self._hotkey_select_page_delta(-1))
+        self._navigation_menu.addAction(previous_page_action)
+
+        next_page_action = QAction("Next Page", self)
+        next_page_action.triggered.connect(lambda _=False: self._hotkey_select_page_delta(1))
+        self._navigation_menu.addAction(next_page_action)
+
+        home_page_action = QAction("Home Page", self)
+        home_page_action.triggered.connect(lambda _=False: self._navigate_to_page(0))
+        self._navigation_menu.addAction(home_page_action)
+
+        self._navigation_menu.addSeparator()
+
+        self._navigation_group_menu = self._navigation_menu.addMenu("Groups")
+        self._navigation_group_actions = {}
+        for group in GROUPS:
+            action = QAction(group, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _=False, value=group: self._navigate_to_group(value))
+            self._navigation_group_menu.addAction(action)
+            self._navigation_group_actions[group] = action
+
+        self._navigation_page_menu = self._navigation_menu.addMenu("Pages")
+        self._navigation_page_actions = {}
+        for page_index in range(PAGE_COUNT):
+            action = QAction("", self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _=False, value=page_index: self._navigate_to_page(value))
+            self._navigation_page_menu.addAction(action)
+            self._navigation_page_actions[page_index] = action
+
+        self._sync_navigation_menu_state()
+
+    def _navigate_to_group(self, group: str) -> None:
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        self._select_group(group)
+
+    def _navigate_to_page(self, page_index: int) -> None:
+        if self.cue_mode:
+            self._toggle_cue_mode(False)
+        self._select_page(page_index)
+
+    def _navigation_page_action_text(self, page_index: int) -> str:
+        return f"{page_index + 1}. {self._page_display_name(self.current_group, page_index)}"
+
+    def _sync_navigation_menu_state(self) -> None:
+        for group, action in self._navigation_group_actions.items():
+            action.blockSignals(True)
+            action.setChecked(group == self.current_group)
+            action.blockSignals(False)
+        for page_index, action in self._navigation_page_actions.items():
+            action.blockSignals(True)
+            action.setText(self._navigation_page_action_text(page_index))
+            action.setChecked((not self.cue_mode) and page_index == self.current_page)
+            action.blockSignals(False)
 
     def _create_lock_screen_button(self, parent: QWidget, *, auto_raise: bool) -> QToolButton:
         button = QToolButton(parent)
@@ -932,12 +1676,11 @@ class UiBuildMixin:
             y = max(avail.y() + margin, min(y2, max_y))
         tips.move(x, y)
 
-    def _build_left_panel(self) -> QWidget:
+    def _build_group_widget(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-
         group_grid = QGridLayout()
         group_grid.setContentsMargins(0, 0, 0, 0)
         group_grid.setHorizontalSpacing(2)
@@ -954,7 +1697,14 @@ class UiBuildMixin:
             self.group_buttons[group] = button
 
         layout.addLayout(group_grid)
+        layout.addStretch(1)
+        return panel
 
+    def _build_page_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self.page_list.setAlternatingRowColors(True)
         self.page_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -968,15 +1718,7 @@ class UiBuildMixin:
         layout.addWidget(self.page_list, 1)
         return panel
 
-    def _build_right_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        top = self._build_top_controls()
-        layout.addWidget(top, 1)
-
+    def _build_sound_button_widget(self) -> QWidget:
         grid_container = QFrame()
         grid_container.setFrameShape(QFrame.StyledPanel)
         grid_layout = QGridLayout(grid_container)
@@ -996,22 +1738,13 @@ class UiBuildMixin:
             grid_layout.setRowStretch(row, 1)
         for col in range(GRID_COLS):
             grid_layout.setColumnStretch(col, 1)
+        return grid_container
 
-        layout.addWidget(grid_container, 3)
-        return panel
-
-    def _build_top_controls(self) -> QWidget:
-        panel = QFrame()
-        panel.setFrameShape(QFrame.StyledPanel)
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
-
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
-
+    def _build_main_button_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self._main_control_grid_layout = QGridLayout()
         self._main_control_grid_layout.setContentsMargins(0, 0, 0, 0)
         self._main_control_grid_layout.setSpacing(2)
@@ -1082,7 +1815,14 @@ class UiBuildMixin:
             self._main_control_buttons_ui[text] = btn
             btn.toggled.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
             btn.clicked.connect(lambda _checked=False, key=text: self._sync_control_button_instances(key))
-        left_layout.addLayout(self._main_control_grid_layout)
+        layout.addLayout(self._main_control_grid_layout)
+        return panel
+
+    def _build_status_display_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
@@ -1098,11 +1838,11 @@ class UiBuildMixin:
         page_status_scroll.setMinimumHeight(30)
         page_status_scroll.setMaximumHeight(34)
         status_row.addWidget(page_status_scroll, 1)
-        left_layout.addLayout(status_row)
+        layout.addLayout(status_row)
         self.now_playing_label.set_now_playing_text("NOW PLAYING:", "")
         self.now_playing_label.setVisible(True)
         self.now_playing_label.setFixedHeight(40)
-        left_layout.addWidget(self.now_playing_label)
+        layout.addWidget(self.now_playing_label)
         self.main_lyric_label.set_now_playing_text("LYRIC:", "")
         self.main_lyric_label.setVisible(True)
         self.main_lyric_label.setFixedHeight(42)
@@ -1121,14 +1861,15 @@ class UiBuildMixin:
         self.lyric_blank_toggle_button.clicked.connect(self._toggle_lyric_force_blank)
         lyric_row.addWidget(self.lyric_blank_toggle_button, 0)
         self._sync_lyric_display_controls()
-        left_layout.addLayout(lyric_row)
-        left_layout.addStretch(1)
+        layout.addLayout(lyric_row)
+        layout.addStretch(1)
+        return panel
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(4)
-
+    def _build_fade_button_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self._fade_control_grid_layout = QGridLayout()
         self._fade_control_grid_layout.setContentsMargins(0, 0, 0, 0)
         self._fade_control_grid_layout.setSpacing(2)
@@ -1148,8 +1889,14 @@ class UiBuildMixin:
             self._fade_control_buttons_ui[label] = b
             b.toggled.connect(lambda _checked=False, key=label: self._sync_control_button_instances(key))
             b.clicked.connect(lambda _checked=False, key=label: self._sync_control_button_instances(key))
-        right_layout.addLayout(self._fade_control_grid_layout)
-        self._apply_top_control_layout()
+        layout.addLayout(self._fade_control_grid_layout)
+        return panel
+
+    def _build_meter_volume_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         meter_row = QHBoxLayout()
         meter_labels = QVBoxLayout()
@@ -1164,7 +1911,7 @@ class UiBuildMixin:
         meters.addWidget(self.left_meter)
         meters.addWidget(self.right_meter)
         meter_row.addLayout(meters, 1)
-        right_layout.addLayout(meter_row)
+        layout.addLayout(meter_row)
 
         volume_row = QHBoxLayout()
         volume_row.addWidget(QLabel("Volume"))
@@ -1174,7 +1921,15 @@ class UiBuildMixin:
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         volume_row.addWidget(self.volume_slider)
         volume_row.addStretch(1)
-        right_layout.addLayout(volume_row)
+        layout.addLayout(volume_row)
+        layout.addStretch(1)
+        return panel
+
+    def _build_time_transport_widget(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         times = QHBoxLayout()
         for title, value in [
@@ -1193,14 +1948,14 @@ class UiBuildMixin:
             box_layout.addWidget(label)
             box_layout.addWidget(value)
             times.addWidget(box, 1)
-        right_layout.addLayout(times)
+        layout.addLayout(times)
 
         self.progress_label.setAlignment(Qt.AlignCenter)
         self.progress_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: white;")
         self.progress_label.setMinimumHeight(28)
         self.progress_label.set_display_mode(self.main_progress_display_mode)
         self.progress_label.setVisible(True)
-        right_layout.addWidget(self.progress_label)
+        layout.addWidget(self.progress_label)
 
         transport_row = QHBoxLayout()
         self.seek_slider.setRange(0, 0)
@@ -1208,7 +1963,7 @@ class UiBuildMixin:
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
         self.seek_slider.valueChanged.connect(self._on_seek_value_changed)
         transport_row.addWidget(self.seek_slider, 1)
-        right_layout.addLayout(transport_row)
+        layout.addLayout(transport_row)
 
         jog_meta_row = QHBoxLayout()
         self.jog_percent_label.setAlignment(Qt.AlignCenter)
@@ -1218,10 +1973,7 @@ class UiBuildMixin:
         jog_meta_row.addWidget(self.jog_percent_label)
         jog_meta_row.addStretch(1)
         jog_meta_row.addWidget(self.jog_out_label)
-        right_layout.addLayout(jog_meta_row)
-
-        layout.addWidget(left, 2)
-        layout.addWidget(right, 3)
+        layout.addLayout(jog_meta_row)
         return panel
 
     @staticmethod
@@ -1431,6 +2183,15 @@ class UiBuildMixin:
             self._lock_screen_overlay.sync_geometry(rebuild_targets=self._ui_locked)
 
     def eventFilter(self, obj, event) -> bool:
+        if obj is self and bool(getattr(self, "window_layout_locked", False)):
+            if event.type() in {
+                QEvent.MouseButtonPress,
+                QEvent.MouseButtonRelease,
+                QEvent.MouseMove,
+                QEvent.MouseButtonDblClick,
+            }:
+                if self._is_separator_drag_event(event.pos()):
+                    return True
         if obj is self.page_list.viewport():
             if event.type() == QEvent.Resize:
                 self._update_page_list_item_heights()

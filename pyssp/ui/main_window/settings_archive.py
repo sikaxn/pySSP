@@ -1268,6 +1268,12 @@ class SettingsArchiveMixin:
         return False
 
     def _save_settings(self) -> None:
+        sync_dock_layout_state = getattr(self, "_sync_live_dock_layout_state", None)
+        if callable(sync_dock_layout_state):
+            try:
+                sync_dock_layout_state()
+            except Exception:
+                pass
         self.settings.active_group_color = self.active_group_color
         self.settings.inactive_group_color = self.inactive_group_color
         self.settings.title_char_limit = self.title_char_limit
@@ -1662,4 +1668,8 @@ class SettingsArchiveMixin:
         self.settings.allow_other_unsupported_audio_files = bool(self.allow_other_unsupported_audio_files)
         self.settings.disable_path_safety = bool(self.disable_path_safety)
         self.settings.window_layout = normalize_window_layout(self.window_layout)
+        self.settings.window_layout_locked = bool(getattr(self, "window_layout_locked", False))
+        self.settings.dock_layout_state = str(getattr(self, "dock_layout_state", "") or "").strip()
+        self.settings.dock_dividers = [str(value).strip() for value in getattr(self, "dock_dividers", []) if str(value).strip()]
+        self.settings.standalone_docks = [str(value).strip() for value in getattr(self, "standalone_docks", []) if str(value).strip()]
         save_settings(self.settings)

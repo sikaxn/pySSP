@@ -39,10 +39,9 @@ class AutomationScriptNavigatorWindow(QWidget):
         language: str = "en",
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent)
         self.setWindowTitle(tr("Automation Script Navigator"))
         self.resize(860, 560)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
 
         self._on_seek_to_ms = on_seek_to_ms
         self._on_show_lyric_changed = on_show_lyric_changed

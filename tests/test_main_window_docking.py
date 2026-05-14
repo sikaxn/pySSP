@@ -5,7 +5,7 @@ import os
 
 import pytest
 from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtGui import QContextMenuEvent, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QDockWidget
 
 from pyssp.settings_store import AppSettings
@@ -146,7 +146,7 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
     qapp.processEvents()
 
     try:
-        assert window.notice_dock is not None
+        assert window.notice_dock is None
         assert window.group_dock is not None
         assert window.page_dock is not None
         assert window.sound_buttons_dock is not None
@@ -159,6 +159,9 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         assert window.automation_script_navigator_dock is not None
         assert window.available_commands_dock is not None
         assert window.centralWidget() is window._dock_canvas
+        assert window.sound_buttons_dock.widget().isAncestorOf(window.button_legend_label)
+        assert window.status_display_dock.widget().isAncestorOf(window.info_notice_banner)
+        assert window.status_display_dock.widget().isAncestorOf(window.drag_mode_banner)
 
         for dock in [
             window.group_dock,
@@ -196,10 +199,12 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
             "Tools",
             "Automation",
             "Logs",
-            "Help",
             "Window",
+            "Help",
         ]
         assert "Restore Default Layout" in menu_items
+        assert "Sound Buttons Grid View" in menu_items
+        assert "Sound Buttons List View" in menu_items
         assert "Remove Blank Space" in menu_items
         assert "Add Horizontal Divider" in menu_items
         assert "Add Vertical Divider" in menu_items
@@ -240,6 +245,23 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         before_dividers = len(window.dock_dividers)
         window._create_global_divider(Qt.Vertical)
         assert len(window.dock_dividers) == before_dividers + 1
+
+        grid_action = next(
+            action for action in window_menu.actions() if action.text().replace("&", "") == "Sound Buttons Grid View"
+        )
+        list_action = next(
+            action for action in window_menu.actions() if action.text().replace("&", "") == "Sound Buttons List View"
+        )
+        assert grid_action.isChecked() is True
+        assert list_action.isChecked() is False
+        list_action.trigger()
+        qapp.processEvents()
+        assert window.sound_button_view_mode == "list"
+        assert list_action.isChecked() is True
+        assert grid_action.isChecked() is False
+        grid_action.trigger()
+        qapp.processEvents()
+        assert window.sound_button_view_mode == "grid"
 
         window.fade_button_dock.setFloating(True)
         qapp.processEvents()
@@ -498,5 +520,141 @@ def test_invalid_saved_layout_falls_back_to_hidden_canvas_default(qapp, monkeypa
         assert not window._dock_canvas.isVisible()
         assert not window.group_dock.isFloating()
         assert not window.main_button_dock.isFloating()
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_sound_buttons_reflow_on_resize_without_horizontal_scroll(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        window.resize(640, 700)
+        qapp.processEvents()
+
+        grid_viewport_width = window.sound_button_grid_scroll.viewport().width()
+        assert window.sound_button_grid_widget.width() <= grid_viewport_width
+
+        window._set_sound_button_view_mode("list", persist=False)
+        qapp.processEvents()
+
+        list_viewport_width = window.sound_button_list_scroll.viewport().width()
+        assert window.sound_button_list_widget.width() <= list_viewport_width
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_playing_sound_button_is_revealed_after_page_switch_and_in_list_view(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        target_slot = 35
+        playing_key = ("A", 0, target_slot)
+        window.resize(640, 420)
+        window.current_playing = playing_key
+        window._active_playing_keys = {playing_key}
+        window._refresh_sound_grid()
+        qapp.processEvents()
+
+        window._select_page(1)
+        qapp.processEvents()
+        window._select_page(0)
+        qapp.processEvents()
+
+        grid_button = window.sound_buttons[target_slot]
+        grid_viewport = window.sound_button_grid_scroll.viewport()
+        grid_rect = grid_button.geometry()
+        grid_rect.moveTopLeft(grid_button.mapTo(grid_viewport, QPoint(0, 0)))
+        assert window.sound_button_grid_scroll.verticalScrollBar().value() > 0
+        assert grid_viewport.rect().intersects(grid_rect)
+
+        window._set_sound_button_view_mode("list", persist=False)
+        qapp.processEvents()
+        list_row = window.sound_button_list_rows[target_slot]
+        list_viewport = window.sound_button_list_scroll.viewport()
+        list_rect = list_row.geometry()
+        list_rect.moveTopLeft(list_row.mapTo(list_viewport, QPoint(0, 0)))
+        assert window.sound_button_list_scroll.verticalScrollBar().value() > 0
+        assert list_viewport.rect().intersects(list_rect)
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_list_view_context_menu_uses_mouse_global_position(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        window._set_sound_button_view_mode("list", persist=False)
+        qapp.processEvents()
+        captured: dict[str, object] = {}
+
+        def _capture(slot_index, pos, *, global_pos=False):
+            captured["slot_index"] = slot_index
+            captured["pos"] = pos
+            captured["global_pos"] = global_pos
+
+        monkeypatch.setattr(window, "_show_slot_menu", _capture)
+        row = window.sound_button_list_rows[0]
+        local_pos = QPoint(17, 19)
+        global_pos = row.mapToGlobal(local_pos)
+        event = QContextMenuEvent(QContextMenuEvent.Mouse, local_pos, global_pos)
+        row.contextMenuEvent(event)
+
+        assert captured["slot_index"] == 0
+        assert captured["global_pos"] is True
+        assert captured["pos"] == global_pos
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_list_view_header_stays_visible_and_columns_follow_settings(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.resize(900, 520)
+    window.show()
+    qapp.processEvents()
+
+    try:
+        window._set_sound_button_view_mode("list", persist=False)
+        qapp.processEvents()
+
+        assert window.sound_button_stack.currentWidget() is window.sound_button_list_container
+        assert window.sound_button_list_scroll.widget() is window.sound_button_list_widget
+        assert not window.sound_button_list_widget.isAncestorOf(window.sound_button_list_header)
+
+        header_y_before = window.sound_button_list_header.mapTo(window.sound_button_list_container, QPoint(0, 0)).y()
+        window.sound_button_list_scroll.verticalScrollBar().setValue(
+            window.sound_button_list_scroll.verticalScrollBar().maximum()
+        )
+        qapp.processEvents()
+        header_y_after = window.sound_button_list_header.mapTo(window.sound_button_list_container, QPoint(0, 0)).y()
+        assert header_y_after == header_y_before
+        assert window.sound_button_list_header.isVisible()
+
+        window._set_sound_button_list_hidden_columns(["ram", "notes"], persist=False)
+        window._set_sound_button_list_column_width_for_key("ram", 18, persist=False)
+        qapp.processEvents()
+
+        header = window.sound_button_list_header
+        first_row = window.sound_button_list_rows[0]
+        assert header.column_labels["ram"].isHidden()
+        assert header.column_labels["notes"].isHidden()
+        assert first_row.column_widgets["ram"].isHidden()
+        assert first_row.column_widgets["notes"].isHidden()
+
+        window._set_sound_button_list_hidden_columns([], persist=False)
+        qapp.processEvents()
+        assert header.column_labels["ram"].isVisible()
+        assert first_row.column_widgets["ram"].isVisible()
+        assert header.column_labels["ram"].width() == 18
+        assert first_row.column_widgets["ram"].width() == 18
     finally:
         _cleanup_main_window(window, qapp)

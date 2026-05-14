@@ -74,6 +74,7 @@ class PagesSlotsMixin:
         self._refresh_sound_grid()
         self._update_page_status()
         self._queue_current_page_audio_preload()
+        self._reveal_current_page_priority_slot()
 
     def _refresh_group_buttons(self) -> None:
         for group, button in self.group_buttons.items():
@@ -879,11 +880,12 @@ class PagesSlotsMixin:
             return self.state_colors["assigned"]
         return self.state_colors["empty"]
 
-    def _show_slot_menu(self, slot_index: int, pos) -> None:
+    def _show_slot_menu(self, slot_index: int, pos, *, global_pos: bool = False) -> None:
         button = self.sound_buttons[slot_index]
         page = self._current_page_slots()
         slot = page[slot_index]
         page_created = self._is_page_created(self.current_group, self.current_page)
+        anchor = pos if global_pos else button.mapToGlobal(pos)
         if (self._view_group_key(), self.current_page, slot_index) in self._active_playing_keys:
             # Keep direct right-click -> popup behavior, but defer by one event
             # turn so the context-menu/mouse sequence can fully unwind.
@@ -901,7 +903,7 @@ class PagesSlotsMixin:
             guidance_action.setEnabled(False)
             detail_action = menu.addAction(tr("Then you can add sound buttons."))
             detail_action.setEnabled(False)
-            menu.exec_(button.mapToGlobal(pos))
+            menu.exec_(anchor)
             return
 
         if is_unused:
@@ -918,7 +920,7 @@ class PagesSlotsMixin:
             paste_action = menu.addAction(tr("Paste Sound Button"))
             paste_action.setEnabled(self._copied_slot_buffer is not None and page_created and not slot.locked)
             self._apply_strike_to_disabled_menu_actions(menu)
-            selected = menu.exec_(button.mapToGlobal(pos))
+            selected = menu.exec_(anchor)
             if selected == add_action:
                 self._pick_sound(slot_index)
             elif selected == add_utility_action:
@@ -948,7 +950,7 @@ class PagesSlotsMixin:
             remove_color_action.setEnabled(bool(slot.custom_color))
             delete_action = menu.addAction(tr("Delete"))
             self._apply_strike_to_disabled_menu_actions(menu)
-            selected = menu.exec_(button.mapToGlobal(pos))
+            selected = menu.exec_(anchor)
             if selected == edit_marker_action:
                 self._edit_place_marker(slot_index)
             elif selected == copy_action:
@@ -1037,7 +1039,7 @@ class PagesSlotsMixin:
         delete_action.setEnabled(slot.assigned or bool(slot.title.strip()) or bool(slot.notes.strip()))
 
         self._apply_strike_to_disabled_menu_actions(menu)
-        selected = menu.exec_(button.mapToGlobal(pos))
+        selected = menu.exec_(anchor)
         if selected == cue_it_action:
             self._cue_slot(slot)
         elif selected == edit_action:
@@ -3607,7 +3609,46 @@ class PagesSlotsMixin:
         self._ensure_page_slot_capacity(self.cue_page, required_count)
 
     def _focus_sound_button_widget(self, slot_index: int) -> None:
-        if 0 <= int(slot_index) < len(getattr(self, "sound_buttons", [])):
-            self.sound_buttons[int(slot_index)].setFocus()
-        if 0 <= int(slot_index) < len(getattr(self, "sound_button_list_rows", [])):
-            self.sound_button_list_rows[int(slot_index)].setFocus()
+        target_index = int(slot_index)
+        grid_button = None
+        list_row = None
+        if 0 <= target_index < len(getattr(self, "sound_buttons", [])):
+            grid_button = self.sound_buttons[target_index]
+            grid_button.setFocus()
+        if 0 <= target_index < len(getattr(self, "sound_button_list_rows", [])):
+            list_row = self.sound_button_list_rows[target_index]
+            list_row.setFocus()
+
+        def _reveal() -> None:
+            try:
+                if grid_button is not None and self.sound_button_grid_scroll is not None:
+                    self.sound_button_grid_scroll.ensureWidgetVisible(grid_button, 12, 12)
+            except Exception:
+                pass
+            try:
+                if list_row is not None and self.sound_button_list_scroll is not None:
+                    self.sound_button_list_scroll.ensureWidgetVisible(list_row, 12, 12)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _reveal)
+
+    def _reveal_current_page_priority_slot(self) -> None:
+        view_group = self._view_group_key()
+        target_slot = None
+        if (
+            self.current_playing is not None
+            and self.current_playing[0] == view_group
+            and self.current_playing[1] == self.current_page
+        ):
+            target_slot = int(self.current_playing[2])
+        else:
+            active_slots = sorted(
+                key[2]
+                for key in self._active_playing_keys
+                if key[0] == view_group and key[1] == self.current_page
+            )
+            if active_slots:
+                target_slot = int(active_slots[0])
+        if target_slot is not None:
+            self._focus_sound_button_widget(target_slot)

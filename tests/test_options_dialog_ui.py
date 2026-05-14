@@ -446,6 +446,9 @@ def _build_dialog(**overrides):
         sound_button_list_hide_empty=bool(
             overrides.get("sound_button_list_hide_empty", defaults["sound_button_list_hide_empty"])
         ),
+        sound_button_list_hidden_columns=list(
+            overrides.get("sound_button_list_hidden_columns", defaults["sound_button_list_hidden_columns"])
+        ),
         window_layout=overrides.get("window_layout", defaults["window_layout"]),
         ui_language=defaults["ui_language"],
         lock_allow_quit=bool(overrides.get("lock_allow_quit", defaults["lock_allow_quit"])),
@@ -515,6 +518,29 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
     assert dialog.selected_main_jog_outside_cue_action() == "stop_immediately"
     assert dialog.selected_candidate_error_action() == "stop_playback"
     assert dialog.jog_outside_group.isEnabled() is False
+
+
+def test_window_layout_sound_button_hidden_columns_round_trip_and_restore_defaults(qapp):
+    dialog = _build_dialog(
+        initial_page="Window Layout",
+        sound_button_list_hidden_columns=["ram", "script"],
+    )
+    try:
+        assert dialog.sound_button_list_column_checkboxes["ram"].isChecked() is False
+        assert dialog.sound_button_list_column_checkboxes["script"].isChecked() is False
+        assert dialog.sound_button_list_column_checkboxes["title"].isChecked() is True
+
+        dialog.sound_button_list_column_checkboxes["title"].setChecked(False)
+        assert dialog.selected_sound_button_list_hidden_columns() == ["ram", "title", "script"]
+
+        dialog.select_page("Window Layout")
+        dialog._restore_defaults_current_page()
+        assert dialog.selected_sound_button_list_hidden_columns() == []
+        assert all(box.isChecked() for box in dialog.sound_button_list_column_checkboxes.values())
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
 
 
 def test_web_remote_url_label_tracks_port_changes(qapp):

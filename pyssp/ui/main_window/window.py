@@ -348,6 +348,9 @@ class MainWindow(
         self.sound_button_grid_rows = max(1, min(512, int(getattr(self.settings, "sound_button_grid_rows", 6) or 6)))
         self.sound_button_page_slot_cap = max(1, min(4096, int(getattr(self.settings, "sound_button_page_slot_cap", 48) or 48)))
         self.sound_button_list_hide_empty = bool(getattr(self.settings, "sound_button_list_hide_empty", False))
+        self.sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(
+            getattr(self.settings, "sound_button_list_hidden_columns", list(DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS))
+        )
         self.sound_button_list_column_widths = normalize_sound_button_list_column_widths(
             getattr(self.settings, "sound_button_list_column_widths", list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
         )
@@ -886,6 +889,7 @@ class MainWindow(
         self.sound_button_list_widget: Optional[QWidget] = None
         self.sound_button_list_layout: Optional[QVBoxLayout] = None
         self.sound_button_list_scroll: Optional[QScrollArea] = None
+        self.sound_button_list_container: Optional[QWidget] = None
         self.sound_button_list_header: Optional[QWidget] = None
         self.status_display_dock: Optional[QDockWidget] = None
         self.main_button_dock: Optional[QDockWidget] = None

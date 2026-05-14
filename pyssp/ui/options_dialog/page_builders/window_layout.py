@@ -49,6 +49,17 @@ class WindowLayoutPageMixin:
         self.sound_button_list_hide_empty_checkbox = QCheckBox("Hide empty sound buttons in list view")
         self.sound_button_list_hide_empty_checkbox.setChecked(bool(getattr(self, "_sound_button_list_hide_empty", False)))
         layout.addWidget(self.sound_button_list_hide_empty_checkbox)
+
+        list_columns_group = QGroupBox("List View Columns")
+        list_columns_layout = QGridLayout(list_columns_group)
+        self.sound_button_list_column_checkboxes = {}
+        hidden_columns = set(getattr(self, "_sound_button_list_hidden_columns", []))
+        for index, key in enumerate(SOUND_BUTTON_LIST_COLUMN_KEYS):
+            checkbox = QCheckBox(f"Show {SOUND_BUTTON_LIST_COLUMN_LABELS[key]}")
+            checkbox.setChecked(key not in hidden_columns)
+            self.sound_button_list_column_checkboxes[key] = checkbox
+            list_columns_layout.addWidget(checkbox, index // 2, index % 2)
+        layout.addWidget(list_columns_group)
         layout.addStretch(1)
         return page
 

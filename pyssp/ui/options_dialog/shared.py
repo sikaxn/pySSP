@@ -52,6 +52,7 @@ from pyssp.settings_store import (
     default_companion_satellite_serial_suffix,
     default_quick_action_keys,
     default_window_layout,
+    normalize_sound_button_list_hidden_columns,
     normalize_window_layout,
 )
 from pyssp.i18n import SOURCE_TEXT_ROLE, localize_widget_tree, normalize_language, tr
@@ -98,3 +99,29 @@ from pyssp.ui.stage_display import (
 
 
 WINDOW_LAYOUT_DRAG_MIME = "application/x-pyssp-window-layout-item"
+SOUND_BUTTON_LIST_COLUMN_KEYS: list[str] = [
+    "ram",
+    "index",
+    "title",
+    "notes",
+    "status",
+    "edit",
+    "cue",
+    "lyric",
+    "automation",
+    "script",
+    "timecode",
+]
+SOUND_BUTTON_LIST_COLUMN_LABELS: dict[str, str] = {
+    "ram": "RAM",
+    "index": "#",
+    "title": "Title",
+    "notes": "Notes",
+    "status": "Status",
+    "edit": "Edit",
+    "cue": "Cue",
+    "lyric": "Lyric",
+    "automation": "Automation",
+    "script": "Script",
+    "timecode": "Timecode",
+}

@@ -5,7 +5,22 @@ from .constants import *
 from .helpers import *
 from .widgets import *
 
-DOCK_LAYOUT_STATE_VERSION = 3
+DOCK_LAYOUT_STATE_VERSION = 4
+SOUND_BUTTON_GRID_MIN_WIDTH = 88
+SOUND_BUTTON_GRID_TARGET_WIDTH = 132
+SOUND_BUTTON_LIST_MIN_WIDTHS: Dict[str, int] = {
+    "ram": 12,
+    "index": 40,
+    "title": 120,
+    "notes": 96,
+    "status": 110,
+    "edit": 56,
+    "cue": 48,
+    "lyric": 56,
+    "automation": 72,
+    "script": 56,
+    "timecode": 72,
+}
 
 
 class UiBuildMixin:
@@ -22,7 +37,6 @@ class UiBuildMixin:
         self._build_dock_canvas()
         self._apply_dock_drag_feedback_style()
 
-        self._build_notice_dock()
         self.group_dock = self._create_panel_dock("Group", "group_widget_dock", self._build_group_widget())
         self.page_dock = self._create_panel_dock("Pages", "page_widget_dock", self._build_page_widget())
         self.sound_buttons_dock = self._create_panel_dock(
@@ -93,69 +107,12 @@ class UiBuildMixin:
         if style not in current:
             self.setStyleSheet(f"{current}\n{style}".strip())
 
-    def _build_notice_dock(self) -> None:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+    def _configure_banner_label(self, label: QLabel, stylesheet: str) -> None:
+        label.setVisible(False)
+        label.setWordWrap(True)
+        label.setStyleSheet(stylesheet)
 
-        self.drag_mode_banner.setVisible(False)
-        self.drag_mode_banner.setWordWrap(True)
-        self.drag_mode_banner.setStyleSheet(
-            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.drag_mode_banner)
-        self.timecode_multiplay_banner.setVisible(False)
-        self.timecode_multiplay_banner.setWordWrap(True)
-        self.timecode_multiplay_banner.setStyleSheet(
-            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.timecode_multiplay_banner)
-        self.web_remote_warning_banner.setVisible(False)
-        self.web_remote_warning_banner.setWordWrap(True)
-        self.web_remote_warning_banner.setStyleSheet(
-            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.web_remote_warning_banner)
-        self.midi_connection_warning_banner.setVisible(False)
-        self.midi_connection_warning_banner.setWordWrap(True)
-        self.midi_connection_warning_banner.setStyleSheet(
-            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.midi_connection_warning_banner)
-        self.vocal_removed_warning_banner.setVisible(False)
-        self.vocal_removed_warning_banner.setWordWrap(True)
-        self.vocal_removed_warning_banner.setStyleSheet(
-            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.vocal_removed_warning_banner)
-        self.playback_warning_banner.setVisible(False)
-        self.playback_warning_banner.setWordWrap(True)
-        self.playback_warning_banner.setStyleSheet(
-            "QLabel{background:#EFE3FA; color:#3F205E; border:1px solid #7B3FB3; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.playback_warning_banner)
-        self.save_notice_banner.setVisible(False)
-        self.save_notice_banner.setWordWrap(True)
-        self.save_notice_banner.setStyleSheet(
-            "QLabel{background:#E4F7E7; color:#165A20; border:1px solid #2E9B47; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.save_notice_banner)
-        self.info_notice_banner.setVisible(False)
-        self.info_notice_banner.setWordWrap(True)
-        self.info_notice_banner.setStyleSheet(
-            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; "
-            "padding:6px; font-weight:bold;}"
-        )
-        layout.addWidget(self.info_notice_banner)
-
+    def _build_sound_button_legend_widget(self) -> QWidget:
         self.button_legend_label = QWidget()
         self.button_legend_label.setContentsMargins(0, 0, 0, 0)
         self.button_legend_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -164,15 +121,54 @@ class UiBuildMixin:
         self._button_legend_layout.setSpacing(2)
         self._refresh_button_legend_label()
         self.button_legend_label.setVisible(bool(self.show_colour_legend))
-        layout.addWidget(self.button_legend_label)
+        return self.button_legend_label
 
-        self.notice_dock = QDockWidget("", self)
-        self.notice_dock.setObjectName("notice_widget_dock")
-        self.notice_dock.setAllowedAreas(Qt.TopDockWidgetArea)
-        self.notice_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
-        self.notice_dock.setTitleBarWidget(QWidget(self.notice_dock))
-        self.notice_dock.setWidget(panel)
-        self.addDockWidget(Qt.TopDockWidgetArea, self.notice_dock)
+    def _build_main_warning_banner_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self._configure_banner_label(
+            self.drag_mode_banner,
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.drag_mode_banner)
+        self._configure_banner_label(
+            self.timecode_multiplay_banner,
+            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.timecode_multiplay_banner)
+        self._configure_banner_label(
+            self.web_remote_warning_banner,
+            "QLabel{background:#FDE7E9; color:#7A0010; border:1px solid #B00020; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.web_remote_warning_banner)
+        self._configure_banner_label(
+            self.midi_connection_warning_banner,
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.midi_connection_warning_banner)
+        self._configure_banner_label(
+            self.vocal_removed_warning_banner,
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.vocal_removed_warning_banner)
+        self._configure_banner_label(
+            self.playback_warning_banner,
+            "QLabel{background:#EFE3FA; color:#3F205E; border:1px solid #7B3FB3; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.playback_warning_banner)
+        self._configure_banner_label(
+            self.save_notice_banner,
+            "QLabel{background:#E4F7E7; color:#165A20; border:1px solid #2E9B47; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.save_notice_banner)
+        self._configure_banner_label(
+            self.info_notice_banner,
+            "QLabel{background:#FFF0A6; color:#3A2A00; border:1px solid #CFAE2A; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.info_notice_banner)
+        return panel
 
     def _create_panel_dock(self, title: str, object_name: str, widget: QWidget, *, fixed: bool = False) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -206,6 +202,22 @@ class UiBuildMixin:
         restore_default_action = QAction("Restore Default Layout", self)
         restore_default_action.triggered.connect(self._restore_default_dock_layout)
         self._window_menu.addAction(restore_default_action)
+        self._window_menu.addSeparator()
+
+        self._sound_button_view_grid_action = QAction("Sound Buttons Grid View", self)
+        self._sound_button_view_grid_action.setCheckable(True)
+        self._sound_button_view_grid_action.triggered.connect(
+            lambda checked=False: self._set_sound_button_view_mode("grid") if checked else None
+        )
+        self._window_menu.addAction(self._sound_button_view_grid_action)
+
+        self._sound_button_view_list_action = QAction("Sound Buttons List View", self)
+        self._sound_button_view_list_action.setCheckable(True)
+        self._sound_button_view_list_action.triggered.connect(
+            lambda checked=False: self._set_sound_button_view_mode("list") if checked else None
+        )
+        self._window_menu.addAction(self._sound_button_view_list_action)
+        self._window_menu.addSeparator()
 
         self._remove_blank_space_action = QAction("Remove Blank Space", self)
         self._remove_blank_space_action.triggered.connect(self._remove_blank_dock_space)
@@ -239,7 +251,41 @@ class UiBuildMixin:
             action = dock.toggleViewAction()
             action.setText(dock.windowTitle())
             self._window_menu.addAction(action)
+        self._sync_sound_button_view_mode_actions()
         self._sync_window_layout_lock_ui()
+
+    def _sync_sound_button_view_mode_actions(self) -> None:
+        mode = str(getattr(self, "sound_button_view_mode", "grid") or "grid").strip().lower()
+        if mode not in {"grid", "list"}:
+            mode = "grid"
+        grid_action = getattr(self, "_sound_button_view_grid_action", None)
+        list_action = getattr(self, "_sound_button_view_list_action", None)
+        if grid_action is not None:
+            grid_action.blockSignals(True)
+            grid_action.setChecked(mode == "grid")
+            grid_action.blockSignals(False)
+        if list_action is not None:
+            list_action.blockSignals(True)
+            list_action.setChecked(mode == "list")
+            list_action.blockSignals(False)
+
+    def _set_sound_button_view_mode(self, mode: str, *, persist: bool = True) -> None:
+        normalized = str(mode or "").strip().lower()
+        if normalized not in {"grid", "list"}:
+            normalized = "grid"
+        if str(getattr(self, "sound_button_view_mode", "grid") or "grid").strip().lower() == normalized:
+            self._sync_sound_button_view_mode_actions()
+            return
+        self.sound_button_view_mode = normalized
+        rebuild_panel = getattr(self, "_rebuild_sound_button_panel", None)
+        if callable(rebuild_panel):
+            rebuild_panel()
+        reveal_priority_slot = getattr(self, "_reveal_current_page_priority_slot", None)
+        if callable(reveal_priority_slot):
+            reveal_priority_slot()
+        self._sync_sound_button_view_mode_actions()
+        if persist:
+            self._save_settings()
 
     def _park_hidden_dock(self, dock: Optional[QDockWidget]) -> None:
         if dock is None:
@@ -1121,6 +1167,7 @@ class UiBuildMixin:
         view_log_action.triggered.connect(self._view_log_file)
         log_menu.addAction(view_log_action)
 
+        self._build_window_menu()
         help_menu = self.menuBar().addMenu("Help")
         about_action = QAction("About", self)
         about_action.triggered.connect(self._open_about_window)
@@ -1722,7 +1769,7 @@ class UiBuildMixin:
         panel = QWidget()
         root = QVBoxLayout(panel)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setSpacing(6)
 
         self.sound_button_stack = QStackedWidget(panel)
         root.addWidget(self.sound_button_stack, 1)
@@ -1733,25 +1780,32 @@ class UiBuildMixin:
         self.sound_button_grid_layout.setContentsMargins(0, 0, 0, 0)
         self.sound_button_grid_layout.setSpacing(1)
         self.sound_button_grid_scroll = QScrollArea(panel)
-        self.sound_button_grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.sound_button_grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.sound_button_grid_scroll.setWidgetResizable(False)
         self.sound_button_grid_scroll.setWidget(self.sound_button_grid_widget)
         self.sound_button_stack.addWidget(self.sound_button_grid_scroll)
 
+        self.sound_button_list_container = QWidget(panel)
+        list_root = QVBoxLayout(self.sound_button_list_container)
+        list_root.setContentsMargins(0, 0, 0, 0)
+        list_root.setSpacing(2)
+        self.sound_button_list_header = SoundButtonListHeaderRow(self)
+        list_root.addWidget(self.sound_button_list_header, 0)
         self.sound_button_list_widget = QWidget()
         self.sound_button_list_layout = QVBoxLayout(self.sound_button_list_widget)
         self.sound_button_list_layout.setContentsMargins(0, 0, 0, 0)
         self.sound_button_list_layout.setSpacing(2)
-        self.sound_button_list_header = SoundButtonListHeaderRow(self)
-        self.sound_button_list_layout.addWidget(self.sound_button_list_header)
         self.sound_button_list_layout.addStretch(1)
-        self.sound_button_list_scroll = QScrollArea(panel)
-        self.sound_button_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sound_button_list_scroll = QScrollArea(self.sound_button_list_container)
+        self.sound_button_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.sound_button_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.sound_button_list_scroll.setWidgetResizable(True)
         self.sound_button_list_scroll.setWidget(self.sound_button_list_widget)
-        self.sound_button_stack.addWidget(self.sound_button_list_scroll)
+        list_root.addWidget(self.sound_button_list_scroll, 1)
+        self.sound_button_stack.addWidget(self.sound_button_list_container)
+
+        root.addWidget(self._build_sound_button_legend_widget(), 0)
 
         self._rebuild_sound_button_panel()
         return panel
@@ -1782,23 +1836,114 @@ class UiBuildMixin:
             if idx < len(widths)
         }
 
+    def _sound_button_list_hidden_column_set(self) -> set[str]:
+        hidden = normalize_sound_button_list_hidden_columns(
+            getattr(self, "sound_button_list_hidden_columns", list(DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS))
+        )
+        self.sound_button_list_hidden_columns = hidden
+        return set(hidden)
+
+    def _visible_sound_button_list_column_keys(self) -> List[str]:
+        hidden = self._sound_button_list_hidden_column_set()
+        return [key for key in SOUND_BUTTON_LIST_COLUMN_KEYS if key not in hidden]
+
+    def _effective_sound_button_grid_columns(self, total_slots: Optional[int] = None, viewport_width: Optional[int] = None) -> int:
+        resolved_total = self._effective_page_slot_count() if total_slots is None else max(1, int(total_slots))
+        configured_columns = max(1, int(getattr(self, "sound_button_grid_columns", 8) or 8))
+        if viewport_width is None and self.sound_button_grid_scroll is not None:
+            viewport_width = int(self.sound_button_grid_scroll.viewport().width())
+        available_width = max(0, int(viewport_width or 0))
+        if available_width <= 0:
+            return min(configured_columns, resolved_total)
+        spacing = 1
+        columns_that_fit = max(1, (available_width + spacing) // (SOUND_BUTTON_GRID_TARGET_WIDTH + spacing))
+        return max(1, min(configured_columns, resolved_total, columns_that_fit))
+
     def _sound_button_list_content_width(self) -> int:
         widths = self._sound_button_list_column_width_map()
+        visible_keys = self._visible_sound_button_list_column_keys()
         spacing = 6
         outer_margins = 12
-        return outer_margins + sum(int(widths.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS) + (
-            max(0, len(SOUND_BUTTON_LIST_COLUMN_KEYS) - 1) * spacing
+        return outer_margins + sum(int(widths.get(key, 72)) for key in visible_keys) + (
+            max(0, len(visible_keys) - 1) * spacing
         )
 
+    def _effective_sound_button_list_width_map(self) -> Dict[str, int]:
+        preferred = self._sound_button_list_column_width_map()
+        visible_keys = self._visible_sound_button_list_column_keys()
+        if not visible_keys:
+            return preferred
+        minimums = {key: int(SOUND_BUTTON_LIST_MIN_WIDTHS.get(key, 24)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS}
+        available_width = 0
+        if self.sound_button_list_scroll is not None:
+            available_width = max(0, int(self.sound_button_list_scroll.viewport().width()))
+        if available_width <= 0:
+            return preferred
+        spacing = 6
+        outer_margins = 12
+        fixed_overhead = outer_margins + (max(0, len(visible_keys) - 1) * spacing)
+        target_budget = max(0, available_width - fixed_overhead)
+        preferred_total = sum(int(preferred.get(key, 72)) for key in visible_keys)
+        minimum_total = sum(int(minimums.get(key, 24)) for key in visible_keys)
+        if target_budget <= minimum_total:
+            return minimums
+        if target_budget <= preferred_total:
+            shrinkable = {
+                key: max(0, int(preferred.get(key, 72)) - int(minimums.get(key, 24)))
+                for key in visible_keys
+            }
+            shrink_total = sum(shrinkable.values())
+            required_shrink = preferred_total - target_budget
+            widths = {key: int(preferred.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS}
+            if shrink_total > 0 and required_shrink > 0:
+                reductions: Dict[str, int] = {}
+                for key in visible_keys:
+                    reductions[key] = min(
+                        shrinkable[key],
+                        int(round((shrinkable[key] / shrink_total) * required_shrink)),
+                    )
+                applied = sum(reductions.values())
+                if applied < required_shrink:
+                    remainder = required_shrink - applied
+                    for key in sorted(visible_keys, key=lambda name: shrinkable[name], reverse=True):
+                        if remainder <= 0:
+                            break
+                        room = shrinkable[key] - reductions[key]
+                        if room <= 0:
+                            continue
+                        extra = min(room, remainder)
+                        reductions[key] += extra
+                        remainder -= extra
+                for key in visible_keys:
+                    widths[key] = max(minimums[key], widths[key] - reductions[key])
+            return widths
+        widths = {key: int(preferred.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS}
+        extra = target_budget - preferred_total
+        elastic_keys = [key for key in ["title", "notes", "status"] if key in visible_keys]
+        if extra > 0 and elastic_keys:
+            share, remainder = divmod(extra, len(elastic_keys))
+            for index, key in enumerate(elastic_keys):
+                widths[key] += share + (1 if index < remainder else 0)
+        return widths
+
     def _apply_sound_button_list_column_widths(self) -> None:
-        widths = self._sound_button_list_column_width_map()
+        widths = self._effective_sound_button_list_width_map()
+        hidden_columns = self._sound_button_list_hidden_column_set()
         if isinstance(self.sound_button_list_header, SoundButtonListHeaderRow):
-            self.sound_button_list_header.apply_column_widths(widths)
+            self.sound_button_list_header.apply_column_widths(widths, hidden_columns)
         for row in getattr(self, "sound_button_list_rows", []):
             if isinstance(row, SoundButtonListRow):
-                row.apply_column_widths(widths)
+                row.apply_column_widths(widths, hidden_columns)
         if self.sound_button_list_widget is not None:
-            self.sound_button_list_widget.setMinimumWidth(self._sound_button_list_content_width())
+            visible_keys = self._visible_sound_button_list_column_keys()
+            content_width = 12 + sum(int(widths.get(key, 72)) for key in visible_keys) + (
+                max(0, len(visible_keys) - 1) * 6
+            )
+            self.sound_button_list_widget.setMinimumWidth(content_width)
+            self.sound_button_list_widget.resize(content_width, self.sound_button_list_widget.height())
+            if self.sound_button_list_header is not None:
+                self.sound_button_list_header.setMinimumWidth(content_width)
+                self.sound_button_list_header.resize(content_width, self.sound_button_list_header.height())
 
     def _set_sound_button_list_column_widths(self, widths: object, *, persist: bool = True) -> None:
         self.sound_button_list_column_widths = normalize_sound_button_list_column_widths(widths)
@@ -1808,11 +1953,24 @@ class UiBuildMixin:
             if callable(save_settings):
                 save_settings()
 
+    def _set_sound_button_list_column_width_for_key(self, key: str, width: int, *, persist: bool = True) -> None:
+        if key not in SOUND_BUTTON_LIST_COLUMN_KEYS:
+            return
+        widths = list(normalize_sound_button_list_column_widths(self.sound_button_list_column_widths))
+        index = SOUND_BUTTON_LIST_COLUMN_KEYS.index(key)
+        widths[index] = max(int(SOUND_BUTTON_LIST_MIN_WIDTHS.get(key, 8)), min(800, int(width)))
+        self._set_sound_button_list_column_widths(widths, persist=persist)
+
+    def _set_sound_button_list_hidden_columns(self, hidden_columns: object, *, persist: bool = True) -> None:
+        self.sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(hidden_columns)
+        self._apply_sound_button_list_column_widths()
+        if persist:
+            save_settings = getattr(self, "_save_settings", None)
+            if callable(save_settings):
+                save_settings()
+
     def _show_sound_button_list_header_menu(self, global_pos) -> None:
         menu = QMenu(self)
-        adjust_action = QAction("Adjust Columns...", menu)
-        adjust_action.triggered.connect(self._open_sound_button_list_column_width_dialog)
-        menu.addAction(adjust_action)
         reset_action = QAction("Reset Column Widths", menu)
         reset_action.triggered.connect(
             lambda _=False: self._set_sound_button_list_column_widths(list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
@@ -1820,39 +1978,12 @@ class UiBuildMixin:
         menu.addAction(reset_action)
         menu.exec_(global_pos)
 
-    def _open_sound_button_list_column_width_dialog(self) -> None:
-        widths = self._sound_button_list_column_width_map()
-        dialog = QDialog(self)
-        dialog.setWindowTitle("List View Column Widths")
-        layout = QVBoxLayout(dialog)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
-        editors: Dict[str, QSpinBox] = {}
-        for row_index, key in enumerate(SOUND_BUTTON_LIST_COLUMN_KEYS):
-            label = QLabel(SOUND_BUTTON_LIST_COLUMN_LABELS[key], dialog)
-            spin = QSpinBox(dialog)
-            spin.setRange(24, 800)
-            spin.setValue(int(widths.get(key, 72)))
-            editors[key] = spin
-            grid.addWidget(label, row_index, 0)
-            grid.addWidget(spin, row_index, 1)
-        layout.addLayout(grid)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        updated = [int(editors[key].value()) for key in SOUND_BUTTON_LIST_COLUMN_KEYS]
-        self._set_sound_button_list_column_widths(updated)
-
     def _rebuild_sound_button_panel(self) -> None:
         if self.sound_button_stack is None or self.sound_button_grid_layout is None or self.sound_button_list_layout is None:
             return
         total_slots = self._effective_page_slot_count(self._current_page_slots())
         self._ensure_sound_button_widgets(total_slots)
-        columns = self._runtime_sound_button_grid_columns()
+        columns = self._effective_sound_button_grid_columns(total_slots)
         rows = self._runtime_sound_button_grid_rows()
 
         self._clear_layout_only(self.sound_button_grid_layout)
@@ -1875,8 +2006,6 @@ class UiBuildMixin:
             if widget is not None:
                 widget.setParent(None)
         self.sound_button_list_layout.setSpacing(2)
-        if self.sound_button_list_header is not None:
-            self.sound_button_list_layout.addWidget(self.sound_button_list_header)
         page = self._current_page_slots()
         hide_empty = bool(getattr(self, "sound_button_list_hide_empty", False))
         for idx in range(total_slots):
@@ -1891,7 +2020,7 @@ class UiBuildMixin:
         self._apply_sound_button_list_column_widths()
 
         if str(getattr(self, "sound_button_view_mode", "grid")) == "list":
-            self.sound_button_stack.setCurrentWidget(self.sound_button_list_scroll)
+            self.sound_button_stack.setCurrentWidget(self.sound_button_list_container)
         else:
             self.sound_button_stack.setCurrentWidget(self.sound_button_grid_scroll)
 
@@ -1904,23 +2033,47 @@ class UiBuildMixin:
         if self.sound_button_grid_widget is None or self.sound_button_grid_scroll is None:
             return
         resolved_total = self._effective_page_slot_count() if total_slots is None else max(1, int(total_slots))
-        resolved_columns = self._runtime_sound_button_grid_columns() if columns is None else max(1, int(columns))
+        resolved_columns = self._effective_sound_button_grid_columns(
+            resolved_total,
+            int(self.sound_button_grid_scroll.viewport().width()),
+        ) if columns is None else max(1, int(columns))
         resolved_visible_rows = self._runtime_sound_button_grid_rows() if rows is None else max(1, int(rows))
         actual_rows = max(resolved_visible_rows, (resolved_total + resolved_columns - 1) // resolved_columns)
         viewport_width = max(0, self.sound_button_grid_scroll.viewport().width())
         grid_layout = self.sound_button_grid_layout
         if grid_layout is None:
             return
+        rendered_columns = 0
+        try:
+            rendered_columns = max(
+                0,
+                max(
+                    (
+                        int(grid_layout.getItemPosition(index)[1]) + int(grid_layout.getItemPosition(index)[3])
+                        for index in range(grid_layout.count())
+                    ),
+                    default=0,
+                ),
+            )
+        except Exception:
+            rendered_columns = 0
+        if rendered_columns != resolved_columns:
+            self._rebuild_sound_button_panel()
+            return
         margins = grid_layout.contentsMargins()
         spacing = max(0, int(grid_layout.horizontalSpacing()))
         total_spacing = max(0, resolved_columns - 1) * spacing
-        min_button_width = 132
-        natural_width = margins.left() + margins.right() + total_spacing + (resolved_columns * min_button_width)
+        natural_width = margins.left() + margins.right() + total_spacing + (resolved_columns * SOUND_BUTTON_GRID_TARGET_WIDTH)
         usable_width = max(0, viewport_width - margins.left() - margins.right() - total_spacing)
-        if viewport_width > 0 and viewport_width >= natural_width:
-            cell_width = max(min_button_width, usable_width // resolved_columns)
+        if resolved_columns <= 0:
+            return
+        if viewport_width > 0:
+            if viewport_width >= natural_width:
+                cell_width = max(SOUND_BUTTON_GRID_TARGET_WIDTH, usable_width // resolved_columns)
+            else:
+                cell_width = max(SOUND_BUTTON_GRID_MIN_WIDTH, usable_width // resolved_columns)
         else:
-            cell_width = min_button_width
+            cell_width = SOUND_BUTTON_GRID_TARGET_WIDTH
         target_width = margins.left() + margins.right() + total_spacing + (resolved_columns * cell_width)
         button_height = 84
         for col in range(resolved_columns):
@@ -2012,6 +2165,8 @@ class UiBuildMixin:
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        layout.addWidget(self._build_main_warning_banner_panel(), 0)
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
@@ -2371,6 +2526,9 @@ class UiBuildMixin:
         update_grid_geometry = getattr(self, "_update_sound_button_grid_geometry", None)
         if callable(update_grid_geometry):
             update_grid_geometry()
+        update_list_widths = getattr(self, "_apply_sound_button_list_column_widths", None)
+        if callable(update_list_widths):
+            update_list_widths()
         if self._lock_screen_overlay is not None:
             self._lock_screen_overlay.sync_geometry(rebuild_targets=self._ui_locked)
 

@@ -162,7 +162,8 @@ WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOU
 
 SOUND_BUTTON_VIEW_GRID = "grid"
 SOUND_BUTTON_VIEW_LIST = "list"
-DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS: list[int] = [24, 52, 220, 190, 170, 72, 64, 72, 96, 72, 96]
+DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS: list[int] = [18, 52, 220, 190, 170, 72, 64, 72, 96, 72, 96]
+DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS: list[str] = []
 
 
 def normalize_sound_button_view_mode(value: object) -> str:
@@ -206,8 +207,25 @@ def normalize_sound_button_list_column_widths(value: object) -> list[int]:
             parsed = int(raw_values[idx])
         except Exception:
             parsed = default
-        widths.append(max(24, min(800, parsed)))
+        widths.append(max(8, min(800, parsed)))
     return widths
+
+
+def normalize_sound_button_list_hidden_columns(value: object, *, allowed_keys: Optional[list[str]] = None) -> list[str]:
+    if allowed_keys is None:
+        allowed_keys = ["ram", "index", "title", "notes", "status", "edit", "cue", "lyric", "automation", "script", "timecode"]
+    allowed = {str(key).strip() for key in allowed_keys if str(key).strip()}
+    if isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        raw_values = [part.strip() for part in str(value or "").split("\t")]
+    hidden: list[str] = []
+    for raw in raw_values:
+        token = str(raw or "").strip().lower()
+        if not token or token not in allowed or token in hidden:
+            continue
+        hidden.append(token)
+    return hidden
 
 
 def default_window_layout() -> dict[str, object]:
@@ -687,6 +705,9 @@ class AppSettings:
     sound_button_grid_rows: int = 6
     sound_button_page_slot_cap: int = 48
     sound_button_list_hide_empty: bool = False
+    sound_button_list_hidden_columns: list[str] = field(
+        default_factory=lambda: list(DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS)
+    )
     sound_button_list_column_widths: list[int] = field(
         default_factory=lambda: list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS)
     )
@@ -1116,6 +1137,9 @@ def save_settings(settings: AppSettings) -> None:
         "sound_button_grid_rows": str(clamp_sound_button_grid_rows(settings.sound_button_grid_rows)),
         "sound_button_page_slot_cap": str(clamp_sound_button_page_slot_cap(settings.sound_button_page_slot_cap)),
         "sound_button_list_hide_empty": "1" if settings.sound_button_list_hide_empty else "0",
+        "sound_button_list_hidden_columns": "\t".join(
+            normalize_sound_button_list_hidden_columns(settings.sound_button_list_hidden_columns)
+        ),
         "sound_button_list_column_widths": "\t".join(
             str(value) for value in normalize_sound_button_list_column_widths(settings.sound_button_list_column_widths)
         ),
@@ -1575,6 +1599,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     sound_button_grid_rows = clamp_sound_button_grid_rows(section.get("sound_button_grid_rows", 6))
     sound_button_page_slot_cap = clamp_sound_button_page_slot_cap(section.get("sound_button_page_slot_cap", 48))
     sound_button_list_hide_empty = _get_bool(section, "sound_button_list_hide_empty", False)
+    sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(
+        section.get("sound_button_list_hidden_columns", "")
+    )
     sound_button_list_column_widths = normalize_sound_button_list_column_widths(
         section.get("sound_button_list_column_widths", "")
     )
@@ -1960,6 +1987,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         sound_button_grid_rows=sound_button_grid_rows,
         sound_button_page_slot_cap=sound_button_page_slot_cap,
         sound_button_list_hide_empty=sound_button_list_hide_empty,
+        sound_button_list_hidden_columns=sound_button_list_hidden_columns,
         sound_button_list_column_widths=sound_button_list_column_widths,
         main_jog_outside_cue_action=outside_action,
         color_empty=_coerce_hex(str(section.get("color_empty", "#0B868A")), "#0B868A"),

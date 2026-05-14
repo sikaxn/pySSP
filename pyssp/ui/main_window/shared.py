@@ -101,6 +101,7 @@ from pyssp.set_loader import (
 )
 from pyssp.settings_store import (
     DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS,
+    DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS,
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
     AppSettings,
@@ -108,6 +109,7 @@ from pyssp.settings_store import (
     get_settings_path,
     load_settings,
     normalize_sound_button_list_column_widths,
+    normalize_sound_button_list_hidden_columns,
     normalize_window_layout,
     save_settings,
 )

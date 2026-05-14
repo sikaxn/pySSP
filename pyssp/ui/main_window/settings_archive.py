@@ -1672,6 +1672,9 @@ class SettingsArchiveMixin:
         self.settings.sound_button_grid_rows = max(1, int(getattr(self, "sound_button_grid_rows", 6)))
         self.settings.sound_button_page_slot_cap = max(1, int(getattr(self, "sound_button_page_slot_cap", 48)))
         self.settings.sound_button_list_hide_empty = bool(getattr(self, "sound_button_list_hide_empty", False))
+        self.settings.sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(
+            getattr(self, "sound_button_list_hidden_columns", list(DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS))
+        )
         self.settings.sound_button_list_column_widths = normalize_sound_button_list_column_widths(
             getattr(self, "sound_button_list_column_widths", list(DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS))
         )

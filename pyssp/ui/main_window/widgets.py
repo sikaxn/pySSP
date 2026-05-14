@@ -267,7 +267,7 @@ class SoundButton(QPushButton):
 class _SoundButtonListColumnsMixin:
     def _column_width(self, widths: Dict[str, int], key: str, fallback: int) -> int:
         try:
-            return max(24, int(widths.get(key, fallback)))
+            return max(8, int(widths.get(key, fallback)))
         except Exception:
             return fallback
 
@@ -277,7 +277,12 @@ class SoundButtonListHeaderRow(QFrame, _SoundButtonListColumnsMixin):
         super().__init__(host)
         self._host = host
         self.column_labels: Dict[str, QLabel] = {}
+        self.column_widgets: Dict[str, QWidget] = {}
+        self._resize_column_key: Optional[str] = None
+        self._resize_start_x = 0
+        self._resize_start_width = 0
         self.setFrameShape(QFrame.StyledPanel)
+        self.setMouseTracking(True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
@@ -287,13 +292,67 @@ class SoundButtonListHeaderRow(QFrame, _SoundButtonListColumnsMixin):
             label.setStyleSheet("font-weight:bold;")
             label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
             self.column_labels[key] = label
+            self.column_widgets[key] = label
             layout.addWidget(label, 0)
-        self.apply_column_widths(getattr(host, "_sound_button_list_column_width_map", lambda: {})())
+        self.apply_column_widths(
+            getattr(host, "_sound_button_list_column_width_map", lambda: {})(),
+            getattr(host, "_sound_button_list_hidden_column_set", lambda: set())(),
+        )
 
-    def apply_column_widths(self, widths: Dict[str, int]) -> None:
+    def apply_column_widths(self, widths: Dict[str, int], hidden_columns: set[str]) -> None:
         for key, label in self.column_labels.items():
             width = self._column_width(widths, key, 72)
             label.setFixedWidth(width)
+            label.setVisible(key not in hidden_columns)
+
+    def _resize_candidate_key(self, pos: QPoint) -> Optional[str]:
+        hidden_columns = getattr(self._host, "_sound_button_list_hidden_column_set", lambda: set())()
+        visible_keys = [key for key in SOUND_BUTTON_LIST_COLUMN_KEYS if key not in hidden_columns]
+        for key in visible_keys[:-1]:
+            widget = self.column_widgets.get(key)
+            if widget is None or not widget.isVisible():
+                continue
+            if abs(pos.x() - widget.geometry().right()) <= 5:
+                return key
+        return None
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            key = self._resize_candidate_key(event.pos())
+            if key is not None:
+                self._resize_column_key = key
+                self._resize_start_x = int(event.globalX())
+                self._resize_start_width = int(self.column_labels[key].width())
+                self.setCursor(Qt.SplitHCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._resize_column_key is not None:
+            delta = int(event.globalX()) - self._resize_start_x
+            new_width = max(8, self._resize_start_width + delta)
+            self._host._set_sound_button_list_column_width_for_key(self._resize_column_key, new_width, persist=False)
+            event.accept()
+            return
+        self.setCursor(Qt.SplitHCursor if self._resize_candidate_key(event.pos()) is not None else Qt.ArrowCursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._resize_column_key is not None and event.button() == Qt.LeftButton:
+            self._resize_column_key = None
+            self.setCursor(Qt.ArrowCursor)
+            save_settings = getattr(self._host, "_save_settings", None)
+            if callable(save_settings):
+                save_settings()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._resize_column_key is None:
+            self.setCursor(Qt.ArrowCursor)
+        super().leaveEvent(event)
 
     def contextMenuEvent(self, event) -> None:
         self._host._show_sound_button_list_header_menu(event.globalPos())
@@ -359,6 +418,19 @@ class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
         self.automation_button = QPushButton("Automation", self)
         self.script_button = QPushButton("Script", self)
         self.timecode_button = QPushButton("Timecode", self)
+        self.column_widgets: Dict[str, QWidget] = {
+            "ram": self.ram_container,
+            "index": self.index_label,
+            "title": self.title_label,
+            "notes": self.notes_label,
+            "status": self.status_label,
+            "edit": self.edit_button,
+            "cue": self.cue_button,
+            "lyric": self.lyric_button,
+            "automation": self.automation_button,
+            "script": self.script_button,
+            "timecode": self.timecode_button,
+        }
         for button in [
             self.edit_button,
             self.cue_button,
@@ -387,9 +459,12 @@ class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
         self.automation_button.clicked.connect(lambda _=False: self._host._edit_sound_button_automation(self.slot_index))
         self.script_button.clicked.connect(lambda _=False: self._host._edit_slot_automation_script(self.slot_index))
         self.timecode_button.clicked.connect(lambda _=False: self._host._edit_slot_timecode_setup(self.slot_index))
-        self.apply_column_widths(getattr(host, "_sound_button_list_column_width_map", lambda: {})())
+        self.apply_column_widths(
+            getattr(host, "_sound_button_list_column_width_map", lambda: {})(),
+            getattr(host, "_sound_button_list_hidden_column_set", lambda: set())(),
+        )
 
-    def apply_column_widths(self, widths: Dict[str, int]) -> None:
+    def apply_column_widths(self, widths: Dict[str, int], hidden_columns: set[str]) -> None:
         self.ram_container.setFixedWidth(self._column_width(widths, "ram", 24))
         self.index_label.setFixedWidth(self._column_width(widths, "index", 52))
         self.title_label.setFixedWidth(self._column_width(widths, "title", 220))
@@ -401,6 +476,8 @@ class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
         self.automation_button.setFixedWidth(self._column_width(widths, "automation", 96))
         self.script_button.setFixedWidth(self._column_width(widths, "script", 72))
         self.timecode_button.setFixedWidth(self._column_width(widths, "timecode", 96))
+        for key, widget in self.column_widgets.items():
+            widget.setVisible(key not in hidden_columns)
         self._apply_elided_texts()
 
     def _apply_elided_texts(self) -> None:
@@ -591,7 +668,7 @@ class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        self._host._show_slot_menu(self.slot_index, event.pos())
+        self._host._show_slot_menu(self.slot_index, event.globalPos(), global_pos=True)
         event.accept()
 
     def dragEnterEvent(self, event) -> None:

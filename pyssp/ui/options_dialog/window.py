@@ -375,6 +375,7 @@ class OptionsDialog(
         "sound_button_grid_rows": 6,
         "sound_button_page_slot_cap": 48,
         "sound_button_list_hide_empty": False,
+        "sound_button_list_hidden_columns": [],
         "window_layout": default_window_layout(),
     }
     _DISPLAY_OPTION_SPECS = STAGE_DISPLAY_GADGET_SPECS
@@ -570,6 +571,7 @@ class OptionsDialog(
         sound_button_grid_rows: int,
         sound_button_page_slot_cap: int,
         sound_button_list_hide_empty: bool,
+        sound_button_list_hidden_columns: List[str],
         window_layout: Optional[Dict[str, object]],
         ui_language: str,
         lock_allow_quit: bool,
@@ -692,6 +694,7 @@ class OptionsDialog(
         self._sound_button_grid_rows = max(1, min(512, int(sound_button_grid_rows)))
         self._sound_button_page_slot_cap = max(1, min(4096, int(sound_button_page_slot_cap)))
         self._sound_button_list_hide_empty = bool(sound_button_list_hide_empty)
+        self._sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(sound_button_list_hidden_columns)
         self._window_layout = normalize_window_layout(window_layout)
         self._window_layout_drop_in_progress = False
         self._window_layout_capture_pending = False

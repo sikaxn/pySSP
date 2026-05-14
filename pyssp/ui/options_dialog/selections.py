@@ -447,6 +447,15 @@ class SelectionMixin:
     def selected_sound_button_list_hide_empty(self) -> bool:
         return bool(self.sound_button_list_hide_empty_checkbox.isChecked())
 
+    def selected_sound_button_list_hidden_columns(self) -> list[str]:
+        checkboxes = getattr(self, "sound_button_list_column_checkboxes", {})
+        hidden: list[str] = []
+        for key in SOUND_BUTTON_LIST_COLUMN_KEYS:
+            checkbox = checkboxes.get(key)
+            if checkbox is not None and not checkbox.isChecked():
+                hidden.append(key)
+        return hidden
+
     def selected_state_colors(self) -> Dict[str, str]:
         return dict(self.state_colors)
 

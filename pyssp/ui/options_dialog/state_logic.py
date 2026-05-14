@@ -316,6 +316,10 @@ class StateLogicMixin:
             self.sound_button_page_slot_cap_spin.setValue(int(d.get("sound_button_page_slot_cap", 48)))
         if hasattr(self, "sound_button_list_hide_empty_checkbox"):
             self.sound_button_list_hide_empty_checkbox.setChecked(bool(d.get("sound_button_list_hide_empty", False)))
+        if hasattr(self, "sound_button_list_column_checkboxes"):
+            hidden = set(normalize_sound_button_list_hidden_columns(d.get("sound_button_list_hidden_columns", [])))
+            for key, checkbox in self.sound_button_list_column_checkboxes.items():
+                checkbox.setChecked(key not in hidden)
         self._window_layout = normalize_window_layout(d.get("window_layout"))
         if hasattr(self, "window_layout_main_editor"):
             self.window_layout_main_editor.set_items(list(self._window_layout.get("main", [])))

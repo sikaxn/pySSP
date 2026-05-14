@@ -1911,6 +1911,7 @@ class ActionsInputMixin:
             sound_button_grid_rows=self.sound_button_grid_rows,
             sound_button_page_slot_cap=self.sound_button_page_slot_cap,
             sound_button_list_hide_empty=self.sound_button_list_hide_empty,
+            sound_button_list_hidden_columns=self.sound_button_list_hidden_columns,
             window_layout=self.window_layout,
             lock_unlock_method=self.lock_unlock_method,
             lock_require_password=self.lock_require_password,
@@ -2159,16 +2160,34 @@ class ActionsInputMixin:
         self.stage_display_lyric_role_sizes = dialog.selected_stage_display_lyric_role_sizes()
         self.stage_display_lyric_role_bold = dialog.selected_stage_display_lyric_role_bold()
         self.stage_display_lyric_role_italic = dialog.selected_stage_display_lyric_role_italic()
-        self.sound_button_view_mode = dialog.selected_sound_button_view_mode()
+        selected_sound_button_view_mode = dialog.selected_sound_button_view_mode()
         self.sound_button_grid_columns = max(1, min(512, int(dialog.selected_sound_button_grid_columns())))
         self.sound_button_grid_rows = max(1, min(512, int(dialog.selected_sound_button_grid_rows())))
         self.sound_button_page_slot_cap = max(1, min(4096, int(dialog.selected_sound_button_page_slot_cap())))
         self.sound_button_list_hide_empty = bool(dialog.selected_sound_button_list_hide_empty())
+        selected_sound_button_list_hidden_columns = normalize_sound_button_list_hidden_columns(
+            dialog.selected_sound_button_list_hidden_columns()
+        )
+        self.sound_button_list_hidden_columns = selected_sound_button_list_hidden_columns
         self.window_layout = normalize_window_layout(dialog.selected_window_layout())
         self._ensure_all_pages_match_runtime_slot_capacity()
+        set_sound_button_view_mode = getattr(self, "_set_sound_button_view_mode", None)
+        if callable(set_sound_button_view_mode):
+            set_sound_button_view_mode(selected_sound_button_view_mode, persist=False)
+        else:
+            self.sound_button_view_mode = selected_sound_button_view_mode
+            rebuild_panel = getattr(self, "_rebuild_sound_button_panel", None)
+            if callable(rebuild_panel):
+                rebuild_panel()
+        set_hidden_columns = getattr(self, "_set_sound_button_list_hidden_columns", None)
+        if callable(set_hidden_columns):
+            set_hidden_columns(selected_sound_button_list_hidden_columns, persist=False)
         rebuild_panel = getattr(self, "_rebuild_sound_button_panel", None)
         if callable(rebuild_panel):
             rebuild_panel()
+        apply_list_widths = getattr(self, "_apply_sound_button_list_column_widths", None)
+        if callable(apply_list_widths):
+            apply_list_widths()
         self._apply_top_control_layout()
         if self._stage_display_window is not None:
             self._stage_display_window.configure_gadgets(self.stage_display_gadgets)

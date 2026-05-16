@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QRect, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QTextDocument
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
@@ -189,7 +189,7 @@ class VideoDisplayWidget(QWidget):
             painter.translate(overlay.topLeft())
             clip = QRect(0, 0, overlay.width(), overlay.height())
             painter.setClipRect(clip)
-            self._lyric_doc.drawContents(painter, clip)
+            self._lyric_doc.drawContents(painter, QRectF(clip))
             painter.restore()
         if mode == "video" and self._show_stage_alert and self._alert_text:
             banner = QRect(bounds.x() + 20, bounds.y() + 20, max(120, bounds.width() - 40), min(100, bounds.height() // 5))

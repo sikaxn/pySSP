@@ -567,6 +567,26 @@ class VideoDisplayMixin:
             return 0, 0
         return max(candidates, key=lambda item: item[0] * item[1])
 
+    def _video_snapshot_target_pixel_size(self) -> tuple[int, int]:
+        candidates: list[tuple[int, int]] = []
+        for widget in (
+            getattr(self, "video_preview_widget", None),
+            None if self._video_display_window is None else self._video_display_window.display_widget,
+        ):
+            if widget is None or (not widget.isVisible()):
+                continue
+            try:
+                dpr = max(1.0, float(widget.devicePixelRatioF()))
+            except Exception:
+                dpr = 1.0
+            width = max(0, int(round(widget.width() * dpr)))
+            height = max(0, int(round(widget.height() * dpr)))
+            if width > 0 and height > 0:
+                candidates.append((width, height))
+        if not candidates:
+            return 0, 0
+        return max(candidates, key=lambda item: item[0] * item[1])
+
     def _video_target_decode_dimensions(self, info: Optional[MediaProbeInfo]) -> tuple[int, int]:
         source_width, source_height = self._video_decode_dimensions(info)
         target_width, target_height = self._video_target_surface_pixel_size()
@@ -586,10 +606,13 @@ class VideoDisplayMixin:
         return desired_output_width, desired_output_height
 
     def _on_video_surface_geometry_changed(self) -> None:
-        if self._active_video_route_mode() != "video":
+        mode = self._active_video_route_mode()
+        if mode == "video":
+            self._clear_video_frame_runtime(preserve_current_frame=True)
+            self._refresh_video_display(force=True)
             return
-        self._clear_video_frame_runtime(preserve_current_frame=True)
-        self._refresh_video_display(force=True)
+        if mode in {"stage_display", "lyric_display"}:
+            self._refresh_video_display(force=True)
 
     def _invalidate_video_playback_sync(self, *, refresh: bool = False) -> None:
         self._video_transport_revision = max(0, int(getattr(self, "_video_transport_revision", 0))) + 1
@@ -647,7 +670,14 @@ class VideoDisplayMixin:
         widget.render(pixmap)
         return pixmap
 
+    def _video_snapshot_dimensions(self) -> tuple[int, int]:
+        width, height = self._video_snapshot_target_pixel_size()
+        if width > 0 and height > 0:
+            return width, height
+        return 960, 540
+
     def _render_stage_display_snapshot(self) -> QPixmap:
+        target_width, target_height = self._video_snapshot_dimensions()
         window = GadgetStageDisplayWindow(self)
         window.configure_gadgets(self.stage_display_gadgets)
         window.configure_font_settings(
@@ -695,9 +725,10 @@ class VideoDisplayMixin:
         )
         window.set_alert(self._stage_alert_message, self._stage_alert_active())
         window.set_playback_status(self._stage_playback_status())
-        return self._render_widget_snapshot(window)
+        return self._render_widget_snapshot(window, target_width, target_height)
 
     def _render_lyric_display_snapshot(self) -> QPixmap:
+        target_width, target_height = self._video_snapshot_dimensions()
         window = LyricDisplayWindow(self)
         window.set_transparent_mode_enabled(False)
         window.configure_display_settings(
@@ -729,7 +760,7 @@ class VideoDisplayMixin:
             force_blank=bool(self._lyric_force_blank),
             force=True,
         )
-        return self._render_widget_snapshot(window)
+        return self._render_widget_snapshot(window, target_width, target_height)
 
     def _video_display_lyric_role_styles(self) -> dict[str, dict[str, object]]:
         if self.video_display_lyric_auto_adjust_role_sizes:

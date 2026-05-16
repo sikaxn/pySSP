@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from pyssp.ffmpeg_support import MediaProbeInfo
+from PyQt5.QtGui import QPaintEvent
+from PyQt5.QtWidgets import QApplication
+
 from pyssp.ui import main_window as mw
 from pyssp.ui.main_window import MainWindow, SLOTS_PER_PAGE, _equal_power_crossfade_volume
 from pyssp.ui.main_window.video_display import VideoDisplayMixin
+from pyssp.ui.video_display import VideoDisplayWidget
 
 
 def test_main_window_import_surface_stays_compatible():
@@ -116,6 +120,9 @@ class _VideoRefreshHost(VideoDisplayMixin):
     def _video_target_surface_pixel_size(self) -> tuple[int, int]:
         return self._target_size
 
+    def _video_snapshot_target_pixel_size(self) -> tuple[int, int]:
+        return self._target_size
+
     def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
         self._video_requested_frame_key = None
         self._video_requested_frame_path = ""
@@ -170,6 +177,24 @@ def test_backdrop_mode_uses_default_asset_and_message_for_idle_state():
     assert host._video_backdrop_message_text() == "No video is playing"
 
 
+def test_video_widget_paints_lyric_overlay_without_type_error():
+    app = QApplication.instance() or QApplication([])
+    widget = VideoDisplayWidget()
+    widget.resize(320, 180)
+    widget.set_mode("video")
+    widget.set_video_pixmap(mw.QPixmap(320, 180))
+    widget.configure_overlay(
+        overlay_rect={"x": 800, "y": 6800, "w": 8400, "h": 2400},
+        show_lyric_overlay=True,
+        show_stage_alert=False,
+    )
+    widget.set_lyric_html("<div style='color:#fff;'>hello<br/>world</div>")
+
+    widget.paintEvent(QPaintEvent(widget.rect()))
+
+    assert widget._lyric_html
+
+
 def test_video_frame_bucket_uses_media_fps():
     host = _AudioOnlyVideoRouteHost()
     info = MediaProbeInfo(has_video=True, fps=25.0)
@@ -200,6 +225,16 @@ def test_video_target_decode_dimensions_follow_surface_size():
     rotated = MediaProbeInfo(width=1920, height=1080, rotation_deg=90)
     host._target_size = (540, 960)
     assert host._video_target_decode_dimensions(rotated) == (960, 540)
+
+
+def test_video_snapshot_dimensions_follow_surface_size():
+    host = _VideoRefreshHost()
+
+    host._target_size = (1920, 1080)
+    assert host._video_snapshot_dimensions() == (1920, 1080)
+
+    host._target_size = (0, 0)
+    assert host._video_snapshot_dimensions() == (960, 540)
 
 
 def test_video_refresh_keeps_single_decode_in_flight():
@@ -254,6 +289,28 @@ def test_video_surface_geometry_change_preserves_current_frame():
     assert host._video_current_frame_key == ("clip.mp4", 80)
     assert host._video_current_frame_pixmap is current_pixmap
     assert host._video_frame_dispatcher.requests == [("clear",), ("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+
+
+def test_stage_display_geometry_change_triggers_snapshot_refresh():
+    class _StageRefreshHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.video_display_mode_playing = "stage_display"
+            self.refresh_calls: list[bool] = []
+            self.clear_calls: list[bool] = []
+
+        def _refresh_video_display(self, force: bool = False) -> None:
+            self.refresh_calls.append(bool(force))
+
+        def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
+            self.clear_calls.append(bool(preserve_current_frame))
+
+    host = _StageRefreshHost()
+
+    host._on_video_surface_geometry_changed()
+
+    assert host.refresh_calls == [True]
+    assert host.clear_calls == []
 
 
 def test_video_decoder_ignores_stale_request_tags():

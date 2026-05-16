@@ -591,6 +591,9 @@ class PlaybackMixin:
         return True
 
     def _prepare_transport_for_new_playback(self) -> None:
+        invalidate_video = getattr(self, "_invalidate_video_playback_sync", None)
+        if callable(invalidate_video):
+            invalidate_video(refresh=False)
         self._auto_transition_track = self.current_playing
         self._auto_transition_done = False
         self._auto_end_fade_track = self.current_playing
@@ -1082,6 +1085,9 @@ class PlaybackMixin:
         self._refresh_main_jog_meta(display_pos, total_ms)
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video()
 
     def _on_secondary_position_changed(self, _pos: int) -> None:
         self._process_automation_script_player(self.player_b)
@@ -1109,6 +1115,9 @@ class PlaybackMixin:
             self._refresh_sound_grid()
         self._refresh_timecode_panel()
         self._refresh_stage_display()
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video(force=True)
 
     def _schedule_main_waveform_refresh(self, delay_ms: int = 0) -> None:
         if self.current_playing is None:
@@ -1200,7 +1209,10 @@ class PlaybackMixin:
             f"primary={self.player.state()} secondary={self.player_b.state()}"
         )
         self._update_pause_button_label()
+        refresh_video = getattr(self, "_refresh_video_display", None)
         if self._ignore_state_changes > 0:
+            if callable(refresh_video):
+                refresh_video(force=True)
             return
         if self.player.state() == ExternalMediaPlayer.StoppedState:
             transition = self._capture_track_end_transition_state()
@@ -1230,6 +1242,8 @@ class PlaybackMixin:
         self._refresh_timecode_panel()
         self._refresh_stage_display()
         self._refresh_lyric_display()
+        if callable(refresh_video):
+            refresh_video(force=True)
 
     def _stop_player_internal(self, player: ExternalMediaPlayer) -> None:
         self._cancel_pending_player_media_load(player)
@@ -1830,6 +1844,7 @@ class PlaybackMixin:
                 self.cue_page[i] = SoundButtonData(
                     source_type=slot.source_type,
                     file_path=slot.file_path,
+                    disable_video_loading=bool(slot.disable_video_loading),
                     vocal_removed_file=slot.vocal_removed_file,
                     title=slot.title,
                     notes=slot.notes,

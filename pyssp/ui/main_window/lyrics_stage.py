@@ -14,6 +14,9 @@ class LyricsStageMixin:
             self.now_playing_label.set_now_playing_text(tr("NOW PLAYING:"), "")
         self._refresh_lyric_display()
         self._refresh_stage_display()
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video(force=True)
 
     def _update_main_lyric_label(self, text: str) -> None:
         value = str(text or "")
@@ -340,6 +343,9 @@ class LyricsStageMixin:
                 internal_bypass=bool(getattr(self, "internal_bypass", False)),
                 force=force,
             )
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video(force=force)
 
     def _open_stage_alert_panel(self) -> None:
         if self._stage_alert_dialog is None:
@@ -414,6 +420,9 @@ class LyricsStageMixin:
         else:
             self._stage_alert_until_monotonic = time.monotonic() + max(1, int(seconds))
         self._refresh_stage_display()
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video(force=True)
 
     def _clear_stage_alert(self) -> None:
         self._set_stage_alert("", keep=True, seconds=1)

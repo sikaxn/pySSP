@@ -1329,6 +1329,7 @@ class SettingsArchiveMixin:
         self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
         self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
         self.settings.preload_use_ffmpeg = bool(self.preload_use_ffmpeg)
+        self.settings.preload_video_enabled = bool(getattr(self, "preload_video_enabled", False))
         self.settings.waveform_cache_limit_mb = int(self.waveform_cache_limit_mb)
         self.settings.waveform_cache_clear_on_launch = bool(self.waveform_cache_clear_on_launch)
         self.settings.max_multi_play_songs = self.max_multi_play_songs
@@ -1381,6 +1382,7 @@ class SettingsArchiveMixin:
         self.settings.timecode_sample_rate = self.timecode_sample_rate
         self.settings.timecode_bit_depth = self.timecode_bit_depth
         self.settings.show_timecode_panel = bool(self.show_timecode_panel)
+        self.settings.show_video_control_panel = bool(getattr(self, "show_video_control_panel", False))
         self.settings.show_colour_legend = bool(self.show_colour_legend)
         self.settings.timecode_timeline_mode = self.timecode_timeline_mode
         self.settings.soundbutton_timecode_offset_enabled = bool(self.soundbutton_timecode_offset_enabled)
@@ -1405,6 +1407,7 @@ class SettingsArchiveMixin:
         self.settings.color_vocal_removed_indicator = self.state_colors["vocal_removed_indicator"]
         self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
         self.settings.color_lyric_indicator = self.state_colors["lyric_indicator"]
+        self.settings.color_video_indicator = self.state_colors["video_indicator"]
         self.settings.color_automation_indicator = self.state_colors["automation_indicator"]
         self.settings.color_automation_indicator_bypassed = self.state_colors["automation_indicator_bypassed"]
         self.settings.color_automation_script_indicator = self.state_colors["automation_script_indicator"]
@@ -1660,6 +1663,35 @@ class SettingsArchiveMixin:
         self.settings.lyric_display_played_italic = bool(self.lyric_display_role_italic.get("played", False))
         self.settings.lyric_display_current_italic = bool(self.lyric_display_role_italic.get("current", False))
         self.settings.lyric_display_next_italic = bool(self.lyric_display_role_italic.get("next", False))
+        self.settings.video_display_mode_playing = str(getattr(self, "video_display_mode_playing", "video") or "video").strip().lower()
+        self.settings.video_display_mode_idle = str(getattr(self, "video_display_mode_idle", "blank") or "blank").strip().lower()
+        self.settings.video_display_show_lyric_overlay = bool(getattr(self, "video_display_show_lyric_overlay", False))
+        self.settings.video_display_show_stage_alert = bool(getattr(self, "video_display_show_stage_alert", False))
+        self.settings.video_display_lyric_overlay_rect = dict(
+            getattr(self, "video_display_lyric_overlay_rect", {"x": 800, "y": 6800, "w": 8400, "h": 2400})
+        )
+        self.settings.video_display_lyric_font_family = str(getattr(self, "video_display_lyric_font_family", "")).strip()
+        self.settings.video_display_lyric_font_size = int(getattr(self, "video_display_lyric_font_size", 36))
+        self.settings.video_display_lyric_previous_line_count = int(getattr(self, "video_display_lyric_previous_line_count", 0))
+        self.settings.video_display_lyric_next_line_count = int(getattr(self, "video_display_lyric_next_line_count", 0))
+        self.settings.video_display_lyric_played_color = self.video_display_lyric_role_colors.get("played", "#A0A0A0")
+        self.settings.video_display_lyric_current_color = self.video_display_lyric_role_colors.get("current", "#FFD400")
+        self.settings.video_display_lyric_next_color = self.video_display_lyric_role_colors.get("next", "#FFFFFF")
+        self.settings.video_display_lyric_auto_adjust_role_sizes = bool(
+            getattr(self, "video_display_lyric_auto_adjust_role_sizes", True)
+        )
+        self.settings.video_display_lyric_played_scale_percent = int(self.video_display_lyric_role_scale_percents.get("played", 70))
+        self.settings.video_display_lyric_current_scale_percent = int(self.video_display_lyric_role_scale_percents.get("current", 115))
+        self.settings.video_display_lyric_next_scale_percent = int(self.video_display_lyric_role_scale_percents.get("next", 90))
+        self.settings.video_display_lyric_played_text_size = int(self.video_display_lyric_role_sizes.get("played", 24))
+        self.settings.video_display_lyric_current_text_size = int(self.video_display_lyric_role_sizes.get("current", 40))
+        self.settings.video_display_lyric_next_text_size = int(self.video_display_lyric_role_sizes.get("next", 32))
+        self.settings.video_display_lyric_played_bold = bool(self.video_display_lyric_role_bold.get("played", True))
+        self.settings.video_display_lyric_current_bold = bool(self.video_display_lyric_role_bold.get("current", True))
+        self.settings.video_display_lyric_next_bold = bool(self.video_display_lyric_role_bold.get("next", True))
+        self.settings.video_display_lyric_played_italic = bool(self.video_display_lyric_role_italic.get("played", False))
+        self.settings.video_display_lyric_current_italic = bool(self.video_display_lyric_role_italic.get("current", False))
+        self.settings.video_display_lyric_next_italic = bool(self.video_display_lyric_role_italic.get("next", False))
         self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
         self.settings.new_lyric_file_format = self.new_lyric_file_format
         self.settings.automation_script_editor_show_lyric = bool(self.automation_script_editor_show_lyric)

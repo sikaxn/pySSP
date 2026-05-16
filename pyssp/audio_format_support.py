@@ -4,7 +4,7 @@ from typing import Callable, List, Optional
 
 from PyQt5.QtWidgets import QMessageBox
 
-from pyssp.ffmpeg_support import ffmpeg_supported_audio_extensions
+from pyssp.ffmpeg_support import ffmpeg_supported_audio_extensions, ffmpeg_supported_media_extensions
 from pyssp.i18n import tr
 from pyssp.settings_store import load_settings, save_settings
 from pyssp.ui.system_info_dialog import detect_supported_audio_format_extensions
@@ -33,12 +33,12 @@ def build_audio_file_dialog_filter(
     supported = normalize_supported_audio_extensions(supported_audio_format_extensions)
     if supported and (not allow_other_unsupported_audio_files):
         patterns = " ".join(f"*{token}" for token in supported)
-        return f"Supported Audio Files ({patterns})"
+        return f"Supported Media Files ({patterns})"
     fallback_exts = normalize_supported_audio_extensions(
-        [".wav", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", *ffmpeg_supported_audio_extensions()]
+        [".wav", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", *ffmpeg_supported_media_extensions()]
     )
     base_patterns = " ".join(f"*{token}" for token in fallback_exts)
-    base = f"Audio Files ({base_patterns})"
+    base = f"Media Files ({base_patterns})"
     if allow_other_unsupported_audio_files:
         return f"{base};;All Files (*.*)"
     return base
@@ -52,7 +52,7 @@ def effective_audio_file_extensions(
     if supported and (not allow_other_unsupported_audio_files):
         return supported
     return normalize_supported_audio_extensions(
-        [".wav", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", *ffmpeg_supported_audio_extensions()]
+        [".wav", ".aiff", ".mp3", ".ogg", ".flac", ".m4a", *ffmpeg_supported_media_extensions()]
     )
 
 
@@ -77,6 +77,7 @@ def ensure_supported_audio_formats_ready(
     detected = normalize_supported_audio_extensions(
         detect_supported_audio_format_extensions(timeout_sec=timeout_sec)
     )
+    detected = normalize_supported_audio_extensions([*detected, *ffmpeg_supported_media_extensions()])
     if detected:
         settings.supported_audio_format_extensions = list(detected)
         save_settings(settings)

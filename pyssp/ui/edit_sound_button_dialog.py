@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pyssp.audio_format_support import build_audio_file_dialog_filter
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.midi_control import (
     midi_binding_to_display,
@@ -76,6 +77,7 @@ class EditSoundButtonDialog(QDialog):
         file_path: str,
         caption: str,
         notes: str,
+        disable_video_loading: bool = False,
         lyric_file: str = "",
         automation_script_path: str = "",
         vocal_removed_file: str = "",
@@ -105,6 +107,10 @@ class EditSoundButtonDialog(QDialog):
         file_layout.addWidget(self.file_edit, 1)
         file_layout.addWidget(self.browse_btn)
         form.addRow(tr("File"), file_row)
+
+        self.disable_video_loading_checkbox = QCheckBox(tr("Do not load video"))
+        self.disable_video_loading_checkbox.setChecked(bool(disable_video_loading))
+        form.addRow("", self.disable_video_loading_checkbox)
 
         self.caption_edit = QLineEdit(caption)
         form.addRow(tr("Caption"), self.caption_edit)
@@ -236,13 +242,13 @@ class EditSoundButtonDialog(QDialog):
             self,
             tr("Select Sound File"),
             start_dir,
-            tr("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a);;All Files (*.*)"),
+            build_audio_file_dialog_filter([], True),
         )
         if file_path:
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, bool, str, str, str, Optional[int], str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -250,6 +256,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.text().strip(),
             self.caption_edit.text().strip(),
             self.notes_edit.text().strip(),
+            bool(self.disable_video_loading_checkbox.isChecked()),
             self.vocal_removed_file_edit.text().strip(),
             self.lyric_file_edit.text().strip(),
             self.automation_script_edit.text().strip(),

@@ -82,6 +82,30 @@ def test_load_set_volume_override(tmp_path):
     assert result.pages["A"][0][1].volume_override_pct is None
 
 
+def test_load_set_disable_video_loading_flag(tmp_path):
+    set_path = tmp_path / "disable_video.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Video Song",
+                "s1=C:\\\\Media\\\\clip.mp4",
+                "pysspdisablevideo1=1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    assert result.pages["A"][0][0].disable_video_loading is True
+
+
 def test_load_set_cue_points_in_ms(tmp_path):
     set_path = tmp_path / "cue_ms.set"
     set_path.write_text(

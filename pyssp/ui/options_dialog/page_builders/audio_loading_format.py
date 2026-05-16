@@ -13,6 +13,7 @@ class AudioLoadingFormatPageMixin:
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
         preload_use_ffmpeg: bool,
+        preload_video_enabled: bool,
         waveform_cache_limit_mb: int,
         waveform_cache_clear_on_launch: bool,
         preload_total_ram_mb: int,
@@ -55,6 +56,9 @@ class AudioLoadingFormatPageMixin:
         self.preload_use_ffmpeg_checkbox = QCheckBox("Use FFmpeg for RAM preload decoding")
         self.preload_use_ffmpeg_checkbox.setChecked(bool(preload_use_ffmpeg))
         options_form.addRow(self.preload_use_ffmpeg_checkbox)
+        self.preload_video_enabled_checkbox = QCheckBox("Preload video onto RAM")
+        self.preload_video_enabled_checkbox.setChecked(bool(preload_video_enabled))
+        options_form.addRow(self.preload_video_enabled_checkbox)
         ffmpeg_note = QLabel("Warning: Enabling this may increase CPU usage during preload.")
         ffmpeg_note.setWordWrap(True)
         options_form.addRow(ffmpeg_note)

@@ -481,6 +481,8 @@ class PagesSlotsMixin:
             notes = clean_set_value(slot.notes or title)
             lines.append(f"c{slot_index}={notes}")
             lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
+            if bool(slot.disable_video_loading):
+                lines.append(f"pysspdisablevideo{slot_index}=1")
             vocal_removed_file = clean_set_value(slot.vocal_removed_file)
             if vocal_removed_file:
                 lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -578,6 +580,7 @@ class PagesSlotsMixin:
             duration = parse_time_string_to_ms(section.get(f"t{i}", "").strip())
             color = parse_delphi_color(section.get(f"co{i}", "").strip())
             volume_override_pct = self._parse_volume_override_pct(section.get(f"v{i}", "").strip())
+            disable_video_loading = str(section.get(f"pysspdisablevideo{i}", "0")).strip() in {"1", "true", "True"}
             sound_hotkey = self._parse_sound_hotkey(section.get(f"h{i}", "").strip())
             cue_start_raw = section.get(f"pysspcuestart{i}", "").strip()
             cue_end_raw = section.get(f"pysspcueend{i}", "").strip()
@@ -603,6 +606,7 @@ class PagesSlotsMixin:
             slots[i - 1] = SoundButtonData(
                 source_type=FILE_SOURCE_TYPE,
                 file_path=path,
+                disable_video_loading=disable_video_loading,
                 vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,
@@ -685,6 +689,7 @@ class PagesSlotsMixin:
             has_midi_hotkey = bool(normalize_midi_binding(slot.sound_midi_hotkey)) and slot.assigned and (not slot.marker)
             has_custom_timecode = self._slot_has_custom_timecode(slot) and slot.assigned and (not slot.marker)
             has_linked_lyric = bool(str(slot.lyric_file or "").strip()) and slot.assigned and (not slot.marker)
+            has_video_media = bool(getattr(self, "_slot_has_video_media", lambda _slot: False)(slot))
             has_sound_button_automation = self._slot_has_sound_button_automation(slot)
             indicator_colors: List[str] = []
             if has_cue:
@@ -695,6 +700,8 @@ class PagesSlotsMixin:
                 indicator_colors.append(self.state_colors["vocal_removed_indicator"])
             if has_linked_lyric:
                 indicator_colors.append(self.state_colors["lyric_indicator"])
+            if has_video_media:
+                indicator_colors.append(self.state_colors["video_indicator"])
             if has_sound_button_automation:
                 indicator_colors.append(
                     self.state_colors["automation_indicator_bypassed"]
@@ -1517,6 +1524,7 @@ class PagesSlotsMixin:
         return SoundButtonData(
             source_type=slot.source_type,
             file_path=slot.file_path,
+            disable_video_loading=bool(slot.disable_video_loading),
             vocal_removed_file=slot.vocal_removed_file,
             title=slot.title,
             notes=slot.notes,
@@ -1584,6 +1592,9 @@ class PagesSlotsMixin:
                     "time_signature_den": int(slot.utility_spec.time_signature_den),
                 },
             }
+        silent_video_source = getattr(self, "_silent_video_source_payload", lambda _slot: None)(slot)
+        if silent_video_source is not None:
+            return silent_video_source
         return str(slot.file_path or "").strip()
 
     def _slot_display_name(self, slot: SoundButtonData) -> str:
@@ -1817,6 +1828,7 @@ class PagesSlotsMixin:
         file_path = slot.file_path
         caption = slot.title
         notes = slot.notes
+        disable_video_loading = bool(slot.disable_video_loading)
         vocal_removed_file = slot.vocal_removed_file
         lyric_file = slot.lyric_file
         automation_script_path = slot.automation_script_path
@@ -1828,6 +1840,7 @@ class PagesSlotsMixin:
                 file_path=file_path,
                 caption=caption,
                 notes=notes,
+                disable_video_loading=disable_video_loading,
                 vocal_removed_file=vocal_removed_file,
                 lyric_file=lyric_file,
                 automation_script_path=automation_script_path,
@@ -1849,6 +1862,7 @@ class PagesSlotsMixin:
                 file_path,
                 caption,
                 notes,
+                disable_video_loading,
                 vocal_removed_file,
                 lyric_file,
                 automation_script_path,
@@ -1910,6 +1924,7 @@ class PagesSlotsMixin:
         self.settings.last_sound_dir = os.path.dirname(file_path)
         self._save_settings()
         slot.file_path = file_path
+        slot.disable_video_loading = bool(disable_video_loading)
         slot.title = caption or os.path.splitext(os.path.basename(file_path))[0]
         slot.notes = notes
         slot.vocal_removed_file = vocal_removed_file
@@ -3289,8 +3304,22 @@ class PagesSlotsMixin:
         try:
             duration_ms, total_units = get_media_ssp_units(file_path)
         except Exception:
+            probe = getattr(self, "_media_probe_for_path", None)
+            if callable(probe):
+                info = probe(file_path)
+                if bool(getattr(info, "has_video", False)) and int(getattr(info, "duration_ms", 0)) > 0:
+                    fallback = (int(info.duration_ms), int(info.duration_ms))
+                    self._ssp_unit_cache[file_path] = fallback
+                    return fallback
             return None
         if duration_ms <= 0 or total_units <= 0:
+            probe = getattr(self, "_media_probe_for_path", None)
+            if callable(probe):
+                info = probe(file_path)
+                if bool(getattr(info, "has_video", False)) and int(getattr(info, "duration_ms", 0)) > 0:
+                    fallback = (int(info.duration_ms), max(1, int(info.duration_ms)))
+                    self._ssp_unit_cache[file_path] = fallback
+                    return fallback
             return None
         self._ssp_unit_cache[file_path] = (duration_ms, total_units)
         return self._ssp_unit_cache[file_path]

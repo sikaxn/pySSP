@@ -158,6 +158,9 @@ def _build_dialog(**overrides):
         preload_audio_memory_limit_mb=defaults["preload_audio_memory_limit_mb"],
         preload_memory_pressure_enabled=defaults["preload_memory_pressure_enabled"],
         preload_pause_on_playback=defaults["preload_pause_on_playback"],
+        preload_video_enabled=bool(
+            overrides.get("preload_video_enabled", defaults["preload_video_enabled"])
+        ),
         preload_total_ram_mb=16384,
         preload_ram_cap_mb=14720,
         timecode_audio_output_device=defaults["timecode_audio_output_device"],
@@ -431,6 +434,109 @@ def _build_dialog(**overrides):
                 defaults["stage_display_lyric_next_italic"],
             )
         ),
+        video_display_mode_playing=str(
+            overrides.get("video_display_mode_playing", defaults["video_display_mode_playing"])
+        ),
+        video_display_mode_idle=str(
+            overrides.get("video_display_mode_idle", defaults["video_display_mode_idle"])
+        ),
+        video_display_show_lyric_overlay=bool(
+            overrides.get("video_display_show_lyric_overlay", defaults["video_display_show_lyric_overlay"])
+        ),
+        video_display_show_stage_alert=bool(
+            overrides.get("video_display_show_stage_alert", defaults["video_display_show_stage_alert"])
+        ),
+        video_display_lyric_overlay_rect=overrides.get(
+            "video_display_lyric_overlay_rect",
+            defaults["video_display_lyric_overlay_rect"],
+        ),
+        video_display_lyric_font_family=str(
+            overrides.get("video_display_lyric_font_family", defaults["video_display_lyric_font_family"])
+        ),
+        video_display_lyric_font_size=int(
+            overrides.get("video_display_lyric_font_size", defaults["video_display_lyric_font_size"])
+        ),
+        video_display_lyric_previous_line_count=int(
+            overrides.get(
+                "video_display_lyric_previous_line_count",
+                defaults["video_display_lyric_previous_line_count"],
+            )
+        ),
+        video_display_lyric_next_line_count=int(
+            overrides.get(
+                "video_display_lyric_next_line_count",
+                defaults["video_display_lyric_next_line_count"],
+            )
+        ),
+        video_display_lyric_played_color=str(
+            overrides.get("video_display_lyric_played_color", defaults["video_display_lyric_played_color"])
+        ),
+        video_display_lyric_current_color=str(
+            overrides.get("video_display_lyric_current_color", defaults["video_display_lyric_current_color"])
+        ),
+        video_display_lyric_next_color=str(
+            overrides.get("video_display_lyric_next_color", defaults["video_display_lyric_next_color"])
+        ),
+        video_display_lyric_auto_adjust_role_sizes=bool(
+            overrides.get(
+                "video_display_lyric_auto_adjust_role_sizes",
+                defaults["video_display_lyric_auto_adjust_role_sizes"],
+            )
+        ),
+        video_display_lyric_played_scale_percent=int(
+            overrides.get(
+                "video_display_lyric_played_scale_percent",
+                defaults["video_display_lyric_played_scale_percent"],
+            )
+        ),
+        video_display_lyric_current_scale_percent=int(
+            overrides.get(
+                "video_display_lyric_current_scale_percent",
+                defaults["video_display_lyric_current_scale_percent"],
+            )
+        ),
+        video_display_lyric_next_scale_percent=int(
+            overrides.get(
+                "video_display_lyric_next_scale_percent",
+                defaults["video_display_lyric_next_scale_percent"],
+            )
+        ),
+        video_display_lyric_played_text_size=int(
+            overrides.get(
+                "video_display_lyric_played_text_size",
+                defaults["video_display_lyric_played_text_size"],
+            )
+        ),
+        video_display_lyric_current_text_size=int(
+            overrides.get(
+                "video_display_lyric_current_text_size",
+                defaults["video_display_lyric_current_text_size"],
+            )
+        ),
+        video_display_lyric_next_text_size=int(
+            overrides.get(
+                "video_display_lyric_next_text_size",
+                defaults["video_display_lyric_next_text_size"],
+            )
+        ),
+        video_display_lyric_played_bold=bool(
+            overrides.get("video_display_lyric_played_bold", defaults["video_display_lyric_played_bold"])
+        ),
+        video_display_lyric_current_bold=bool(
+            overrides.get("video_display_lyric_current_bold", defaults["video_display_lyric_current_bold"])
+        ),
+        video_display_lyric_next_bold=bool(
+            overrides.get("video_display_lyric_next_bold", defaults["video_display_lyric_next_bold"])
+        ),
+        video_display_lyric_played_italic=bool(
+            overrides.get("video_display_lyric_played_italic", defaults["video_display_lyric_played_italic"])
+        ),
+        video_display_lyric_current_italic=bool(
+            overrides.get("video_display_lyric_current_italic", defaults["video_display_lyric_current_italic"])
+        ),
+        video_display_lyric_next_italic=bool(
+            overrides.get("video_display_lyric_next_italic", defaults["video_display_lyric_next_italic"])
+        ),
         sound_button_view_mode=str(
             overrides.get("sound_button_view_mode", defaults["sound_button_view_mode"])
         ),
@@ -564,6 +670,35 @@ def test_web_remote_url_label_tracks_port_changes(qapp):
     assert dialog.web_remote_companion_default_value.text() == ""
     dialog.web_remote_enabled_checkbox.setChecked(True)
     assert dialog.web_remote_enabled_checkbox.isChecked() is True
+
+
+def test_video_display_and_preload_video_controls_round_trip(qapp):
+    dialog = _build_dialog(
+        preload_video_enabled=True,
+        video_display_mode_playing="stage_display",
+        video_display_mode_idle="white_screen",
+        video_display_show_lyric_overlay=True,
+        video_display_show_stage_alert=True,
+        initial_page="Video Display",
+    )
+    try:
+        assert dialog.select_page("Audio Loading & Format")
+        assert dialog.preload_video_enabled_checkbox.isChecked() is True
+
+        assert dialog.select_page("Video Display")
+        assert dialog.video_display_mode_playing_combo.currentData() == "stage_display"
+        assert dialog.video_display_mode_idle_combo.currentData() == "white_screen"
+        assert dialog.video_display_show_lyric_overlay_checkbox.isChecked() is True
+        assert dialog.video_display_show_stage_alert_checkbox.isChecked() is True
+        assert dialog.selected_video_display_mode_playing() == "stage_display"
+        assert dialog.selected_video_display_mode_idle() == "white_screen"
+        assert dialog.selected_video_display_show_lyric_overlay() is True
+        assert dialog.selected_video_display_show_stage_alert() is True
+        assert dialog.selected_preload_video_enabled() is True
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
 
 
 def test_web_remote_authentication_controls_follow_toggles(qapp):

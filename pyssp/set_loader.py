@@ -40,6 +40,7 @@ CUE_SECTION_RE = re.compile(r"^PageQ(\d+)$", re.IGNORECASE)
 class SetSlotData:
     source_type: str = FILE_SOURCE_TYPE
     file_path: str = ""
+    disable_video_loading: bool = False
     vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
@@ -173,6 +174,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
             pages[group][page_index][i - 1] = SetSlotData(
                 source_type=FILE_SOURCE_TYPE,
                 file_path=path,
+                disable_video_loading=str(section.get(f"pysspdisablevideo{i}", "0")).strip() in {"1", "true", "True"},
                 vocal_removed_file=vocal_removed_file,
                 title=title,
                 notes=notes,

@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import threading
 import glob
+import json
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -54,6 +56,48 @@ FFMPEG_AUDIO_EXTENSIONS: List[str] = [
     ".wma",
     ".wv",
 ]
+
+FFMPEG_VIDEO_EXTENSIONS: List[str] = [
+    ".asf",
+    ".avi",
+    ".flv",
+    ".m2ts",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".mts",
+    ".mxf",
+    ".ogv",
+    ".ts",
+    ".vob",
+    ".webm",
+    ".wmv",
+]
+
+
+@dataclass(frozen=True)
+class MediaProbeInfo:
+    duration_ms: int = 0
+    has_audio: bool = False
+    has_video: bool = False
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    rotation_deg: int = 0
+
+
+def _normalize_rotation_degrees(value: object) -> int:
+    try:
+        angle = int(round(float(value or 0.0)))
+    except Exception:
+        return 0
+    normalized = angle % 360
+    if normalized in {0, 90, 180, 270}:
+        return normalized
+    return 0
 
 
 def _normalize_ext(values: List[str]) -> List[str]:
@@ -228,6 +272,16 @@ def ffmpeg_supported_audio_extensions() -> List[str]:
     return _normalize_ext(FFMPEG_AUDIO_EXTENSIONS)
 
 
+def ffmpeg_supported_video_extensions() -> List[str]:
+    if not ffmpeg_available():
+        return []
+    return _normalize_ext(FFMPEG_VIDEO_EXTENSIONS)
+
+
+def ffmpeg_supported_media_extensions() -> List[str]:
+    return _normalize_ext([*ffmpeg_supported_audio_extensions(), *ffmpeg_supported_video_extensions()])
+
+
 def probe_media_duration_ms(file_path: str) -> int:
     path = str(file_path or "").strip()
     if not path or (not os.path.exists(path)):
@@ -340,6 +394,224 @@ def media_has_audio_stream(file_path: str) -> Optional[bool]:
         except Exception:
             pass
     return None
+
+
+def media_has_video_stream(file_path: str) -> Optional[bool]:
+    path = str(file_path or "").strip()
+    if not path or (not os.path.exists(path)):
+        return None
+    ffprobe = get_ffprobe_executable()
+    if ffprobe:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                capture_output=True,
+                timeout=6,
+                check=False,
+                **_subprocess_platform_kwargs(),
+            )
+            values = [
+                str(token or "").strip().lower()
+                for token in (proc.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+                if str(token or "").strip()
+            ]
+            if "video" in values:
+                return True
+            if proc.returncode == 0 and values:
+                return False
+        except Exception:
+            pass
+    ffmpeg = get_ffmpeg_executable()
+    if ffmpeg:
+        try:
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", path],
+                capture_output=True,
+                timeout=6,
+                check=False,
+                **_subprocess_platform_kwargs(),
+            )
+            blob = "\n".join(
+                [
+                    (proc.stdout or b"").decode("utf-8", errors="replace"),
+                    (proc.stderr or b"").decode("utf-8", errors="replace"),
+                ]
+            )
+            return bool(re.search(r"Stream #\d+:\d+.*Video:", blob, flags=re.IGNORECASE))
+        except Exception:
+            pass
+    return None
+
+
+def _probe_media_info_with_ffmpeg(path: str) -> MediaProbeInfo:
+    ffmpeg = get_ffmpeg_executable()
+    if not ffmpeg:
+        return MediaProbeInfo()
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", path],
+            capture_output=True,
+            timeout=8,
+            check=False,
+            **_subprocess_platform_kwargs(),
+        )
+    except Exception:
+        return MediaProbeInfo()
+    blob = "\n".join(
+        [
+            (proc.stdout or b"").decode("utf-8", errors="replace"),
+            (proc.stderr or b"").decode("utf-8", errors="replace"),
+        ]
+    )
+    duration_ms = 0
+    has_audio = bool(re.search(r"Stream #\d+:\d+.*Audio:", blob, flags=re.IGNORECASE))
+    has_video = bool(re.search(r"Stream #\d+:\d+.*Video:", blob, flags=re.IGNORECASE))
+    width = 0
+    height = 0
+    fps = 0.0
+    rotation_deg = 0
+    duration_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", blob)
+    if duration_match:
+        try:
+            hours = int(duration_match.group(1))
+            minutes = int(duration_match.group(2))
+            seconds = float(duration_match.group(3))
+            duration_ms = int(round(max(0.0, (hours * 3600.0) + (minutes * 60.0) + seconds) * 1000.0))
+        except Exception:
+            duration_ms = 0
+    video_match = re.search(
+        r"Stream #\d+:\d+.*Video:.*?(\d{2,5})x(\d{2,5}).*?(\d+(?:\.\d+)?)\s+fps",
+        blob,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if video_match:
+        try:
+            width = max(0, int(video_match.group(1)))
+            height = max(0, int(video_match.group(2)))
+            fps = max(0.0, float(video_match.group(3)))
+        except Exception:
+            width = 0
+            height = 0
+            fps = 0.0
+    rotation_match = re.search(r"rotation of\s*(-?\d+(?:\.\d+)?)\s*degrees", blob, flags=re.IGNORECASE)
+    if rotation_match:
+        rotation_deg = _normalize_rotation_degrees(rotation_match.group(1))
+    if not rotation_deg:
+        display_matrix_match = re.search(r"rotation[:=]\s*(-?\d+(?:\.\d+)?)", blob, flags=re.IGNORECASE)
+        if display_matrix_match:
+            rotation_deg = _normalize_rotation_degrees(display_matrix_match.group(1))
+    return MediaProbeInfo(
+        duration_ms=max(0, int(duration_ms)),
+        has_audio=bool(has_audio),
+        has_video=bool(has_video),
+        width=max(0, int(width)),
+        height=max(0, int(height)),
+        fps=max(0.0, float(fps)),
+        rotation_deg=rotation_deg,
+    )
+
+
+def probe_media_info(file_path: str) -> MediaProbeInfo:
+    path = str(file_path or "").strip()
+    if not path or (not os.path.exists(path)):
+        return MediaProbeInfo()
+    ffprobe = get_ffprobe_executable()
+    if ffprobe:
+        try:
+            proc = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data=rotation",
+                    "-of",
+                    "json",
+                    path,
+                ],
+                capture_output=True,
+                timeout=8,
+                check=False,
+                **_subprocess_platform_kwargs(),
+            )
+            payload = json.loads((proc.stdout or b"{}").decode("utf-8", errors="replace") or "{}")
+            format_info = payload.get("format", {}) if isinstance(payload, dict) else {}
+            streams = payload.get("streams", []) if isinstance(payload, dict) else []
+            duration_ms = 0
+            try:
+                duration_ms = int(round(max(0.0, float(format_info.get("duration", 0.0) or 0.0)) * 1000.0))
+            except Exception:
+                duration_ms = 0
+            has_audio = False
+            has_video = False
+            width = 0
+            height = 0
+            fps = 0.0
+            rotation_deg = 0
+            for stream in list(streams or []):
+                if not isinstance(stream, dict):
+                    continue
+                codec_type = str(stream.get("codec_type", "") or "").strip().lower()
+                if codec_type == "audio":
+                    has_audio = True
+                elif codec_type == "video":
+                    has_video = True
+                    width = max(width, int(stream.get("width", 0) or 0))
+                    height = max(height, int(stream.get("height", 0) or 0))
+                    raw_rate = str(stream.get("avg_frame_rate", "") or stream.get("r_frame_rate", "") or "").strip()
+                    if raw_rate and raw_rate != "0/0":
+                        try:
+                            if "/" in raw_rate:
+                                num_text, den_text = raw_rate.split("/", 1)
+                                den = float(den_text or 0.0)
+                                if den > 0.0:
+                                    fps = max(fps, float(num_text or 0.0) / den)
+                            else:
+                                fps = max(fps, float(raw_rate))
+                        except Exception:
+                            pass
+                    tags = stream.get("tags", {}) if isinstance(stream.get("tags", {}), dict) else {}
+                    if not rotation_deg:
+                        rotation_deg = _normalize_rotation_degrees(tags.get("rotate", 0))
+                    if not rotation_deg:
+                        side_data_list = stream.get("side_data_list", [])
+                        for side_data in list(side_data_list or []):
+                            if not isinstance(side_data, dict):
+                                continue
+                            rotation_deg = _normalize_rotation_degrees(side_data.get("rotation", 0))
+                            if rotation_deg:
+                                break
+            if duration_ms or has_audio or has_video:
+                return MediaProbeInfo(
+                    duration_ms=max(0, int(duration_ms)),
+                    has_audio=bool(has_audio),
+                    has_video=bool(has_video),
+                    width=max(0, int(width)),
+                    height=max(0, int(height)),
+                    fps=max(0.0, float(fps)),
+                    rotation_deg=rotation_deg,
+                )
+        except Exception:
+            pass
+    fallback = _probe_media_info_with_ffmpeg(path)
+    if fallback.duration_ms or fallback.has_audio or fallback.has_video or fallback.width or fallback.height or fallback.fps:
+        return fallback
+    return MediaProbeInfo(
+        duration_ms=probe_media_duration_ms(path),
+        has_audio=bool(media_has_audio_stream(path)),
+        has_video=bool(media_has_video_stream(path)),
+    )
 
 
 class FFmpegPCMStream:

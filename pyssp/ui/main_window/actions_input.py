@@ -1081,11 +1081,17 @@ class ActionsInputMixin:
         total_ms = self._transport_total_ms()
         clamped_display = max(0, min(total_ms, int(display_ms)))
         absolute = max(0, int(self._transport_absolute_ms_for_display(clamped_display)))
+        invalidate_video = getattr(self, "_invalidate_video_playback_sync", None)
+        if callable(invalidate_video):
+            invalidate_video(refresh=False)
         self.player.setPosition(absolute)
         self._sync_shadow_transport_from_primary(self.player)
         self.seek_slider.setValue(clamped_display)
         self._apply_main_jog_outside_cue_behavior(absolute)
         self._mtc_sender.request_resync()
+        refresh_video = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video):
+            refresh_video(force=True)
         return clamped_display, absolute
 
     def _on_seek_value_changed(self, value: int) -> None:
@@ -1531,6 +1537,8 @@ class ActionsInputMixin:
                         notes = clean_set_value(slot.notes or title)
                         lines.append(f"c{slot_index}={notes}")
                         lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
+                        if bool(slot.disable_video_loading):
+                            lines.append(f"pysspdisablevideo{slot_index}=1")
                         vocal_removed_file = clean_set_value(vocal_removed_overrides.get(slot_key, slot.vocal_removed_file))
                         if vocal_removed_file:
                             lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -1622,6 +1630,7 @@ class ActionsInputMixin:
                     self.data[group][page_index][slot_index] = SoundButtonData(
                         source_type=src.source_type,
                         file_path=src.file_path,
+                        disable_video_loading=bool(src.disable_video_loading),
                         vocal_removed_file=src.vocal_removed_file,
                         title=src.title,
                         notes=src.notes,
@@ -1770,6 +1779,7 @@ class ActionsInputMixin:
             preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
             preload_pause_on_playback=self.preload_pause_on_playback,
             preload_use_ffmpeg=self.preload_use_ffmpeg,
+            preload_video_enabled=self.preload_video_enabled,
             waveform_cache_limit_mb=self.waveform_cache_limit_mb,
             waveform_cache_clear_on_launch=self.waveform_cache_clear_on_launch,
             preload_total_ram_mb=total_ram_mb,
@@ -1834,6 +1844,7 @@ class ActionsInputMixin:
                 "vocal_removed_indicator": self.state_colors["vocal_removed_indicator"],
                 "midi_indicator": self.state_colors["midi_indicator"],
                 "lyric_indicator": self.state_colors["lyric_indicator"],
+                "video_indicator": self.state_colors["video_indicator"],
                 "automation_indicator": self.state_colors["automation_indicator"],
                 "automation_indicator_bypassed": self.state_colors["automation_indicator_bypassed"],
                 "automation_script_indicator": self.state_colors["automation_script_indicator"],
@@ -1906,6 +1917,31 @@ class ActionsInputMixin:
             stage_display_lyric_played_italic=self.stage_display_lyric_role_italic["played"],
             stage_display_lyric_current_italic=self.stage_display_lyric_role_italic["current"],
             stage_display_lyric_next_italic=self.stage_display_lyric_role_italic["next"],
+            video_display_mode_playing=self.video_display_mode_playing,
+            video_display_mode_idle=self.video_display_mode_idle,
+            video_display_show_lyric_overlay=self.video_display_show_lyric_overlay,
+            video_display_show_stage_alert=self.video_display_show_stage_alert,
+            video_display_lyric_overlay_rect=self.video_display_lyric_overlay_rect,
+            video_display_lyric_font_family=self.video_display_lyric_font_family,
+            video_display_lyric_font_size=self.video_display_lyric_font_size,
+            video_display_lyric_previous_line_count=self.video_display_lyric_previous_line_count,
+            video_display_lyric_next_line_count=self.video_display_lyric_next_line_count,
+            video_display_lyric_played_color=self.video_display_lyric_role_colors["played"],
+            video_display_lyric_current_color=self.video_display_lyric_role_colors["current"],
+            video_display_lyric_next_color=self.video_display_lyric_role_colors["next"],
+            video_display_lyric_auto_adjust_role_sizes=self.video_display_lyric_auto_adjust_role_sizes,
+            video_display_lyric_played_scale_percent=self.video_display_lyric_role_scale_percents["played"],
+            video_display_lyric_current_scale_percent=self.video_display_lyric_role_scale_percents["current"],
+            video_display_lyric_next_scale_percent=self.video_display_lyric_role_scale_percents["next"],
+            video_display_lyric_played_text_size=self.video_display_lyric_role_sizes["played"],
+            video_display_lyric_current_text_size=self.video_display_lyric_role_sizes["current"],
+            video_display_lyric_next_text_size=self.video_display_lyric_role_sizes["next"],
+            video_display_lyric_played_bold=self.video_display_lyric_role_bold["played"],
+            video_display_lyric_current_bold=self.video_display_lyric_role_bold["current"],
+            video_display_lyric_next_bold=self.video_display_lyric_role_bold["next"],
+            video_display_lyric_played_italic=self.video_display_lyric_role_italic["played"],
+            video_display_lyric_current_italic=self.video_display_lyric_role_italic["current"],
+            video_display_lyric_next_italic=self.video_display_lyric_role_italic["next"],
             sound_button_view_mode=self.sound_button_view_mode,
             sound_button_grid_columns=self.sound_button_grid_columns,
             sound_button_grid_rows=self.sound_button_grid_rows,
@@ -1983,6 +2019,21 @@ class ActionsInputMixin:
         self.lyric_display_role_sizes = dialog.selected_lyric_display_role_sizes()
         self.lyric_display_role_bold = dialog.selected_lyric_display_role_bold()
         self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
+        self.video_display_mode_playing = dialog.selected_video_display_mode_playing()
+        self.video_display_mode_idle = dialog.selected_video_display_mode_idle()
+        self.video_display_show_lyric_overlay = dialog.selected_video_display_show_lyric_overlay()
+        self.video_display_show_stage_alert = dialog.selected_video_display_show_stage_alert()
+        self.video_display_lyric_overlay_rect = dialog.selected_video_display_lyric_overlay_rect()
+        self.video_display_lyric_font_family = dialog.selected_video_display_lyric_font_family()
+        self.video_display_lyric_font_size = dialog.selected_video_display_lyric_font_size()
+        self.video_display_lyric_previous_line_count = dialog.selected_video_display_lyric_previous_line_count()
+        self.video_display_lyric_next_line_count = dialog.selected_video_display_lyric_next_line_count()
+        self.video_display_lyric_role_colors = dialog.selected_video_display_lyric_role_colors()
+        self.video_display_lyric_auto_adjust_role_sizes = dialog.selected_video_display_lyric_auto_adjust_role_sizes()
+        self.video_display_lyric_role_scale_percents = dialog.selected_video_display_lyric_role_scale_percents()
+        self.video_display_lyric_role_sizes = dialog.selected_video_display_lyric_role_sizes()
+        self.video_display_lyric_role_bold = dialog.selected_video_display_lyric_role_bold()
+        self.video_display_lyric_role_italic = dialog.selected_video_display_lyric_role_italic()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
         self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()
@@ -2063,6 +2114,10 @@ class ActionsInputMixin:
         self.state_colors["lyric_indicator"] = selected_colors.get(
             "lyric_indicator",
             self.state_colors["lyric_indicator"],
+        )
+        self.state_colors["video_indicator"] = selected_colors.get(
+            "video_indicator",
+            self.state_colors["video_indicator"],
         )
         self.state_colors["automation_indicator"] = selected_colors.get(
             "automation_indicator",
@@ -2247,6 +2302,7 @@ class ActionsInputMixin:
         self.preload_memory_pressure_enabled = dialog.selected_preload_memory_pressure_enabled()
         self.preload_pause_on_playback = dialog.selected_preload_pause_on_playback()
         self.preload_use_ffmpeg = dialog.selected_preload_use_ffmpeg()
+        self.preload_video_enabled = dialog.selected_preload_video_enabled()
         self.waveform_cache_limit_mb = dialog.selected_waveform_cache_limit_mb()
         self.waveform_cache_clear_on_launch = dialog.selected_waveform_cache_clear_on_launch()
         self._apply_audio_preload_cache_settings()

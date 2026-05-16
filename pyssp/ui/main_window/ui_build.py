@@ -73,6 +73,7 @@ class UiBuildMixin:
         self._build_auxiliary_tool_docks()
         self._build_saved_divider_docks()
         self._build_timecode_dock()
+        self._build_video_control_dock()
         self._apply_top_control_layout()
         if not self._restore_saved_dock_layout():
             self._apply_default_dock_layout()
@@ -311,6 +312,7 @@ class UiBuildMixin:
             self.automation_script_navigator_dock,
             self.available_commands_dock,
             self.timecode_dock,
+            self.video_control_dock,
         ]
         docks.extend(self._divider_docks.get(name) for name in self.dock_dividers)
         return [dock for dock in docks if dock is not None]
@@ -539,6 +541,7 @@ class UiBuildMixin:
             self.automation_script_navigator_dock,
             self.available_commands_dock,
             self.timecode_dock,
+            self.video_control_dock,
         ]
         docks.extend(self._divider_docks.values())
         return [dock for dock in docks if dock is not None]
@@ -583,6 +586,12 @@ class UiBuildMixin:
                 self.timecode_dock.show()
             else:
                 self._park_hidden_dock(self.timecode_dock)
+        if self.video_control_dock is not None:
+            if self.show_video_control_panel:
+                self.video_control_dock.setFloating(False)
+                self.video_control_dock.show()
+            else:
+                self._park_hidden_dock(self.video_control_dock)
 
         self.addDockWidget(Qt.LeftDockWidgetArea, self.group_dock)
         self.splitDockWidget(self.group_dock, self.main_button_dock, Qt.Horizontal)
@@ -696,9 +705,12 @@ class UiBuildMixin:
     def _restore_default_dock_layout(self) -> None:
         self._remove_all_divider_docks()
         self.show_timecode_panel = False
+        self.show_video_control_panel = False
         self.standalone_docks = []
         if self.timecode_dock is not None:
             self.timecode_dock.hide()
+        if self.video_control_dock is not None:
+            self.video_control_dock.hide()
         self.dock_layout_state = ""
         self._apply_default_dock_layout()
         self.standalone_docks = []
@@ -993,9 +1005,15 @@ class UiBuildMixin:
         lyric_display_action = QAction("Open Lyric Display", self)
         lyric_display_action.triggered.connect(self._open_lyric_display)
         display_menu.addAction(lyric_display_action)
+        video_display_action = QAction("Open Video Display", self)
+        video_display_action.triggered.connect(self._open_video_display)
+        display_menu.addAction(video_display_action)
         display_settings_action = QAction("Stage and Lyric Display Setting", self)
         display_settings_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Stage and Lyric Display"))
         display_menu.addAction(display_settings_action)
+        video_settings_action = QAction("Video Display Setting", self)
+        video_settings_action.triggered.connect(lambda: self._open_options_dialog(initial_page="Video Display"))
+        display_menu.addAction(video_settings_action)
         self._lyric_display_transparent_mode_action = QAction("Lyric Display Transparent Mode", self)
         self._lyric_display_transparent_mode_action.setCheckable(True)
         self._lyric_display_transparent_mode_action.setChecked(bool(self.lyric_display_transparent_mode))
@@ -1037,6 +1055,12 @@ class UiBuildMixin:
         timecode_panel_action.triggered.connect(self._toggle_timecode_panel)
         timecode_menu.addAction(timecode_panel_action)
         self._menu_actions["timecode_panel"] = timecode_panel_action
+        video_control_panel_action = QAction("Video Control Panel", self)
+        video_control_panel_action.setCheckable(True)
+        video_control_panel_action.setChecked(bool(self.show_video_control_panel))
+        video_control_panel_action.triggered.connect(self._toggle_video_control_panel)
+        timecode_menu.addAction(video_control_panel_action)
+        self._menu_actions["video_control_panel"] = video_control_panel_action
 
         tools_menu = self.menuBar().addMenu("Tools")
         show_colour_legend_action = QAction("Show Colour Legend", self)
@@ -1397,6 +1421,14 @@ class UiBuildMixin:
     def _audio_engine_insight_snapshot_data(self) -> dict:
         ref_player, ref_key = self._timecode_reference_context()
         engine_left, engine_right = get_engine_output_meter_levels()
+        ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
+        ffprobe_path = str(get_ffprobe_executable() or "").strip()
+        current_video_slot = None
+        current_video_probe = MediaProbeInfo()
+        try:
+            current_video_slot, current_video_probe = self._current_video_slot_and_probe()
+        except Exception:
+            current_video_slot, current_video_probe = None, MediaProbeInfo()
         summary = [
             ("audio_output_device", self.audio_output_device or "default"),
             ("timecode_audio_output_device", self.timecode_audio_output_device or "none"),
@@ -1409,6 +1441,26 @@ class UiBuildMixin:
             ("dsp_config", self._describe_dsp_config(self._dsp_config)),
             ("engine_output_meter", f"({engine_left:.4f}, {engine_right:.4f})"),
             ("timecode_reference", "none" if ref_player is None else f"{self._audio_player_label(ref_player)} slot={ref_key}"),
+            ("ffmpeg_available", ffmpeg_available()),
+            ("ffmpeg_source", ffmpeg_source()),
+            ("ffmpeg_path", ffmpeg_path or "not found"),
+            ("ffprobe_path", ffprobe_path or "not found"),
+            ("ffmpeg_version", ffmpeg_version_text() or "unknown"),
+            ("video_route_mode", getattr(self, "_active_video_route_mode", lambda: "unknown")()),
+            ("video_targets_visible", bool(getattr(self, "_video_display_target_visible", lambda: False)())),
+            ("video_transport_revision", int(getattr(self, "_video_transport_revision", 0) or 0)),
+            ("current_video_slot", None if current_video_slot is None else str(current_video_slot.file_path or "").strip()),
+            (
+                "current_video_probe",
+                (
+                    f"video={bool(current_video_probe.has_video)} "
+                    f"audio={bool(current_video_probe.has_audio)} "
+                    f"size={int(current_video_probe.width)}x{int(current_video_probe.height)} "
+                    f"fps={float(current_video_probe.fps):.2f} "
+                    f"duration_ms={int(current_video_probe.duration_ms)} "
+                    f"rotation={int(current_video_probe.rotation_deg)}"
+                ),
+            ),
         ]
         player_records: List[dict] = []
         runtime_players = self._insight_runtime_players()
@@ -1485,6 +1537,13 @@ class UiBuildMixin:
         except Exception:
             volume = 0
         title = "" if slot is None else self._build_now_playing_text(slot)
+        file_path = "" if slot is None else str(slot.file_path or "").strip()
+        media_probe = MediaProbeInfo()
+        if file_path:
+            try:
+                media_probe = probe_media_info(file_path)
+            except Exception:
+                media_probe = MediaProbeInfo()
         details = [
             ("index", index),
             ("label", label),
@@ -1493,7 +1552,9 @@ class UiBuildMixin:
             ("state", state_name),
             ("slot_key", slot_key),
             ("title", title),
-            ("file_path", "" if slot is None else slot.file_path),
+            ("file_path", file_path),
+            ("source_type", "" if slot is None else slot.source_type),
+            ("disable_video_loading", False if slot is None else bool(getattr(slot, "disable_video_loading", False))),
             ("volume", volume),
             ("slot_volume_pct", self._slot_pct_for_player(player)),
             ("duration_ms", duration_ms),
@@ -1502,6 +1563,13 @@ class UiBuildMixin:
             ("remaining_ms", max(0, duration_ms - position_ms)),
             ("streaming_mode", bool(getattr(player, "_streaming_mode", False))),
             ("media_path", getattr(player, "_media_path", "")),
+            ("media_probe_has_audio", bool(media_probe.has_audio)),
+            ("media_probe_has_video", bool(media_probe.has_video)),
+            ("media_probe_width", int(media_probe.width)),
+            ("media_probe_height", int(media_probe.height)),
+            ("media_probe_fps", float(media_probe.fps)),
+            ("media_probe_duration_ms", int(media_probe.duration_ms)),
+            ("media_probe_rotation_deg", int(media_probe.rotation_deg)),
             ("cue_end_override_ms", self._player_end_override_ms.get(pid)),
             ("ignore_cue_end", pid in self._player_ignore_cue_end),
             ("started_at_monotonic", self._player_started_map.get(pid)),
@@ -1808,7 +1876,20 @@ class UiBuildMixin:
         root.addWidget(self._build_sound_button_legend_widget(), 0)
 
         self._rebuild_sound_button_panel()
+        QTimer.singleShot(0, lambda: self._refresh_sound_button_panel_after_show(0))
         return panel
+
+    def _refresh_sound_button_panel_after_show(self, attempt: int = 0) -> None:
+        if self.sound_button_stack is None or self.sound_button_grid_scroll is None:
+            return
+        viewport_width = max(0, int(self.sound_button_grid_scroll.viewport().width()))
+        if viewport_width <= 0:
+            if attempt < 5:
+                QTimer.singleShot(20, lambda attempt=attempt + 1: self._refresh_sound_button_panel_after_show(attempt))
+            return
+        self._rebuild_sound_button_panel()
+        if attempt < 5:
+            QTimer.singleShot(40, lambda attempt=attempt + 1: self._refresh_sound_button_panel_after_show(attempt))
 
     def _ensure_sound_button_widgets(self, count: int) -> None:
         target = max(0, int(count))
@@ -2042,6 +2123,8 @@ class UiBuildMixin:
         viewport_width = max(0, self.sound_button_grid_scroll.viewport().width())
         grid_layout = self.sound_button_grid_layout
         if grid_layout is None:
+            return
+        if viewport_width <= 0:
             return
         rendered_columns = 0
         try:

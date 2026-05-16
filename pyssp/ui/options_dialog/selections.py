@@ -133,6 +133,76 @@ class SelectionMixin:
     def selected_disable_path_safety(self) -> bool:
         return bool(self.disable_path_safety_checkbox.isChecked())
 
+    def selected_video_display_mode_playing(self) -> str:
+        return str(self.video_display_mode_playing_combo.currentData() or "video")
+
+    def selected_video_display_mode_idle(self) -> str:
+        return str(self.video_display_mode_idle_combo.currentData() or "blank")
+
+    def selected_video_display_show_lyric_overlay(self) -> bool:
+        return bool(self.video_display_show_lyric_overlay_checkbox.isChecked())
+
+    def selected_video_display_show_stage_alert(self) -> bool:
+        return bool(self.video_display_show_stage_alert_checkbox.isChecked())
+
+    def selected_video_display_lyric_overlay_rect(self) -> Dict[str, int]:
+        gadgets = self.video_display_overlay_editor.gadgets()
+        spec = dict(gadgets.get("lyric", {}))
+        return {
+            "x": int(spec.get("x", 800)),
+            "y": int(spec.get("y", 6800)),
+            "w": int(spec.get("w", 8400)),
+            "h": int(spec.get("h", 2400)),
+        }
+
+    def selected_video_display_lyric_font_family(self) -> str:
+        if hasattr(self.video_display_lyric_font_family_combo, "currentFont"):
+            return str(self.video_display_lyric_font_family_combo.currentFont().family() or "").strip()
+        return str(self.video_display_lyric_font_family_combo.currentData() or "").strip()
+
+    def selected_video_display_lyric_font_size(self) -> int:
+        return max(10, int(self.video_display_lyric_font_size_spin.value()))
+
+    def selected_video_display_lyric_previous_line_count(self) -> int:
+        return max(0, int(self.video_display_lyric_previous_line_count_spin.value()))
+
+    def selected_video_display_lyric_next_line_count(self) -> int:
+        return max(0, int(self.video_display_lyric_next_line_count_spin.value()))
+
+    def selected_video_display_lyric_role_colors(self) -> Dict[str, str]:
+        return dict(self._video_display_lyric_role_colors)
+
+    def selected_video_display_lyric_auto_adjust_role_sizes(self) -> bool:
+        return bool(self.video_display_lyric_auto_adjust_role_sizes_checkbox.isChecked())
+
+    def selected_video_display_lyric_role_scale_percents(self) -> Dict[str, int]:
+        return {
+            "played": max(25, min(300, int(self.video_display_lyric_played_scale_percent_spin.value()))),
+            "current": max(25, min(300, int(self.video_display_lyric_current_scale_percent_spin.value()))),
+            "next": max(25, min(300, int(self.video_display_lyric_next_scale_percent_spin.value()))),
+        }
+
+    def selected_video_display_lyric_role_sizes(self) -> Dict[str, int]:
+        return {
+            "played": max(8, int(self.video_display_lyric_played_text_size_spin.value())),
+            "current": max(8, int(self.video_display_lyric_current_text_size_spin.value())),
+            "next": max(8, int(self.video_display_lyric_next_text_size_spin.value())),
+        }
+
+    def selected_video_display_lyric_role_bold(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.video_display_lyric_played_bold_checkbox.isChecked()),
+            "current": bool(self.video_display_lyric_current_bold_checkbox.isChecked()),
+            "next": bool(self.video_display_lyric_next_bold_checkbox.isChecked()),
+        }
+
+    def selected_video_display_lyric_role_italic(self) -> Dict[str, bool]:
+        return {
+            "played": bool(self.video_display_lyric_played_italic_checkbox.isChecked()),
+            "current": bool(self.video_display_lyric_current_italic_checkbox.isChecked()),
+            "next": bool(self.video_display_lyric_next_italic_checkbox.isChecked()),
+        }
+
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
 
@@ -161,6 +231,9 @@ class SelectionMixin:
 
     def selected_preload_use_ffmpeg(self) -> bool:
         return bool(self.preload_use_ffmpeg_checkbox.isChecked())
+
+    def selected_preload_video_enabled(self) -> bool:
+        return bool(self.preload_video_enabled_checkbox.isChecked())
 
     def selected_waveform_cache_limit_mb(self) -> int:
         step_mb = int(self._waveform_cache_slider_step_mb)

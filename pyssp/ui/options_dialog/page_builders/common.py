@@ -32,6 +32,8 @@ class CommonPageBuilderMixin:
             needle = "stage and lyric display"
         if needle in {"stage display", "lyric", "lyric display", "stage and lyric display setting"}:
             needle = "stage and lyric display"
+        if needle in {"video", "video display", "video display setting"}:
+            needle = "video display"
         if needle in {"companion satellite", "automation setup"}:
             needle = "automation"
         if needle == "audio device / timecode":

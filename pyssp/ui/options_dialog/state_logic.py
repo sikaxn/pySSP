@@ -50,6 +50,14 @@ class StateLogicMixin:
                 "next": self.stage_display_lyric_next_color_btn,
             }
             title = "Stage Display Lyric Color"
+        elif scope == "video_display":
+            colors = self._video_display_lyric_role_colors
+            buttons = {
+                "played": self.video_display_lyric_played_color_btn,
+                "current": self.video_display_lyric_current_color_btn,
+                "next": self.video_display_lyric_next_color_btn,
+            }
+            title = "Video Display Lyric Color"
         else:
             colors = self._lyric_display_role_colors
             buttons = {
@@ -95,6 +103,9 @@ class StateLogicMixin:
             if source_title == "stage and lyric display":
                 self._restore_display_defaults()
                 self._restore_lyric_defaults()
+                return
+            if source_title == "video display":
+                self._restore_video_display_defaults()
                 return
             if source_title == "window layout":
                 self._restore_window_layout_defaults()
@@ -300,6 +311,57 @@ class StateLogicMixin:
         self._sync_alert_edit_button_text()
         self._sync_display_font_preview()
         self._sync_stage_display_lyric_role_size_mode()
+
+    def _restore_video_display_defaults(self) -> None:
+        d = self._DEFAULTS
+        self._set_combo_data_or_default(
+            self.video_display_mode_playing_combo,
+            str(d.get("video_display_mode_playing", "video")),
+            "video",
+        )
+        self._set_combo_data_or_default(
+            self.video_display_mode_idle_combo,
+            str(d.get("video_display_mode_idle", "blank")),
+            "blank",
+        )
+        self.video_display_show_lyric_overlay_checkbox.setChecked(bool(d.get("video_display_show_lyric_overlay", False)))
+        self.video_display_show_stage_alert_checkbox.setChecked(bool(d.get("video_display_show_stage_alert", False)))
+        overlay_gadgets = self.video_display_overlay_editor.gadgets()
+        lyric_spec = overlay_gadgets.get("lyric", {})
+        lyric_spec.update(dict(d.get("video_display_lyric_overlay_rect", {"x": 800, "y": 6800, "w": 8400, "h": 2400})))
+        overlay_gadgets["lyric"] = lyric_spec
+        self.video_display_overlay_editor.set_gadgets(overlay_gadgets)
+        self._populate_display_font_combo(
+            self.video_display_lyric_font_family_combo,
+            str(d.get("video_display_lyric_font_family", "")),
+        )
+        self.video_display_lyric_font_size_spin.setValue(int(d.get("video_display_lyric_font_size", 36)))
+        self.video_display_lyric_previous_line_count_spin.setValue(int(d.get("video_display_lyric_previous_line_count", 0)))
+        self.video_display_lyric_next_line_count_spin.setValue(int(d.get("video_display_lyric_next_line_count", 0)))
+        self._video_display_lyric_role_colors = {
+            "played": str(d.get("video_display_lyric_played_color", "#A0A0A0")),
+            "current": str(d.get("video_display_lyric_current_color", "#FFD400")),
+            "next": str(d.get("video_display_lyric_next_color", "#FFFFFF")),
+        }
+        self.video_display_lyric_auto_adjust_role_sizes_checkbox.setChecked(
+            bool(d.get("video_display_lyric_auto_adjust_role_sizes", True))
+        )
+        self.video_display_lyric_played_scale_percent_spin.setValue(int(d.get("video_display_lyric_played_scale_percent", 70)))
+        self.video_display_lyric_current_scale_percent_spin.setValue(int(d.get("video_display_lyric_current_scale_percent", 115)))
+        self.video_display_lyric_next_scale_percent_spin.setValue(int(d.get("video_display_lyric_next_scale_percent", 90)))
+        self.video_display_lyric_played_text_size_spin.setValue(int(d.get("video_display_lyric_played_text_size", 24)))
+        self.video_display_lyric_current_text_size_spin.setValue(int(d.get("video_display_lyric_current_text_size", 40)))
+        self.video_display_lyric_next_text_size_spin.setValue(int(d.get("video_display_lyric_next_text_size", 32)))
+        self.video_display_lyric_played_bold_checkbox.setChecked(bool(d.get("video_display_lyric_played_bold", True)))
+        self.video_display_lyric_current_bold_checkbox.setChecked(bool(d.get("video_display_lyric_current_bold", True)))
+        self.video_display_lyric_next_bold_checkbox.setChecked(bool(d.get("video_display_lyric_next_bold", True)))
+        self.video_display_lyric_played_italic_checkbox.setChecked(bool(d.get("video_display_lyric_played_italic", False)))
+        self.video_display_lyric_current_italic_checkbox.setChecked(bool(d.get("video_display_lyric_current_italic", False)))
+        self.video_display_lyric_next_italic_checkbox.setChecked(bool(d.get("video_display_lyric_next_italic", False)))
+        self._refresh_color_button(self.video_display_lyric_played_color_btn, self._video_display_lyric_role_colors["played"])
+        self._refresh_color_button(self.video_display_lyric_current_color_btn, self._video_display_lyric_role_colors["current"])
+        self._refresh_color_button(self.video_display_lyric_next_color_btn, self._video_display_lyric_role_colors["next"])
+        self._sync_video_display_lyric_role_size_mode()
 
     def _restore_window_layout_defaults(self) -> None:
         d = self._DEFAULTS
@@ -771,6 +833,7 @@ class StateLogicMixin:
         self.preload_memory_pressure_checkbox.setChecked(bool(d["preload_memory_pressure_enabled"]))
         self.preload_pause_on_playback_checkbox.setChecked(bool(d["preload_pause_on_playback"]))
         self.preload_use_ffmpeg_checkbox.setChecked(bool(d["preload_use_ffmpeg"]))
+        self.preload_video_enabled_checkbox.setChecked(bool(d.get("preload_video_enabled", False)))
         step_mb = int(self._preload_slider_step_mb)
         target_mb = max(step_mb, min(int(self._preload_ram_cap_mb), int(d["preload_audio_memory_limit_mb"])))
         self.preload_memory_slider.setValue(max(1, target_mb // step_mb))

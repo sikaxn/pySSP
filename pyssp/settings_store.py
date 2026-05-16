@@ -91,6 +91,33 @@ def default_stage_display_layout() -> list[str]:
     ]
 
 
+def default_video_display_lyric_overlay_rect() -> dict[str, int]:
+    return {
+        "x": 800,
+        "y": 6800,
+        "w": 8400,
+        "h": 2400,
+    }
+
+
+def _normalize_video_display_lyric_overlay_rect(value: object) -> dict[str, int]:
+    base = default_video_display_lyric_overlay_rect()
+    source = dict(value) if isinstance(value, dict) else {}
+    output: dict[str, int] = {}
+    for key, fallback, minimum in [
+        ("x", int(base["x"]), 0),
+        ("y", int(base["y"]), 0),
+        ("w", int(base["w"]), 600),
+        ("h", int(base["h"]), 600),
+    ]:
+        try:
+            parsed = int(source.get(key, fallback))
+        except Exception:
+            parsed = fallback
+        output[key] = max(minimum, min(10000, parsed))
+    return output
+
+
 def default_supported_audio_format_extensions() -> list[str]:
     return []
 
@@ -647,6 +674,7 @@ class AppSettings:
     preload_memory_pressure_enabled: bool = True
     preload_pause_on_playback: bool = True
     preload_use_ffmpeg: bool = True
+    preload_video_enabled: bool = False
     waveform_cache_limit_mb: int = 1024
     waveform_cache_clear_on_launch: bool = True
     max_multi_play_songs: int = 5
@@ -693,6 +721,7 @@ class AppSettings:
     timecode_sample_rate: int = 48000
     timecode_bit_depth: int = 16
     show_timecode_panel: bool = False
+    show_video_control_panel: bool = False
     show_colour_legend: bool = True
     timecode_timeline_mode: str = "cue_region"
     soundbutton_timecode_offset_enabled: bool = True
@@ -726,6 +755,7 @@ class AppSettings:
     color_vocal_removed_indicator: str = "#8E7CFF"
     color_midi_indicator: str = "#FF9E4A"
     color_lyric_indicator: str = "#57C3A4"
+    color_video_indicator: str = "#FF5E7A"
     color_automation_indicator: str = "#49C16D"
     color_automation_indicator_bypassed: str = "#9A9A9A"
     color_automation_script_indicator: str = "#2E8BFF"
@@ -941,6 +971,31 @@ class AppSettings:
     stage_display_lyric_played_italic: bool = False
     stage_display_lyric_current_italic: bool = False
     stage_display_lyric_next_italic: bool = False
+    video_display_mode_playing: str = "video"
+    video_display_mode_idle: str = "blank"
+    video_display_show_lyric_overlay: bool = False
+    video_display_show_stage_alert: bool = False
+    video_display_lyric_overlay_rect: dict[str, int] = field(default_factory=default_video_display_lyric_overlay_rect)
+    video_display_lyric_font_family: str = ""
+    video_display_lyric_font_size: int = 36
+    video_display_lyric_previous_line_count: int = 0
+    video_display_lyric_next_line_count: int = 0
+    video_display_lyric_played_color: str = "#A0A0A0"
+    video_display_lyric_current_color: str = "#FFD400"
+    video_display_lyric_next_color: str = "#FFFFFF"
+    video_display_lyric_auto_adjust_role_sizes: bool = True
+    video_display_lyric_played_scale_percent: int = 70
+    video_display_lyric_current_scale_percent: int = 115
+    video_display_lyric_next_scale_percent: int = 90
+    video_display_lyric_played_text_size: int = 24
+    video_display_lyric_current_text_size: int = 40
+    video_display_lyric_next_text_size: int = 32
+    video_display_lyric_played_bold: bool = True
+    video_display_lyric_current_bold: bool = True
+    video_display_lyric_next_bold: bool = True
+    video_display_lyric_played_italic: bool = False
+    video_display_lyric_current_italic: bool = False
+    video_display_lyric_next_italic: bool = False
     window_layout: dict[str, object] = field(default_factory=default_window_layout)
     window_layout_locked: bool = False
     dock_layout_state: str = ""
@@ -1067,6 +1122,7 @@ def save_settings(settings: AppSettings) -> None:
         "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
         "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
         "preload_use_ffmpeg": "1" if settings.preload_use_ffmpeg else "0",
+        "preload_video_enabled": "1" if settings.preload_video_enabled else "0",
         "waveform_cache_limit_mb": str(settings.waveform_cache_limit_mb),
         "waveform_cache_clear_on_launch": "1" if settings.waveform_cache_clear_on_launch else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
@@ -1123,6 +1179,7 @@ def save_settings(settings: AppSettings) -> None:
         "timecode_sample_rate": str(settings.timecode_sample_rate),
         "timecode_bit_depth": str(settings.timecode_bit_depth),
         "show_timecode_panel": "1" if settings.show_timecode_panel else "0",
+        "show_video_control_panel": "1" if settings.show_video_control_panel else "0",
         "show_colour_legend": "1" if settings.show_colour_legend else "0",
         "timecode_timeline_mode": settings.timecode_timeline_mode,
         "soundbutton_timecode_offset_enabled": "1" if settings.soundbutton_timecode_offset_enabled else "0",
@@ -1158,6 +1215,7 @@ def save_settings(settings: AppSettings) -> None:
         "color_vocal_removed_indicator": settings.color_vocal_removed_indicator,
         "color_midi_indicator": settings.color_midi_indicator,
         "color_lyric_indicator": settings.color_lyric_indicator,
+        "color_video_indicator": settings.color_video_indicator,
         "color_automation_indicator": settings.color_automation_indicator,
         "color_automation_indicator_bypassed": settings.color_automation_indicator_bypassed,
         "color_automation_script_indicator": settings.color_automation_script_indicator,
@@ -1376,6 +1434,34 @@ def save_settings(settings: AppSettings) -> None:
         "stage_display_lyric_played_italic": "1" if settings.stage_display_lyric_played_italic else "0",
         "stage_display_lyric_current_italic": "1" if settings.stage_display_lyric_current_italic else "0",
         "stage_display_lyric_next_italic": "1" if settings.stage_display_lyric_next_italic else "0",
+        "video_display_mode_playing": str(settings.video_display_mode_playing or "video").strip().lower(),
+        "video_display_mode_idle": str(settings.video_display_mode_idle or "blank").strip().lower(),
+        "video_display_show_lyric_overlay": "1" if settings.video_display_show_lyric_overlay else "0",
+        "video_display_show_stage_alert": "1" if settings.video_display_show_stage_alert else "0",
+        "video_display_lyric_overlay_rect": json.dumps(
+            _normalize_video_display_lyric_overlay_rect(settings.video_display_lyric_overlay_rect),
+            separators=(",", ":"),
+        ),
+        "video_display_lyric_font_family": settings.video_display_lyric_font_family,
+        "video_display_lyric_font_size": str(settings.video_display_lyric_font_size),
+        "video_display_lyric_previous_line_count": str(settings.video_display_lyric_previous_line_count),
+        "video_display_lyric_next_line_count": str(settings.video_display_lyric_next_line_count),
+        "video_display_lyric_played_color": settings.video_display_lyric_played_color,
+        "video_display_lyric_current_color": settings.video_display_lyric_current_color,
+        "video_display_lyric_next_color": settings.video_display_lyric_next_color,
+        "video_display_lyric_auto_adjust_role_sizes": "1" if settings.video_display_lyric_auto_adjust_role_sizes else "0",
+        "video_display_lyric_played_scale_percent": str(settings.video_display_lyric_played_scale_percent),
+        "video_display_lyric_current_scale_percent": str(settings.video_display_lyric_current_scale_percent),
+        "video_display_lyric_next_scale_percent": str(settings.video_display_lyric_next_scale_percent),
+        "video_display_lyric_played_text_size": str(settings.video_display_lyric_played_text_size),
+        "video_display_lyric_current_text_size": str(settings.video_display_lyric_current_text_size),
+        "video_display_lyric_next_text_size": str(settings.video_display_lyric_next_text_size),
+        "video_display_lyric_played_bold": "1" if settings.video_display_lyric_played_bold else "0",
+        "video_display_lyric_current_bold": "1" if settings.video_display_lyric_current_bold else "0",
+        "video_display_lyric_next_bold": "1" if settings.video_display_lyric_next_bold else "0",
+        "video_display_lyric_played_italic": "1" if settings.video_display_lyric_played_italic else "0",
+        "video_display_lyric_current_italic": "1" if settings.video_display_lyric_current_italic else "0",
+        "video_display_lyric_next_italic": "1" if settings.video_display_lyric_next_italic else "0",
         "window_layout": json.dumps(
             normalize_window_layout(settings.window_layout),
             separators=(",", ":"),
@@ -1464,6 +1550,60 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     lyric_display_played_italic = _get_bool(section, "lyric_display_played_italic", False)
     lyric_display_current_italic = _get_bool(section, "lyric_display_current_italic", False)
     lyric_display_next_italic = _get_bool(section, "lyric_display_next_italic", False)
+    video_display_mode_playing = str(section.get("video_display_mode_playing", "video")).strip().lower()
+    if video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+        video_display_mode_playing = "video"
+    video_display_mode_idle = str(section.get("video_display_mode_idle", "blank")).strip().lower()
+    if video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+        video_display_mode_idle = "blank"
+    video_display_show_lyric_overlay = _get_bool(section, "video_display_show_lyric_overlay", False)
+    video_display_show_stage_alert = _get_bool(section, "video_display_show_stage_alert", False)
+    raw_video_display_lyric_overlay_rect = str(section.get("video_display_lyric_overlay_rect", "")).strip()
+    parsed_video_display_lyric_overlay_rect: dict[str, int] = default_video_display_lyric_overlay_rect()
+    if raw_video_display_lyric_overlay_rect:
+        try:
+            decoded_video_display_lyric_overlay_rect = json.loads(raw_video_display_lyric_overlay_rect)
+        except Exception:
+            decoded_video_display_lyric_overlay_rect = {}
+        parsed_video_display_lyric_overlay_rect = _normalize_video_display_lyric_overlay_rect(
+            decoded_video_display_lyric_overlay_rect
+        )
+    video_display_lyric_font_family = str(section.get("video_display_lyric_font_family", "")).strip()
+    video_display_lyric_font_size = _clamp_int(_get_int(section, "video_display_lyric_font_size", 36), 10, 240)
+    video_display_lyric_previous_line_count = _clamp_int(
+        _get_int(section, "video_display_lyric_previous_line_count", 0),
+        0,
+        20,
+    )
+    video_display_lyric_next_line_count = _clamp_int(_get_int(section, "video_display_lyric_next_line_count", 0), 0, 20)
+    video_display_lyric_played_color = _coerce_hex(str(section.get("video_display_lyric_played_color", "#A0A0A0")), "#A0A0A0")
+    video_display_lyric_current_color = _coerce_hex(str(section.get("video_display_lyric_current_color", "#FFD400")), "#FFD400")
+    video_display_lyric_next_color = _coerce_hex(str(section.get("video_display_lyric_next_color", "#FFFFFF")), "#FFFFFF")
+    video_display_lyric_auto_adjust_role_sizes = _get_bool(section, "video_display_lyric_auto_adjust_role_sizes", True)
+    video_display_lyric_played_scale_percent = _clamp_int(
+        _get_int(section, "video_display_lyric_played_scale_percent", 70),
+        25,
+        300,
+    )
+    video_display_lyric_current_scale_percent = _clamp_int(
+        _get_int(section, "video_display_lyric_current_scale_percent", 115),
+        25,
+        300,
+    )
+    video_display_lyric_next_scale_percent = _clamp_int(
+        _get_int(section, "video_display_lyric_next_scale_percent", 90),
+        25,
+        300,
+    )
+    video_display_lyric_played_text_size = _clamp_int(_get_int(section, "video_display_lyric_played_text_size", 24), 8, 240)
+    video_display_lyric_current_text_size = _clamp_int(_get_int(section, "video_display_lyric_current_text_size", 40), 8, 240)
+    video_display_lyric_next_text_size = _clamp_int(_get_int(section, "video_display_lyric_next_text_size", 32), 8, 240)
+    video_display_lyric_played_bold = _get_bool(section, "video_display_lyric_played_bold", True)
+    video_display_lyric_current_bold = _get_bool(section, "video_display_lyric_current_bold", True)
+    video_display_lyric_next_bold = _get_bool(section, "video_display_lyric_next_bold", True)
+    video_display_lyric_played_italic = _get_bool(section, "video_display_lyric_played_italic", False)
+    video_display_lyric_current_italic = _get_bool(section, "video_display_lyric_current_italic", False)
+    video_display_lyric_next_italic = _get_bool(section, "video_display_lyric_next_italic", False)
     search_lyric_on_add_sound_button = _get_bool(section, "search_lyric_on_add_sound_button", True)
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
@@ -1486,6 +1626,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
     waveform_cache_limit_mb = _clamp_int(_get_int(section, "waveform_cache_limit_mb", 1024), 128, 16384)
+    preload_video_enabled = _get_bool(section, "preload_video_enabled", False)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
@@ -1929,6 +2070,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
         preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", True),
         preload_use_ffmpeg=_get_bool(section, "preload_use_ffmpeg", True),
+        preload_video_enabled=preload_video_enabled,
         waveform_cache_limit_mb=waveform_cache_limit_mb,
         waveform_cache_clear_on_launch=_get_bool(section, "waveform_cache_clear_on_launch", True),
         max_multi_play_songs=max_multi_play_songs,
@@ -1975,6 +2117,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         timecode_sample_rate=timecode_sample_rate,
         timecode_bit_depth=timecode_bit_depth,
         show_timecode_panel=_get_bool(section, "show_timecode_panel", False),
+        show_video_control_panel=_get_bool(section, "show_video_control_panel", False),
         show_colour_legend=_get_bool(section, "show_colour_legend", True),
         timecode_timeline_mode=timecode_timeline_mode_raw,
         soundbutton_timecode_offset_enabled=soundbutton_timecode_offset_enabled,
@@ -2007,6 +2150,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ),
         color_midi_indicator=_coerce_hex(str(section.get("color_midi_indicator", "#FF9E4A")), "#FF9E4A"),
         color_lyric_indicator=_coerce_hex(str(section.get("color_lyric_indicator", "#57C3A4")), "#57C3A4"),
+        color_video_indicator=_coerce_hex(str(section.get("color_video_indicator", "#FF5E7A")), "#FF5E7A"),
         color_automation_indicator=_coerce_hex(str(section.get("color_automation_indicator", "#49C16D")), "#49C16D"),
         color_automation_indicator_bypassed=_coerce_hex(
             str(section.get("color_automation_indicator_bypassed", "#9A9A9A")),
@@ -2231,6 +2375,31 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_lyric_played_italic=stage_display_lyric_played_italic,
         stage_display_lyric_current_italic=stage_display_lyric_current_italic,
         stage_display_lyric_next_italic=stage_display_lyric_next_italic,
+        video_display_mode_playing=video_display_mode_playing,
+        video_display_mode_idle=video_display_mode_idle,
+        video_display_show_lyric_overlay=video_display_show_lyric_overlay,
+        video_display_show_stage_alert=video_display_show_stage_alert,
+        video_display_lyric_overlay_rect=parsed_video_display_lyric_overlay_rect,
+        video_display_lyric_font_family=video_display_lyric_font_family,
+        video_display_lyric_font_size=video_display_lyric_font_size,
+        video_display_lyric_previous_line_count=video_display_lyric_previous_line_count,
+        video_display_lyric_next_line_count=video_display_lyric_next_line_count,
+        video_display_lyric_played_color=video_display_lyric_played_color,
+        video_display_lyric_current_color=video_display_lyric_current_color,
+        video_display_lyric_next_color=video_display_lyric_next_color,
+        video_display_lyric_auto_adjust_role_sizes=video_display_lyric_auto_adjust_role_sizes,
+        video_display_lyric_played_scale_percent=video_display_lyric_played_scale_percent,
+        video_display_lyric_current_scale_percent=video_display_lyric_current_scale_percent,
+        video_display_lyric_next_scale_percent=video_display_lyric_next_scale_percent,
+        video_display_lyric_played_text_size=video_display_lyric_played_text_size,
+        video_display_lyric_current_text_size=video_display_lyric_current_text_size,
+        video_display_lyric_next_text_size=video_display_lyric_next_text_size,
+        video_display_lyric_played_bold=video_display_lyric_played_bold,
+        video_display_lyric_current_bold=video_display_lyric_current_bold,
+        video_display_lyric_next_bold=video_display_lyric_next_bold,
+        video_display_lyric_played_italic=video_display_lyric_played_italic,
+        video_display_lyric_current_italic=video_display_lyric_current_italic,
+        video_display_lyric_next_italic=video_display_lyric_next_italic,
         window_layout=window_layout,
         window_layout_locked=_get_bool(section, "window_layout_locked", False),
         dock_layout_state=str(section.get("dock_layout_state", "")).strip(),

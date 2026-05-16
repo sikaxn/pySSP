@@ -66,6 +66,7 @@ SOUND_BUTTON_LIST_COLUMN_LABELS: dict[str, str] = {
 class SoundButtonData:
     source_type: str = FILE_SOURCE_TYPE
     file_path: str = ""
+    disable_video_loading: bool = False
     vocal_removed_file: str = ""
     title: str = ""
     notes: str = ""
@@ -601,6 +602,8 @@ class SoundButtonListRow(QFrame, _SoundButtonListColumnsMixin):
             indicator_colors.append(host.state_colors["vocal_removed_indicator"])
         if has_linked_lyric:
             indicator_colors.append(host.state_colors["lyric_indicator"])
+        if bool(getattr(host, "_slot_has_video_media", lambda _slot: False)(slot)):
+            indicator_colors.append(host.state_colors["video_indicator"])
         if has_sound_button_automation:
             indicator_colors.append(
                 host.state_colors["automation_indicator_bypassed"]

@@ -14,6 +14,7 @@ from .lock_screen import LockScreenPageMixin
 from .lyrics import LyricsPageMixin
 from .playback import PlaybackPageMixin
 from .talk import TalkPageMixin
+from .video_display import VideoDisplayPageMixin
 from .web_remote import WebRemotePageMixin
 from .window_layout import WindowLayoutPageMixin
 
@@ -31,6 +32,7 @@ class PageBuilderMixin(
     AudioLoadingFormatPageMixin,
     CompanionSatellitePageMixin,
     TalkPageMixin,
+    VideoDisplayPageMixin,
     WebRemotePageMixin,
     LyricsPageMixin,
     DisplayPageMixin,

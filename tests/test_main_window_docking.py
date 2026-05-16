@@ -158,6 +158,9 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         assert window.lyric_navigator_dock is not None
         assert window.automation_script_navigator_dock is not None
         assert window.available_commands_dock is not None
+        assert window.video_control_dock is not None
+        assert window.video_preview_widget is not None
+        assert window.video_control_dock.widget().isAncestorOf(window.video_preview_widget)
         assert window.centralWidget() is window._dock_canvas
         assert window.sound_buttons_dock.widget().isAncestorOf(window.button_legend_label)
         assert window.status_display_dock.widget().isAncestorOf(window.info_notice_banner)
@@ -181,12 +184,17 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
             window.lyric_navigator_dock,
             window.automation_script_navigator_dock,
             window.available_commands_dock,
+            window.video_control_dock,
         ]:
             assert dock.features() & QDockWidget.DockWidgetFloatable
             assert dock.features() & QDockWidget.DockWidgetClosable
 
         window_menu = _window_menu(window)
         menu_items = {action.text().replace("&", "") for action in window_menu.actions()}
+        display_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Display"
+        )
+        display_items = {action.text().replace("&", "") for action in display_menu.actions()}
         navigation_menu = _navigation_menu(window)
         navigation_items = {action.text().replace("&", "") for action in navigation_menu.actions()}
         top_level_menus = [action.text().replace("&", "") for action in window.menuBar().actions()]
@@ -209,6 +217,8 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         assert "Add Horizontal Divider" in menu_items
         assert "Add Vertical Divider" in menu_items
         assert "Clear All Standalone Mode" in menu_items
+        assert "Open Video Display" in display_items
+        assert "Video Display Setting" in display_items
         assert "Previous Group" in navigation_items
         assert "Next Group" in navigation_items
         assert "Previous Page" in navigation_items
@@ -542,6 +552,51 @@ def test_sound_buttons_reflow_on_resize_without_horizontal_scroll(qapp, monkeypa
 
         list_viewport_width = window.sound_button_list_scroll.viewport().width()
         assert window.sound_button_list_widget.width() <= list_viewport_width
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_sound_button_grid_uses_multiple_columns_on_startup(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.resize(1200, 760)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+
+    try:
+        grid_layout = window.sound_button_grid_layout
+        assert grid_layout is not None
+        rendered_columns = max(
+            (
+                int(grid_layout.getItemPosition(index)[1]) + int(grid_layout.getItemPosition(index)[3])
+                for index in range(grid_layout.count())
+            ),
+            default=0,
+        )
+        assert rendered_columns > 1
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_build_set_file_lines_persists_disable_video_loading_flag(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        slot = window.data["A"][0][0]
+        slot.file_path = r"C:\Media\clip.mp4"
+        slot.disable_video_loading = True
+        slot.title = "Clip"
+        slot.notes = "Clip"
+        slot.duration_ms = 1000
+        slot.activity_code = "8"
+
+        lines = window._build_set_file_lines()
+
+        assert "pysspdisablevideo1=1" in lines
     finally:
         _cleanup_main_window(window, qapp)
 

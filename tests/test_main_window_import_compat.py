@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pyssp.ffmpeg_support import MediaProbeInfo
 from pyssp.ui import main_window as mw
 from pyssp.ui.main_window import MainWindow, SLOTS_PER_PAGE, _equal_power_crossfade_volume
+from pyssp.ui.main_window.video_display import VideoDisplayMixin
 
 
 def test_main_window_import_surface_stays_compatible():
@@ -12,6 +14,7 @@ def test_main_window_import_surface_stays_compatible():
 
 def test_main_window_module_exposes_monkeypatch_targets():
     assert hasattr(mw, "QFileDialog")
+    assert hasattr(mw, "QImage")
     assert hasattr(mw, "LtcAudioOutput")
     assert hasattr(mw, "MtcMidiOutput")
     assert hasattr(mw, "load_settings")
@@ -20,3 +23,228 @@ def test_main_window_module_exposes_monkeypatch_targets():
     assert hasattr(mw, "configure_audio_preload_cache_policy")
     assert hasattr(mw, "configure_waveform_disk_cache")
     assert hasattr(mw, "shutdown_audio_preload")
+
+
+class _AudioOnlyVideoRouteHost(VideoDisplayMixin):
+    def __init__(self) -> None:
+        self._media_probe_cache = {}
+        self.current_playing = ("A", 0, 0)
+        self.video_display_mode_idle = "blank"
+        self.video_display_mode_playing = "video"
+        self._slot = mw.SoundButtonData(file_path="theme_song.mp3")
+
+    def _slot_for_key(self, _key):
+        return self._slot
+
+    def _stage_playback_status(self) -> str:
+        return "playing"
+
+
+class _VideoRefreshHost(VideoDisplayMixin):
+    def __init__(self) -> None:
+        class _NullPixmap:
+            def isNull(self) -> bool:
+                return True
+
+        self._media_probe_cache = {}
+        self.current_playing = ("A", 0, 0)
+        self.video_display_mode_idle = "blank"
+        self.video_display_mode_playing = "video"
+        self._slot = mw.SoundButtonData(file_path="clip.mp4")
+        self._probe = MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
+        self._video_frame_cache = {}
+        self._video_requested_frame_key = None
+        self._video_requested_frame_path = ""
+        self._video_decode_inflight_key = None
+        self._video_request_tag_serial = 0
+        self._video_active_request_tag = 0
+        self._video_transport_revision = 0
+        self._video_active_stream_revision = -1
+        self._video_stream_path_key = ""
+        self._video_stream_interval_ms = 0
+        self._video_stream_dimensions = (0, 0)
+        self._video_last_frame_pts_ms = 0
+        self._video_current_frame_key = None
+        self._video_current_frame_pixmap = _NullPixmap()
+        self.preload_video_enabled = False
+        self._video_display_window = None
+        self.video_preview_widget = None
+        self._position_ms = 80
+
+        class _Dispatcher:
+            def __init__(self):
+                self.requests = []
+
+            def request_frame(self, tag, path, bucket_ms, width, height):
+                self.requests.append(("frame", tag, path, bucket_ms, width, height))
+
+            def request_stream(self, tag, path, start_ms, width, height, interval_ms):
+                self.requests.append(("stream", tag, path, start_ms, width, height, interval_ms))
+
+            def clear(self):
+                self.requests.append(("clear",))
+
+        self._video_frame_dispatcher = _Dispatcher()
+        self._target_size = (0, 0)
+
+    def _slot_for_key(self, _key):
+        return self._slot
+
+    def _stage_playback_status(self) -> str:
+        return "playing"
+
+    def _media_probe_for_path(self, path: str) -> MediaProbeInfo:
+        if str(path or "").strip().lower().endswith(".mp4"):
+            return self._probe
+        return MediaProbeInfo()
+
+    def _video_display_target_visible(self) -> bool:
+        return True
+
+    def _current_video_display_position_ms(self) -> int:
+        return int(self._position_ms)
+
+    def _apply_video_frame_to_targets(self) -> None:
+        return None
+
+    def _video_target_surface_pixel_size(self) -> tuple[int, int]:
+        return self._target_size
+
+    def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
+        self._video_requested_frame_key = None
+        self._video_requested_frame_path = ""
+        self._video_decode_inflight_key = None
+        self._video_stream_path_key = ""
+        self._video_stream_interval_ms = 0
+        self._video_stream_dimensions = (0, 0)
+        self._video_active_request_tag = 0
+        self._video_active_stream_revision = -1
+        self._video_last_frame_pts_ms = 0
+        if not preserve_current_frame:
+            self._video_current_frame_key = None
+            self._video_current_frame_pixmap = type(self._video_current_frame_pixmap)()
+        self._video_frame_dispatcher.clear()
+
+
+def test_video_display_skips_media_probe_for_audio_only_paths(monkeypatch):
+    def _unexpected_probe(_path: str):
+        raise AssertionError("audio-only paths should not be probed for video metadata")
+
+    monkeypatch.setattr("pyssp.ui.main_window.video_display.probe_media_info", _unexpected_probe)
+    host = _AudioOnlyVideoRouteHost()
+
+    info = host._media_probe_for_path("theme_song.wav")
+    assert info.has_video is False
+    assert info.has_audio is False
+    assert host._slot_has_video_media(host._slot) is False
+    assert host._silent_video_source_payload(host._slot) is None
+    assert host._active_video_route_mode() == "blank"
+
+
+def test_disable_video_loading_treats_video_file_as_audio_only(monkeypatch):
+    def _unexpected_probe(_path: str):
+        raise AssertionError("video metadata probe should be skipped when video loading is disabled")
+
+    monkeypatch.setattr("pyssp.ui.main_window.video_display.probe_media_info", _unexpected_probe)
+    host = _AudioOnlyVideoRouteHost()
+    host._slot = mw.SoundButtonData(file_path="clip.mp4", disable_video_loading=True)
+
+    assert host._slot_has_video_media(host._slot) is False
+    assert host._slot_or_media_has_audio(host._slot) is True
+    assert host._silent_video_source_payload(host._slot) is None
+    assert host._active_video_route_mode() == "blank"
+
+
+def test_video_frame_bucket_uses_media_fps():
+    host = _AudioOnlyVideoRouteHost()
+    info = MediaProbeInfo(has_video=True, fps=25.0)
+
+    assert host._video_frame_interval_ms(info) == 40
+    assert host._video_frame_bucket_ms(83, info) == 80
+    assert host._video_frame_interval_ms(MediaProbeInfo()) == 33
+
+
+def test_video_output_dimensions_follow_rotation_metadata():
+    host = _AudioOnlyVideoRouteHost()
+
+    assert host._video_output_dimensions(MediaProbeInfo(width=1920, height=1080, rotation_deg=0)) == (1920, 1080)
+    assert host._video_output_dimensions(MediaProbeInfo(width=1920, height=1080, rotation_deg=90)) == (1080, 1920)
+    assert host._video_decode_dimensions(MediaProbeInfo(width=3840, height=2160)) == (3840, 2160)
+
+
+def test_video_target_decode_dimensions_follow_surface_size():
+    host = _VideoRefreshHost()
+    info = MediaProbeInfo(width=3840, height=2160, rotation_deg=0)
+
+    host._target_size = (1280, 720)
+    assert host._video_target_decode_dimensions(info) == (1280, 720)
+
+    host._target_size = (4096, 2160)
+    assert host._video_target_decode_dimensions(info) == (3840, 2160)
+
+    rotated = MediaProbeInfo(width=1920, height=1080, rotation_deg=90)
+    host._target_size = (540, 960)
+    assert host._video_target_decode_dimensions(rotated) == (960, 540)
+
+
+def test_video_refresh_keeps_single_decode_in_flight():
+    host = _VideoRefreshHost()
+
+    host._queue_video_frame_refresh()
+    host._position_ms = 120
+    host._queue_video_frame_refresh()
+
+    assert host._video_decode_inflight_key == ("stream", 80)
+    assert host._video_frame_dispatcher.requests == [("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+
+
+def test_video_refresh_does_not_restart_stream_during_normal_playback_progress():
+    host = _VideoRefreshHost()
+    host._video_stream_path_key = host._normalized_media_probe_key("clip.mp4")
+    host._video_stream_interval_ms = 40
+    host._video_stream_dimensions = (640, 360)
+    host._video_active_stream_revision = 0
+    host._video_decode_inflight_key = ("stream", 80)
+    host._video_current_frame_key = (host._normalized_media_probe_key("clip.mp4"), 80)
+    host._video_last_frame_pts_ms = 80
+    host._position_ms = 240
+
+    host._queue_video_frame_refresh()
+
+    assert host._video_frame_dispatcher.requests == []
+
+
+def test_video_refresh_restarts_stream_after_transport_invalidation():
+    host = _VideoRefreshHost()
+    host._video_stream_path_key = host._normalized_media_probe_key("clip.mp4")
+    host._video_stream_interval_ms = 40
+    host._video_stream_dimensions = (640, 360)
+    host._video_active_stream_revision = 0
+    host._video_decode_inflight_key = ("stream", 80)
+    host._position_ms = 240
+    host._invalidate_video_playback_sync(refresh=False)
+
+    host._queue_video_frame_refresh()
+
+    assert host._video_frame_dispatcher.requests[-1] == ("stream", 1, "clip.mp4", 240, 640, 360, 40)
+
+
+def test_video_surface_geometry_change_preserves_current_frame():
+    host = _VideoRefreshHost()
+    host._video_current_frame_key = ("clip.mp4", 80)
+    current_pixmap = host._video_current_frame_pixmap
+
+    host._on_video_surface_geometry_changed()
+
+    assert host._video_current_frame_key == ("clip.mp4", 80)
+    assert host._video_current_frame_pixmap is current_pixmap
+    assert host._video_frame_dispatcher.requests == [("clear",), ("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+
+
+def test_video_decoder_ignores_stale_request_tags():
+    host = _VideoRefreshHost()
+    host._video_active_request_tag = 2
+
+    host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
+
+    assert host._video_current_frame_key is None

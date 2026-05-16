@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, QByteArray, pyqtSignal, pyqtSlot, QThread, QUrl
-from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap, QPen, QIcon
+from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap, QPen, QIcon, QImage
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt5.QtWidgets import (
     QAction,
@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFrame,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QComboBox,
@@ -89,7 +90,17 @@ from pyssp.audio_engine import (
 )
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController
 from pyssp.audio_runtime import PlaybackRuntimeTracker
-from pyssp.ffmpeg_support import get_ffmpeg_executable, media_has_audio_stream
+from pyssp.ffmpeg_support import (
+    MediaProbeInfo,
+    ffmpeg_available,
+    ffmpeg_source,
+    ffmpeg_version_text,
+    get_ffmpeg_executable,
+    get_ffprobe_executable,
+    media_has_audio_stream,
+    media_has_video_stream,
+    probe_media_info,
+)
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.set_loader import (
     format_timecode_offset_hhmmss,
@@ -200,6 +211,7 @@ from pyssp.ui.stage_display import (
     gadgets_to_legacy_layout_visibility,
     normalize_stage_display_gadgets,
 )
+from pyssp.ui.video_display import VideoDisplayWindow
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
 from pyssp.ui.companion_available_commands_dialog import CompanionAvailableCommandsDialog

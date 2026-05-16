@@ -15,6 +15,7 @@ from .settings_archive import SettingsArchiveMixin
 from .timecode import TimecodeMixin
 from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
+from .video_display import VideoDisplayMixin, _VideoFrameDecodeDispatcher
 from pyssp.companion_satellite import CompanionSatelliteClient
 from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
 
@@ -47,6 +48,7 @@ def _shutdown_executor_safely(executor) -> None:
 class MainWindow(
     UiBuildMixin,
     TimecodeMixin,
+    VideoDisplayMixin,
     SettingsArchiveMixin,
     ToolsLibraryMixin,
     PagesSlotsMixin,
@@ -179,6 +181,7 @@ class MainWindow(
         )
         self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", True))
         self.preload_use_ffmpeg = bool(getattr(self.settings, "preload_use_ffmpeg", True))
+        self.preload_video_enabled = bool(getattr(self.settings, "preload_video_enabled", False))
         self.waveform_cache_limit_mb = max(128, min(16384, int(getattr(self.settings, "waveform_cache_limit_mb", 1024))))
         self.waveform_cache_clear_on_launch = bool(getattr(self.settings, "waveform_cache_clear_on_launch", True))
         self._preload_runtime_paused = False
@@ -318,6 +321,7 @@ class MainWindow(
         if self.timecode_bit_depth not in {8, 16, 32}:
             self.timecode_bit_depth = 16
         self.show_timecode_panel = bool(self.settings.show_timecode_panel)
+        self.show_video_control_panel = bool(getattr(self.settings, "show_video_control_panel", False))
         self.show_colour_legend = bool(getattr(self.settings, "show_colour_legend", True))
         self.timecode_timeline_mode = (
             self.settings.timecode_timeline_mode
@@ -486,6 +490,55 @@ class MainWindow(
             "current": bool(getattr(self.settings, "lyric_display_current_italic", False)),
             "next": bool(getattr(self.settings, "lyric_display_next_italic", False)),
         }
+        self.video_display_mode_playing = str(getattr(self.settings, "video_display_mode_playing", "video") or "video").strip().lower()
+        if self.video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+            self.video_display_mode_playing = "video"
+        self.video_display_mode_idle = str(getattr(self.settings, "video_display_mode_idle", "blank") or "blank").strip().lower()
+        if self.video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+            self.video_display_mode_idle = "blank"
+        self.video_display_show_lyric_overlay = bool(getattr(self.settings, "video_display_show_lyric_overlay", False))
+        self.video_display_show_stage_alert = bool(getattr(self.settings, "video_display_show_stage_alert", False))
+        self.video_display_lyric_overlay_rect = dict(
+            getattr(self.settings, "video_display_lyric_overlay_rect", {"x": 800, "y": 6800, "w": 8400, "h": 2400})
+        )
+        self.video_display_lyric_font_family = str(getattr(self.settings, "video_display_lyric_font_family", "")).strip()
+        self.video_display_lyric_font_size = max(10, int(getattr(self.settings, "video_display_lyric_font_size", 36)))
+        self.video_display_lyric_previous_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "video_display_lyric_previous_line_count", 0))),
+        )
+        self.video_display_lyric_next_line_count = max(
+            0,
+            min(20, int(getattr(self.settings, "video_display_lyric_next_line_count", 0))),
+        )
+        self.video_display_lyric_role_colors = {
+            "played": str(getattr(self.settings, "video_display_lyric_played_color", "#A0A0A0")).strip() or "#A0A0A0",
+            "current": str(getattr(self.settings, "video_display_lyric_current_color", "#FFD400")).strip() or "#FFD400",
+            "next": str(getattr(self.settings, "video_display_lyric_next_color", "#FFFFFF")).strip() or "#FFFFFF",
+        }
+        self.video_display_lyric_auto_adjust_role_sizes = bool(
+            getattr(self.settings, "video_display_lyric_auto_adjust_role_sizes", True)
+        )
+        self.video_display_lyric_role_scale_percents = {
+            "played": max(25, min(300, int(getattr(self.settings, "video_display_lyric_played_scale_percent", 70)))),
+            "current": max(25, min(300, int(getattr(self.settings, "video_display_lyric_current_scale_percent", 115)))),
+            "next": max(25, min(300, int(getattr(self.settings, "video_display_lyric_next_scale_percent", 90)))),
+        }
+        self.video_display_lyric_role_sizes = {
+            "played": max(8, int(getattr(self.settings, "video_display_lyric_played_text_size", 24))),
+            "current": max(8, int(getattr(self.settings, "video_display_lyric_current_text_size", 40))),
+            "next": max(8, int(getattr(self.settings, "video_display_lyric_next_text_size", 32))),
+        }
+        self.video_display_lyric_role_bold = {
+            "played": bool(getattr(self.settings, "video_display_lyric_played_bold", True)),
+            "current": bool(getattr(self.settings, "video_display_lyric_current_bold", True)),
+            "next": bool(getattr(self.settings, "video_display_lyric_next_bold", True)),
+        }
+        self.video_display_lyric_role_italic = {
+            "played": bool(getattr(self.settings, "video_display_lyric_played_italic", False)),
+            "current": bool(getattr(self.settings, "video_display_lyric_current_italic", False)),
+            "next": bool(getattr(self.settings, "video_display_lyric_next_italic", False)),
+        }
         self.search_lyric_on_add_sound_button = bool(
             getattr(self.settings, "search_lyric_on_add_sound_button", True)
         )
@@ -523,6 +576,7 @@ class MainWindow(
             "vocal_removed_indicator": getattr(self.settings, "color_vocal_removed_indicator", "#8E7CFF"),
             "midi_indicator": getattr(self.settings, "color_midi_indicator", "#FF9E4A"),
             "lyric_indicator": getattr(self.settings, "color_lyric_indicator", "#57C3A4"),
+            "video_indicator": getattr(self.settings, "color_video_indicator", "#FF5E7A"),
             "automation_indicator": getattr(self.settings, "color_automation_indicator", "#49C16D"),
             "automation_indicator_bypassed": getattr(self.settings, "color_automation_indicator_bypassed", "#9A9A9A"),
             "automation_script_indicator": getattr(self.settings, "color_automation_script_indicator", "#2E8BFF"),
@@ -901,6 +955,26 @@ class MainWindow(
         self.available_commands_dock: Optional[QDockWidget] = None
         self.timecode_dock: Optional[QDockWidget] = None
         self.timecode_panel: Optional[TimecodePanel] = None
+        self.video_control_dock: Optional[QDockWidget] = None
+        self.video_control_panel: Optional[QWidget] = None
+        self.video_preview_widget: Optional[VideoDisplayWidget] = None
+        self.video_mode_playing_combo: Optional[QComboBox] = None
+        self.video_mode_idle_combo: Optional[QComboBox] = None
+        self._video_refresh_timer: Optional[QTimer] = None
+        self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
+        self._video_requested_frame_key: Optional[Tuple[str, int]] = None
+        self._video_requested_frame_path: str = ""
+        self._video_decode_inflight_key: Optional[Tuple[str, int]] = None
+        self._video_request_tag_serial: int = 0
+        self._video_active_request_tag: int = 0
+        self._video_transport_revision: int = 0
+        self._video_active_stream_revision: int = -1
+        self._video_stream_path_key: str = ""
+        self._video_stream_interval_ms: int = 0
+        self._video_stream_dimensions: Tuple[int, int] = (0, 0)
+        self._video_last_frame_pts_ms: int = 0
+        self._video_current_frame_key: Optional[Tuple[str, int]] = None
+        self._video_current_frame_pixmap = QPixmap()
         self._divider_docks: Dict[str, QDockWidget] = {}
         self._navigation_menu: Optional[QMenu] = None
         self._navigation_group_menu: Optional[QMenu] = None
@@ -936,6 +1010,9 @@ class MainWindow(
         self._stage_lyric_cache_mtime: float = -1.0
         self._stage_lyric_cache_lines: List[LyricLine] = []
         self._stage_lyric_cache_error: str = ""
+        self._video_display_window: Optional[VideoDisplayWindow] = None
+        self._video_frame_cache: Dict[Tuple[str, int], QPixmap] = {}
+        self._media_probe_cache: Dict[str, MediaProbeInfo] = {}
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
         self._automation_script_navigator_window: Optional[AutomationScriptNavigatorWindow] = None
@@ -1022,6 +1099,11 @@ class MainWindow(
         self.meter_timer.timeout.connect(self._tick_meter)
         self.meter_timer.start(60)
 
+        self._video_frame_dispatcher.frameDecoded.connect(self._on_video_frame_ready)
+        self._video_refresh_timer = QTimer(self)
+        self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
+        self._video_refresh_timer.start(33)
+
         self.timecode_mtc_timer = QTimer(self)
         self.timecode_mtc_timer.timeout.connect(self._tick_timecode_mtc)
         self.timecode_mtc_timer.start(10)
@@ -1071,6 +1153,18 @@ class MainWindow(
             QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
 
     def _shutdown_runtime_threads(self) -> None:
+        timer = getattr(self, "_video_refresh_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        dispatcher = getattr(self, "_video_frame_dispatcher", None)
+        if dispatcher is not None:
+            try:
+                dispatcher.stop()
+            except Exception:
+                pass
         try:
             self._ltc_sender.shutdown()
         except Exception:

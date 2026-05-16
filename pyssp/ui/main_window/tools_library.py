@@ -1363,6 +1363,11 @@ class ToolsLibraryMixin:
             get_media_ssp_units(path)
             return None
         except Exception as exc:
+            probe = getattr(self, "_media_probe_for_path", None)
+            if callable(probe):
+                info = probe(path)
+                if bool(getattr(info, "has_video", False)) and not bool(getattr(info, "has_audio", False)):
+                    return None
             try:
                 if can_decode_with_ffmpeg(path):
                     return None

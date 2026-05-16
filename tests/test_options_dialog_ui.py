@@ -549,6 +549,26 @@ def _build_dialog(**overrides):
         video_display_lyric_next_italic=bool(
             overrides.get("video_display_lyric_next_italic", defaults["video_display_lyric_next_italic"])
         ),
+        ndi_output_enabled=bool(overrides.get("ndi_output_enabled", defaults["ndi_output_enabled"])),
+        ndi_output_name=str(overrides.get("ndi_output_name", defaults["ndi_output_name"])),
+        ndi_output_mode_playing=str(
+            overrides.get("ndi_output_mode_playing", defaults["ndi_output_mode_playing"])
+        ),
+        ndi_output_mode_idle=str(
+            overrides.get("ndi_output_mode_idle", defaults["ndi_output_mode_idle"])
+        ),
+        ndi_output_resolution_mode=str(
+            overrides.get("ndi_output_resolution_mode", defaults["ndi_output_resolution_mode"])
+        ),
+        ndi_output_width=int(overrides.get("ndi_output_width", defaults["ndi_output_width"])),
+        ndi_output_height=int(overrides.get("ndi_output_height", defaults["ndi_output_height"])),
+        ndi_output_fps=int(overrides.get("ndi_output_fps", defaults["ndi_output_fps"])),
+        ndi_output_audio_enabled=bool(
+            overrides.get("ndi_output_audio_enabled", defaults["ndi_output_audio_enabled"])
+        ),
+        ndi_output_audio_tap_mode=str(
+            overrides.get("ndi_output_audio_tap_mode", defaults["ndi_output_audio_tap_mode"])
+        ),
         sound_button_view_mode=str(
             overrides.get("sound_button_view_mode", defaults["sound_button_view_mode"])
         ),
@@ -694,6 +714,16 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         video_display_show_backdrop_message=False,
         video_display_show_lyric_overlay=True,
         video_display_show_stage_alert=True,
+        ndi_output_enabled=True,
+        ndi_output_name="Sanctuary Feed",
+        ndi_output_mode_playing="stage_display",
+        ndi_output_mode_idle="backdrop",
+        ndi_output_resolution_mode="custom",
+        ndi_output_width=1600,
+        ndi_output_height=900,
+        ndi_output_fps=50,
+        ndi_output_audio_enabled=True,
+        ndi_output_audio_tap_mode="pre_fader",
         initial_page="Video Display",
     )
     try:
@@ -715,6 +745,27 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_video_display_show_backdrop_message() is False
         assert dialog.selected_video_display_show_lyric_overlay() is True
         assert dialog.selected_video_display_show_stage_alert() is True
+        assert dialog.ndi_output_name_edit.text() == "Sanctuary Feed"
+        assert dialog.ndi_output_route_note_label.text() == "Source routing follows Video Control."
+        assert dialog.ndi_output_mode_playing_combo.currentData() == "backdrop"
+        assert dialog.ndi_output_mode_idle_combo.currentData() == "backdrop"
+        assert dialog.ndi_output_mode_playing_combo.isEnabled() is False
+        assert dialog.ndi_output_mode_idle_combo.isEnabled() is False
+        assert dialog.ndi_output_resolution_mode_combo.currentData() == "custom"
+        assert dialog.ndi_output_width_spin.value() == 1600
+        assert dialog.ndi_output_height_spin.value() == 900
+        assert dialog.ndi_output_fps_combo.currentData() == 50
+        assert dialog.ndi_output_audio_enabled_checkbox.isChecked() is True
+        assert dialog.ndi_output_audio_tap_mode_combo.currentData() == "pre_fader"
+        assert dialog.selected_ndi_output_name() == "Sanctuary Feed"
+        assert dialog.selected_ndi_output_mode_playing() == "backdrop"
+        assert dialog.selected_ndi_output_mode_idle() == "backdrop"
+        assert dialog.selected_ndi_output_resolution_mode() == "custom"
+        assert dialog.selected_ndi_output_width() == 1600
+        assert dialog.selected_ndi_output_height() == 900
+        assert dialog.selected_ndi_output_fps() == 50
+        assert dialog.selected_ndi_output_audio_enabled() is True
+        assert dialog.selected_ndi_output_audio_tap_mode() == "pre_fader"
         assert dialog.selected_preload_video_enabled() is True
     finally:
         dialog.close()

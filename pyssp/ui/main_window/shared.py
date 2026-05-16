@@ -21,6 +21,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 from PyQt5.QtCore import QEvent, QRect, QSize, QTimer, Qt, QMimeData, QObject, QByteArray, pyqtSignal, pyqtSlot, QThread, QUrl
 from PyQt5.QtGui import QColor, QTextDocument, QDrag, QKeySequence, QPainter, QFont, QDesktopServices, QPixmap, QPen, QIcon, QImage
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
@@ -180,6 +181,8 @@ from pyssp.lyrics import (
     lyric_text_around_position,
     parse_lyric_file,
 )
+from pyssp.ndi_output import NDIOutputConfig, NDIOutputSender
+from pyssp.ndi_support import NDI_DOWNLOAD_URL, ndi_status_lines, probe_ndi_capability
 from pyssp.timecode import (
     LtcAudioOutput,
     MIDI_OUTPUT_DEVICE_NONE,

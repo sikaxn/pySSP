@@ -1192,6 +1192,9 @@ class ExternalMediaPlayer(QObject):
         self._fresh_media_start_pending = False
         self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
         self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+        self._output_tap_pre_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._output_tap_post_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._output_tap_capacity_frames = max(int(self._sample_rate * 2), 4096)
         self._source_pos = 0.0
         self._source_pos_anchor = 0.0
         self._source_pos_anchor_t = time.perf_counter()
@@ -1457,6 +1460,22 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             return self._meter_levels
 
+    def sampleRate(self) -> int:
+        with self._lock:
+            return int(self._sample_rate)
+
+    def takeOutputFrames(self, max_frames: int = 0, mode: str = "post_fader") -> np.ndarray:
+        with self._lock:
+            token = str(mode or "post_fader").strip().lower()
+            buffer_name = "_output_tap_pre_frames" if token == "pre_fader" else "_output_tap_post_frames"
+            pending = np.asarray(getattr(self, buffer_name), dtype=np.float32)
+            if len(pending) <= 0:
+                return np.zeros((0, self._channels), dtype=np.float32)
+            take = len(pending) if max_frames <= 0 else min(len(pending), max(1, int(max_frames)))
+            chunk = np.asarray(pending[:take, :], dtype=np.float32).copy()
+            setattr(self, buffer_name, np.asarray(pending[take:, :], dtype=np.float32, copy=False))
+            return chunk
+
     def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
         with self._lock:
             frames = self._source_frames
@@ -1601,6 +1620,8 @@ class ExternalMediaPlayer(QObject):
         self._fresh_media_fade_frames = self._startup_fade_frames
         self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
         self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+        self._output_tap_pre_frames = np.zeros((0, self._channels), dtype=np.float32)
+        self._output_tap_post_frames = np.zeros((0, self._channels), dtype=np.float32)
 
     def _arm_declick_fade_in_locked(self, frame_count: Optional[int] = None) -> None:
         count = int(self._declick_frames if frame_count is None else frame_count)
@@ -1675,6 +1696,22 @@ class ExternalMediaPlayer(QObject):
         if len(merged) > int(self._declick_frames):
             merged = merged[-int(self._declick_frames) :, :]
         self._recent_output_frames = merged.astype(np.float32, copy=False)
+
+    def _append_output_tap_locked(self, frames_block: np.ndarray, *, mode: str) -> None:
+        block = np.asarray(frames_block, dtype=np.float32)
+        if block.ndim != 2 or block.shape[1] != self._channels or len(block) <= 0:
+            return
+        buffer_name = "_output_tap_pre_frames" if str(mode or "").strip().lower() == "pre_fader" else "_output_tap_post_frames"
+        pending = np.asarray(getattr(self, buffer_name), dtype=np.float32)
+        if len(block) > int(self._output_tap_capacity_frames):
+            block = block[-int(self._output_tap_capacity_frames) :, :]
+        if len(pending) <= 0:
+            setattr(self, buffer_name, block.copy())
+            return
+        merged = np.vstack((pending, block))
+        if len(merged) > int(self._output_tap_capacity_frames):
+            merged = merged[-int(self._output_tap_capacity_frames) :, :]
+        setattr(self, buffer_name, merged.astype(np.float32, copy=False))
 
     def _fresh_start_fade_frames_for_media_locked(self, file_path: str) -> int:
         frames = int(self._startup_fade_frames)
@@ -1778,6 +1815,7 @@ class ExternalMediaPlayer(QObject):
         try:
             self._apply_pending_dsp_config_locked()
             if self._emit_declick_tail_locked(outdata, frames):
+                self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
                 return
             if self._state != self.PlayingState:
                 self._meter_levels = (0.0, 0.0)
@@ -1837,6 +1875,7 @@ class ExternalMediaPlayer(QObject):
 
             if self._dsp_active:
                 block = self._dsp_processor.process_block(block)
+            self._append_output_tap_locked(block, mode="pre_fader")
             if self._volume != 100:
                 block = block * (self._volume / 100.0)
             block = self._apply_declick_fade_in_locked(block)
@@ -1881,6 +1920,7 @@ class ExternalMediaPlayer(QObject):
             self._source_pos_anchor = self._source_pos
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = tempo_ratio
+            self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
         finally:
             self._lock.release()
 

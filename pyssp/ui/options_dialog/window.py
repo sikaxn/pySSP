@@ -141,6 +141,16 @@ class OptionsDialog(
         "video_display_lyric_played_italic": False,
         "video_display_lyric_current_italic": False,
         "video_display_lyric_next_italic": False,
+        "ndi_output_enabled": False,
+        "ndi_output_name": "pyssp-video",
+        "ndi_output_mode_playing": "video",
+        "ndi_output_mode_idle": "backdrop",
+        "ndi_output_resolution_mode": "source",
+        "ndi_output_width": 1920,
+        "ndi_output_height": 1080,
+        "ndi_output_fps": 30,
+        "ndi_output_audio_enabled": True,
+        "ndi_output_audio_tap_mode": "post_fader",
         "search_lyric_on_add_sound_button": True,
         "new_lyric_file_format": "srt",
         "warn_dual_automation_sources": True,
@@ -625,6 +635,16 @@ class OptionsDialog(
         video_display_lyric_played_italic: bool,
         video_display_lyric_current_italic: bool,
         video_display_lyric_next_italic: bool,
+        ndi_output_enabled: bool,
+        ndi_output_name: str,
+        ndi_output_mode_playing: str,
+        ndi_output_mode_idle: str,
+        ndi_output_resolution_mode: str,
+        ndi_output_width: int,
+        ndi_output_height: int,
+        ndi_output_fps: int,
+        ndi_output_audio_enabled: bool,
+        ndi_output_audio_tap_mode: str,
         sound_button_view_mode: str,
         sound_button_grid_columns: int,
         sound_button_grid_rows: int,
@@ -873,6 +893,7 @@ class OptionsDialog(
         self._companion_command_tcp_port = max(1, min(65535, int(companion_command_tcp_port)))
         self._companion_command_udp_port = max(1, min(65535, int(companion_command_udp_port)))
         self._companion_command_http_port = max(1, min(65535, int(companion_command_http_port)))
+        self._ndi_status = probe_ndi_capability()
 
         root_layout = QVBoxLayout(self)
         content = QHBoxLayout()
@@ -1000,6 +1021,19 @@ class OptionsDialog(
                     "current": video_display_lyric_current_italic,
                     "next": video_display_lyric_next_italic,
                 },
+                ndi_status_text=self._ndi_status.availability_reason,
+                ndi_download_url=self._ndi_status.download_url,
+                ndi_ready=self._ndi_status.ready,
+                ndi_output_enabled=ndi_output_enabled,
+                ndi_output_name=ndi_output_name,
+                ndi_output_mode_playing=ndi_output_mode_playing,
+                ndi_output_mode_idle=ndi_output_mode_idle,
+                ndi_output_resolution_mode=ndi_output_resolution_mode,
+                ndi_output_width=ndi_output_width,
+                ndi_output_height=ndi_output_height,
+                ndi_output_fps=ndi_output_fps,
+                ndi_output_audio_enabled=ndi_output_audio_enabled,
+                ndi_output_audio_tap_mode=ndi_output_audio_tap_mode,
             ),
         )
         self._add_page(

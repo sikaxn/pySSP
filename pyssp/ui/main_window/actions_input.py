@@ -1945,6 +1945,16 @@ class ActionsInputMixin:
             video_display_lyric_played_italic=self.video_display_lyric_role_italic["played"],
             video_display_lyric_current_italic=self.video_display_lyric_role_italic["current"],
             video_display_lyric_next_italic=self.video_display_lyric_role_italic["next"],
+            ndi_output_enabled=self.ndi_output_enabled,
+            ndi_output_name=self.ndi_output_name,
+            ndi_output_mode_playing=self.ndi_output_mode_playing,
+            ndi_output_mode_idle=self.ndi_output_mode_idle,
+            ndi_output_resolution_mode=self.ndi_output_resolution_mode,
+            ndi_output_width=self.ndi_output_width,
+            ndi_output_height=self.ndi_output_height,
+            ndi_output_fps=self.ndi_output_fps,
+            ndi_output_audio_enabled=self.ndi_output_audio_enabled,
+            ndi_output_audio_tap_mode=self.ndi_output_audio_tap_mode,
             sound_button_view_mode=self.sound_button_view_mode,
             sound_button_grid_columns=self.sound_button_grid_columns,
             sound_button_grid_rows=self.sound_button_grid_rows,
@@ -2040,6 +2050,16 @@ class ActionsInputMixin:
         self.video_display_lyric_role_sizes = dialog.selected_video_display_lyric_role_sizes()
         self.video_display_lyric_role_bold = dialog.selected_video_display_lyric_role_bold()
         self.video_display_lyric_role_italic = dialog.selected_video_display_lyric_role_italic()
+        self.ndi_output_enabled = dialog.selected_ndi_output_enabled()
+        self.ndi_output_name = dialog.selected_ndi_output_name()
+        self.ndi_output_mode_playing = dialog.selected_ndi_output_mode_playing()
+        self.ndi_output_mode_idle = dialog.selected_ndi_output_mode_idle()
+        self.ndi_output_resolution_mode = dialog.selected_ndi_output_resolution_mode()
+        self.ndi_output_width = dialog.selected_ndi_output_width()
+        self.ndi_output_height = dialog.selected_ndi_output_height()
+        self.ndi_output_fps = dialog.selected_ndi_output_fps()
+        self.ndi_output_audio_enabled = dialog.selected_ndi_output_audio_enabled()
+        self.ndi_output_audio_tap_mode = dialog.selected_ndi_output_audio_tap_mode()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
         self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()
@@ -2051,6 +2071,9 @@ class ActionsInputMixin:
         self._sync_lyric_display_controls()
         self._refresh_lyric_display(force=True)
         self._refresh_video_display(force=True)
+        refresh_ndi = getattr(self, "_refresh_ndi_output", None)
+        if callable(refresh_ndi):
+            refresh_ndi(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
             self.set_file_encoding = selected_set_file_encoding

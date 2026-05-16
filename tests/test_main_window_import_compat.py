@@ -121,6 +121,10 @@ class _VideoRefreshHost(VideoDisplayMixin):
         return self._target_size
 
     def _video_snapshot_target_pixel_size(self) -> tuple[int, int]:
+        if bool(getattr(self, "ndi_output_enabled", False)):
+            ndi_mode = self._active_ndi_route_mode()
+            if ndi_mode in {"stage_display", "lyric_display", "backdrop", "blank", "white_screen", "colour_bars"}:
+                return self._ndi_output_dimensions()
         return self._target_size
 
     def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
@@ -173,6 +177,7 @@ def test_backdrop_mode_uses_default_asset_and_message_for_idle_state():
     host.video_display_mode_idle = "backdrop"
 
     assert host._active_video_route_mode() == "backdrop"
+    assert host._active_ndi_route_mode() == "backdrop"
     assert host._resolved_video_backdrop_path() == "logo2.png"
     assert host._video_backdrop_message_text() == "No video is playing"
 
@@ -235,6 +240,20 @@ def test_video_snapshot_dimensions_follow_surface_size():
 
     host._target_size = (0, 0)
     assert host._video_snapshot_dimensions() == (960, 540)
+
+
+def test_video_snapshot_dimensions_include_ndi_target_when_enabled():
+    host = _VideoRefreshHost()
+    host.ndi_output_enabled = True
+    host.ndi_output_resolution_mode = "custom"
+    host.ndi_output_width = 1600
+    host.ndi_output_height = 900
+    host.video_display_mode_playing = "stage_display"
+    host.video_display_mode_idle = "blank"
+
+    host._target_size = (0, 0)
+
+    assert host._video_snapshot_dimensions() == (1600, 900)
 
 
 def test_video_refresh_keeps_single_decode_in_flight():

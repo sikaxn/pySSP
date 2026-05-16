@@ -4,13 +4,14 @@ from PyInstaller.utils.hooks import collect_all
 
 pedalboard_datas, pedalboard_binaries, pedalboard_hiddenimports = collect_all("pedalboard")
 pedalboard_native_datas, pedalboard_native_binaries, pedalboard_native_hiddenimports = collect_all("pedalboard_native")
+ndi_datas, ndi_binaries, ndi_hiddenimports = collect_all("NDIlib")
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=pedalboard_binaries + pedalboard_native_binaries,
-    datas=[('pyssp\\assets', 'pyssp\\assets'), ('docs\\build\\html', 'docs\\build\\html')] + pedalboard_datas + pedalboard_native_datas,
-    hiddenimports=pedalboard_hiddenimports + pedalboard_native_hiddenimports + ['pedalboard_native'],
+    binaries=pedalboard_binaries + pedalboard_native_binaries + ndi_binaries,
+    datas=[('pyssp\\assets', 'pyssp\\assets'), ('docs\\build\\html', 'docs\\build\\html')] + pedalboard_datas + pedalboard_native_datas + ndi_datas,
+    hiddenimports=pedalboard_hiddenimports + pedalboard_native_hiddenimports + ndi_hiddenimports + ['pedalboard_native', 'NDIlib'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

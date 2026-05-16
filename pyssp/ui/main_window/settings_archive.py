@@ -1699,6 +1699,16 @@ class SettingsArchiveMixin:
         self.settings.video_display_lyric_played_italic = bool(self.video_display_lyric_role_italic.get("played", False))
         self.settings.video_display_lyric_current_italic = bool(self.video_display_lyric_role_italic.get("current", False))
         self.settings.video_display_lyric_next_italic = bool(self.video_display_lyric_role_italic.get("next", False))
+        self.settings.ndi_output_enabled = bool(getattr(self, "ndi_output_enabled", False))
+        self.settings.ndi_output_name = str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video"
+        self.settings.ndi_output_mode_playing = str(getattr(self, "ndi_output_mode_playing", "video") or "video").strip().lower()
+        self.settings.ndi_output_mode_idle = str(getattr(self, "ndi_output_mode_idle", "backdrop") or "backdrop").strip().lower()
+        self.settings.ndi_output_resolution_mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
+        self.settings.ndi_output_width = max(2, int(getattr(self, "ndi_output_width", 1920)))
+        self.settings.ndi_output_height = max(2, int(getattr(self, "ndi_output_height", 1080)))
+        self.settings.ndi_output_fps = max(1, int(getattr(self, "ndi_output_fps", 30)))
+        self.settings.ndi_output_audio_enabled = bool(getattr(self, "ndi_output_audio_enabled", True))
+        self.settings.ndi_output_audio_tap_mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
         self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
         self.settings.new_lyric_file_format = self.new_lyric_file_format
         self.settings.automation_script_editor_show_lyric = bool(self.automation_script_editor_show_lyric)

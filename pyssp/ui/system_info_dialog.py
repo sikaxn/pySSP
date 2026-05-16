@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 
 from pyssp.audio_engine import list_output_devices
 from pyssp.midi_control import list_midi_input_devices
+from pyssp.ndi_support import ndi_status_lines
 from pyssp.settings_store import get_settings_path, load_settings
 from pyssp.timecode import list_midi_output_devices
 
@@ -495,6 +496,11 @@ def build_system_information_text(
 
     lines.append("Library versions on this build/runtime:")
     for item in _get_library_versions():
+        lines.append(f"- {item}")
+    lines.append("")
+
+    lines.append("NDI status:")
+    for item in ndi_status_lines():
         lines.append(f"- {item}")
     lines.append("")
 

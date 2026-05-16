@@ -472,6 +472,9 @@ class VideoDisplayMixin:
             return str(self.video_display_mode_idle or "blank")
         return str(self.video_display_mode_playing or "video")
 
+    def _active_ndi_route_mode(self) -> str:
+        return self._active_video_route_mode()
+
     def _video_frame_interval_ms(self, info: Optional[MediaProbeInfo] = None) -> int:
         fps = 0.0
         if info is not None:
@@ -563,6 +566,10 @@ class VideoDisplayMixin:
             height = max(0, int(round(widget.height() * dpr)))
             if width > 0 and height > 0:
                 candidates.append((width, height))
+        if bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() == "video":
+            width, height = self._ndi_output_dimensions()
+            if width > 0 and height > 0:
+                candidates.append((width, height))
         if not candidates:
             return 0, 0
         return max(candidates, key=lambda item: item[0] * item[1])
@@ -583,6 +590,12 @@ class VideoDisplayMixin:
             height = max(0, int(round(widget.height() * dpr)))
             if width > 0 and height > 0:
                 candidates.append((width, height))
+        if bool(getattr(self, "ndi_output_enabled", False)):
+            ndi_mode = self._active_ndi_route_mode()
+            if ndi_mode in {"stage_display", "lyric_display", "backdrop", "blank", "white_screen", "colour_bars"}:
+                width, height = self._ndi_output_dimensions()
+                if width > 0 and height > 0:
+                    candidates.append((width, height))
         if not candidates:
             return 0, 0
         return max(candidates, key=lambda item: item[0] * item[1])
@@ -628,7 +641,9 @@ class VideoDisplayMixin:
         preview = getattr(self, "video_preview_widget", None)
         if preview is not None and preview.isVisible():
             return True
-        return self._video_display_window is not None and self._video_display_window.isVisible()
+        if self._video_display_window is not None and self._video_display_window.isVisible():
+            return True
+        return bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() == "video"
 
     def _current_video_display_position_ms(self) -> int:
         if self.current_playing is None:
@@ -670,14 +685,24 @@ class VideoDisplayMixin:
         widget.render(pixmap)
         return pixmap
 
+    def _render_widget_image(self, widget: QWidget, width: int, height: int) -> QImage:
+        widget.resize(max(1, int(width)), max(1, int(height)))
+        image = QImage(widget.size(), QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.black)
+        painter = QPainter(image)
+        widget.render(painter)
+        painter.end()
+        return image
+
     def _video_snapshot_dimensions(self) -> tuple[int, int]:
         width, height = self._video_snapshot_target_pixel_size()
         if width > 0 and height > 0:
             return width, height
         return 960, 540
 
-    def _render_stage_display_snapshot(self) -> QPixmap:
-        target_width, target_height = self._video_snapshot_dimensions()
+    def _render_stage_display_snapshot(self, target_width: Optional[int] = None, target_height: Optional[int] = None) -> QPixmap:
+        if target_width is None or target_height is None:
+            target_width, target_height = self._video_snapshot_dimensions()
         window = GadgetStageDisplayWindow(self)
         window.configure_gadgets(self.stage_display_gadgets)
         window.configure_font_settings(
@@ -727,8 +752,9 @@ class VideoDisplayMixin:
         window.set_playback_status(self._stage_playback_status())
         return self._render_widget_snapshot(window, target_width, target_height)
 
-    def _render_lyric_display_snapshot(self) -> QPixmap:
-        target_width, target_height = self._video_snapshot_dimensions()
+    def _render_lyric_display_snapshot(self, target_width: Optional[int] = None, target_height: Optional[int] = None) -> QPixmap:
+        if target_width is None or target_height is None:
+            target_width, target_height = self._video_snapshot_dimensions()
         window = LyricDisplayWindow(self)
         window.set_transparent_mode_enabled(False)
         window.configure_display_settings(
@@ -821,10 +847,9 @@ class VideoDisplayMixin:
             role_styles=self._video_display_lyric_role_styles(),
         )
 
-    def _sync_video_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
+    def _sync_output_surface_widget(self, widget: Optional[VideoDisplayWidget], mode: str, *, force: bool = False) -> None:
         if widget is None:
             return
-        mode = self._active_video_route_mode()
         widget.configure_overlay(
             overlay_rect=self.video_display_lyric_overlay_rect,
             show_lyric_overlay=self.video_display_show_lyric_overlay and mode == "video",
@@ -848,6 +873,127 @@ class VideoDisplayMixin:
             widget.set_content_pixmap(QPixmap())
         widget.set_video_pixmap(QPixmap())
         widget.set_lyric_html("")
+
+    def _sync_video_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
+        self._sync_output_surface_widget(widget, self._active_video_route_mode(), force=force)
+
+    def _ndi_output_dimensions(self) -> tuple[int, int]:
+        mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
+        if mode == "720p":
+            return 1280, 720
+        if mode == "1080p":
+            return 1920, 1080
+        if mode == "custom":
+            return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
+        slot, info = self._current_video_slot_and_probe()
+        if slot is not None and info.has_video:
+            return self._video_output_dimensions(info)
+        return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
+
+    def _ensure_ndi_preview_widget(self) -> VideoDisplayWidget:
+        widget = getattr(self, "ndi_preview_widget", None)
+        if widget is None:
+            widget = VideoDisplayWidget(self, allow_fullscreen_toggle=False)
+            widget.hide()
+            self.ndi_preview_widget = widget
+        return widget
+
+    def _render_ndi_frame_image(self) -> QImage:
+        width, height = self._ndi_output_dimensions()
+        widget = self._ensure_ndi_preview_widget()
+        self._sync_output_surface_widget(widget, self._active_ndi_route_mode(), force=True)
+        return self._render_widget_image(widget, width, height)
+
+    def _current_ndi_audio_player(self) -> Optional[ExternalMediaPlayer]:
+        key = self.current_playing
+        if key is None:
+            return None
+        return self._player_for_slot_key(key)
+
+    def _configure_ndi_sender(self) -> bool:
+        sender = getattr(self, "_ndi_sender", None)
+        if sender is None:
+            return False
+        enabled = bool(getattr(self, "ndi_output_enabled", False))
+        if (not enabled) or (not getattr(self, "_ndi_status", None) or not self._ndi_status.ready):
+            try:
+                sender.stop()
+            except Exception:
+                pass
+            self._ndi_last_config = None
+            self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
+            return False
+        width, height = self._ndi_output_dimensions()
+        config = NDIOutputConfig(
+            source_name=str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video",
+            width=width,
+            height=height,
+            fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
+            audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
+        )
+        if sender.configure(config):
+            self._ndi_last_config = config
+            return True
+        self._ndi_last_config = None
+        return False
+
+    def _send_ndi_audio(self) -> None:
+        if not bool(getattr(self, "ndi_output_audio_enabled", True)):
+            self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
+            return
+        sender = getattr(self, "_ndi_sender", None)
+        config = getattr(self, "_ndi_last_config", None)
+        player = self._current_ndi_audio_player()
+        if sender is None or config is None or player is None:
+            return
+        sample_rate_getter = getattr(player, "sampleRate", None)
+        if not callable(sample_rate_getter):
+            return
+        sample_rate = max(1, int(sample_rate_getter()))
+        target_frames = max(1, int(round(sample_rate / max(1.0, float(config.fps)))))
+        take_frames = getattr(player, "takeOutputFrames", None)
+        if not callable(take_frames):
+            return
+        try:
+            incoming = np.asarray(
+                take_frames(max_frames=target_frames * 4, mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader"))),
+                dtype=np.float32,
+            )
+        except Exception:
+            return
+        if incoming.ndim != 2:
+            incoming = np.zeros((0, 2), dtype=np.float32)
+        remainder = np.asarray(getattr(self, "_ndi_audio_remainder", np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
+        if remainder.ndim != 2:
+            remainder = np.zeros((0, incoming.shape[1] if incoming.ndim == 2 and incoming.shape[1] > 0 else 2), dtype=np.float32)
+        if incoming.size <= 0 and remainder.size <= 0:
+            return
+        if incoming.size > 0 and remainder.size > 0 and remainder.shape[1] != incoming.shape[1]:
+            remainder = np.zeros((0, incoming.shape[1]), dtype=np.float32)
+        combined = incoming if remainder.size <= 0 else np.vstack([remainder, incoming])
+        channel_count = max(1, int(combined.shape[1])) if combined.ndim == 2 else 2
+        while combined.ndim == 2 and combined.shape[0] >= target_frames:
+            chunk = np.ascontiguousarray(combined[:target_frames], dtype=np.float32)
+            if not sender.send_audio_frames(chunk, sample_rate):
+                break
+            combined = combined[target_frames:]
+        if combined.ndim != 2:
+            combined = np.zeros((0, channel_count), dtype=np.float32)
+        self._ndi_audio_remainder = np.ascontiguousarray(combined, dtype=np.float32)
+
+    def _refresh_ndi_output(self, force: bool = False) -> None:
+        if not self._configure_ndi_sender():
+            return
+        sender = getattr(self, "_ndi_sender", None)
+        if sender is None:
+            return
+        frame_image = self._render_ndi_frame_image()
+        if not frame_image.isNull():
+            sender.send_video_frame(frame_image)
+        self._send_ndi_audio()
+
+    def _tick_ndi_refresh(self) -> None:
+        self._refresh_ndi_output()
 
     def _apply_video_frame_to_targets(self) -> None:
         pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())

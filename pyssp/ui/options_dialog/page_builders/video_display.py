@@ -26,6 +26,19 @@ class VideoDisplayPageMixin:
         lyric_role_sizes: Dict[str, int],
         lyric_role_bold: Dict[str, bool],
         lyric_role_italic: Dict[str, bool],
+        ndi_status_text: str,
+        ndi_download_url: str,
+        ndi_ready: bool,
+        ndi_output_enabled: bool,
+        ndi_output_name: str,
+        ndi_output_mode_playing: str,
+        ndi_output_mode_idle: str,
+        ndi_output_resolution_mode: str,
+        ndi_output_width: int,
+        ndi_output_height: int,
+        ndi_output_fps: int,
+        ndi_output_audio_enabled: bool,
+        ndi_output_audio_tap_mode: str,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -82,6 +95,99 @@ class VideoDisplayPageMixin:
         backdrop_form.addRow(backdrop_note)
         self.video_display_use_default_backdrop_checkbox.toggled.connect(self._sync_video_display_backdrop_controls)
         layout.addWidget(backdrop_group)
+
+        ndi_group = QGroupBox("NDI Output")
+        ndi_form = QFormLayout(ndi_group)
+        self.ndi_output_status_label = QLabel(str(ndi_status_text or ""))
+        self.ndi_output_status_label.setWordWrap(True)
+        ndi_form.addRow("Status:", self.ndi_output_status_label)
+        self.ndi_output_download_label = QLabel(
+            f'<a href="{str(ndi_download_url or "").strip()}">Download NDI SDK / Runtime</a>'
+        )
+        self.ndi_output_download_label.setOpenExternalLinks(True)
+        ndi_form.addRow("Install:", self.ndi_output_download_label)
+        self.ndi_output_enabled_checkbox = QCheckBox("Enable NDI output")
+        self.ndi_output_enabled_checkbox.setChecked(bool(ndi_output_enabled))
+        ndi_form.addRow(self.ndi_output_enabled_checkbox)
+        self.ndi_output_name_edit = QLineEdit(str(ndi_output_name or ""))
+        ndi_form.addRow("Source Name:", self.ndi_output_name_edit)
+        self.ndi_output_route_note_label = QLabel("Source routing follows Video Control.")
+        self.ndi_output_route_note_label.setWordWrap(True)
+        ndi_form.addRow("Source:", self.ndi_output_route_note_label)
+        self.ndi_output_mode_playing_combo = QComboBox()
+        for label, value in [
+            ("Video", "video"),
+            ("Lyric Display", "lyric_display"),
+            ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
+            ("Blank", "blank"),
+            ("White Screen", "white_screen"),
+            ("Colour Bars", "colour_bars"),
+        ]:
+            self.ndi_output_mode_playing_combo.addItem(label, value)
+        self._set_combo_data_or_default(self.ndi_output_mode_playing_combo, ndi_output_mode_playing, "video")
+        ndi_form.addRow("When video is playing:", self.ndi_output_mode_playing_combo)
+        self.ndi_output_mode_idle_combo = QComboBox()
+        for label, value in [
+            ("Lyric Display", "lyric_display"),
+            ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
+            ("Blank", "blank"),
+            ("White Screen", "white_screen"),
+            ("Colour Bars", "colour_bars"),
+        ]:
+            self.ndi_output_mode_idle_combo.addItem(label, value)
+        self._set_combo_data_or_default(self.ndi_output_mode_idle_combo, ndi_output_mode_idle, "backdrop")
+        ndi_form.addRow("When video is not playing:", self.ndi_output_mode_idle_combo)
+        self.ndi_output_resolution_mode_combo = QComboBox()
+        for label, value in [
+            ("Source / Native", "source"),
+            ("1280 x 720", "720p"),
+            ("1920 x 1080", "1080p"),
+            ("Custom", "custom"),
+        ]:
+            self.ndi_output_resolution_mode_combo.addItem(label, value)
+        self._set_combo_data_or_default(self.ndi_output_resolution_mode_combo, ndi_output_resolution_mode, "source")
+        ndi_form.addRow("Resolution:", self.ndi_output_resolution_mode_combo)
+        ndi_size_row = QWidget()
+        ndi_size_layout = QHBoxLayout(ndi_size_row)
+        ndi_size_layout.setContentsMargins(0, 0, 0, 0)
+        ndi_size_layout.setSpacing(6)
+        self.ndi_output_width_spin = QSpinBox()
+        self.ndi_output_width_spin.setRange(2, 8192)
+        self.ndi_output_width_spin.setValue(max(2, int(ndi_output_width)))
+        self.ndi_output_height_spin = QSpinBox()
+        self.ndi_output_height_spin.setRange(2, 8192)
+        self.ndi_output_height_spin.setValue(max(2, int(ndi_output_height)))
+        ndi_size_layout.addWidget(self.ndi_output_width_spin, 1)
+        ndi_size_layout.addWidget(QLabel("x"))
+        ndi_size_layout.addWidget(self.ndi_output_height_spin, 1)
+        ndi_form.addRow("Custom Size:", ndi_size_row)
+        self.ndi_output_fps_combo = QComboBox()
+        fps_value = max(1, int(ndi_output_fps))
+        fps_presets = [24, 25, 30, 50, 60]
+        for preset in fps_presets:
+            self.ndi_output_fps_combo.addItem(f"{preset} fps", preset)
+        if fps_value not in fps_presets:
+            self.ndi_output_fps_combo.addItem(f"{fps_value} fps", fps_value)
+        self._set_combo_data_or_default(self.ndi_output_fps_combo, fps_value, 30)
+        ndi_form.addRow("Frame Rate:", self.ndi_output_fps_combo)
+        self.ndi_output_audio_enabled_checkbox = QCheckBox("Send audio")
+        self.ndi_output_audio_enabled_checkbox.setChecked(bool(ndi_output_audio_enabled))
+        ndi_form.addRow(self.ndi_output_audio_enabled_checkbox)
+        self.ndi_output_audio_tap_mode_combo = QComboBox()
+        self.ndi_output_audio_tap_mode_combo.addItem("Post volume fader", "post_fader")
+        self.ndi_output_audio_tap_mode_combo.addItem("Pre volume fader", "pre_fader")
+        self._set_combo_data_or_default(self.ndi_output_audio_tap_mode_combo, ndi_output_audio_tap_mode, "post_fader")
+        ndi_form.addRow("Audio Tap:", self.ndi_output_audio_tap_mode_combo)
+        self._ndi_capability_ready = bool(ndi_ready)
+        self.ndi_output_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
+        self.ndi_output_audio_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
+        self.ndi_output_resolution_mode_combo.currentIndexChanged.connect(self._sync_ndi_controls)
+        self.video_display_mode_playing_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
+        self.video_display_mode_idle_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
+        self._sync_ndi_route_controls()
+        layout.addWidget(ndi_group)
 
         overlay_group = QGroupBox("Overlay")
         overlay_form = QFormLayout(overlay_group)
@@ -226,6 +332,7 @@ class VideoDisplayPageMixin:
         layout.addWidget(font_group)
         self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()
+        self._sync_ndi_controls()
         layout.addStretch(1)
         return page
 
@@ -242,6 +349,43 @@ class VideoDisplayPageMixin:
         enabled = not bool(self.video_display_use_default_backdrop_checkbox.isChecked())
         self.video_display_backdrop_path_edit.setEnabled(enabled)
         self.video_display_backdrop_path_browse_button.setEnabled(enabled)
+
+    def _sync_ndi_controls(self) -> None:
+        ready = bool(getattr(self, "_ndi_capability_ready", False))
+        enabled = ready and bool(self.ndi_output_enabled_checkbox.isChecked())
+        for widget in [
+            self.ndi_output_name_edit,
+            self.ndi_output_resolution_mode_combo,
+            self.ndi_output_fps_combo,
+            self.ndi_output_audio_enabled_checkbox,
+        ]:
+            widget.setEnabled(ready)
+        self.ndi_output_mode_playing_combo.setEnabled(False)
+        self.ndi_output_mode_idle_combo.setEnabled(False)
+        custom_enabled = (
+            ready
+            and enabled
+            and str(self.ndi_output_resolution_mode_combo.currentData() or "source") == "custom"
+        )
+        self.ndi_output_width_spin.setEnabled(custom_enabled)
+        self.ndi_output_height_spin.setEnabled(custom_enabled)
+        self.ndi_output_audio_tap_mode_combo.setEnabled(
+            ready and enabled and self.ndi_output_audio_enabled_checkbox.isChecked()
+        )
+
+    def _sync_ndi_route_controls(self) -> None:
+        self._set_combo_data_or_default(
+            self.ndi_output_mode_playing_combo,
+            str(self.video_display_mode_playing_combo.currentData() or "video"),
+            "video",
+        )
+        idle_mode = str(self.video_display_mode_idle_combo.currentData() or "blank")
+        default_idle = idle_mode if idle_mode in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"} else "backdrop"
+        self._set_combo_data_or_default(
+            self.ndi_output_mode_idle_combo,
+            idle_mode,
+            default_idle,
+        )
 
     def _browse_video_display_backdrop_path(self) -> None:
         start_dir = str(self.video_display_backdrop_path_edit.text() or "").strip()

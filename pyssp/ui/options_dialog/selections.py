@@ -212,6 +212,38 @@ class SelectionMixin:
             "next": bool(self.video_display_lyric_next_italic_checkbox.isChecked()),
         }
 
+    def selected_ndi_output_enabled(self) -> bool:
+        return bool(self.ndi_output_enabled_checkbox.isChecked())
+
+    def selected_ndi_output_name(self) -> str:
+        return str(self.ndi_output_name_edit.text() or "").strip() or "pyssp-video"
+
+    def selected_ndi_output_mode_playing(self) -> str:
+        return str(self.video_display_mode_playing_combo.currentData() or "video")
+
+    def selected_ndi_output_mode_idle(self) -> str:
+        return str(self.video_display_mode_idle_combo.currentData() or "blank")
+
+    def selected_ndi_output_resolution_mode(self) -> str:
+        value = str(self.ndi_output_resolution_mode_combo.currentData() or "source").strip().lower()
+        return value if value in {"source", "720p", "1080p", "custom"} else "source"
+
+    def selected_ndi_output_width(self) -> int:
+        return max(2, int(self.ndi_output_width_spin.value()))
+
+    def selected_ndi_output_height(self) -> int:
+        return max(2, int(self.ndi_output_height_spin.value()))
+
+    def selected_ndi_output_fps(self) -> int:
+        return max(1, int(self.ndi_output_fps_combo.currentData() or 30))
+
+    def selected_ndi_output_audio_enabled(self) -> bool:
+        return bool(self.ndi_output_audio_enabled_checkbox.isChecked())
+
+    def selected_ndi_output_audio_tap_mode(self) -> str:
+        value = str(self.ndi_output_audio_tap_mode_combo.currentData() or "post_fader").strip().lower()
+        return value if value in {"pre_fader", "post_fader"} else "post_fader"
+
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
 

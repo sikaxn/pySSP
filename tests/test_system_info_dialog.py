@@ -56,3 +56,20 @@ def test_refresh_runs_async_without_blocking_ui(qapp, monkeypatch):
     refresh_thread = dialog._refresh_thread
     if refresh_thread is not None:
         assert refresh_thread.wait(1000)
+
+
+def test_build_system_information_text_includes_ndi_status(monkeypatch):
+    monkeypatch.setattr(system_info_dialog, "list_output_devices", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "list_midi_input_devices", lambda force_refresh=False: [])
+    monkeypatch.setattr(system_info_dialog, "_list_midi_outputs_cross_platform", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "_get_pygame_decoder_report", lambda register_process=None: ["ok"])
+    monkeypatch.setattr(system_info_dialog, "_get_current_running_config_report", lambda: ["cfg"])
+    monkeypatch.setattr(system_info_dialog, "_get_library_versions", lambda: ["lib"])
+    monkeypatch.setattr(system_info_dialog, "_get_network_interfaces", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "ndi_status_lines", lambda: ["NDI ready", "NDI python version: 6.3.2.1"])
+
+    text = system_info_dialog.build_system_information_text("v1.2.3")
+
+    assert "NDI status:" in text
+    assert "- NDI ready" in text
+    assert "- NDI python version: 6.3.2.1" in text

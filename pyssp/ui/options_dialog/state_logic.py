@@ -368,8 +368,40 @@ class StateLogicMixin:
         self._refresh_color_button(self.video_display_lyric_played_color_btn, self._video_display_lyric_role_colors["played"])
         self._refresh_color_button(self.video_display_lyric_current_color_btn, self._video_display_lyric_role_colors["current"])
         self._refresh_color_button(self.video_display_lyric_next_color_btn, self._video_display_lyric_role_colors["next"])
+        self.ndi_output_enabled_checkbox.setChecked(bool(d.get("ndi_output_enabled", False)))
+        self.ndi_output_name_edit.setText(str(d.get("ndi_output_name", "pyssp-video")))
+        self._set_combo_data_or_default(
+            self.ndi_output_mode_playing_combo,
+            str(d.get("ndi_output_mode_playing", "video")),
+            "video",
+        )
+        self._set_combo_data_or_default(
+            self.ndi_output_mode_idle_combo,
+            str(d.get("ndi_output_mode_idle", "backdrop")),
+            "backdrop",
+        )
+        self._set_combo_data_or_default(
+            self.ndi_output_resolution_mode_combo,
+            str(d.get("ndi_output_resolution_mode", "source")),
+            "source",
+        )
+        self.ndi_output_width_spin.setValue(int(d.get("ndi_output_width", 1920)))
+        self.ndi_output_height_spin.setValue(int(d.get("ndi_output_height", 1080)))
+        self._set_combo_data_or_default(
+            self.ndi_output_fps_combo,
+            int(d.get("ndi_output_fps", 30)),
+            30,
+        )
+        self.ndi_output_audio_enabled_checkbox.setChecked(bool(d.get("ndi_output_audio_enabled", True)))
+        self._set_combo_data_or_default(
+            self.ndi_output_audio_tap_mode_combo,
+            str(d.get("ndi_output_audio_tap_mode", "post_fader")),
+            "post_fader",
+        )
+        self._sync_ndi_route_controls()
         self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()
+        self._sync_ndi_controls()
 
     def _restore_window_layout_defaults(self) -> None:
         d = self._DEFAULTS

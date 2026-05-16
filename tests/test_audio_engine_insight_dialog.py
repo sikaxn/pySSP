@@ -6,6 +6,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from pyssp.ffmpeg_support import MediaProbeInfo
+from pyssp.ndi_support import NDICapabilityStatus
 from pyssp.settings_store import AppSettings
 from pyssp.ui import main_window as mw
 
@@ -89,6 +90,17 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
     monkeypatch.setattr(mw, "get_ffprobe_executable", lambda: "")
     monkeypatch.setattr(
         mw,
+        "probe_ndi_capability",
+        lambda: NDICapabilityStatus(
+            ndi_python_available=True,
+            ndi_python_version="6.3.2.1",
+            ndi_module_importable=True,
+            ndi_runtime_or_sdk_detected=True,
+            availability_reason="NDI output is ready.",
+        ),
+    )
+    monkeypatch.setattr(
+        mw,
         "probe_media_info",
         lambda _path: MediaProbeInfo(
             duration_ms=40170,
@@ -132,6 +144,8 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         assert summary_map["ffmpeg_path"] == r"C:\ffmpeg.exe"
         assert summary_map["ffprobe_path"] == "not found"
         assert summary_map["ffmpeg_version"] == "ffmpeg version test"
+        assert summary_map["ndi_ready"] is True
+        assert summary_map["ndi_audio_tap_mode"] == "post_fader"
         assert "size=1920x1080" in summary_map["current_video_probe"]
         details_map = dict(snapshot["players"][0]["details"])
         assert details_map["file_path"] == "clip.mp4"

@@ -544,6 +544,25 @@ class MainWindow(
             "current": bool(getattr(self.settings, "video_display_lyric_current_italic", False)),
             "next": bool(getattr(self.settings, "video_display_lyric_next_italic", False)),
         }
+        self.ndi_output_enabled = bool(getattr(self.settings, "ndi_output_enabled", False))
+        self.ndi_output_name = str(getattr(self.settings, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video"
+        self.ndi_output_mode_playing = str(getattr(self.settings, "ndi_output_mode_playing", "video") or "video").strip().lower()
+        if self.ndi_output_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
+            self.ndi_output_mode_playing = "video"
+        self.ndi_output_mode_idle = str(getattr(self.settings, "ndi_output_mode_idle", "backdrop") or "backdrop").strip().lower()
+        if self.ndi_output_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
+            self.ndi_output_mode_idle = "backdrop"
+        self.ndi_output_resolution_mode = str(getattr(self.settings, "ndi_output_resolution_mode", "source") or "source").strip().lower()
+        if self.ndi_output_resolution_mode not in {"source", "720p", "1080p", "custom"}:
+            self.ndi_output_resolution_mode = "source"
+        self.ndi_output_width = max(2, int(getattr(self.settings, "ndi_output_width", 1920)))
+        self.ndi_output_height = max(2, int(getattr(self.settings, "ndi_output_height", 1080)))
+        self.ndi_output_fps = max(1, int(getattr(self.settings, "ndi_output_fps", 30)))
+        self.ndi_output_audio_enabled = bool(getattr(self.settings, "ndi_output_audio_enabled", True))
+        self.ndi_output_audio_tap_mode = str(getattr(self.settings, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
+        if self.ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
+            self.ndi_output_audio_tap_mode = "post_fader"
+        self._ndi_status = probe_ndi_capability()
         self.search_lyric_on_add_sound_button = bool(
             getattr(self.settings, "search_lyric_on_add_sound_button", True)
         )
@@ -963,10 +982,15 @@ class MainWindow(
         self.video_control_dock: Optional[QDockWidget] = None
         self.video_control_panel: Optional[QWidget] = None
         self.video_preview_widget: Optional[VideoDisplayWidget] = None
+        self.ndi_preview_widget: Optional[VideoDisplayWidget] = None
         self.video_mode_playing_combo: Optional[QComboBox] = None
         self.video_mode_idle_combo: Optional[QComboBox] = None
         self._video_refresh_timer: Optional[QTimer] = None
+        self._ndi_refresh_timer: Optional[QTimer] = None
         self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
+        self._ndi_sender = NDIOutputSender(self._ndi_status)
+        self._ndi_last_config: Optional[NDIOutputConfig] = None
+        self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
         self._video_requested_frame_key: Optional[Tuple[str, int]] = None
         self._video_requested_frame_path: str = ""
         self._video_decode_inflight_key: Optional[Tuple[str, int]] = None
@@ -1108,6 +1132,9 @@ class MainWindow(
         self._video_refresh_timer = QTimer(self)
         self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
         self._video_refresh_timer.start(33)
+        self._ndi_refresh_timer = QTimer(self)
+        self._ndi_refresh_timer.timeout.connect(self._tick_ndi_refresh)
+        self._ndi_refresh_timer.start(33)
 
         self.timecode_mtc_timer = QTimer(self)
         self.timecode_mtc_timer.timeout.connect(self._tick_timecode_mtc)
@@ -1164,12 +1191,32 @@ class MainWindow(
                 timer.stop()
             except Exception:
                 pass
+        ndi_timer = getattr(self, "_ndi_refresh_timer", None)
+        if ndi_timer is not None:
+            try:
+                ndi_timer.stop()
+            except Exception:
+                pass
         dispatcher = getattr(self, "_video_frame_dispatcher", None)
         if dispatcher is not None:
             try:
                 dispatcher.stop()
             except Exception:
                 pass
+        ndi_sender = getattr(self, "_ndi_sender", None)
+        if ndi_sender is not None:
+            try:
+                ndi_sender.stop()
+            except Exception:
+                pass
+        ndi_preview = getattr(self, "ndi_preview_widget", None)
+        if ndi_preview is not None:
+            try:
+                ndi_preview.hide()
+                ndi_preview.deleteLater()
+            except Exception:
+                pass
+            self.ndi_preview_widget = None
         try:
             self._ltc_sender.shutdown()
         except Exception:

@@ -999,6 +999,16 @@ class AppSettings:
     video_display_lyric_played_italic: bool = False
     video_display_lyric_current_italic: bool = False
     video_display_lyric_next_italic: bool = False
+    ndi_output_enabled: bool = False
+    ndi_output_name: str = "pyssp-video"
+    ndi_output_mode_playing: str = "video"
+    ndi_output_mode_idle: str = "backdrop"
+    ndi_output_resolution_mode: str = "source"
+    ndi_output_width: int = 1920
+    ndi_output_height: int = 1080
+    ndi_output_fps: int = 30
+    ndi_output_audio_enabled: bool = True
+    ndi_output_audio_tap_mode: str = "post_fader"
     window_layout: dict[str, object] = field(default_factory=default_window_layout)
     window_layout_locked: bool = False
     dock_layout_state: str = ""
@@ -1468,6 +1478,16 @@ def save_settings(settings: AppSettings) -> None:
         "video_display_lyric_played_italic": "1" if settings.video_display_lyric_played_italic else "0",
         "video_display_lyric_current_italic": "1" if settings.video_display_lyric_current_italic else "0",
         "video_display_lyric_next_italic": "1" if settings.video_display_lyric_next_italic else "0",
+        "ndi_output_enabled": "1" if settings.ndi_output_enabled else "0",
+        "ndi_output_name": _encode_ascii_setting(settings.ndi_output_name),
+        "ndi_output_mode_playing": str(settings.ndi_output_mode_playing or "video").strip().lower(),
+        "ndi_output_mode_idle": str(settings.ndi_output_mode_idle or "backdrop").strip().lower(),
+        "ndi_output_resolution_mode": str(settings.ndi_output_resolution_mode or "source").strip().lower(),
+        "ndi_output_width": str(max(2, int(settings.ndi_output_width))),
+        "ndi_output_height": str(max(2, int(settings.ndi_output_height))),
+        "ndi_output_fps": str(max(1, int(settings.ndi_output_fps))),
+        "ndi_output_audio_enabled": "1" if settings.ndi_output_audio_enabled else "0",
+        "ndi_output_audio_tap_mode": str(settings.ndi_output_audio_tap_mode or "post_fader").strip().lower(),
         "window_layout": json.dumps(
             normalize_window_layout(settings.window_layout),
             separators=(",", ":"),
@@ -1613,6 +1633,24 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     video_display_lyric_played_italic = _get_bool(section, "video_display_lyric_played_italic", False)
     video_display_lyric_current_italic = _get_bool(section, "video_display_lyric_current_italic", False)
     video_display_lyric_next_italic = _get_bool(section, "video_display_lyric_next_italic", False)
+    ndi_output_enabled = _get_bool(section, "ndi_output_enabled", False)
+    ndi_output_name = _decode_ascii_setting(str(section.get("ndi_output_name", "pyssp-video"))).strip() or "pyssp-video"
+    ndi_output_mode_playing = str(section.get("ndi_output_mode_playing", "video")).strip().lower()
+    if ndi_output_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
+        ndi_output_mode_playing = "video"
+    ndi_output_mode_idle = str(section.get("ndi_output_mode_idle", "backdrop")).strip().lower()
+    if ndi_output_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
+        ndi_output_mode_idle = "backdrop"
+    ndi_output_resolution_mode = str(section.get("ndi_output_resolution_mode", "source")).strip().lower()
+    if ndi_output_resolution_mode not in {"source", "720p", "1080p", "custom"}:
+        ndi_output_resolution_mode = "source"
+    ndi_output_width = _clamp_int(_get_int(section, "ndi_output_width", 1920), 2, 8192)
+    ndi_output_height = _clamp_int(_get_int(section, "ndi_output_height", 1080), 2, 8192)
+    ndi_output_fps = _clamp_int(_get_int(section, "ndi_output_fps", 30), 1, 120)
+    ndi_output_audio_enabled = _get_bool(section, "ndi_output_audio_enabled", True)
+    ndi_output_audio_tap_mode = str(section.get("ndi_output_audio_tap_mode", "post_fader")).strip().lower()
+    if ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
+        ndi_output_audio_tap_mode = "post_fader"
     search_lyric_on_add_sound_button = _get_bool(section, "search_lyric_on_add_sound_button", True)
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
@@ -2412,6 +2450,16 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         video_display_lyric_played_italic=video_display_lyric_played_italic,
         video_display_lyric_current_italic=video_display_lyric_current_italic,
         video_display_lyric_next_italic=video_display_lyric_next_italic,
+        ndi_output_enabled=ndi_output_enabled,
+        ndi_output_name=ndi_output_name,
+        ndi_output_mode_playing=ndi_output_mode_playing,
+        ndi_output_mode_idle=ndi_output_mode_idle,
+        ndi_output_resolution_mode=ndi_output_resolution_mode,
+        ndi_output_width=ndi_output_width,
+        ndi_output_height=ndi_output_height,
+        ndi_output_fps=ndi_output_fps,
+        ndi_output_audio_enabled=ndi_output_audio_enabled,
+        ndi_output_audio_tap_mode=ndi_output_audio_tap_mode,
         window_layout=window_layout,
         window_layout_locked=_get_bool(section, "window_layout_locked", False),
         dock_layout_state=str(section.get("dock_layout_state", "")).strip(),

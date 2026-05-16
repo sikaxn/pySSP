@@ -274,7 +274,7 @@ def build_decoder_report() -> List[str]:
 
         mixer_initialized = False
         try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2)
+            pygame.mixer.init(frequency=48000, size=-16, channels=2, allowedchanges=0)
             mixer_initialized = True
         except Exception as exc:
             lines.append(f"pygame mixer initialized: False ({exc})")

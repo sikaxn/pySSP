@@ -66,10 +66,10 @@ def test_build_system_information_text_includes_ndi_status(monkeypatch):
     monkeypatch.setattr(system_info_dialog, "_get_current_running_config_report", lambda: ["cfg"])
     monkeypatch.setattr(system_info_dialog, "_get_library_versions", lambda: ["lib"])
     monkeypatch.setattr(system_info_dialog, "_get_network_interfaces", lambda: [])
-    monkeypatch.setattr(system_info_dialog, "ndi_status_lines", lambda: ["NDI ready", "NDI python version: 6.3.2.1"])
+    monkeypatch.setattr(system_info_dialog, "ndi_status_lines", lambda: ["NDI ready", "NDI backend version: 0.1.1"])
 
     text = system_info_dialog.build_system_information_text("v1.2.3")
 
     assert "NDI status:" in text
     assert "- NDI ready" in text
-    assert "- NDI python version: 6.3.2.1" in text
+    assert "- NDI backend version: 0.1.1" in text

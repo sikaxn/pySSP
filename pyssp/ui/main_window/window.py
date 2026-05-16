@@ -987,10 +987,11 @@ class MainWindow(
         self.video_mode_idle_combo: Optional[QComboBox] = None
         self._video_refresh_timer: Optional[QTimer] = None
         self._ndi_refresh_timer: Optional[QTimer] = None
+        self._ndi_audio_refresh_timer: Optional[QTimer] = None
         self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
-        self._ndi_sender = NDIOutputSender(self._ndi_status)
+        self._ndi_sender = NDIOutputDispatcher(self._ndi_status)
         self._ndi_last_config: Optional[NDIOutputConfig] = None
-        self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
+        self._ndi_audio_player_buffers: Dict[int, np.ndarray] = {}
         self._video_requested_frame_key: Optional[Tuple[str, int]] = None
         self._video_requested_frame_path: str = ""
         self._video_decode_inflight_key: Optional[Tuple[str, int]] = None
@@ -1130,11 +1131,18 @@ class MainWindow(
 
         self._video_frame_dispatcher.frameDecoded.connect(self._on_video_frame_ready)
         self._video_refresh_timer = QTimer(self)
+        self._video_refresh_timer.setTimerType(Qt.PreciseTimer)
         self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
         self._video_refresh_timer.start(33)
         self._ndi_refresh_timer = QTimer(self)
+        self._ndi_refresh_timer.setTimerType(Qt.PreciseTimer)
         self._ndi_refresh_timer.timeout.connect(self._tick_ndi_refresh)
         self._ndi_refresh_timer.start(33)
+        self._ndi_audio_refresh_timer = QTimer(self)
+        self._ndi_audio_refresh_timer.setTimerType(Qt.PreciseTimer)
+        self._ndi_audio_refresh_timer.timeout.connect(self._tick_ndi_audio_refresh)
+        self._ndi_audio_refresh_timer.start(10)
+        self._sync_ndi_timer_intervals()
 
         self.timecode_mtc_timer = QTimer(self)
         self.timecode_mtc_timer.timeout.connect(self._tick_timecode_mtc)
@@ -1197,6 +1205,12 @@ class MainWindow(
                 ndi_timer.stop()
             except Exception:
                 pass
+        ndi_audio_timer = getattr(self, "_ndi_audio_refresh_timer", None)
+        if ndi_audio_timer is not None:
+            try:
+                ndi_audio_timer.stop()
+            except Exception:
+                pass
         dispatcher = getattr(self, "_video_frame_dispatcher", None)
         if dispatcher is not None:
             try:
@@ -1206,7 +1220,11 @@ class MainWindow(
         ndi_sender = getattr(self, "_ndi_sender", None)
         if ndi_sender is not None:
             try:
-                ndi_sender.stop()
+                shutdown = getattr(ndi_sender, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+                else:
+                    ndi_sender.stop()
             except Exception:
                 pass
         ndi_preview = getattr(self, "ndi_preview_widget", None)

@@ -1370,12 +1370,13 @@ class UiBuildMixin:
         credits_text = self._load_asset_text_file("about", "credits.md")
         license_text = self._load_asset_text_file("about", "license.md")
         ndi_status = getattr(self, "_ndi_status", None)
+        ndi_backend = str(getattr(ndi_status, "ndi_backend_name", "cyndilib") or "cyndilib")
         ndi_version = str(getattr(ndi_status, "ndi_python_version", "not installed") or "not installed")
         ndi_state = str(getattr(ndi_status, "availability_reason", "unknown") or "unknown")
         about_text += (
             "\n\n---\n\n"
             "## NDI Output\n\n"
-            f"- `ndi-python` version: `{ndi_version}`\n"
+            f"- `{ndi_backend}` version: `{ndi_version}`\n"
             f"- Runtime status: `{ndi_state}`\n"
             f"- Download: {NDI_DOWNLOAD_URL}\n"
             "- NDI SDK/runtime is separately licensed and may need to be installed on the target machine.\n"
@@ -1459,11 +1460,14 @@ class UiBuildMixin:
             ("ffmpeg_version", ffmpeg_version_text() or "unknown"),
             ("ndi_enabled", bool(getattr(self, "ndi_output_enabled", False))),
             ("ndi_ready", bool(getattr(getattr(self, "_ndi_status", None), "ready", False))),
+            ("ndi_backend", str(getattr(getattr(self, "_ndi_status", None), "ndi_backend_name", "cyndilib") or "cyndilib")),
             ("ndi_status", str(getattr(getattr(self, "_ndi_status", None), "availability_reason", "unknown"))),
             ("ndi_source_name", str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video")),
             ("ndi_route_mode", getattr(self, "_active_ndi_route_mode", lambda: "unknown")()),
             ("ndi_audio_enabled", bool(getattr(self, "ndi_output_audio_enabled", True))),
             ("ndi_audio_tap_mode", str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader")),
+            ("ndi_last_audio_mode", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_mode", "") or "")),
+            ("ndi_last_audio_error", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_error", "") or "")),
             ("video_route_mode", getattr(self, "_active_video_route_mode", lambda: "unknown")()),
             ("video_targets_visible", bool(getattr(self, "_video_display_target_visible", lambda: False)())),
             ("video_transport_revision", int(getattr(self, "_video_transport_revision", 0) or 0)),

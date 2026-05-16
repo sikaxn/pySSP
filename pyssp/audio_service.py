@@ -209,6 +209,14 @@ class AudioService(QObject):
         if command == "meterLevels":
             left, right = player.meterLevels()
             return float(left), float(right)
+        if command == "sampleRate":
+            return int(player.sampleRate())
+        if command == "takeOutputFrames":
+            frames = player.takeOutputFrames(
+                max_frames=int(payload.get("max_frames", 0)),
+                mode=str(payload.get("mode", "post_fader") or "post_fader"),
+            )
+            return frames
         if command == "waveformPeaks":
             return player.waveformPeaks(int(payload.get("sample_count", 1024)))
         if command == "waveformPeaksAsync":
@@ -402,6 +410,23 @@ class AudioPlayerProxy(QObject):
 
     def meterLevels(self) -> Tuple[float, float]:
         return float(self._meter_levels[0]), float(self._meter_levels[1])
+
+    def sampleRate(self) -> int:
+        try:
+            return int(self._call("sampleRate", timeout=0.5))
+        except Exception:
+            return 48000
+
+    def takeOutputFrames(self, max_frames: int = 0, mode: str = "post_fader"):
+        result = self._call(
+            "takeOutputFrames",
+            {
+                "max_frames": max(0, int(max_frames)),
+                "mode": str(mode or "post_fader"),
+            },
+            timeout=0.5,
+        )
+        return result
 
     def waveformPeaks(self, sample_count: int = 1024):
         return self._call("waveformPeaks", {"sample_count": int(sample_count)}, timeout=20.0)

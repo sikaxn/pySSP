@@ -181,7 +181,7 @@ from pyssp.lyrics import (
     lyric_text_around_position,
     parse_lyric_file,
 )
-from pyssp.ndi_output import NDIOutputConfig, NDIOutputSender
+from pyssp.ndi_output import NDIOutputConfig, NDIOutputDispatcher
 from pyssp.ndi_support import NDI_DOWNLOAD_URL, ndi_status_lines, probe_ndi_capability
 from pyssp.timecode import (
     LtcAudioOutput,

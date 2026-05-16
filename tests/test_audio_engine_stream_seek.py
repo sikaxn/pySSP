@@ -51,6 +51,34 @@ def _wait_for(predicate, app, timeout=1.0):
     return False
 
 
+def test_ensure_decoder_reinitializes_preinitialized_mixer_to_48000(monkeypatch):
+    state = {"pygame_ready": False, "mixer_info": (44100, -16, 2)}
+    init_calls = []
+    quit_calls = []
+
+    monkeypatch.setattr(audio_engine, "_DECODER_READY", False)
+    monkeypatch.setattr(audio_engine.pygame, "get_init", lambda: bool(state["pygame_ready"]))
+    monkeypatch.setattr(audio_engine.pygame, "init", lambda: state.__setitem__("pygame_ready", True))
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: state["mixer_info"])
+
+    def _quit():
+        quit_calls.append(True)
+        state["mixer_info"] = None
+
+    def _init(*, frequency, size, channels, allowedchanges):
+        init_calls.append((int(frequency), int(size), int(channels), int(allowedchanges)))
+        state["mixer_info"] = (int(frequency), int(size), int(channels))
+
+    monkeypatch.setattr(audio_engine.pygame.mixer, "quit", _quit)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "init", _init)
+
+    audio_engine.ensure_audio_decoder_ready()
+
+    assert quit_calls == [True]
+    assert init_calls == [(48000, -16, 2, 0)]
+    assert state["mixer_info"] == (48000, -16, 2)
+
+
 def test_stream_seek_does_not_report_eof_while_decoder_restarts(monkeypatch):
     monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
     monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))

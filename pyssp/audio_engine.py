@@ -32,6 +32,7 @@ from pyssp.utility_audio import (
 _DECODER_READY = False
 _NEXT_STREAM_ID = 0
 _CHANNEL_COUNT = 2
+_DEFAULT_AUDIO_SAMPLE_RATE = 48000
 _REQUESTED_DEVICE = ""
 _DECODER_LOCK = threading.RLock()
 _PRELOAD_LOCK = threading.RLock()
@@ -513,12 +514,15 @@ class _NullOutputStream:
 
 def _ensure_decoder() -> None:
     global _DECODER_READY
+    desired_mixer_info = (_DEFAULT_AUDIO_SAMPLE_RATE, -16, _CHANNEL_COUNT)
     with _DECODER_LOCK:
-        if _DECODER_READY and pygame.mixer.get_init():
+        current_mixer_info = pygame.mixer.get_init()
+        if _DECODER_READY and current_mixer_info == desired_mixer_info:
             return
         if not pygame.get_init():
             pygame.init()
-        if not pygame.mixer.get_init():
+        current_mixer_info = pygame.mixer.get_init()
+        if current_mixer_info != desired_mixer_info:
             original_driver = os.environ.get("SDL_AUDIODRIVER")
             init_errors: List[str] = []
             for driver in [original_driver, "wasapi", "directsound", "winmm", "dummy"]:
@@ -529,11 +533,18 @@ def _ensure_decoder() -> None:
                         os.environ["SDL_AUDIODRIVER"] = driver
                     elif "SDL_AUDIODRIVER" in os.environ:
                         del os.environ["SDL_AUDIODRIVER"]
-                    pygame.mixer.init(frequency=44100, size=-16, channels=_CHANNEL_COUNT)
-                    break
+                    pygame.mixer.init(
+                        frequency=_DEFAULT_AUDIO_SAMPLE_RATE,
+                        size=-16,
+                        channels=_CHANNEL_COUNT,
+                        allowedchanges=0,
+                    )
+                    if pygame.mixer.get_init() == desired_mixer_info:
+                        break
+                    raise pygame.error(f"Initialized unexpected mixer format {pygame.mixer.get_init()!r}")
                 except Exception as exc:
                     init_errors.append(f"{driver or 'default'}: {exc}")
-            if not pygame.mixer.get_init():
+            if pygame.mixer.get_init() != desired_mixer_info:
                 raise pygame.error("Unable to initialize pygame mixer: " + " | ".join(init_errors))
         _DECODER_READY = True
 
@@ -722,7 +733,7 @@ def can_decode_with_ffmpeg(file_path: str, timeout_ms: int = 180) -> bool:
     path = str(file_path or "").strip()
     if not can_stream_without_preload(path):
         return False
-    mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+    mixer_info = pygame.mixer.get_init() or (_DEFAULT_AUDIO_SAMPLE_RATE, -16, 2)
     sample_rate = int(mixer_info[0])
     channels = int(mixer_info[2])
     decoder: Optional[FFmpegPCMStream] = None
@@ -928,7 +939,7 @@ def _bytes_to_frames(raw: bytes, sample_size: int, channels: int) -> Optional[np
 
 def _decode_media_frames(file_path: str, prefer_ffmpeg: bool = False) -> Tuple[np.ndarray, int]:
     _ensure_decoder()
-    mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+    mixer_info = pygame.mixer.get_init() or (_DEFAULT_AUDIO_SAMPLE_RATE, -16, 2)
     sample_rate = int(mixer_info[0])
     channels = int(mixer_info[2])
     if prefer_ffmpeg and ffmpeg_available():
@@ -1171,7 +1182,7 @@ class ExternalMediaPlayer(QObject):
         self._started_at = 0.0
         self._meter_levels: Tuple[float, float] = (0.0, 0.0)
 
-        mixer_info = pygame.mixer.get_init() or (44100, -16, 2)
+        mixer_info = pygame.mixer.get_init() or (_DEFAULT_AUDIO_SAMPLE_RATE, -16, 2)
         self._sample_rate = int(mixer_info[0])
         self._sample_size = int(mixer_info[1])
         self._channels = int(mixer_info[2])

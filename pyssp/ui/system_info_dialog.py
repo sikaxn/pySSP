@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 from pyssp.audio_engine import list_output_devices
 from pyssp.midi_control import list_midi_input_devices
 from pyssp.ndi_support import ndi_status_lines
+from pyssp.python_runtime import preferred_python_executable
 from pyssp.settings_store import get_settings_path, load_settings
 from pyssp.timecode import list_midi_output_devices
 
@@ -301,10 +302,11 @@ def _get_pygame_decoder_report(
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("SDL_AUDIODRIVER", "dummy")
     env.setdefault("SDL_VIDEODRIVER", "dummy")
+    python_executable = preferred_python_executable()
     if getattr(sys, "frozen", False):
-        cmd = [sys.executable, "--system-info-probe"]
+        cmd = [python_executable, "--system-info-probe"]
     else:
-        cmd = [sys.executable, "-m", "pyssp.system_info_probe"]
+        cmd = [python_executable, "-m", "pyssp.system_info_probe"]
     proc: Optional[subprocess.Popen[str]] = None
     try:
         proc = subprocess.Popen(

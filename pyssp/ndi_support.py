@@ -11,10 +11,13 @@ from typing import List
 
 NDI_DOWNLOAD_URL = "https://ndi.video/for-developers/ndi-sdk/download/"
 NDI_RUNTIME_DOWNLOAD_URL = "https://ndi.link/NDIRedistV5"
+_NDI_BACKEND_PACKAGE = "cyndilib"
+_NDI_BACKEND_MODULE = "cyndilib"
 
 
 @dataclass(frozen=True)
 class NDICapabilityStatus:
+    ndi_backend_name: str = _NDI_BACKEND_PACKAGE
     ndi_python_available: bool = False
     ndi_python_version: str = "not installed"
     ndi_module_importable: bool = False
@@ -23,7 +26,8 @@ class NDICapabilityStatus:
     runtime_env_value: str = ""
     runtime_paths: List[str] = field(default_factory=list)
     sdk_paths: List[str] = field(default_factory=list)
-    availability_reason: str = "NDI Python binding is not installed."
+    bundled_runtime_paths: List[str] = field(default_factory=list)
+    availability_reason: str = "cyndilib is not installed."
     import_error: str = ""
     platform_name: str = ""
     download_url: str = NDI_DOWNLOAD_URL
@@ -142,40 +146,69 @@ def _sdk_candidates() -> List[str]:
     ]
 
 
+def _bundled_runtime_candidates() -> List[str]:
+    try:
+        module = importlib.import_module(_NDI_BACKEND_MODULE)
+    except Exception:
+        return []
+    module_file = getattr(module, "__file__", "")
+    if not module_file:
+        return []
+    root = Path(module_file).resolve().parent
+    wrapper_bin = root / "wrapper" / "bin"
+    candidates: List[str] = []
+    if wrapper_bin.exists():
+        candidates.append(str(wrapper_bin))
+        for name in (
+            "Processing.NDI.Lib.x64.dll",
+            "Processing.NDI.Lib.UWP.x64.dll",
+            "libndi.so",
+            "libndi.dylib",
+        ):
+            candidates.append(str(wrapper_bin / name))
+    for child in (wrapper_bin / "x86_64-linux-gnu", wrapper_bin / "i686-linux-gnu"):
+        candidates.append(str(child))
+    return candidates
+
+
 def probe_ndi_capability(force_refresh: bool = False) -> NDICapabilityStatus:
     global _NDI_STATUS_CACHE
     if _NDI_STATUS_CACHE is not None and not force_refresh:
         return _NDI_STATUS_CACHE
 
-    version = _package_version("ndi-python")
+    version = _package_version(_NDI_BACKEND_PACKAGE)
     ndi_python_available = version != "not installed"
     import_error = ""
     module_importable = False
     if ndi_python_available:
         try:
-            importlib.import_module("NDIlib")
+            importlib.import_module(_NDI_BACKEND_MODULE)
             module_importable = True
         except Exception as exc:
             import_error = str(exc).strip()
     runtime_env_var, runtime_candidates = _runtime_candidates()
     runtime_paths = _existing_paths(runtime_candidates)
     sdk_paths = _existing_paths(_sdk_candidates())
+    bundled_runtime_paths = _existing_paths(_bundled_runtime_candidates()) if module_importable else []
     runtime_env_value = _env_dir(runtime_env_var)
-    runtime_or_sdk_detected = bool(runtime_paths or sdk_paths)
+    runtime_or_sdk_detected = bool(runtime_paths or sdk_paths or bundled_runtime_paths)
 
     if not ndi_python_available:
         if runtime_or_sdk_detected:
-            reason = "NDI SDK/runtime was detected, but the NDI Python binding is not installed in this Python environment."
+            reason = "NDI runtime/SDK was detected, but cyndilib is not installed in this Python environment."
         else:
-            reason = "NDI Python binding is not installed."
+            reason = "cyndilib is not installed."
     elif not module_importable:
-        reason = f"NDI Python binding is installed but could not be imported: {import_error or 'unknown error'}"
+        reason = f"cyndilib is installed but could not be imported: {import_error or 'unknown error'}"
     elif not runtime_or_sdk_detected:
-        reason = "NDI runtime/SDK was not detected on this machine."
+        reason = "NDI runtime binaries were not detected."
+    elif bundled_runtime_paths:
+        reason = "NDI output is ready via cyndilib bundled runtime."
     else:
         reason = "NDI output is ready."
 
     _NDI_STATUS_CACHE = NDICapabilityStatus(
+        ndi_backend_name=_NDI_BACKEND_PACKAGE,
         ndi_python_available=ndi_python_available,
         ndi_python_version=version,
         ndi_module_importable=module_importable,
@@ -184,6 +217,7 @@ def probe_ndi_capability(force_refresh: bool = False) -> NDICapabilityStatus:
         runtime_env_value=runtime_env_value,
         runtime_paths=runtime_paths,
         sdk_paths=sdk_paths,
+        bundled_runtime_paths=bundled_runtime_paths,
         availability_reason=reason,
         import_error=import_error,
         platform_name=platform.system(),
@@ -195,13 +229,16 @@ def ndi_status_lines(status: NDICapabilityStatus | None = None) -> List[str]:
     resolved = status if status is not None else probe_ndi_capability()
     runtime_paths = ", ".join(resolved.runtime_paths) if resolved.runtime_paths else "none"
     sdk_paths = ", ".join(resolved.sdk_paths) if resolved.sdk_paths else "none"
+    bundled_paths = ", ".join(resolved.bundled_runtime_paths) if resolved.bundled_runtime_paths else "none"
     return [
-        f"NDI python installed: {'yes' if resolved.ndi_python_available else 'no'}",
-        f"NDI python version: {resolved.ndi_python_version}",
-        f"NDI module importable: {'yes' if resolved.ndi_module_importable else 'no'}",
+        f"NDI backend package: {resolved.ndi_backend_name}",
+        f"NDI backend installed: {'yes' if resolved.ndi_python_available else 'no'}",
+        f"NDI backend version: {resolved.ndi_python_version}",
+        f"NDI backend importable: {'yes' if resolved.ndi_module_importable else 'no'}",
         f"NDI runtime/sdk detected: {'yes' if resolved.ndi_runtime_or_sdk_detected else 'no'}",
         f"NDI status: {resolved.availability_reason}",
         f"NDI runtime env: {resolved.runtime_env_var or '(none)'} = {resolved.runtime_env_value or '(unset)'}",
+        f"NDI bundled runtime paths: {bundled_paths}",
         f"NDI runtime paths: {runtime_paths}",
         f"NDI sdk paths: {sdk_paths}",
         f"NDI download: {resolved.download_url}",

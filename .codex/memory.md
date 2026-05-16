@@ -59,3 +59,37 @@
   - `styled`: pySSP renders its own button appearance
 - In `styled` mode, each button should show its axis/coordinate label as `X<col> Y<row>`.
 - `styled` is the clearer user-facing name for pySSP-rendered buttons; avoid vague labels like `custom`.
+
+## 2026-05-16
+
+- NDI backend was migrated from `ndi-python` / `NDIlib` to `cyndilib`.
+- Relevant current files for NDI are:
+  - `pyssp/ndi_support.py`
+  - `pyssp/ndi_output.py`
+  - `pyssp/ui/main_window/video_display.py`
+  - `pyssp/ui/options_dialog/page_builders/video_display.py`
+  - `pyssp/ui/main_window/ui_build.py`
+  - `pyssp/ui/system_info_dialog.py`
+  - tests: `tests/test_ndi_support.py`, `tests/test_ndi_output.py`, plus NDI-related assertions in `tests/test_options_dialog_ui.py` and `tests/test_main_window_import_compat.py`
+- Existing user-facing NDI features that must be preserved during the backend swap:
+  - independent NDI output pipeline
+  - source name setting, default `pyssp-video`
+  - route follows Video Control
+  - resolution presets/custom size
+  - fps selector
+  - audio enable
+  - audio tap mode `pre_fader` / `post_fader`
+  - diagnostics in About, System Information, and Audio Engine Insight
+- Important `cyndilib` note:
+  - `Sender.write_audio()` / `write_video_and_audio()` expects audio shaped `(num_channels, num_samples)`, not `(num_samples, num_channels)`
+  - `AudioSendFrame.reference_level` should likely be set to `AudioReference.dBFS_smpte` for pySSP because engine audio is normalized float audio; otherwise NDI audio level will be about 20 dB low
+- Current backend behavior:
+  - `pyssp/ndi_output.py` now uses `cyndilib.sender.Sender`, `VideoSendFrame`, and `AudioSendFrame`
+  - sender audio path transposes engine audio to `(channels, samples)` and uses `AudioReference.dBFS_smpte`
+  - capability detection treats either bundled `cyndilib` runtime binaries or external NDI runtime/SDK installs as valid
+- Testing note:
+  - real `cyndilib` loopback should run in a subprocess during tests; importing and exercising the native backend in the same pytest process as the Qt-heavy UI suites caused Windows access-violation instability
+- Packaging direction to remember:
+  - `requirements.txt` now uses `cyndilib>=0.1.1`
+  - `pySSP.spec` / `pySSP_debug.spec` now collect `cyndilib`
+  - keep runtime/SDK detection cross-platform, not Windows-only

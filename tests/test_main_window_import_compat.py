@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 from pyssp.ffmpeg_support import MediaProbeInfo
+from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QPaintEvent
 from PyQt5.QtWidgets import QApplication
 
@@ -339,3 +342,196 @@ def test_video_decoder_ignores_stale_request_tags():
     host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
 
     assert host._video_current_frame_key is None
+
+
+def test_send_ndi_audio_flushes_player_tap_blocks():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    class _DummyPlayer:
+        def __init__(self):
+            self.calls = []
+
+        def sampleRate(self):
+            return 48000
+
+        def takeOutputFrames(self, max_frames=0, mode="post_fader"):
+            self.calls.append((int(max_frames), str(mode)))
+            return np.ones((3000, 2), dtype=np.float32) * 0.25
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "pre_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_player_buffers = {}
+    player = _DummyPlayer()
+    host._ndi_audio_players = lambda: [player]
+
+    host._send_ndi_audio()
+
+    assert player.calls == [(8192, "pre_fader")]
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (1024, 2)
+    assert host._ndi_audio_player_buffers[id(player)].shape == (1976, 2)
+
+
+def test_send_ndi_audio_mixes_active_players():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    class _DummyPlayer:
+        def __init__(self, value):
+            self.value = float(value)
+
+        def sampleRate(self):
+            return 48000
+
+        def takeOutputFrames(self, max_frames=0, mode="post_fader"):
+            return np.ones((1600, 2), dtype=np.float32) * self.value
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_player_buffers = {}
+    host._ndi_audio_players = lambda: [_DummyPlayer(0.25), _DummyPlayer(0.5)]
+
+    host._send_ndi_audio()
+
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (1024, 2)
+    assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.75)
+
+
+def test_send_ndi_audio_supports_audio_player_proxy():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    class _FakeAudioController(QObject):
+        positionChanged = pyqtSignal(str, int)
+        durationChanged = pyqtSignal(str, int)
+        stateChanged = pyqtSignal(str, int)
+        mediaLoadFinished = pyqtSignal(str, int, bool, str)
+
+        def __init__(self):
+            super().__init__()
+            self.state_cache = AudioStateCache()
+            self.calls = []
+
+        def post(self, player_id: str, command: str, payload=None):
+            return None
+
+        def call(self, player_id: str, command: str, payload=None, timeout: float = 2.0):
+            self.calls.append((str(player_id), str(command), payload, float(timeout)))
+            if command == "sampleRate":
+                return 48000
+            if command == "takeOutputFrames":
+                return np.ones((3000, 2), dtype=np.float32) * 0.125
+            raise AssertionError(command)
+
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    controller = _FakeAudioController()
+    player = AudioPlayerProxy(controller, "player-test")
+    controller.stateChanged.emit("player-test", AudioPlayerProxy.PlayingState)
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_player_buffers = {}
+    host._ndi_audio_players = lambda: [player]
+
+    host._send_ndi_audio()
+
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (1024, 2)
+    assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.125)
+
+
+def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    class _DummyPlayer:
+        def __init__(self, frames):
+            self._frames = np.asarray(frames, dtype=np.float32)
+
+        def sampleRate(self):
+            return 48000
+
+        def takeOutputFrames(self, max_frames=0, mode="post_fader"):
+            _ = (max_frames, mode)
+            return np.asarray(self._frames, dtype=np.float32)
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_player_buffers = {}
+    host._ndi_audio_players = lambda: [
+        _DummyPlayer(np.ones((2048, 2), dtype=np.float32) * 0.5),
+        _DummyPlayer(np.zeros((0, 2), dtype=np.float32)),
+    ]
+
+    host._send_ndi_audio()
+
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (1024, 2)
+    assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.5)

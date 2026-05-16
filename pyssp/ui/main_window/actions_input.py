@@ -2071,6 +2071,9 @@ class ActionsInputMixin:
         self._sync_lyric_display_controls()
         self._refresh_lyric_display(force=True)
         self._refresh_video_display(force=True)
+        sync_ndi_timers = getattr(self, "_sync_ndi_timer_intervals", None)
+        if callable(sync_ndi_timers):
+            sync_ndi_timers()
         refresh_ndi = getattr(self, "_refresh_ndi_output", None)
         if callable(refresh_ndi):
             refresh_ndi(force=True)

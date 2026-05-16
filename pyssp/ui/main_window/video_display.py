@@ -890,6 +890,22 @@ class VideoDisplayMixin:
             return self._video_output_dimensions(info)
         return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
 
+    def _sync_ndi_timer_intervals(self) -> None:
+        video_timer = getattr(self, "_ndi_refresh_timer", None)
+        if video_timer is not None:
+            fps = max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30))
+            interval_ms = max(5, int(round(1000.0 / fps)))
+            try:
+                video_timer.setInterval(interval_ms)
+            except Exception:
+                pass
+        audio_timer = getattr(self, "_ndi_audio_refresh_timer", None)
+        if audio_timer is not None:
+            try:
+                audio_timer.setInterval(10)
+            except Exception:
+                pass
+
     def _ensure_ndi_preview_widget(self) -> VideoDisplayWidget:
         widget = getattr(self, "ndi_preview_widget", None)
         if widget is None:
@@ -900,15 +916,60 @@ class VideoDisplayMixin:
 
     def _render_ndi_frame_image(self) -> QImage:
         width, height = self._ndi_output_dimensions()
+        mode = self._active_ndi_route_mode()
+        if (
+            mode == "video"
+            and (not bool(getattr(self, "video_display_show_lyric_overlay", False)))
+            and (not (bool(getattr(self, "video_display_show_stage_alert", False)) and self._stage_alert_active()))
+        ):
+            pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+            if not pixmap.isNull():
+                image = pixmap.toImage()
+                if not image.isNull():
+                    return image.scaled(
+                        max(1, int(width)),
+                        max(1, int(height)),
+                        Qt.IgnoreAspectRatio,
+                        Qt.FastTransformation,
+                    )
         widget = self._ensure_ndi_preview_widget()
-        self._sync_output_surface_widget(widget, self._active_ndi_route_mode(), force=True)
+        self._sync_output_surface_widget(widget, mode, force=True)
         return self._render_widget_image(widget, width, height)
 
-    def _current_ndi_audio_player(self) -> Optional[ExternalMediaPlayer]:
-        key = self.current_playing
-        if key is None:
-            return None
-        return self._player_for_slot_key(key)
+    def _ndi_audio_players(self) -> List[ExternalMediaPlayer]:
+        players: List[ExternalMediaPlayer] = []
+        seen: set[int] = set()
+        primaries = [self.player, self.player_b, *self._multi_players]
+        for player in primaries:
+            if player is None or id(player) in seen:
+                continue
+            try:
+                if player.state() == ExternalMediaPlayer.PlayingState:
+                    players.append(player)
+                    seen.add(id(player))
+            except Exception:
+                pass
+            shadow = self._shadow_player_for(player)
+            if shadow is None or id(shadow) in seen:
+                continue
+            try:
+                if shadow.state() == ExternalMediaPlayer.PlayingState:
+                    players.append(shadow)
+                    seen.add(id(shadow))
+            except Exception:
+                pass
+        return players
+
+    def _ndi_sender_has_receivers(self) -> bool:
+        sender = getattr(self, "_ndi_sender", None)
+        if sender is None:
+            return False
+        return bool(getattr(sender, "get_num_connections", lambda _timeout=0.0: 0)(0.0) > 0)
+
+    @staticmethod
+    def _ndi_audio_target_frames(sample_rate: int) -> int:
+        rate = max(1, int(sample_rate))
+        return max(256, int(round((1024.0 / 48000.0) * float(rate))))
 
     def _configure_ndi_sender(self) -> bool:
         sender = getattr(self, "_ndi_sender", None)
@@ -921,7 +982,7 @@ class VideoDisplayMixin:
             except Exception:
                 pass
             self._ndi_last_config = None
-            self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
+            self._ndi_audio_player_buffers.clear()
             return False
         width, height = self._ndi_output_dimensions()
         config = NDIOutputConfig(
@@ -931,55 +992,122 @@ class VideoDisplayMixin:
             fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
             audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
         )
+        config_changed = config != getattr(self, "_ndi_last_config", None)
         if sender.configure(config):
             self._ndi_last_config = config
+            if config_changed:
+                self._ndi_audio_player_buffers.clear()
             return True
         self._ndi_last_config = None
         return False
 
+    def _mix_ndi_audio_chunk(
+        self,
+        buffers: Dict[int, np.ndarray],
+        active_player_ids: List[int],
+        target_frames: int,
+        channel_count: int,
+    ) -> Optional[np.ndarray]:
+        if target_frames <= 0 or channel_count <= 0:
+            return None
+        max_available = 0
+        for player_id in active_player_ids:
+            pending = np.asarray(buffers.get(player_id), dtype=np.float32)
+            if pending.ndim == 2 and pending.shape[1] == channel_count:
+                max_available = max(max_available, int(pending.shape[0]))
+        if max_available < target_frames:
+            return None
+        mixed = np.zeros((target_frames, channel_count), dtype=np.float32)
+        for player_id in active_player_ids:
+            pending = np.asarray(buffers.get(player_id), dtype=np.float32)
+            if pending.ndim != 2 or pending.shape[1] != channel_count or len(pending) <= 0:
+                continue
+            take = min(target_frames, int(pending.shape[0]))
+            if take > 0:
+                mixed[:take, :] += pending[:take, :]
+                pending = pending[take:, :]
+            buffers[player_id] = np.ascontiguousarray(pending, dtype=np.float32)
+        return mixed
+
     def _send_ndi_audio(self) -> None:
         if not bool(getattr(self, "ndi_output_audio_enabled", True)):
-            self._ndi_audio_remainder = np.zeros((0, 2), dtype=np.float32)
+            self._ndi_audio_player_buffers.clear()
             return
         sender = getattr(self, "_ndi_sender", None)
         config = getattr(self, "_ndi_last_config", None)
-        player = self._current_ndi_audio_player()
-        if sender is None or config is None or player is None:
+        if sender is None or config is None:
             return
-        sample_rate_getter = getattr(player, "sampleRate", None)
-        if not callable(sample_rate_getter):
+        players = self._ndi_audio_players()
+        if not players:
             return
-        sample_rate = max(1, int(sample_rate_getter()))
-        target_frames = max(1, int(round(sample_rate / max(1.0, float(config.fps)))))
-        take_frames = getattr(player, "takeOutputFrames", None)
-        if not callable(take_frames):
+        sample_rate = 0
+        active_player_ids: List[int] = []
+        for player in players:
+            sample_rate_getter = getattr(player, "sampleRate", None)
+            if not callable(sample_rate_getter):
+                continue
+            try:
+                player_rate = max(1, int(sample_rate_getter()))
+            except Exception:
+                continue
+            if sample_rate <= 0:
+                sample_rate = player_rate
+            active_player_ids.append(id(player))
+        if sample_rate <= 0 or (not active_player_ids):
             return
-        try:
-            incoming = np.asarray(
-                take_frames(max_frames=target_frames * 4, mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader"))),
+        mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader"))
+        buffers: Dict[int, np.ndarray] = getattr(self, "_ndi_audio_player_buffers", {})
+        pull_frames = 8192
+        for player_id in list(buffers.keys()):
+            if player_id not in active_player_ids:
+                pending = np.asarray(buffers.get(player_id), dtype=np.float32)
+                if pending.ndim != 2 or len(pending) <= 0:
+                    buffers.pop(player_id, None)
+        channel_count = 2
+        for player in players:
+            take_frames = getattr(player, "takeOutputFrames", None)
+            if not callable(take_frames):
+                continue
+            try:
+                incoming = np.asarray(
+                    take_frames(max_frames=pull_frames, mode=mode),
+                    dtype=np.float32,
+                )
+            except Exception:
+                continue
+            if incoming.ndim != 2 or incoming.shape[1] <= 0:
+                continue
+            channel_count = int(incoming.shape[1])
+            pending = np.asarray(
+                buffers.get(id(player), np.zeros((0, channel_count), dtype=np.float32)),
                 dtype=np.float32,
             )
-        except Exception:
-            return
-        if incoming.ndim != 2:
-            incoming = np.zeros((0, 2), dtype=np.float32)
-        remainder = np.asarray(getattr(self, "_ndi_audio_remainder", np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
-        if remainder.ndim != 2:
-            remainder = np.zeros((0, incoming.shape[1] if incoming.ndim == 2 and incoming.shape[1] > 0 else 2), dtype=np.float32)
-        if incoming.size <= 0 and remainder.size <= 0:
-            return
-        if incoming.size > 0 and remainder.size > 0 and remainder.shape[1] != incoming.shape[1]:
-            remainder = np.zeros((0, incoming.shape[1]), dtype=np.float32)
-        combined = incoming if remainder.size <= 0 else np.vstack([remainder, incoming])
-        channel_count = max(1, int(combined.shape[1])) if combined.ndim == 2 else 2
-        while combined.ndim == 2 and combined.shape[0] >= target_frames:
-            chunk = np.ascontiguousarray(combined[:target_frames], dtype=np.float32)
-            if not sender.send_audio_frames(chunk, sample_rate):
-                break
-            combined = combined[target_frames:]
-        if combined.ndim != 2:
-            combined = np.zeros((0, channel_count), dtype=np.float32)
-        self._ndi_audio_remainder = np.ascontiguousarray(combined, dtype=np.float32)
+            if pending.ndim != 2 or pending.shape[1] != channel_count:
+                pending = np.zeros((0, channel_count), dtype=np.float32)
+            if len(incoming) > 0:
+                pending = incoming if len(pending) <= 0 else np.vstack([pending, incoming])
+            buffers[id(player)] = np.ascontiguousarray(pending, dtype=np.float32)
+        sendable_player_ids: List[int] = []
+        max_available = 0
+        for player_id in active_player_ids:
+            pending = np.asarray(buffers.get(player_id), dtype=np.float32)
+            if pending.ndim != 2 or pending.shape[1] != channel_count:
+                continue
+            frames_available = int(pending.shape[0])
+            if frames_available <= 0:
+                continue
+            sendable_player_ids.append(player_id)
+            max_available = max(max_available, frames_available)
+        if max_available > 0 and sendable_player_ids:
+            chunk = self._mix_ndi_audio_chunk(
+                buffers,
+                sendable_player_ids,
+                min(int(max_available), int(self._ndi_audio_target_frames(sample_rate))),
+                channel_count,
+            )
+            if chunk is not None:
+                sender.send_audio_frames(chunk, sample_rate)
+        self._ndi_audio_player_buffers = buffers
 
     def _refresh_ndi_output(self, force: bool = False) -> None:
         if not self._configure_ndi_sender():
@@ -987,13 +1115,21 @@ class VideoDisplayMixin:
         sender = getattr(self, "_ndi_sender", None)
         if sender is None:
             return
+        if (not force) and (not self._ndi_sender_has_receivers()):
+            return
         frame_image = self._render_ndi_frame_image()
         if not frame_image.isNull():
             sender.send_video_frame(frame_image)
-        self._send_ndi_audio()
 
     def _tick_ndi_refresh(self) -> None:
         self._refresh_ndi_output()
+
+    def _tick_ndi_audio_refresh(self) -> None:
+        if not self._configure_ndi_sender():
+            return
+        if not self._ndi_sender_has_receivers():
+            return
+        self._send_ndi_audio()
 
     def _apply_video_frame_to_targets(self) -> None:
         pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())

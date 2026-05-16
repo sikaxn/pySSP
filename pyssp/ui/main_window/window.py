@@ -491,11 +491,16 @@ class MainWindow(
             "next": bool(getattr(self.settings, "lyric_display_next_italic", False)),
         }
         self.video_display_mode_playing = str(getattr(self.settings, "video_display_mode_playing", "video") or "video").strip().lower()
-        if self.video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+        if self.video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
             self.video_display_mode_playing = "video"
         self.video_display_mode_idle = str(getattr(self.settings, "video_display_mode_idle", "blank") or "blank").strip().lower()
-        if self.video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+        if self.video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
             self.video_display_mode_idle = "blank"
+        self.video_display_use_default_backdrop = bool(getattr(self.settings, "video_display_use_default_backdrop", True))
+        self.video_display_backdrop_path = str(getattr(self.settings, "video_display_backdrop_path", "") or "").strip()
+        self.video_display_show_backdrop_message = bool(
+            getattr(self.settings, "video_display_show_backdrop_message", True)
+        )
         self.video_display_show_lyric_overlay = bool(getattr(self.settings, "video_display_show_lyric_overlay", False))
         self.video_display_show_stage_alert = bool(getattr(self.settings, "video_display_show_stage_alert", False))
         self.video_display_lyric_overlay_rect = dict(

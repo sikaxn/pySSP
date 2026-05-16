@@ -973,6 +973,9 @@ class AppSettings:
     stage_display_lyric_next_italic: bool = False
     video_display_mode_playing: str = "video"
     video_display_mode_idle: str = "blank"
+    video_display_use_default_backdrop: bool = True
+    video_display_backdrop_path: str = ""
+    video_display_show_backdrop_message: bool = True
     video_display_show_lyric_overlay: bool = False
     video_display_show_stage_alert: bool = False
     video_display_lyric_overlay_rect: dict[str, int] = field(default_factory=default_video_display_lyric_overlay_rect)
@@ -1436,6 +1439,9 @@ def save_settings(settings: AppSettings) -> None:
         "stage_display_lyric_next_italic": "1" if settings.stage_display_lyric_next_italic else "0",
         "video_display_mode_playing": str(settings.video_display_mode_playing or "video").strip().lower(),
         "video_display_mode_idle": str(settings.video_display_mode_idle or "blank").strip().lower(),
+        "video_display_use_default_backdrop": "1" if settings.video_display_use_default_backdrop else "0",
+        "video_display_backdrop_path": _encode_ascii_setting(settings.video_display_backdrop_path),
+        "video_display_show_backdrop_message": "1" if settings.video_display_show_backdrop_message else "0",
         "video_display_show_lyric_overlay": "1" if settings.video_display_show_lyric_overlay else "0",
         "video_display_show_stage_alert": "1" if settings.video_display_show_stage_alert else "0",
         "video_display_lyric_overlay_rect": json.dumps(
@@ -1551,11 +1557,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     lyric_display_current_italic = _get_bool(section, "lyric_display_current_italic", False)
     lyric_display_next_italic = _get_bool(section, "lyric_display_next_italic", False)
     video_display_mode_playing = str(section.get("video_display_mode_playing", "video")).strip().lower()
-    if video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+    if video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
         video_display_mode_playing = "video"
     video_display_mode_idle = str(section.get("video_display_mode_idle", "blank")).strip().lower()
-    if video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars"}:
+    if video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
         video_display_mode_idle = "blank"
+    video_display_use_default_backdrop = _get_bool(section, "video_display_use_default_backdrop", True)
+    video_display_backdrop_path = _decode_ascii_setting(str(section.get("video_display_backdrop_path", ""))).strip()
+    video_display_show_backdrop_message = _get_bool(section, "video_display_show_backdrop_message", True)
     video_display_show_lyric_overlay = _get_bool(section, "video_display_show_lyric_overlay", False)
     video_display_show_stage_alert = _get_bool(section, "video_display_show_stage_alert", False)
     raw_video_display_lyric_overlay_rect = str(section.get("video_display_lyric_overlay_rect", "")).strip()
@@ -2377,6 +2386,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_lyric_next_italic=stage_display_lyric_next_italic,
         video_display_mode_playing=video_display_mode_playing,
         video_display_mode_idle=video_display_mode_idle,
+        video_display_use_default_backdrop=video_display_use_default_backdrop,
+        video_display_backdrop_path=video_display_backdrop_path,
+        video_display_show_backdrop_message=video_display_show_backdrop_message,
         video_display_show_lyric_overlay=video_display_show_lyric_overlay,
         video_display_show_stage_alert=video_display_show_stage_alert,
         video_display_lyric_overlay_rect=parsed_video_display_lyric_overlay_rect,

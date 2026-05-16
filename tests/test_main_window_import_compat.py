@@ -31,6 +31,9 @@ class _AudioOnlyVideoRouteHost(VideoDisplayMixin):
         self.current_playing = ("A", 0, 0)
         self.video_display_mode_idle = "blank"
         self.video_display_mode_playing = "video"
+        self.video_display_show_backdrop_message = True
+        self.video_display_use_default_backdrop = True
+        self.video_display_backdrop_path = ""
         self._slot = mw.SoundButtonData(file_path="theme_song.mp3")
 
     def _slot_for_key(self, _key):
@@ -38,6 +41,9 @@ class _AudioOnlyVideoRouteHost(VideoDisplayMixin):
 
     def _stage_playback_status(self) -> str:
         return "playing"
+
+    def _asset_file_path(self, name: str) -> str:
+        return name
 
 
 class _VideoRefreshHost(VideoDisplayMixin):
@@ -153,6 +159,15 @@ def test_disable_video_loading_treats_video_file_as_audio_only(monkeypatch):
     assert host._slot_or_media_has_audio(host._slot) is True
     assert host._silent_video_source_payload(host._slot) is None
     assert host._active_video_route_mode() == "blank"
+
+
+def test_backdrop_mode_uses_default_asset_and_message_for_idle_state():
+    host = _AudioOnlyVideoRouteHost()
+    host.video_display_mode_idle = "backdrop"
+
+    assert host._active_video_route_mode() == "backdrop"
+    assert host._resolved_video_backdrop_path() == "logo2.png"
+    assert host._video_backdrop_message_text() == "No video is playing"
 
 
 def test_video_frame_bucket_uses_media_fps():

@@ -440,6 +440,18 @@ def _build_dialog(**overrides):
         video_display_mode_idle=str(
             overrides.get("video_display_mode_idle", defaults["video_display_mode_idle"])
         ),
+        video_display_use_default_backdrop=bool(
+            overrides.get("video_display_use_default_backdrop", defaults["video_display_use_default_backdrop"])
+        ),
+        video_display_backdrop_path=str(
+            overrides.get("video_display_backdrop_path", defaults["video_display_backdrop_path"])
+        ),
+        video_display_show_backdrop_message=bool(
+            overrides.get(
+                "video_display_show_backdrop_message",
+                defaults["video_display_show_backdrop_message"],
+            )
+        ),
         video_display_show_lyric_overlay=bool(
             overrides.get("video_display_show_lyric_overlay", defaults["video_display_show_lyric_overlay"])
         ),
@@ -675,8 +687,11 @@ def test_web_remote_url_label_tracks_port_changes(qapp):
 def test_video_display_and_preload_video_controls_round_trip(qapp):
     dialog = _build_dialog(
         preload_video_enabled=True,
-        video_display_mode_playing="stage_display",
-        video_display_mode_idle="white_screen",
+        video_display_mode_playing="backdrop",
+        video_display_mode_idle="backdrop",
+        video_display_use_default_backdrop=False,
+        video_display_backdrop_path=r"C:\Media\fallback.png",
+        video_display_show_backdrop_message=False,
         video_display_show_lyric_overlay=True,
         video_display_show_stage_alert=True,
         initial_page="Video Display",
@@ -686,12 +701,18 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.preload_video_enabled_checkbox.isChecked() is True
 
         assert dialog.select_page("Video Display")
-        assert dialog.video_display_mode_playing_combo.currentData() == "stage_display"
-        assert dialog.video_display_mode_idle_combo.currentData() == "white_screen"
+        assert dialog.video_display_mode_playing_combo.currentData() == "backdrop"
+        assert dialog.video_display_mode_idle_combo.currentData() == "backdrop"
+        assert dialog.video_display_use_default_backdrop_checkbox.isChecked() is False
+        assert dialog.video_display_backdrop_path_edit.text() == r"C:\Media\fallback.png"
+        assert dialog.video_display_show_backdrop_message_checkbox.isChecked() is False
         assert dialog.video_display_show_lyric_overlay_checkbox.isChecked() is True
         assert dialog.video_display_show_stage_alert_checkbox.isChecked() is True
-        assert dialog.selected_video_display_mode_playing() == "stage_display"
-        assert dialog.selected_video_display_mode_idle() == "white_screen"
+        assert dialog.selected_video_display_mode_playing() == "backdrop"
+        assert dialog.selected_video_display_mode_idle() == "backdrop"
+        assert dialog.selected_video_display_use_default_backdrop() is False
+        assert dialog.selected_video_display_backdrop_path() == r"C:\Media\fallback.png"
+        assert dialog.selected_video_display_show_backdrop_message() is False
         assert dialog.selected_video_display_show_lyric_overlay() is True
         assert dialog.selected_video_display_show_stage_alert() is True
         assert dialog.selected_preload_video_enabled() is True

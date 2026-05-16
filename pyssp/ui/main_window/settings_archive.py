@@ -1665,6 +1665,13 @@ class SettingsArchiveMixin:
         self.settings.lyric_display_next_italic = bool(self.lyric_display_role_italic.get("next", False))
         self.settings.video_display_mode_playing = str(getattr(self, "video_display_mode_playing", "video") or "video").strip().lower()
         self.settings.video_display_mode_idle = str(getattr(self, "video_display_mode_idle", "blank") or "blank").strip().lower()
+        self.settings.video_display_use_default_backdrop = bool(
+            getattr(self, "video_display_use_default_backdrop", True)
+        )
+        self.settings.video_display_backdrop_path = str(getattr(self, "video_display_backdrop_path", "") or "").strip()
+        self.settings.video_display_show_backdrop_message = bool(
+            getattr(self, "video_display_show_backdrop_message", True)
+        )
         self.settings.video_display_show_lyric_overlay = bool(getattr(self, "video_display_show_lyric_overlay", False))
         self.settings.video_display_show_stage_alert = bool(getattr(self, "video_display_show_stage_alert", False))
         self.settings.video_display_lyric_overlay_rect = dict(

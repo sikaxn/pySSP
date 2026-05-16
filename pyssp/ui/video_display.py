@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPixmap, QTextDocument
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QTextDocument
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
@@ -34,11 +34,14 @@ class VideoDisplayWidget(QWidget):
         self._mode = "blank"
         self._video_pixmap = QPixmap()
         self._content_pixmap = QPixmap()
+        self._backdrop_pixmap = QPixmap()
         self._lyric_html = ""
         self._overlay_rect = {"x": 800, "y": 6800, "w": 8400, "h": 2400}
         self._show_lyric_overlay = False
         self._show_stage_alert = False
         self._alert_text = ""
+        self._show_backdrop_message = False
+        self._backdrop_message_text = ""
         self._lyric_doc = QTextDocument(self)
         self._lyric_doc.setDocumentMargin(0.0)
         self._install_fullscreen_filter(self)
@@ -113,6 +116,10 @@ class VideoDisplayWidget(QWidget):
         self._content_pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
         self.update()
 
+    def set_backdrop_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        self._backdrop_pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
+        self.update()
+
     def set_lyric_html(self, html: str) -> None:
         self._lyric_html = str(html or "")
         self._lyric_doc.setHtml(self._lyric_html)
@@ -120,6 +127,11 @@ class VideoDisplayWidget(QWidget):
 
     def set_alert_text(self, text: str) -> None:
         self._alert_text = str(text or "").strip()
+        self.update()
+
+    def configure_backdrop(self, *, show_message: bool = False, message_text: str = "") -> None:
+        self._show_backdrop_message = bool(show_message)
+        self._backdrop_message_text = str(message_text or "").strip()
         self.update()
 
     def _draw_colour_bars(self, painter: QPainter, rect: QRect) -> None:
@@ -165,6 +177,8 @@ class VideoDisplayWidget(QWidget):
             self._draw_colour_bars(painter, bounds)
         elif mode == "video":
             self._draw_scaled_pixmap(painter, bounds, self._video_pixmap, keep_aspect=True)
+        elif mode == "backdrop":
+            self._draw_scaled_pixmap(painter, bounds, self._backdrop_pixmap, keep_aspect=False)
         elif mode in {"stage_display", "lyric_display"}:
             self._draw_scaled_pixmap(painter, bounds, self._content_pixmap, keep_aspect=False)
         if mode == "video" and self._show_lyric_overlay and self._lyric_html.strip():
@@ -184,6 +198,24 @@ class VideoDisplayWidget(QWidget):
             painter.drawRect(banner)
             text_rect = banner.adjusted(14, 10, -14, -10)
             painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap, self._alert_text)
+        if mode == "backdrop" and self._show_backdrop_message and self._backdrop_message_text:
+            banner = QRect(
+                bounds.x() + 40,
+                bounds.bottom() - min(140, max(80, bounds.height() // 6)),
+                max(180, bounds.width() - 80),
+                90,
+            )
+            painter.fillRect(banner, QColor(0, 0, 0, 170))
+            painter.setPen(QPen(QColor("#FFFFFF")))
+            font = QFont(self.font())
+            font.setBold(True)
+            font.setPointSize(max(14, min(28, bounds.height() // 18)))
+            painter.setFont(font)
+            painter.drawText(
+                banner.adjusted(16, 12, -16, -12),
+                Qt.AlignCenter | Qt.TextWordWrap,
+                self._backdrop_message_text,
+            )
 
 
 class VideoDisplayWindow(QWidget):
@@ -208,11 +240,17 @@ class VideoDisplayWindow(QWidget):
     def set_content_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self.display_widget.set_content_pixmap(pixmap)
 
+    def set_backdrop_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        self.display_widget.set_backdrop_pixmap(pixmap)
+
     def set_lyric_html(self, html: str) -> None:
         self.display_widget.set_lyric_html(html)
 
     def set_alert_text(self, text: str) -> None:
         self.display_widget.set_alert_text(text)
+
+    def configure_backdrop(self, *, show_message: bool = False, message_text: str = "") -> None:
+        self.display_widget.configure_backdrop(show_message=show_message, message_text=message_text)
 
     def configure_overlay(
         self,

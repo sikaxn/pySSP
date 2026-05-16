@@ -10,6 +10,9 @@ class VideoDisplayPageMixin:
         *,
         mode_playing: str,
         mode_idle: str,
+        use_default_backdrop: bool,
+        backdrop_path: str,
+        show_backdrop_message: bool,
         show_lyric_overlay: bool,
         show_stage_alert: bool,
         lyric_overlay_rect: Dict[str, int],
@@ -34,6 +37,7 @@ class VideoDisplayPageMixin:
             ("Video", "video"),
             ("Lyric Display", "lyric_display"),
             ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
             ("Blank", "blank"),
             ("White Screen", "white_screen"),
             ("Colour Bars", "colour_bars"),
@@ -45,6 +49,7 @@ class VideoDisplayPageMixin:
         for label, value in [
             ("Lyric Display", "lyric_display"),
             ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
             ("Blank", "blank"),
             ("White Screen", "white_screen"),
             ("Colour Bars", "colour_bars"),
@@ -53,6 +58,30 @@ class VideoDisplayPageMixin:
         self._set_combo_data_or_default(self.video_display_mode_idle_combo, mode_idle, "blank")
         routing_form.addRow("When video is not playing:", self.video_display_mode_idle_combo)
         layout.addWidget(routing_group)
+
+        backdrop_group = QGroupBox("Backdrop")
+        backdrop_form = QFormLayout(backdrop_group)
+        self.video_display_use_default_backdrop_checkbox = QCheckBox("Use default backdrop")
+        self.video_display_use_default_backdrop_checkbox.setChecked(bool(use_default_backdrop))
+        backdrop_form.addRow(self.video_display_use_default_backdrop_checkbox)
+        backdrop_path_row = QWidget()
+        backdrop_path_layout = QHBoxLayout(backdrop_path_row)
+        backdrop_path_layout.setContentsMargins(0, 0, 0, 0)
+        backdrop_path_layout.setSpacing(6)
+        self.video_display_backdrop_path_edit = QLineEdit(str(backdrop_path or ""))
+        self.video_display_backdrop_path_browse_button = QPushButton("Browse...")
+        self.video_display_backdrop_path_browse_button.clicked.connect(self._browse_video_display_backdrop_path)
+        backdrop_path_layout.addWidget(self.video_display_backdrop_path_edit, 1)
+        backdrop_path_layout.addWidget(self.video_display_backdrop_path_browse_button)
+        backdrop_form.addRow("Backdrop Image:", backdrop_path_row)
+        self.video_display_show_backdrop_message_checkbox = QCheckBox("Show message on backdrop")
+        self.video_display_show_backdrop_message_checkbox.setChecked(bool(show_backdrop_message))
+        backdrop_form.addRow(self.video_display_show_backdrop_message_checkbox)
+        backdrop_note = QLabel("Backdrop message text: No video is playing")
+        backdrop_note.setWordWrap(True)
+        backdrop_form.addRow(backdrop_note)
+        self.video_display_use_default_backdrop_checkbox.toggled.connect(self._sync_video_display_backdrop_controls)
+        layout.addWidget(backdrop_group)
 
         overlay_group = QGroupBox("Overlay")
         overlay_form = QFormLayout(overlay_group)
@@ -195,6 +224,7 @@ class VideoDisplayPageMixin:
         font_form.addRow("Current Color:", self.video_display_lyric_current_color_btn)
         font_form.addRow("Next Color:", self.video_display_lyric_next_color_btn)
         layout.addWidget(font_group)
+        self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()
         layout.addStretch(1)
         return page
@@ -207,3 +237,19 @@ class VideoDisplayPageMixin:
             self.video_display_lyric_next_text_size_spin,
         ]:
             spin.setEnabled(enabled)
+
+    def _sync_video_display_backdrop_controls(self) -> None:
+        enabled = not bool(self.video_display_use_default_backdrop_checkbox.isChecked())
+        self.video_display_backdrop_path_edit.setEnabled(enabled)
+        self.video_display_backdrop_path_browse_button.setEnabled(enabled)
+
+    def _browse_video_display_backdrop_path(self) -> None:
+        start_dir = str(self.video_display_backdrop_path_edit.text() or "").strip()
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Select Backdrop Image",
+            start_dir,
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*.*)",
+        )
+        if selected:
+            self.video_display_backdrop_path_edit.setText(selected)

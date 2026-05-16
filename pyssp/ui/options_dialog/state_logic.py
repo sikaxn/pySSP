@@ -324,6 +324,13 @@ class StateLogicMixin:
             str(d.get("video_display_mode_idle", "blank")),
             "blank",
         )
+        self.video_display_use_default_backdrop_checkbox.setChecked(
+            bool(d.get("video_display_use_default_backdrop", True))
+        )
+        self.video_display_backdrop_path_edit.setText(str(d.get("video_display_backdrop_path", "")))
+        self.video_display_show_backdrop_message_checkbox.setChecked(
+            bool(d.get("video_display_show_backdrop_message", True))
+        )
         self.video_display_show_lyric_overlay_checkbox.setChecked(bool(d.get("video_display_show_lyric_overlay", False)))
         self.video_display_show_stage_alert_checkbox.setChecked(bool(d.get("video_display_show_stage_alert", False)))
         overlay_gadgets = self.video_display_overlay_editor.gadgets()
@@ -361,6 +368,7 @@ class StateLogicMixin:
         self._refresh_color_button(self.video_display_lyric_played_color_btn, self._video_display_lyric_role_colors["played"])
         self._refresh_color_button(self.video_display_lyric_current_color_btn, self._video_display_lyric_role_colors["current"])
         self._refresh_color_button(self.video_display_lyric_next_color_btn, self._video_display_lyric_role_colors["next"])
+        self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()
 
     def _restore_window_layout_defaults(self) -> None:

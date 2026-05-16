@@ -1919,6 +1919,9 @@ class ActionsInputMixin:
             stage_display_lyric_next_italic=self.stage_display_lyric_role_italic["next"],
             video_display_mode_playing=self.video_display_mode_playing,
             video_display_mode_idle=self.video_display_mode_idle,
+            video_display_use_default_backdrop=self.video_display_use_default_backdrop,
+            video_display_backdrop_path=self.video_display_backdrop_path,
+            video_display_show_backdrop_message=self.video_display_show_backdrop_message,
             video_display_show_lyric_overlay=self.video_display_show_lyric_overlay,
             video_display_show_stage_alert=self.video_display_show_stage_alert,
             video_display_lyric_overlay_rect=self.video_display_lyric_overlay_rect,
@@ -2021,6 +2024,9 @@ class ActionsInputMixin:
         self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
         self.video_display_mode_playing = dialog.selected_video_display_mode_playing()
         self.video_display_mode_idle = dialog.selected_video_display_mode_idle()
+        self.video_display_use_default_backdrop = dialog.selected_video_display_use_default_backdrop()
+        self.video_display_backdrop_path = dialog.selected_video_display_backdrop_path()
+        self.video_display_show_backdrop_message = dialog.selected_video_display_show_backdrop_message()
         self.video_display_show_lyric_overlay = dialog.selected_video_display_show_lyric_overlay()
         self.video_display_show_stage_alert = dialog.selected_video_display_show_stage_alert()
         self.video_display_lyric_overlay_rect = dialog.selected_video_display_lyric_overlay_rect()
@@ -2044,6 +2050,7 @@ class ActionsInputMixin:
         self.disable_path_safety = dialog.selected_disable_path_safety()
         self._sync_lyric_display_controls()
         self._refresh_lyric_display(force=True)
+        self._refresh_video_display(force=True)
         selected_set_file_encoding = dialog.selected_set_file_encoding()
         if selected_set_file_encoding != self.set_file_encoding:
             self.set_file_encoding = selected_set_file_encoding

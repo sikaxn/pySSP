@@ -12,6 +12,7 @@ from pyssp.ui.video_display import VideoDisplayWidget
 
 _VIDEO_FILE_EXTENSIONS = {str(token or "").strip().lower() for token in FFMPEG_VIDEO_EXTENSIONS}
 _VIDEO_FRAME_FALLBACK_INTERVAL_MS = 33
+_VIDEO_BACKDROP_MESSAGE = "No video is playing"
 
 
 @dataclass(frozen=True)
@@ -334,6 +335,7 @@ class VideoDisplayMixin:
             ("Video", "video"),
             ("Lyric Display", "lyric_display"),
             ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
             ("Blank", "blank"),
             ("White Screen", "white_screen"),
             ("Colour Bars", "colour_bars"),
@@ -347,6 +349,7 @@ class VideoDisplayMixin:
         for label, value in [
             ("Lyric Display", "lyric_display"),
             ("Stage Display", "stage_display"),
+            ("Backdrop", "backdrop"),
             ("Blank", "blank"),
             ("White Screen", "white_screen"),
             ("Colour Bars", "colour_bars"),
@@ -480,6 +483,48 @@ class VideoDisplayMixin:
             return _VIDEO_FRAME_FALLBACK_INTERVAL_MS
         fps = max(15.0, min(60.0, fps))
         return max(16, int(round(1000.0 / fps)))
+
+    def _default_video_backdrop_path(self) -> str:
+        helper = getattr(self, "_asset_file_path", None)
+        if callable(helper):
+            try:
+                return str(helper("logo2.png") or "").strip()
+            except Exception:
+                return ""
+        return ""
+
+    def _resolved_video_backdrop_path(self) -> str:
+        default_path = self._default_video_backdrop_path()
+        if bool(getattr(self, "video_display_use_default_backdrop", True)):
+            return default_path
+        custom_path = str(getattr(self, "video_display_backdrop_path", "") or "").strip()
+        if custom_path:
+            candidate = QPixmap(custom_path)
+            if not candidate.isNull():
+                return custom_path
+        return default_path
+
+    def _video_backdrop_pixmap(self) -> QPixmap:
+        path = self._resolved_video_backdrop_path()
+        cache_key = str(path or "").strip()
+        if cache_key == str(getattr(self, "_video_backdrop_cache_path", "") or ""):
+            return QPixmap(getattr(self, "_video_backdrop_cache_pixmap", QPixmap()))
+        pixmap = QPixmap(cache_key) if cache_key else QPixmap()
+        if pixmap.isNull() and cache_key != self._default_video_backdrop_path():
+            fallback_path = self._default_video_backdrop_path()
+            pixmap = QPixmap(fallback_path) if fallback_path else QPixmap()
+            cache_key = fallback_path
+        self._video_backdrop_cache_path = cache_key
+        self._video_backdrop_cache_pixmap = QPixmap(pixmap)
+        return pixmap
+
+    def _video_backdrop_message_text(self) -> str:
+        if not bool(getattr(self, "video_display_show_backdrop_message", True)):
+            return ""
+        slot, info = self._current_video_slot_and_probe()
+        if slot is not None and info.has_video and self._stage_playback_status() == "playing":
+            return ""
+        return _VIDEO_BACKDROP_MESSAGE
 
     def _video_output_dimensions(self, info: Optional[MediaProbeInfo]) -> tuple[int, int]:
         width = int(getattr(info, "width", 0) or 0) if info is not None else 0
@@ -756,6 +801,9 @@ class VideoDisplayMixin:
         )
         widget.set_mode(mode)
         widget.set_alert_text(self._stage_alert_message if self._stage_alert_active() else "")
+        widget.set_backdrop_pixmap(self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap())
+        backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
+        widget.configure_backdrop(show_message=bool(backdrop_message), message_text=backdrop_message)
         if mode == "video":
             widget.set_video_pixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
             widget.set_content_pixmap(QPixmap())

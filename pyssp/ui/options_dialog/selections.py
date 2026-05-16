@@ -139,6 +139,15 @@ class SelectionMixin:
     def selected_video_display_mode_idle(self) -> str:
         return str(self.video_display_mode_idle_combo.currentData() or "blank")
 
+    def selected_video_display_use_default_backdrop(self) -> bool:
+        return bool(self.video_display_use_default_backdrop_checkbox.isChecked())
+
+    def selected_video_display_backdrop_path(self) -> str:
+        return str(self.video_display_backdrop_path_edit.text() or "").strip()
+
+    def selected_video_display_show_backdrop_message(self) -> bool:
+        return bool(self.video_display_show_backdrop_message_checkbox.isChecked())
+
     def selected_video_display_show_lyric_overlay(self) -> bool:
         return bool(self.video_display_show_lyric_overlay_checkbox.isChecked())
 

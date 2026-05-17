@@ -1633,6 +1633,9 @@ class NoAudioPlayer(QObject):
     def sampleRate(self) -> int:
         return 0
 
+    def outputBlockSize(self) -> int:
+        return 0
+
     def outputTapFrameCounts(self) -> Dict[str, int]:
         return {"pre_fader": 0, "post_fader": 0}
 

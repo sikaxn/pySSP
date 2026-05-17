@@ -902,7 +902,21 @@ class VideoDisplayMixin:
         audio_timer = getattr(self, "_ndi_audio_refresh_timer", None)
         if audio_timer is not None:
             try:
-                audio_timer.setInterval(10)
+                sample_rate = 48000
+                try:
+                    for player in list(self._ndi_audio_players() or []):
+                        getter = getattr(player, "sampleRate", None)
+                        if not callable(getter):
+                            continue
+                        rate = max(1, int(getter()))
+                        if rate > 0:
+                            sample_rate = rate
+                            break
+                except Exception:
+                    sample_rate = 48000
+                block_frames = self._ndi_audio_output_block_frames()
+                interval_ms = max(5, int(round((1000.0 * float(max(1, block_frames))) / float(max(1, sample_rate)))))
+                audio_timer.setInterval(interval_ms)
             except Exception:
                 pass
 
@@ -978,10 +992,27 @@ class VideoDisplayMixin:
             return False
         return bool(getattr(sender, "get_num_connections", lambda _timeout=0.0: 0)(0.0) > 0)
 
-    @staticmethod
-    def _ndi_audio_target_frames(sample_rate: int) -> int:
-        rate = max(1, int(sample_rate))
-        return max(256, int(round((1024.0 / 48000.0) * float(rate))))
+    def _ndi_audio_output_block_frames(self) -> int:
+        players = []
+        try:
+            players = list(self._ndi_audio_players() or [])
+        except Exception:
+            players = []
+        for player in players:
+            getter = getattr(player, "outputBlockSize", None)
+            if not callable(getter):
+                continue
+            try:
+                value = max(0, int(getter()))
+            except Exception:
+                continue
+            if value > 0:
+                return value
+        return 1024
+
+    def _ndi_audio_target_frames(self, sample_rate: int) -> int:
+        _ = sample_rate
+        return max(240, int(self._ndi_audio_output_block_frames()))
 
     def _configure_ndi_sender(self) -> bool:
         sender = getattr(self, "_ndi_sender", None)
@@ -1019,7 +1050,7 @@ class VideoDisplayMixin:
         active_player_ids: List[int],
         target_frames: int,
         channel_count: int,
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[tuple[np.ndarray, Dict[int, int]]]:
         if target_frames <= 0 or channel_count <= 0:
             return None
         max_available = 0
@@ -1030,6 +1061,7 @@ class VideoDisplayMixin:
         if max_available < target_frames:
             return None
         mixed = np.zeros((target_frames, channel_count), dtype=np.float32)
+        consume_map: Dict[int, int] = {}
         for player_id in active_player_ids:
             pending = np.asarray(buffers.get(player_id), dtype=np.float32)
             if pending.ndim != 2 or pending.shape[1] != channel_count or len(pending) <= 0:
@@ -1037,9 +1069,23 @@ class VideoDisplayMixin:
             take = min(target_frames, int(pending.shape[0]))
             if take > 0:
                 mixed[:take, :] += pending[:take, :]
-                pending = pending[take:, :]
-            buffers[player_id] = np.ascontiguousarray(pending, dtype=np.float32)
-        return mixed
+                consume_map[player_id] = take
+        return mixed, consume_map
+
+    @staticmethod
+    def _consume_ndi_audio_chunk(
+        buffers: Dict[int, np.ndarray],
+        consume_map: Dict[int, int],
+        channel_count: int,
+    ) -> None:
+        for player_id, take in consume_map.items():
+            pending = np.asarray(buffers.get(player_id), dtype=np.float32)
+            if pending.ndim != 2 or pending.shape[1] != channel_count:
+                continue
+            consume = max(0, min(int(take), int(pending.shape[0])))
+            if consume <= 0:
+                continue
+            buffers[player_id] = np.ascontiguousarray(pending[consume:, :], dtype=np.float32)
 
     def _send_ndi_audio(self) -> None:
         if not bool(getattr(self, "ndi_output_audio_enabled", True)):
@@ -1067,6 +1113,7 @@ class VideoDisplayMixin:
             active_player_ids.append(id(player))
         if sample_rate <= 0 or (not active_player_ids):
             return
+        self._sync_ndi_timer_intervals()
         mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader"))
         buffers: Dict[int, np.ndarray] = getattr(self, "_ndi_audio_player_buffers", {})
         pull_frames = 8192
@@ -1111,14 +1158,23 @@ class VideoDisplayMixin:
             sendable_player_ids.append(player_id)
             max_available = max(max_available, frames_available)
         if max_available > 0 and sendable_player_ids:
-            chunk = self._mix_ndi_audio_chunk(
-                buffers,
-                sendable_player_ids,
-                min(int(max_available), int(self._ndi_audio_target_frames(sample_rate))),
-                channel_count,
-            )
-            if chunk is not None:
-                sender.send_audio_frames(chunk, sample_rate)
+            target_frames = min(int(max_available), int(self._ndi_audio_target_frames(sample_rate)))
+            burst_limit = 4
+            burst_count = 0
+            while burst_count < burst_limit:
+                mixed = self._mix_ndi_audio_chunk(
+                    buffers,
+                    sendable_player_ids,
+                    target_frames,
+                    channel_count,
+                )
+                if mixed is None:
+                    break
+                chunk, consume_map = mixed
+                if not sender.send_audio_frames(chunk, sample_rate):
+                    break
+                self._consume_ndi_audio_chunk(buffers, consume_map, channel_count)
+                burst_count += 1
         self._ndi_audio_player_buffers = buffers
 
     def _refresh_ndi_output(self, force: bool = False) -> None:

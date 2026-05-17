@@ -1215,6 +1215,7 @@ class ExternalMediaPlayer(QObject):
         self._pending_dsp_config: Optional[DSPConfig] = None
         self._dsp_active = False
         self._dsp_processor = RealTimeDSPProcessor(self._sample_rate, self._channels)
+        self._stream_blocksize = 1024 if sys.platform != "darwin" else 2048
 
         self._lock = threading.RLock()
         _retain_coreaudio_keepalive(self._sample_rate, self._channels)
@@ -1475,6 +1476,10 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             return int(self._sample_rate)
 
+    def outputBlockSize(self) -> int:
+        with self._lock:
+            return max(0, int(getattr(self, "_stream_blocksize", 0) or 0))
+
     def takeOutputFrames(self, max_frames: int = 0, mode: str = "post_fader") -> np.ndarray:
         with self._lock:
             token = str(mode or "post_fader").strip().lower()
@@ -1589,14 +1594,16 @@ class ExternalMediaPlayer(QObject):
 
     def _create_stream(self):
         device_index = None
+        blocksize = 1024
+        latency = "low"
         stream_kwargs = {
             "samplerate": self._sample_rate,
             "channels": self._channels,
             "dtype": "float32",
             "callback": self._audio_callback,
             "device": device_index,
-            "blocksize": 1024,
-            "latency": "low",
+            "blocksize": blocksize,
+            "latency": latency,
         }
         if _REQUESTED_DEVICE:
             try:
@@ -1606,8 +1613,11 @@ class ExternalMediaPlayer(QObject):
         stream_kwargs["device"] = device_index
         if sys.platform == "darwin":
             # CoreAudio is more stable with a less aggressive callback cadence here.
-            stream_kwargs["blocksize"] = 2048
-            stream_kwargs["latency"] = "high"
+            blocksize = 2048
+            latency = "high"
+            stream_kwargs["blocksize"] = blocksize
+            stream_kwargs["latency"] = latency
+        self._stream_blocksize = int(blocksize)
         try:
             return sd.OutputStream(**stream_kwargs)
         except Exception:

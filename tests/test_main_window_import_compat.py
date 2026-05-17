@@ -382,11 +382,11 @@ def test_send_ndi_audio_flushes_player_tap_blocks():
     host._send_ndi_audio()
 
     assert player.calls == [(8192, "pre_fader")]
-    assert len(host._ndi_sender.chunks) == 1
+    assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
-    assert host._ndi_audio_player_buffers[id(player)].shape == (1976, 2)
+    assert host._ndi_audio_player_buffers[id(player)].shape == (952, 2)
 
 
 def test_send_ndi_audio_mixes_active_players():
@@ -458,6 +458,8 @@ def test_send_ndi_audio_supports_audio_player_proxy():
             self.calls.append((str(player_id), str(command), payload, float(timeout)))
             if command == "sampleRate":
                 return 48000
+            if command == "outputBlockSize":
+                return 1024
             if command == "takeOutputFrames":
                 return np.ones((3000, 2), dtype=np.float32) * 0.125
             raise AssertionError(command)
@@ -484,7 +486,7 @@ def test_send_ndi_audio_supports_audio_player_proxy():
 
     host._send_ndi_audio()
 
-    assert len(host._ndi_sender.chunks) == 1
+    assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
@@ -530,11 +532,51 @@ def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
 
     host._send_ndi_audio()
 
-    assert len(host._ndi_sender.chunks) == 1
+    assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
     assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.5)
+    assert all(np.asarray(value, dtype=np.float32).shape[0] == 0 for value in host._ndi_audio_player_buffers.values())
+
+
+def test_send_ndi_audio_keeps_buffers_when_sender_defers_block():
+    class _DummySender:
+        def __init__(self):
+            self.calls = 0
+
+        def send_audio_frames(self, frames, sample_rate):
+            _ = (frames, sample_rate)
+            self.calls += 1
+            return False
+
+    class _DummyPlayer:
+        def sampleRate(self):
+            return 48000
+
+        def takeOutputFrames(self, max_frames=0, mode="post_fader"):
+            _ = (max_frames, mode)
+            return np.ones((1600, 2), dtype=np.float32) * 0.5
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_player_buffers = {}
+    player = _DummyPlayer()
+    host._ndi_audio_players = lambda: [player]
+
+    host._send_ndi_audio()
+
+    assert host._ndi_sender.calls == 1
+    assert host._ndi_audio_player_buffers[id(player)].shape == (1600, 2)
 
 
 def test_ndi_audio_players_prefers_current_playing_player_mapping():

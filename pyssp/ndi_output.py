@@ -64,7 +64,7 @@ class NDIOutputSender:
         self._config: Optional[NDIOutputConfig] = None
         self._initialize_failed = False
         self._audio_format: tuple[int, int, int] = (0, 0, 0)
-        self._audio_target_spec: tuple[int, int, int] = (48000, 2, _NDI_AUDIO_FRAME_CAPACITY)
+        self._audio_target_spec: tuple[int, int, int] = (48000, 1, _NDI_AUDIO_FRAME_CAPACITY)
         self._last_audio_error = ""
         self._last_audio_mode = ""
         self._audio_recovery_count = 0
@@ -224,7 +224,7 @@ class NDIOutputSender:
         if self._sender is None or self._config is None or (not self._config.audio_enabled):
             self._set_audio_error("sender unavailable")
             return False
-        block = np.asarray(frames, dtype=np.float32)
+        block = self._normalized_audio_block(frames)
         if block.ndim != 2 or len(block) <= 0:
             self._set_audio_error("invalid audio block")
             return False
@@ -272,6 +272,18 @@ class NDIOutputSender:
             return True
         self._set_audio_error(error_text)
         return False
+
+    @staticmethod
+    def _normalized_audio_block(frames: np.ndarray) -> np.ndarray:
+        block = np.asarray(frames, dtype=np.float32)
+        if block.ndim != 2 or len(block) <= 0:
+            return block
+        if int(block.shape[1]) <= 1:
+            return np.ascontiguousarray(block[:, :1], dtype=np.float32)
+        # cyndilib's current planar float sender path is corrupting channel 2
+        # on the target runtime, so send a safe mono downmix for now.
+        mono = np.mean(block, axis=1, dtype=np.float32).reshape(-1, 1)
+        return np.ascontiguousarray(mono, dtype=np.float32)
 
     def _write_audio_payload(self, payload: np.ndarray) -> tuple[bool, str]:
         try:
@@ -422,13 +434,6 @@ class NDIOutputDispatcher:
             self._set_audio_error("invalid audio block")
             return False
         normalized_rate = max(1, int(sample_rate))
-        duration_sec = float(block.shape[0]) / float(normalized_rate)
-        now = time.perf_counter()
-        if now + 0.001 < self._audio_next_send_at:
-            self._audio_drop_count += 1
-            self._last_audio_mode = "dispatcher_audio_drop_realtime"
-            self._clear_audio_error()
-            return True
         try:
             with self._sender_lock:
                 ok = bool(self._sender.send_audio_frames(np.ascontiguousarray(block, dtype=np.float32), normalized_rate))
@@ -437,7 +442,6 @@ class NDIOutputDispatcher:
             return False
         if ok:
             self._audio_send_count += 1
-            self._audio_next_send_at = max(self._audio_next_send_at, now) + max(0.005, duration_sec)
         self._sync_public_state()
         return bool(ok)
 

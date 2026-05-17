@@ -211,6 +211,8 @@ class AudioService(QObject):
             return float(left), float(right)
         if command == "sampleRate":
             return int(player.sampleRate())
+        if command == "outputBlockSize":
+            return int(getattr(player, "outputBlockSize", lambda: 0)())
         if command == "takeOutputFrames":
             frames = player.takeOutputFrames(
                 max_frames=int(payload.get("max_frames", 0)),
@@ -418,6 +420,12 @@ class AudioPlayerProxy(QObject):
             return int(self._call("sampleRate", timeout=0.5))
         except Exception:
             return 48000
+
+    def outputBlockSize(self) -> int:
+        try:
+            return max(0, int(self._call("outputBlockSize", timeout=0.5)))
+        except Exception:
+            return 0
 
     def takeOutputFrames(self, max_frames: int = 0, mode: str = "post_fader"):
         result = self._call(

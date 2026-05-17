@@ -26,6 +26,8 @@ class _FakeAudioController(QObject):
         self.calls.append((str(player_id), str(command), payload, float(timeout)))
         if command == "sampleRate":
             return 48000
+        if command == "outputBlockSize":
+            return 1024
         if command == "takeOutputFrames":
             return np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
         if command == "outputTapFrameCounts":
@@ -90,12 +92,15 @@ def test_proxy_exposes_sample_rate_and_output_tap_frames_via_controller() -> Non
     player = AudioPlayerProxy(controller, "player-test")
 
     sample_rate = player.sampleRate()
+    block_size = player.outputBlockSize()
     frames = player.takeOutputFrames(max_frames=4, mode="pre_fader")
 
     assert sample_rate == 48000
+    assert block_size == 1024
     assert np.allclose(frames, np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32))
     assert controller.calls == [
         ("player-test", "sampleRate", None, 0.5),
+        ("player-test", "outputBlockSize", None, 0.5),
         ("player-test", "takeOutputFrames", {"max_frames": 4, "mode": "pre_fader"}, 0.5),
     ]
 

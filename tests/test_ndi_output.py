@@ -120,12 +120,13 @@ def test_ndi_sender_uses_cyndilib_audio_and_video_shapes():
     assert sender._sender.video_frame.frame_rate == Fraction(30, 1)
     assert sender._sender.video_frame.fourcc == "bgrx"
     assert sender._sender.audio_frame.reference_level == "dbvu"
+    assert sender._sender.audio_frame.num_channels == 1
     assert sender._sender.audio_frame.max_num_samples >= 8192
 
     frames = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
     assert sender.send_audio_frames(frames, 48000) is True
     assert len(sender._sender.audio_payloads) == 1
-    assert np.allclose(sender._sender.audio_payloads[0], np.asarray([[0.1, 0.3], [0.2, 0.4]], dtype=np.float32))
+    assert np.allclose(sender._sender.audio_payloads[0], np.asarray([[0.15, 0.35]], dtype=np.float32))
 
     image = QImage(4, 2, QImage.Format_RGB32)
     image.fill(0x112233)
@@ -221,7 +222,7 @@ print(json.dumps(result))
         return
     assert result["configured"] is True
     assert result["captured"] is True
-    assert result["shape"] == [2, 1600]
+    assert result["shape"] == [1, 1600]
     assert 0.20 < result["max"] < 0.40
 
 
@@ -463,8 +464,8 @@ def test_ndi_dispatcher_throttles_audio_to_realtime():
         assert dispatcher.send_audio_frames(audio, 48000) is True
         assert dispatcher.send_audio_frames(audio, 48000) is True
 
-        assert dispatcher._sender.audio_calls == 1
-        assert dispatcher._audio_drop_count == 1
-        assert dispatcher._last_audio_mode == "dispatcher_audio_drop_realtime"
+        assert dispatcher._sender.audio_calls == 2
+        assert dispatcher._audio_drop_count == 0
+        assert dispatcher._last_audio_mode == "ok"
     finally:
         dispatcher.shutdown()

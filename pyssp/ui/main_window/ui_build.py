@@ -1728,6 +1728,9 @@ class UiBuildMixin:
     def _open_audio_device_options(self) -> None:
         self._open_options_dialog(initial_page="Audio Device & Timecode")
 
+    def _open_ndi_options(self) -> None:
+        self._open_options_dialog(initial_page="Video Display")
+
     def _getting_started_image_path(self, *parts: str) -> str:
         docs_source = os.path.join(self._project_root_path(), "docs", "source", "images", *parts)
         if os.path.exists(docs_source):
@@ -1742,6 +1745,11 @@ class UiBuildMixin:
         return docs_source
 
     def _open_getting_started_window(self, startup: bool = False) -> None:
+        ndi_status = probe_ndi_capability(force_refresh=True)
+        ndi_status_text = str(getattr(ndi_status, "availability_reason", "unknown") or "unknown")
+        ndi_version = str(getattr(ndi_status, "ndi_runtime_version", "") or "").strip()
+        if ndi_version:
+            ndi_status_text = f"{ndi_status_text} ({ndi_version})"
         if self._getting_started_window is None:
             self._getting_started_window = GettingStartedDialog(
                 language=self.ui_language,
@@ -1751,7 +1759,10 @@ class UiBuildMixin:
                 splash_image_path=self._asset_file_path("logo2.png"),
                 add_page_image_path=self._getting_started_image_path("getting_started", "add_page.png"),
                 drag_file_image_path=self._getting_started_image_path("getting_started", "drag_file_to_sound_button.png"),
+                ndi_status_text=ndi_status_text,
+                ndi_runtime_download_url=str(getattr(ndi_status, "runtime_download_url", "") or ""),
                 open_audio_device_options=self._open_audio_device_options,
+                open_ndi_options=self._open_ndi_options,
                 open_latest_version_page=self._open_latest_version_page,
                 open_docs_page=self._open_getting_started_docs_page,
                 open_options_page=self._open_options_dialog,
@@ -1759,6 +1770,10 @@ class UiBuildMixin:
                 parent=self,
             )
             self._getting_started_window.destroyed.connect(lambda _=None: self._clear_getting_started_window_ref())
+        else:
+            self._getting_started_window._ndi_status_text = ndi_status_text
+            self._getting_started_window._ndi_runtime_download_url = str(getattr(ndi_status, "runtime_download_url", "") or "")
+            self._getting_started_window.set_language(self.ui_language)
         if not startup:
             self._getting_started_window.reset_to_first_page()
         self._getting_started_window.show()

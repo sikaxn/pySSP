@@ -47,3 +47,26 @@ def test_getting_started_dialog_shows_close_only_on_last_page(qapp):
 
     assert dialog._next_button.isVisible() is False
     assert dialog._close_button.isVisible() is True
+
+
+def test_getting_started_dialog_shows_ndi_status_license_and_link(qapp):
+    opened = {"ndi": 0}
+    dialog = GettingStartedDialog(
+        version_text="1.2.3",
+        build_text="20260425",
+        beta_build=False,
+        ndi_status_text="NDI runtime is ready. (6.1.0)",
+        ndi_runtime_download_url="https://ndi.link/NDIRedistV6",
+        open_ndi_options=lambda: opened.__setitem__("ndi", opened["ndi"] + 1),
+    )
+    dialog.show()
+    qapp.processEvents()
+
+    assert "NDI runtime is ready." in dialog._ndi_status_label.text()
+    assert "ndi.link/NDIRedistV6" in dialog._ndi_download_label.text()
+    assert "licensed separately" in dialog._ndi_license_label.text()
+
+    dialog._ndi_options_button.click()
+    qapp.processEvents()
+
+    assert opened["ndi"] == 1

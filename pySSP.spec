@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('pyssp\\assets', 'pyssp\\assets'), ('docs\\build\\html', 'docs\\build\\html'), ('.build_meta\\version.json', '.')]
+datas = [('pyssp/assets', 'pyssp/assets'), ('docs/build/html', 'docs/build/html'), ('.build_meta/version.json', '.')]
 binaries = []
 hiddenimports = []
 datas += collect_data_files('imageio_ffmpeg')
@@ -10,6 +10,8 @@ tmp_ret = collect_all('pedalboard')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pedalboard_native')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -41,7 +43,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['pyssp\\assets\\app_icon.ico'],
+    icon=['/Users/nathan/Documents/GitHub/pySSP/build/app_icon.icns'],
 )
 coll = COLLECT(
     exe,
@@ -51,4 +53,10 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='pySSP',
+)
+app = BUNDLE(
+    coll,
+    name='pySSP.app',
+    icon='/Users/nathan/Documents/GitHub/pySSP/build/app_icon.icns',
+    bundle_identifier=None,
 )

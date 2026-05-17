@@ -159,3 +159,15 @@ NDI audio
 - Important caveat on the current NDI design:
   - NDI is closer to soundcard behavior now, but it is still not a true shared mix bus
   - it mixes per-player monitor buffers later in `video_display.py`, so the remaining architectural gap is still “per-player monitor pull” vs “single engine mix bus”
+- Agreed long-term audio-engine direction:
+  - build a real internal central master bus and redesign the engine around one authoritative mix/render path
+  - this should be a big rewrite, not another narrow NDI workaround
+  - preserve the current player-facing API initially, especially `ExternalMediaPlayer` / `AudioPlayerProxy` behavior
+  - unify NDI, meters, monitoring, and future recording around the same internal engine tap points
+  - keep LTC/timecode audio separate in v1 of the redesign
+  - do not cut over until full current feature parity is reached for fades, crossfades, multi-play, DSP, vocal-shadow behavior, meters, NDI, and preload-related playback behavior
+- Target architecture to preserve:
+  - one engine-owned hardware output stream for program audio
+  - player instances become engine voices feeding buses instead of owning independent output streams
+  - explicit internal tap stages for `pre_fader`, `post_fader`, and final master
+  - no downstream consumer should rebuild or remix audio independently in the UI thread

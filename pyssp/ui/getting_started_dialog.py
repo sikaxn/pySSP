@@ -30,7 +30,10 @@ class GettingStartedDialog(QDialog):
         splash_image_path: str = "",
         add_page_image_path: str = "",
         drag_file_image_path: str = "",
+        ndi_status_text: str = "",
+        ndi_runtime_download_url: str = "",
         open_audio_device_options: Optional[Callable[[], None]] = None,
+        open_ndi_options: Optional[Callable[[], None]] = None,
         open_latest_version_page: Optional[Callable[[], None]] = None,
         open_docs_page: Optional[Callable[[], None]] = None,
         open_options_page: Optional[Callable[[], None]] = None,
@@ -42,7 +45,10 @@ class GettingStartedDialog(QDialog):
         self._version_text = str(version_text or "")
         self._build_text = str(build_text or "")
         self._beta_build = bool(beta_build)
+        self._ndi_status_text = str(ndi_status_text or "")
+        self._ndi_runtime_download_url = str(ndi_runtime_download_url or "").strip()
         self._open_audio_device_options = open_audio_device_options
+        self._open_ndi_options = open_ndi_options
         self._open_latest_version_page = open_latest_version_page
         self._open_docs_page = open_docs_page
         self._open_options_page = open_options_page
@@ -219,11 +225,23 @@ class GettingStartedDialog(QDialog):
         self._audio_device_title.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._audio_device_title)
 
+        card_row = QHBoxLayout()
+        card_row.setSpacing(14)
+
+        audio_card = self._card_widget()
+        audio_layout = QVBoxLayout(audio_card)
+        audio_layout.setContentsMargins(18, 18, 18, 18)
+        audio_layout.setSpacing(12)
+
+        self._audio_box_title = QLabel(page)
+        self._audio_box_title.setStyleSheet("QLabel{font-size:16pt;font-weight:700;color:#2B221A;}")
+        audio_layout.addWidget(self._audio_box_title)
+
         self._audio_device_body = QLabel(page)
-        self._audio_device_body.setAlignment(Qt.AlignCenter)
+        self._audio_device_body.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._audio_device_body.setWordWrap(True)
-        self._audio_device_body.setStyleSheet("QLabel{font-size:15pt;color:#5C5348;}")
-        layout.addWidget(self._audio_device_body)
+        self._audio_device_body.setStyleSheet("QLabel{font-size:14pt;color:#5C5348;line-height:1.35;}")
+        audio_layout.addWidget(self._audio_device_body)
 
         self._audio_device_button = QPushButton(page)
         self._audio_device_button.setMinimumHeight(58)
@@ -233,7 +251,51 @@ class GettingStartedDialog(QDialog):
             "QPushButton:pressed{background:#DFD0B8;}"
         )
         self._audio_device_button.clicked.connect(self._handle_open_audio_device_options)
-        layout.addWidget(self._audio_device_button, 0, Qt.AlignHCenter)
+        audio_layout.addWidget(self._audio_device_button, 0, Qt.AlignHCenter)
+        audio_layout.addStretch(1)
+
+        ndi_card = self._card_widget()
+        ndi_layout = QVBoxLayout(ndi_card)
+        ndi_layout.setContentsMargins(18, 18, 18, 18)
+        ndi_layout.setSpacing(12)
+
+        self._ndi_title = QLabel(page)
+        self._ndi_title.setStyleSheet("QLabel{font-size:16pt;font-weight:700;color:#2B221A;}")
+        ndi_layout.addWidget(self._ndi_title)
+
+        self._ndi_status_label = QLabel(page)
+        self._ndi_status_label.setWordWrap(True)
+        self._ndi_status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._ndi_status_label.setStyleSheet("QLabel{font-size:12.5pt;color:#5C5348;line-height:1.35;}")
+        ndi_layout.addWidget(self._ndi_status_label)
+
+        self._ndi_download_label = QLabel(page)
+        self._ndi_download_label.setWordWrap(True)
+        self._ndi_download_label.setOpenExternalLinks(True)
+        self._ndi_download_label.setStyleSheet("QLabel{font-size:12.5pt;color:#5C5348;}")
+        ndi_layout.addWidget(self._ndi_download_label)
+
+        self._ndi_license_label = QLabel(page)
+        self._ndi_license_label.setWordWrap(True)
+        self._ndi_license_label.setStyleSheet(
+            "QLabel{background:#F9E9D7;color:#6A4A00;border:0;border-radius:18px;padding:16px;font-size:12pt;line-height:1.35;}"
+        )
+        ndi_layout.addWidget(self._ndi_license_label)
+
+        self._ndi_options_button = QPushButton(page)
+        self._ndi_options_button.setMinimumHeight(52)
+        self._ndi_options_button.setStyleSheet(
+            "QPushButton{font-size:13.5pt;font-weight:600;padding:10px 18px;background:#F3E9D8;border:0;border-radius:16px;color:#3E3429;text-align:left;}"
+            "QPushButton:hover{background:#EADFCB;}"
+            "QPushButton:pressed{background:#DFD0B8;}"
+        )
+        self._ndi_options_button.clicked.connect(self._handle_open_ndi_options)
+        ndi_layout.addWidget(self._ndi_options_button, 0, Qt.AlignHCenter)
+        ndi_layout.addStretch(1)
+
+        card_row.addWidget(audio_card, 1)
+        card_row.addWidget(ndi_card, 1)
+        layout.addLayout(card_row)
         layout.addStretch(1)
         return page
 
@@ -354,9 +416,31 @@ class GettingStartedDialog(QDialog):
         self._add_page_card_title.setText(tr("1. Add a page", self._language))
         self._drag_file_card_title.setText(tr("2. Drag file to sound button", self._language))
         self._audio_device_title.setText(tr("Set the Audio Output Device", self._language))
+        self._audio_box_title.setText(tr("Audio Output", self._language))
         self._audio_device_body.setText(
             tr("Set the audio output device under Setup > Options > Audio Device & Timecode.", self._language)
         )
+        self._ndi_title.setText(tr("NDI Output", self._language))
+        self._ndi_status_label.setText(
+            tr("Runtime status:", self._language) + f" {self._ndi_status_text or tr('Unknown', self._language)}"
+        )
+        runtime_url = self._ndi_runtime_download_url
+        if runtime_url:
+            self._ndi_download_label.setText(
+                tr("Download NDI Runtime:", self._language) + f' <a href="{runtime_url}">{runtime_url}</a>'
+            )
+        else:
+            self._ndi_download_label.setText(tr("Download NDI Runtime: unavailable", self._language))
+        self._ndi_license_label.setText(
+            tr(
+                "pySSP uses NDI® technology through binding code that dynamically loads an installed NDI runtime/SDK. "
+                "pySSP does not include NDI library source code or bundled NDI runtime/SDK binaries. "
+                "NDI runtime/SDK components are licensed separately. "
+                "NDI® is a registered trademark of Vizrt NDI AB.",
+                self._language,
+            )
+        )
+        self._ndi_options_button.setText(tr("Open NDI Options", self._language))
         self._audio_device_button.setText(tr("Open Audio Device Options", self._language))
         self._finish_title.setText(tr("You're Ready", self._language))
         self._finish_body.setText(
@@ -393,6 +477,10 @@ class GettingStartedDialog(QDialog):
     def _handle_open_audio_device_options(self) -> None:
         if callable(self._open_audio_device_options):
             self._open_audio_device_options()
+
+    def _handle_open_ndi_options(self) -> None:
+        if callable(self._open_ndi_options):
+            self._open_ndi_options()
 
     def _handle_open_latest_version_page(self) -> None:
         if callable(self._open_latest_version_page):

@@ -69,9 +69,11 @@ from pyssp.audio_format_support import (
     normalize_supported_audio_extensions,
 )
 from pyssp.audio_engine import (
+    append_output_monitor_frames,
     ExternalMediaPlayer,
     can_decode_with_ffmpeg,
     can_stream_without_preload,
+    clear_output_monitor_frames,
     configure_audio_preload_cache_policy,
     configure_waveform_disk_cache,
     clear_waveform_disk_cache,
@@ -84,10 +86,12 @@ from pyssp.audio_engine import (
     get_media_ssp_units,
     is_audio_preloaded,
     list_output_devices,
+    output_monitor_frame_counts,
     request_audio_preload,
     set_audio_preload_paused,
     set_output_device,
     shutdown_audio_preload,
+    take_output_monitor_frames,
 )
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController
 from pyssp.audio_runtime import PlaybackRuntimeTracker

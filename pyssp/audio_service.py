@@ -137,6 +137,10 @@ class AudioService(QObject):
         if command == "create":
             if player_id not in self._players:
                 player = ExternalMediaPlayer()
+                try:
+                    player.setOutputMonitorId(player_id)
+                except Exception:
+                    pass
                 self._players[player_id] = player
                 player.positionChanged.connect(lambda value, pid=player_id: self.positionChanged.emit(pid, int(value)))
                 player.durationChanged.connect(lambda value, pid=player_id: self.durationChanged.emit(pid, int(value)))

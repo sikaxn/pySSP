@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
@@ -52,6 +52,12 @@ _WAVEFORM_CACHE_LOCK = threading.RLock()
 _OUTPUT_METER_LOCK = threading.RLock()
 _OUTPUT_METER_ACTIVE_WINDOW_SEC = 0.25
 _OUTPUT_METER_SOURCES: Dict[int, Tuple[float, float, float]] = {}
+_OUTPUT_MONITOR_LOCK = threading.RLock()
+_OUTPUT_MONITOR_CAPACITY_FRAMES = _DEFAULT_AUDIO_SAMPLE_RATE * 4
+_OUTPUT_MONITOR_PRE: Dict[str, deque[np.ndarray]] = {}
+_OUTPUT_MONITOR_POST: Dict[str, deque[np.ndarray]] = {}
+_OUTPUT_MONITOR_PRE_COUNTS: Dict[str, int] = {}
+_OUTPUT_MONITOR_POST_COUNTS: Dict[str, int] = {}
 _COREAUDIO_KEEPALIVE_LOCK = threading.RLock()
 _COREAUDIO_KEEPALIVE_STREAM = None
 _COREAUDIO_KEEPALIVE_REFS = 0
@@ -234,6 +240,102 @@ def _update_engine_output_meter(stream_id: int, left: float, right: float) -> No
 def _clear_engine_output_meter(stream_id: int) -> None:
     with _OUTPUT_METER_LOCK:
         _OUTPUT_METER_SOURCES.pop(int(stream_id), None)
+
+
+def clear_output_monitor_frames(player_id: str = "") -> None:
+    token = str(player_id or "").strip()
+    with _OUTPUT_MONITOR_LOCK:
+        if not token:
+            _OUTPUT_MONITOR_PRE.clear()
+            _OUTPUT_MONITOR_POST.clear()
+            _OUTPUT_MONITOR_PRE_COUNTS.clear()
+            _OUTPUT_MONITOR_POST_COUNTS.clear()
+            return
+        _OUTPUT_MONITOR_PRE.pop(token, None)
+        _OUTPUT_MONITOR_POST.pop(token, None)
+        _OUTPUT_MONITOR_PRE_COUNTS.pop(token, None)
+        _OUTPUT_MONITOR_POST_COUNTS.pop(token, None)
+
+
+def _output_monitor_store(mode: str) -> tuple[Dict[str, deque[np.ndarray]], Dict[str, int]]:
+    token = str(mode or "post_fader").strip().lower()
+    if token == "pre_fader":
+        return _OUTPUT_MONITOR_PRE, _OUTPUT_MONITOR_PRE_COUNTS
+    return _OUTPUT_MONITOR_POST, _OUTPUT_MONITOR_POST_COUNTS
+
+
+def append_output_monitor_frames(player_id: str, frames_block: np.ndarray, *, mode: str) -> None:
+    token = str(player_id or "").strip()
+    if not token:
+        return
+    block = np.asarray(frames_block, dtype=np.float32)
+    if block.ndim != 2 or len(block) <= 0:
+        return
+    store, counts = _output_monitor_store(mode)
+    with _OUTPUT_MONITOR_LOCK:
+        queue_ref = store.get(token)
+        if queue_ref is None:
+            queue_ref = deque()
+            store[token] = queue_ref
+            counts[token] = 0
+        queue_ref.append(np.ascontiguousarray(block, dtype=np.float32).copy())
+        counts[token] = max(0, int(counts.get(token, 0))) + int(len(block))
+        while counts[token] > _OUTPUT_MONITOR_CAPACITY_FRAMES and queue_ref:
+            dropped = np.asarray(queue_ref.popleft(), dtype=np.float32)
+            counts[token] = max(0, int(counts[token]) - int(len(dropped)))
+
+
+def take_output_monitor_frames(player_id: str, max_frames: int = 0, mode: str = "post_fader") -> np.ndarray:
+    token = str(player_id or "").strip()
+    if not token:
+        return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
+    store, counts = _output_monitor_store(mode)
+    with _OUTPUT_MONITOR_LOCK:
+        queue_ref = store.get(token)
+        if not queue_ref:
+            return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
+        total_frames = max(0, int(counts.get(token, 0)))
+        if total_frames <= 0:
+            return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
+        target_frames = total_frames if max_frames <= 0 else min(total_frames, max(1, int(max_frames)))
+        pieces: List[np.ndarray] = []
+        remaining = target_frames
+        channel_count = _CHANNEL_COUNT
+        while remaining > 0 and queue_ref:
+            head = np.asarray(queue_ref[0], dtype=np.float32)
+            if head.ndim != 2 or len(head) <= 0:
+                queue_ref.popleft()
+                continue
+            channel_count = int(head.shape[1])
+            take = min(remaining, int(head.shape[0]))
+            pieces.append(np.ascontiguousarray(head[:take, :], dtype=np.float32))
+            remaining -= take
+            if take >= int(head.shape[0]):
+                queue_ref.popleft()
+            else:
+                queue_ref[0] = np.ascontiguousarray(head[take:, :], dtype=np.float32)
+            counts[token] = max(0, int(counts.get(token, 0)) - take)
+        if counts.get(token, 0) <= 0:
+            counts[token] = 0
+        if not queue_ref:
+            store.pop(token, None)
+            counts.pop(token, None)
+        if not pieces:
+            return np.zeros((0, channel_count), dtype=np.float32)
+        if len(pieces) == 1:
+            return pieces[0]
+        return np.ascontiguousarray(np.vstack(pieces), dtype=np.float32)
+
+
+def output_monitor_frame_counts(player_id: str) -> Dict[str, int]:
+    token = str(player_id or "").strip()
+    if not token:
+        return {"pre_fader": 0, "post_fader": 0}
+    with _OUTPUT_MONITOR_LOCK:
+        return {
+            "pre_fader": max(0, int(_OUTPUT_MONITOR_PRE_COUNTS.get(token, 0))),
+            "post_fader": max(0, int(_OUTPUT_MONITOR_POST_COUNTS.get(token, 0))),
+        }
 
 
 def _coreaudio_keepalive_callback(outdata, frames, _time_info, _status) -> None:
@@ -1206,6 +1308,7 @@ class ExternalMediaPlayer(QObject):
         self._output_tap_pre_frames = np.zeros((0, self._channels), dtype=np.float32)
         self._output_tap_post_frames = np.zeros((0, self._channels), dtype=np.float32)
         self._output_tap_capacity_frames = max(int(self._sample_rate * 2), 4096)
+        self._output_monitor_id = ""
         self._source_pos = 0.0
         self._source_pos_anchor = 0.0
         self._source_pos_anchor_t = time.perf_counter()
@@ -1355,6 +1458,7 @@ class ExternalMediaPlayer(QObject):
     def stop(self) -> None:
         decoder_to_close: Optional[FFmpegPCMStream] = None
         clear_meter_now = True
+        monitor_id = ""
         with self._lock:
             self._pending_media_request_id += 1
             self._queue_declick_tail_locked()
@@ -1370,9 +1474,12 @@ class ExternalMediaPlayer(QObject):
             self._ended = False
             self._meter_levels = (0.0, 0.0)
             self._dsp_processor.reset()
+            monitor_id = str(getattr(self, "_output_monitor_id", "") or "").strip()
             self._set_state_locked(self.StoppedState)
         if clear_meter_now:
             _clear_engine_output_meter(self._stream_id)
+        if monitor_id:
+            clear_output_monitor_frames(monitor_id)
         if decoder_to_close is not None:
             try:
                 decoder_to_close.close()
@@ -1388,6 +1495,7 @@ class ExternalMediaPlayer(QObject):
         close_stream_decoder = False
         seek_stream_decoder = False
         target = 0
+        monitor_id = ""
         with self._lock:
             target = max(0, min(int(position_ms), self._duration_ms))
             if self._state == self.PlayingState:
@@ -1425,6 +1533,7 @@ class ExternalMediaPlayer(QObject):
                     decoder_to_close = None
             else:
                 decoder_to_close = None
+            monitor_id = str(getattr(self, "_output_monitor_id", "") or "").strip()
         if close_stream_decoder and decoder_to_close is not None:
             try:
                 decoder_to_close.close()
@@ -1433,6 +1542,8 @@ class ExternalMediaPlayer(QObject):
         if seek_stream_decoder and (not self._seek_stream_decoder_to_position(target)):
             with self._lock:
                 self._ended = True
+        if monitor_id:
+            clear_output_monitor_frames(monitor_id)
         self.positionChanged.emit(target)
 
     def position(self) -> int:
@@ -1475,6 +1586,18 @@ class ExternalMediaPlayer(QObject):
     def sampleRate(self) -> int:
         with self._lock:
             return int(self._sample_rate)
+
+    def setOutputMonitorId(self, player_id: str) -> None:
+        token = str(player_id or "").strip()
+        with self._lock:
+            previous = str(getattr(self, "_output_monitor_id", "") or "").strip()
+            self._output_monitor_id = token
+        if previous and previous != token:
+            clear_output_monitor_frames(previous)
+
+    def outputMonitorId(self) -> str:
+        with self._lock:
+            return str(getattr(self, "_output_monitor_id", "") or "").strip()
 
     def outputBlockSize(self) -> int:
         with self._lock:
@@ -1792,6 +1915,7 @@ class ExternalMediaPlayer(QObject):
         utility_spec: Optional[UtilitySoundSpec],
         dsp_config: Optional[DSPConfig],
     ) -> None:
+        monitor_id = ""
         with self._lock:
             old_decoder = self._stream_decoder
             self._discard_declick_history_locked()
@@ -1818,6 +1942,7 @@ class ExternalMediaPlayer(QObject):
             self._fresh_media_start_pending = True
             self._fresh_media_fade_frames = self._fresh_start_fade_frames_for_media_locked(self._media_path)
             self._dsp_processor.reset()
+            monitor_id = str(getattr(self, "_output_monitor_id", "") or "").strip()
             if dsp_config is not None:
                 self._dsp_config = normalize_config(dsp_config)
                 self._dsp_active = bool(has_active_processing(self._dsp_config))
@@ -1830,6 +1955,8 @@ class ExternalMediaPlayer(QObject):
                 old_decoder.close()
             except Exception:
                 pass
+        if monitor_id:
+            clear_output_monitor_frames(monitor_id)
         self.durationChanged.emit(self._duration_ms)
         self.positionChanged.emit(0)
 
@@ -1846,6 +1973,7 @@ class ExternalMediaPlayer(QObject):
             self._apply_pending_dsp_config_locked()
             if self._emit_declick_tail_locked(outdata, frames):
                 self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
+                append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
                 return
             if self._state != self.PlayingState:
                 self._meter_levels = (0.0, 0.0)
@@ -1906,6 +2034,7 @@ class ExternalMediaPlayer(QObject):
             if self._dsp_active:
                 block = self._dsp_processor.process_block(block)
             self._append_output_tap_locked(block, mode="pre_fader")
+            append_output_monitor_frames(self._output_monitor_id, block, mode="pre_fader")
             if self._volume != 100:
                 block = block * (self._volume / 100.0)
             block = self._apply_declick_fade_in_locked(block)
@@ -1951,6 +2080,7 @@ class ExternalMediaPlayer(QObject):
             self._source_pos_anchor_t = time.perf_counter()
             self._source_pos_anchor_tempo = tempo_ratio
             self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
+            append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
         finally:
             self._lock.release()
 

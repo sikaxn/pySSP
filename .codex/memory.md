@@ -93,3 +93,23 @@
   - `requirements.txt` now uses `cyndilib>=0.1.1`
   - `pySSP.spec` / `pySSP_debug.spec` now collect `cyndilib`
   - keep runtime/SDK detection cross-platform, not Windows-only
+
+## 2026-05-17
+
+- The `cyndilib` sender path is no longer considered reliable enough for pySSP production NDI output:
+  - direct loopback reproduced broken stereo behavior on this machine
+  - audio cadence from app-side polling still produced skips/crackle even after multiple timer fixes
+- New backend direction is to bind directly to the installed NDI runtime/SDK instead of relying on a Python wrapper sender path.
+- Licensing constraint to preserve:
+  - do not bundle the NDI SDK/runtime with pySSP
+  - pySSP should detect and use a user-installed NDI runtime/SDK on Windows and macOS
+- Cross-platform requirement is explicit:
+  - runtime discovery and sender backend must work for both Windows and macOS
+  - do not implement a Windows-only path and “fix mac later”
+- Current redesign in progress:
+  - new `pyssp/ndi_runtime.py` introduces direct `ctypes` bindings for the installed runtime
+  - target audio send path is `NDIlib_util_send_send_audio_interleaved_32f`
+  - target video send path is direct `NDIlib_send_send_video_async_v2`
+- Audio architecture direction to preserve:
+  - NDI audio should move away from main-window/player-proxy polling
+  - prefer engine-callback-side monitor buffers or a true mix bus so NDI hears the same result as soundcard output, including fades, crossfades, and multi-play

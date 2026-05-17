@@ -1,55 +1,45 @@
 from __future__ import annotations
 
-import importlib
-import importlib.metadata
 import os
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+from pyssp.ndi_runtime import probe_runtime_version
 
-NDI_DOWNLOAD_URL = "https://ndi.video/for-developers/ndi-sdk/download/"
-NDI_RUNTIME_DOWNLOAD_URL = "https://ndi.link/NDIRedistV5"
-_NDI_BACKEND_PACKAGE = "cyndilib"
-_NDI_BACKEND_MODULE = "cyndilib"
+
+NDI_DOWNLOAD_URL = "https://ndi.video/tools/"
+NDI_RUNTIME_DOWNLOAD_URL = "https://ndi.link/NDIRedistV6"
+_NDI_BACKEND_NAME = "ndi-runtime"
 
 
 @dataclass(frozen=True)
 class NDICapabilityStatus:
-    ndi_backend_name: str = _NDI_BACKEND_PACKAGE
-    ndi_python_available: bool = False
-    ndi_python_version: str = "not installed"
-    ndi_module_importable: bool = False
+    ndi_backend_name: str = _NDI_BACKEND_NAME
+    ndi_python_available: bool = True
+    ndi_python_version: str = "builtin"
+    ndi_module_importable: bool = True
     ndi_runtime_or_sdk_detected: bool = False
     runtime_env_var: str = ""
     runtime_env_value: str = ""
     runtime_paths: List[str] = field(default_factory=list)
     sdk_paths: List[str] = field(default_factory=list)
     bundled_runtime_paths: List[str] = field(default_factory=list)
-    availability_reason: str = "cyndilib is not installed."
+    availability_reason: str = "NDI runtime library was not detected."
     import_error: str = ""
     platform_name: str = ""
     download_url: str = NDI_DOWNLOAD_URL
     runtime_download_url: str = NDI_RUNTIME_DOWNLOAD_URL
+    runtime_library_path: str = ""
+    ndi_runtime_version: str = ""
 
     @property
     def ready(self) -> bool:
-        return bool(
-            self.ndi_python_available
-            and self.ndi_module_importable
-            and self.ndi_runtime_or_sdk_detected
-        )
+        return bool(self.ndi_runtime_or_sdk_detected and self.runtime_library_path)
 
 
 _NDI_STATUS_CACHE: NDICapabilityStatus | None = None
-
-
-def _package_version(package_name: str) -> str:
-    try:
-        return str(importlib.metadata.version(package_name) or "").strip() or "unknown"
-    except Exception:
-        return "not installed"
 
 
 def _existing_paths(candidates: List[str]) -> List[str]:
@@ -59,14 +49,18 @@ def _existing_paths(candidates: List[str]) -> List[str]:
         candidate = str(raw or "").strip()
         if not candidate:
             continue
-        path = Path(candidate).expanduser()
-        if not path.exists():
+        try:
+            path = Path(candidate).expanduser()
+            if not path.exists():
+                continue
+            resolved = str(path.resolve())
+        except Exception:
             continue
-        normalized = os.path.normcase(str(path.resolve()))
+        normalized = os.path.normcase(resolved)
         if normalized in seen:
             continue
         seen.add(normalized)
-        output.append(str(path.resolve()))
+        output.append(resolved)
     return output
 
 
@@ -84,15 +78,15 @@ def _env_dir(var_name: str) -> str:
 
 
 def _runtime_candidates() -> tuple[str, List[str]]:
-    system = platform.system().lower()
-    env_var = "NDI_RUNTIME_DIR_V5"
+    env_var = "NDI_RUNTIME_DIR_V6"
     env_candidates = [_env_dir("NDI_RUNTIME_DIR_V6"), _env_dir("NDI_RUNTIME_DIR_V5")]
-    if _env_dir("NDI_RUNTIME_DIR_V6"):
-        env_var = "NDI_RUNTIME_DIR_V6"
+    if _env_dir("NDI_RUNTIME_DIR_V5") and not _env_dir("NDI_RUNTIME_DIR_V6"):
+        env_var = "NDI_RUNTIME_DIR_V5"
+    system = platform.system().lower()
     if system == "windows":
         program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
         program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-        candidates = [
+        return env_var, [
             *env_candidates,
             os.path.join(program_files, "NDI", "NDI 6 Runtime"),
             os.path.join(program_files, "NDI", "NDI 6 Runtime", "v6"),
@@ -101,28 +95,26 @@ def _runtime_candidates() -> tuple[str, List[str]]:
             os.path.join(program_files_x86, "NDI", "NDI 6 Runtime"),
             os.path.join(program_files_x86, "NDI", "NDI 5 Runtime"),
         ]
-        return env_var, candidates
     if system == "darwin":
         return env_var, [
             *env_candidates,
-            "/usr/local/lib",
-            "/usr/local/lib/libndi.dylib",
             "/Library/NDI SDK for Apple",
             "/Library/NDI SDK for Apple/lib/macOS",
+            "/usr/local/lib",
+            "/opt/homebrew/lib",
         ]
     return env_var, [
         *env_candidates,
         "/usr/local/lib",
-        "/usr/local/lib/libndi.so",
-        "/usr/lib/libndi.so",
-        "/usr/lib64/libndi.so",
+        "/usr/lib",
+        "/usr/lib64",
         "/opt/ndi/lib",
     ]
 
 
 def _sdk_candidates() -> List[str]:
-    system = platform.system().lower()
     env_candidates = [_env_dir("NDI_SDK_DIR"), _env_dir("NDI_SDK_HOME")]
+    system = platform.system().lower()
     if system == "windows":
         program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
         program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
@@ -141,34 +133,54 @@ def _sdk_candidates() -> List[str]:
     return [
         *env_candidates,
         "/opt/ndi",
-        "/usr/local/include/Processing.NDI.Lib.h",
-        "/usr/include/Processing.NDI.Lib.h",
+        "/usr/local/include",
+        "/usr/include",
     ]
 
 
-def _bundled_runtime_candidates() -> List[str]:
-    try:
-        module = importlib.import_module(_NDI_BACKEND_MODULE)
-    except Exception:
+def _runtime_library_file_candidates(root: str) -> List[str]:
+    candidate = str(root or "").strip()
+    if not candidate:
         return []
-    module_file = getattr(module, "__file__", "")
-    if not module_file:
-        return []
-    root = Path(module_file).resolve().parent
-    wrapper_bin = root / "wrapper" / "bin"
-    candidates: List[str] = []
-    if wrapper_bin.exists():
-        candidates.append(str(wrapper_bin))
-        for name in (
-            "Processing.NDI.Lib.x64.dll",
-            "Processing.NDI.Lib.UWP.x64.dll",
-            "libndi.so",
-            "libndi.dylib",
-        ):
-            candidates.append(str(wrapper_bin / name))
-    for child in (wrapper_bin / "x86_64-linux-gnu", wrapper_bin / "i686-linux-gnu"):
-        candidates.append(str(child))
-    return candidates
+    system = platform.system().lower()
+    if system == "windows":
+        names = ["Processing.NDI.Lib.x64.dll", "Processing.NDI.Lib.x86.dll"]
+        paths = [candidate]
+        for relative in ("", "v6", "v5", os.path.join("Bin", "x64"), os.path.join("Bin", "x86")):
+            paths.append(os.path.join(candidate, relative))
+        output: List[str] = []
+        for base in paths:
+            for name in names:
+                output.append(os.path.join(base, name))
+        return output
+    if system == "darwin":
+        names = ["libndi.dylib"]
+        paths = [candidate, os.path.join(candidate, "lib"), os.path.join(candidate, "lib", "macOS")]
+        return [os.path.join(base, name) for base in paths for name in names]
+    names = ["libndi.so.6", "libndi.so"]
+    paths = [candidate, os.path.join(candidate, "lib"), os.path.join(candidate, "lib64")]
+    return [os.path.join(base, name) for base in paths for name in names]
+
+
+def _resolve_runtime_library_path(runtime_paths: List[str], sdk_paths: List[str]) -> str:
+    exact_files: List[str] = []
+    roots: List[str] = []
+    for candidate in [*runtime_paths, *sdk_paths]:
+        path = Path(candidate)
+        if path.is_file():
+            exact_files.append(str(path))
+        else:
+            roots.append(str(path))
+    for file_candidate in exact_files:
+        if Path(file_candidate).exists():
+            return str(Path(file_candidate).resolve())
+    file_candidates: List[str] = []
+    for root in roots:
+        file_candidates.extend(_runtime_library_file_candidates(root))
+    for candidate in _existing_paths(file_candidates):
+        if Path(candidate).is_file():
+            return candidate
+    return ""
 
 
 def probe_ndi_capability(force_refresh: bool = False) -> NDICapabilityStatus:
@@ -176,51 +188,37 @@ def probe_ndi_capability(force_refresh: bool = False) -> NDICapabilityStatus:
     if _NDI_STATUS_CACHE is not None and not force_refresh:
         return _NDI_STATUS_CACHE
 
-    version = _package_version(_NDI_BACKEND_PACKAGE)
-    ndi_python_available = version != "not installed"
-    import_error = ""
-    module_importable = False
-    if ndi_python_available:
-        try:
-            importlib.import_module(_NDI_BACKEND_MODULE)
-            module_importable = True
-        except Exception as exc:
-            import_error = str(exc).strip()
     runtime_env_var, runtime_candidates = _runtime_candidates()
     runtime_paths = _existing_paths(runtime_candidates)
     sdk_paths = _existing_paths(_sdk_candidates())
-    bundled_runtime_paths = _existing_paths(_bundled_runtime_candidates()) if module_importable else []
+    runtime_library_path = _resolve_runtime_library_path(runtime_paths, sdk_paths)
     runtime_env_value = _env_dir(runtime_env_var)
-    runtime_or_sdk_detected = bool(runtime_paths or sdk_paths or bundled_runtime_paths)
+    runtime_or_sdk_detected = bool(runtime_paths or sdk_paths)
+    runtime_version = probe_runtime_version(runtime_library_path) if runtime_library_path else ""
 
-    if not ndi_python_available:
-        if runtime_or_sdk_detected:
-            reason = "NDI runtime/SDK was detected, but cyndilib is not installed in this Python environment."
-        else:
-            reason = "cyndilib is not installed."
-    elif not module_importable:
-        reason = f"cyndilib is installed but could not be imported: {import_error or 'unknown error'}"
-    elif not runtime_or_sdk_detected:
-        reason = "NDI runtime binaries were not detected."
-    elif bundled_runtime_paths:
-        reason = "NDI output is ready via cyndilib bundled runtime."
+    if not runtime_or_sdk_detected:
+        reason = "NDI runtime/SDK was not detected."
+    elif not runtime_library_path:
+        reason = "NDI runtime/SDK was detected, but the runtime library file was not found."
     else:
-        reason = "NDI output is ready."
+        reason = "NDI runtime is ready."
 
     _NDI_STATUS_CACHE = NDICapabilityStatus(
-        ndi_backend_name=_NDI_BACKEND_PACKAGE,
-        ndi_python_available=ndi_python_available,
-        ndi_python_version=version,
-        ndi_module_importable=module_importable,
+        ndi_backend_name=_NDI_BACKEND_NAME,
+        ndi_python_available=True,
+        ndi_python_version="builtin",
+        ndi_module_importable=True,
         ndi_runtime_or_sdk_detected=runtime_or_sdk_detected,
         runtime_env_var=runtime_env_var,
         runtime_env_value=runtime_env_value,
         runtime_paths=runtime_paths,
         sdk_paths=sdk_paths,
-        bundled_runtime_paths=bundled_runtime_paths,
+        bundled_runtime_paths=[],
         availability_reason=reason,
-        import_error=import_error,
+        import_error="",
         platform_name=platform.system(),
+        runtime_library_path=runtime_library_path,
+        ndi_runtime_version=runtime_version,
     )
     return _NDI_STATUS_CACHE
 
@@ -229,16 +227,13 @@ def ndi_status_lines(status: NDICapabilityStatus | None = None) -> List[str]:
     resolved = status if status is not None else probe_ndi_capability()
     runtime_paths = ", ".join(resolved.runtime_paths) if resolved.runtime_paths else "none"
     sdk_paths = ", ".join(resolved.sdk_paths) if resolved.sdk_paths else "none"
-    bundled_paths = ", ".join(resolved.bundled_runtime_paths) if resolved.bundled_runtime_paths else "none"
     return [
-        f"NDI backend package: {resolved.ndi_backend_name}",
-        f"NDI backend installed: {'yes' if resolved.ndi_python_available else 'no'}",
-        f"NDI backend version: {resolved.ndi_python_version}",
-        f"NDI backend importable: {'yes' if resolved.ndi_module_importable else 'no'}",
+        f"NDI backend: {resolved.ndi_backend_name}",
         f"NDI runtime/sdk detected: {'yes' if resolved.ndi_runtime_or_sdk_detected else 'no'}",
-        f"NDI status: {resolved.availability_reason}",
+        f"NDI runtime version: {resolved.ndi_runtime_version or 'unknown'}",
+        f"NDI runtime status: {resolved.availability_reason}",
         f"NDI runtime env: {resolved.runtime_env_var or '(none)'} = {resolved.runtime_env_value or '(unset)'}",
-        f"NDI bundled runtime paths: {bundled_paths}",
+        f"NDI runtime library: {resolved.runtime_library_path or 'none'}",
         f"NDI runtime paths: {runtime_paths}",
         f"NDI sdk paths: {sdk_paths}",
         f"NDI download: {resolved.download_url}",

@@ -951,20 +951,21 @@ class VideoDisplayMixin:
         return self._render_widget_image(widget, width, height)
 
     def _ndi_audio_players(self) -> List[ExternalMediaPlayer]:
+        players: List[ExternalMediaPlayer] = []
+        seen: set[int] = set()
         current_key = getattr(self, "current_playing", None)
         if current_key is not None:
             primary = self._player_for_slot_key(current_key)
-            players: List[ExternalMediaPlayer] = []
-            seen: set[int] = set()
             for player in [primary, self._shadow_player_for(primary)]:
                 if player is None or id(player) in seen:
                     continue
+                try:
+                    if player.state() != ExternalMediaPlayer.PlayingState:
+                        continue
+                except Exception:
+                    continue
                 seen.add(id(player))
                 players.append(player)
-            if players:
-                return players
-        players: List[ExternalMediaPlayer] = []
-        seen: set[int] = set()
         primaries = [self.player, self.player_b, *self._multi_players]
         for player in primaries:
             if player is None or id(player) in seen:
@@ -1046,11 +1047,11 @@ class VideoDisplayMixin:
 
     def _mix_ndi_audio_chunk(
         self,
-        buffers: Dict[int, np.ndarray],
-        active_player_ids: List[int],
+        buffers: Dict[str, np.ndarray],
+        active_player_ids: List[str],
         target_frames: int,
         channel_count: int,
-    ) -> Optional[tuple[np.ndarray, Dict[int, int]]]:
+    ) -> Optional[tuple[np.ndarray, Dict[str, int]]]:
         if target_frames <= 0 or channel_count <= 0:
             return None
         max_available = 0
@@ -1061,7 +1062,7 @@ class VideoDisplayMixin:
         if max_available < target_frames:
             return None
         mixed = np.zeros((target_frames, channel_count), dtype=np.float32)
-        consume_map: Dict[int, int] = {}
+        consume_map: Dict[str, int] = {}
         for player_id in active_player_ids:
             pending = np.asarray(buffers.get(player_id), dtype=np.float32)
             if pending.ndim != 2 or pending.shape[1] != channel_count or len(pending) <= 0:
@@ -1074,8 +1075,8 @@ class VideoDisplayMixin:
 
     @staticmethod
     def _consume_ndi_audio_chunk(
-        buffers: Dict[int, np.ndarray],
-        consume_map: Dict[int, int],
+        buffers: Dict[str, np.ndarray],
+        consume_map: Dict[str, int],
         channel_count: int,
     ) -> None:
         for player_id, take in consume_map.items():
@@ -1099,8 +1100,11 @@ class VideoDisplayMixin:
         if not players:
             return
         sample_rate = 0
-        active_player_ids: List[int] = []
+        active_player_ids: List[str] = []
         for player in players:
+            player_token = str(getattr(player, "player_id", "") or "").strip()
+            if not player_token:
+                continue
             sample_rate_getter = getattr(player, "sampleRate", None)
             if not callable(sample_rate_getter):
                 continue
@@ -1110,12 +1114,12 @@ class VideoDisplayMixin:
                 continue
             if sample_rate <= 0:
                 sample_rate = player_rate
-            active_player_ids.append(id(player))
+            active_player_ids.append(player_token)
         if sample_rate <= 0 or (not active_player_ids):
             return
         self._sync_ndi_timer_intervals()
         mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader"))
-        buffers: Dict[int, np.ndarray] = getattr(self, "_ndi_audio_player_buffers", {})
+        buffers: Dict[str, np.ndarray] = getattr(self, "_ndi_audio_player_buffers", {})
         pull_frames = 8192
         for player_id in list(buffers.keys()):
             if player_id not in active_player_ids:
@@ -1123,30 +1127,24 @@ class VideoDisplayMixin:
                 if pending.ndim != 2 or len(pending) <= 0:
                     buffers.pop(player_id, None)
         channel_count = 2
-        for player in players:
-            take_frames = getattr(player, "takeOutputFrames", None)
-            if not callable(take_frames):
-                continue
+        for player_id in active_player_ids:
             try:
-                incoming = np.asarray(
-                    take_frames(max_frames=pull_frames, mode=mode),
-                    dtype=np.float32,
-                )
+                incoming = np.asarray(take_output_monitor_frames(player_id, max_frames=pull_frames, mode=mode), dtype=np.float32)
             except Exception:
                 continue
             if incoming.ndim != 2 or incoming.shape[1] <= 0:
                 continue
             channel_count = int(incoming.shape[1])
             pending = np.asarray(
-                buffers.get(id(player), np.zeros((0, channel_count), dtype=np.float32)),
+                buffers.get(player_id, np.zeros((0, channel_count), dtype=np.float32)),
                 dtype=np.float32,
             )
             if pending.ndim != 2 or pending.shape[1] != channel_count:
                 pending = np.zeros((0, channel_count), dtype=np.float32)
             if len(incoming) > 0:
                 pending = incoming if len(pending) <= 0 else np.vstack([pending, incoming])
-            buffers[id(player)] = np.ascontiguousarray(pending, dtype=np.float32)
-        sendable_player_ids: List[int] = []
+            buffers[player_id] = np.ascontiguousarray(pending, dtype=np.float32)
+        sendable_player_ids: List[str] = []
         max_available = 0
         for player_id in active_player_ids:
             pending = np.asarray(buffers.get(player_id), dtype=np.float32)

@@ -92,11 +92,14 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         mw,
         "probe_ndi_capability",
         lambda: NDICapabilityStatus(
+            ndi_backend_name="ndi-runtime",
             ndi_python_available=True,
-            ndi_python_version="6.3.2.1",
+            ndi_python_version="builtin",
             ndi_module_importable=True,
             ndi_runtime_or_sdk_detected=True,
-            availability_reason="NDI output is ready.",
+            availability_reason="NDI runtime is ready.",
+            runtime_library_path=r"C:\Program Files\NDI\NDI 6 Runtime\v6\Processing.NDI.Lib.x64.dll",
+            ndi_runtime_version="6.3.2.1",
         ),
     )
     monkeypatch.setattr(
@@ -129,10 +132,11 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
     try:
         window.data["A"][0][0] = mw.SoundButtonData(file_path="clip.mp4", title="Clip", duration_ms=40170)
         window.player.play()
+        window.player.player_id = "primary-player"
         window._set_player_slot_key(window.player, ("A", 0, 0))
         window._mark_player_started(window.player)
         window.current_playing = ("A", 0, 0)
-        window._ndi_audio_player_buffers[id(window.player)] = __import__("numpy").zeros((512, 2), dtype=__import__("numpy").float32)
+        window._ndi_audio_player_buffers[window.player.player_id] = __import__("numpy").zeros((512, 2), dtype=__import__("numpy").float32)
         snapshot = window._audio_engine_insight_snapshot_data()
         assert snapshot["summary"]
         assert snapshot["players"]

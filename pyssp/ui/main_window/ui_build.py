@@ -1370,8 +1370,12 @@ class UiBuildMixin:
         credits_text = self._load_asset_text_file("about", "credits.md")
         license_text = self._load_asset_text_file("about", "license.md")
         ndi_status = getattr(self, "_ndi_status", None)
-        ndi_backend = str(getattr(ndi_status, "ndi_backend_name", "cyndilib") or "cyndilib")
-        ndi_version = str(getattr(ndi_status, "ndi_python_version", "not installed") or "not installed")
+        ndi_backend = str(getattr(ndi_status, "ndi_backend_name", "ndi-runtime") or "ndi-runtime")
+        ndi_version = str(
+            getattr(ndi_status, "ndi_runtime_version", "")
+            or getattr(ndi_status, "ndi_python_version", "unknown")
+            or "unknown"
+        )
         ndi_state = str(getattr(ndi_status, "availability_reason", "unknown") or "unknown")
         about_text += (
             "\n\n---\n\n"
@@ -1468,7 +1472,9 @@ class UiBuildMixin:
             ("ffmpeg_version", ffmpeg_version_text() or "unknown"),
             ("ndi_enabled", bool(getattr(self, "ndi_output_enabled", False))),
             ("ndi_ready", bool(getattr(getattr(self, "_ndi_status", None), "ready", False))),
-            ("ndi_backend", str(getattr(getattr(self, "_ndi_status", None), "ndi_backend_name", "cyndilib") or "cyndilib")),
+            ("ndi_backend", str(getattr(getattr(self, "_ndi_status", None), "ndi_backend_name", "ndi-runtime") or "ndi-runtime")),
+            ("ndi_runtime_version", str(getattr(getattr(self, "_ndi_status", None), "ndi_runtime_version", "") or "")),
+            ("ndi_runtime_library", str(getattr(getattr(self, "_ndi_status", None), "runtime_library_path", "") or "")),
             ("ndi_status", str(getattr(getattr(self, "_ndi_status", None), "availability_reason", "unknown"))),
             ("ndi_source_name", str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video")),
             ("ndi_route_mode", getattr(self, "_active_ndi_route_mode", lambda: "unknown")()),
@@ -1646,7 +1652,10 @@ class UiBuildMixin:
         if not isinstance(buffers, dict):
             return summary
         for player in self._insight_runtime_players():
-            pending = np.asarray(buffers.get(id(player)), dtype=np.float32)
+            player_token = str(getattr(player, "player_id", "") or "").strip()
+            if not player_token:
+                continue
+            pending = np.asarray(buffers.get(player_token), dtype=np.float32)
             if pending.ndim != 2:
                 continue
             summary[self._audio_player_label(player)] = max(0, int(len(pending)))

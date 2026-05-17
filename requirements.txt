@@ -9,7 +9,6 @@ websockets>=12.0
 Werkzeug>=3.0
 cryptography>=43.0
 imageio-ffmpeg>=0.6
-cyndilib>=0.1.1
 PyInstaller>=6.0
 pytest>=8.0
 sphinx>=9.1

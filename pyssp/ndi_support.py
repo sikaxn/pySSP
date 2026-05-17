@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import os
 import platform
 from dataclasses import dataclass, field
@@ -77,6 +78,19 @@ def _env_dir(var_name: str) -> str:
     return value
 
 
+def _macos_bundle_framework_candidates() -> List[str]:
+    patterns = [
+        "/Applications/NDI*.app/Contents/Frameworks",
+        "/Applications/NDI*.app/Contents/Frameworks/*/Versions/A/Frameworks",
+        "/Library/CoreMediaIO/Plug-Ins/DAL/*.plugin/Contents/Frameworks",
+        "/Library/Audio/Plug-Ins/HAL/*.driver/Contents/Frameworks",
+    ]
+    output: List[str] = []
+    for pattern in patterns:
+        output.extend(glob.glob(pattern))
+    return output
+
+
 def _runtime_candidates() -> tuple[str, List[str]]:
     env_var = "NDI_RUNTIME_DIR_V6"
     env_candidates = [_env_dir("NDI_RUNTIME_DIR_V6"), _env_dir("NDI_RUNTIME_DIR_V5")]
@@ -100,6 +114,7 @@ def _runtime_candidates() -> tuple[str, List[str]]:
             *env_candidates,
             "/Library/NDI SDK for Apple",
             "/Library/NDI SDK for Apple/lib/macOS",
+            *_macos_bundle_framework_candidates(),
             "/usr/local/lib",
             "/opt/homebrew/lib",
         ]
@@ -154,8 +169,15 @@ def _runtime_library_file_candidates(root: str) -> List[str]:
                 output.append(os.path.join(base, name))
         return output
     if system == "darwin":
-        names = ["libndi.dylib"]
-        paths = [candidate, os.path.join(candidate, "lib"), os.path.join(candidate, "lib", "macOS")]
+        names = ["libndi.dylib", "libndi_advanced.dylib"]
+        paths = [
+            candidate,
+            os.path.join(candidate, "lib"),
+            os.path.join(candidate, "lib", "macOS"),
+            os.path.join(candidate, "Contents", "Frameworks"),
+            os.path.join(candidate, "Contents", "Frameworks", "NDICommon.framework"),
+            os.path.join(candidate, "Contents", "Frameworks", "NDICommon.framework", "Versions", "A"),
+        ]
         return [os.path.join(base, name) for base in paths for name in names]
     names = ["libndi.so.6", "libndi.so"]
     paths = [candidate, os.path.join(candidate, "lib"), os.path.join(candidate, "lib64")]

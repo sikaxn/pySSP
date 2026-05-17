@@ -535,3 +535,62 @@ def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
     assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.5)
+
+
+def test_ndi_audio_players_prefers_current_playing_player_mapping():
+    class _DummyPlayer:
+        PlayingState = 1
+
+        def __init__(self, name):
+            self.name = name
+
+        def state(self):
+            return self.PlayingState
+
+    host = _VideoRefreshHost()
+    host.current_playing = ("B", 0, 8)
+    mapped = _DummyPlayer("mapped")
+    fallback = _DummyPlayer("fallback")
+    host.player = fallback
+    host.player_b = None
+    host._multi_players = []
+    host._shadow_player_for = lambda player: None
+    host._player_for_slot_key = lambda key: mapped if key == ("B", 0, 8) else None
+
+    players = host._ndi_audio_players()
+
+    assert players == [mapped]
+
+
+def test_tick_ndi_audio_refresh_runs_even_when_receiver_count_is_zero():
+    host = _VideoRefreshHost()
+    calls = []
+    host._configure_ndi_sender = lambda: True
+    host._ndi_sender_has_receivers = lambda: False
+    host._send_ndi_audio = lambda: calls.append("audio")
+
+    host._tick_ndi_audio_refresh()
+
+    assert calls == ["audio"]
+
+
+def test_refresh_ndi_output_sends_video_even_when_receiver_count_is_zero():
+    class _DummySender:
+        def __init__(self):
+            self.calls = 0
+
+        def send_video_frame(self, _image):
+            self.calls += 1
+            return True
+
+    host = _VideoRefreshHost()
+    host._configure_ndi_sender = lambda: True
+    host._ndi_sender_has_receivers = lambda: False
+    host._ndi_sender = _DummySender()
+    image = mw.QImage(8, 8, mw.QImage.Format_RGB32)
+    image.fill(0)
+    host._render_ndi_frame_image = lambda: image
+
+    host._refresh_ndi_output()
+
+    assert host._ndi_sender.calls == 1

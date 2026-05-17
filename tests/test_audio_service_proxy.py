@@ -28,6 +28,8 @@ class _FakeAudioController(QObject):
             return 48000
         if command == "takeOutputFrames":
             return np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+        if command == "outputTapFrameCounts":
+            return {"pre_fader": 12, "post_fader": 34}
         raise AssertionError(f"Unexpected blocking call: {command}")
 
 
@@ -95,4 +97,17 @@ def test_proxy_exposes_sample_rate_and_output_tap_frames_via_controller() -> Non
     assert controller.calls == [
         ("player-test", "sampleRate", None, 0.5),
         ("player-test", "takeOutputFrames", {"max_frames": 4, "mode": "pre_fader"}, 0.5),
+    ]
+
+
+def test_proxy_exposes_output_tap_frame_counts_via_controller() -> None:
+    _app()
+    controller = _FakeAudioController()
+    player = AudioPlayerProxy(controller, "player-test")
+
+    counts = player.outputTapFrameCounts()
+
+    assert counts == {"pre_fader": 12, "post_fader": 34}
+    assert controller.calls == [
+        ("player-test", "outputTapFrameCounts", None, 0.5),
     ]

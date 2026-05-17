@@ -1630,6 +1630,12 @@ class NoAudioPlayer(QObject):
     def meterLevels(self) -> Tuple[float, float]:
         return (0.0, 0.0)
 
+    def sampleRate(self) -> int:
+        return 0
+
+    def outputTapFrameCounts(self) -> Dict[str, int]:
+        return {"pre_fader": 0, "post_fader": 0}
+
     def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
         _ = sample_count
         return []

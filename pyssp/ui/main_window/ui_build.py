@@ -1441,6 +1441,14 @@ class UiBuildMixin:
             current_video_slot, current_video_probe = self._current_video_slot_and_probe()
         except Exception:
             current_video_slot, current_video_probe = None, MediaProbeInfo()
+        ndi_sender = getattr(self, "_ndi_sender", None)
+        ndi_audio_players = []
+        try:
+            ndi_audio_players = list(getattr(self, "_ndi_audio_players", lambda: [])() or [])
+        except Exception:
+            ndi_audio_players = []
+        ndi_audio_player_labels = [self._audio_player_label(player) for player in ndi_audio_players]
+        ndi_buffer_frames = self._ndi_audio_buffer_frame_summary()
         summary = [
             ("audio_output_device", self.audio_output_device or "default"),
             ("timecode_audio_output_device", self.timecode_audio_output_device or "none"),
@@ -1466,6 +1474,13 @@ class UiBuildMixin:
             ("ndi_route_mode", getattr(self, "_active_ndi_route_mode", lambda: "unknown")()),
             ("ndi_audio_enabled", bool(getattr(self, "ndi_output_audio_enabled", True))),
             ("ndi_audio_tap_mode", str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader")),
+            ("ndi_connection_count", int(getattr(ndi_sender, "get_num_connections", lambda _timeout=0.0: 0)(0.0))),
+            ("ndi_audio_player_labels", ndi_audio_player_labels),
+            ("ndi_audio_player_count", len(ndi_audio_player_labels)),
+            ("ndi_audio_buffer_frames", ndi_buffer_frames),
+            ("ndi_audio_send_count", int(getattr(ndi_sender, "_audio_send_count", 0) or 0)),
+            ("ndi_audio_drop_count", int(getattr(ndi_sender, "_audio_drop_count", 0) or 0)),
+            ("ndi_audio_recovery_count", int(getattr(ndi_sender, "_audio_recovery_count", 0) or 0)),
             ("ndi_last_audio_mode", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_mode", "") or "")),
             ("ndi_last_audio_error", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_error", "") or "")),
             ("video_route_mode", getattr(self, "_active_video_route_mode", lambda: "unknown")()),
@@ -1528,6 +1543,12 @@ class UiBuildMixin:
     def _audio_player_insight_record(self, player: object, index: int) -> dict:
         label = self._audio_player_label(player)
         pid = id(player)
+        ndi_audio_players = []
+        try:
+            ndi_audio_players = list(getattr(self, "_ndi_audio_players", lambda: [])() or [])
+        except Exception:
+            ndi_audio_players = []
+        is_ndi_audio_player = player in ndi_audio_players
         slot_key = self._player_slot_key_map.get(pid)
         if slot_key is None:
             for primary in [self.player, self.player_b, *self._multi_players]:
@@ -1558,6 +1579,14 @@ class UiBuildMixin:
             volume = int(getattr(player, "volume", lambda: 0)())
         except Exception:
             volume = 0
+        try:
+            sample_rate = int(getattr(player, "sampleRate", lambda: 0)())
+        except Exception:
+            sample_rate = 0
+        try:
+            tap_counts = dict(getattr(player, "outputTapFrameCounts", lambda: {"pre_fader": 0, "post_fader": 0})())
+        except Exception:
+            tap_counts = {"pre_fader": 0, "post_fader": 0}
         title = "" if slot is None else self._build_now_playing_text(slot)
         file_path = "" if slot is None else str(slot.file_path or "").strip()
         media_probe = MediaProbeInfo()
@@ -1578,6 +1607,7 @@ class UiBuildMixin:
             ("source_type", "" if slot is None else slot.source_type),
             ("disable_video_loading", False if slot is None else bool(getattr(slot, "disable_video_loading", False))),
             ("volume", volume),
+            ("sample_rate", sample_rate),
             ("slot_volume_pct", self._slot_pct_for_player(player)),
             ("duration_ms", duration_ms),
             ("position_ms", position_ms),
@@ -1595,6 +1625,9 @@ class UiBuildMixin:
             ("cue_end_override_ms", self._player_end_override_ms.get(pid)),
             ("ignore_cue_end", pid in self._player_ignore_cue_end),
             ("started_at_monotonic", self._player_started_map.get(pid)),
+            ("is_ndi_audio_player", is_ndi_audio_player),
+            ("tap_pre_fader_frames", max(0, int(tap_counts.get("pre_fader", 0) or 0))),
+            ("tap_post_fader_frames", max(0, int(tap_counts.get("post_fader", 0) or 0))),
             ("meter_levels", meter),
             ("dsp_config", self._describe_dsp_config(getattr(player, "_dsp_config", None))),
         ]
@@ -1606,6 +1639,18 @@ class UiBuildMixin:
             "title": title,
             "details": details,
         }
+
+    def _ndi_audio_buffer_frame_summary(self) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        buffers = getattr(self, "_ndi_audio_player_buffers", {})
+        if not isinstance(buffers, dict):
+            return summary
+        for player in self._insight_runtime_players():
+            pending = np.asarray(buffers.get(id(player)), dtype=np.float32)
+            if pending.ndim != 2:
+                continue
+            summary[self._audio_player_label(player)] = max(0, int(len(pending)))
+        return summary
 
     def _open_help_window(self) -> None:
         help_index = self._help_index_path()

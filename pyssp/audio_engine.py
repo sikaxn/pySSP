@@ -1487,6 +1487,15 @@ class ExternalMediaPlayer(QObject):
             setattr(self, buffer_name, np.asarray(pending[take:, :], dtype=np.float32, copy=False))
             return chunk
 
+    def outputTapFrameCounts(self) -> Dict[str, int]:
+        with self._lock:
+            pre = np.asarray(self._output_tap_pre_frames, dtype=np.float32)
+            post = np.asarray(self._output_tap_post_frames, dtype=np.float32)
+            return {
+                "pre_fader": max(0, int(len(pre))),
+                "post_fader": max(0, int(len(post))),
+            }
+
     def waveformPeaks(self, sample_count: int = 1024) -> List[float]:
         with self._lock:
             frames = self._source_frames

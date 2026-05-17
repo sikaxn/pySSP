@@ -132,6 +132,7 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         window._set_player_slot_key(window.player, ("A", 0, 0))
         window._mark_player_started(window.player)
         window.current_playing = ("A", 0, 0)
+        window._ndi_audio_player_buffers[id(window.player)] = __import__("numpy").zeros((512, 2), dtype=__import__("numpy").float32)
         snapshot = window._audio_engine_insight_snapshot_data()
         assert snapshot["summary"]
         assert snapshot["players"]
@@ -146,11 +147,20 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         assert summary_map["ffmpeg_version"] == "ffmpeg version test"
         assert summary_map["ndi_ready"] is True
         assert summary_map["ndi_audio_tap_mode"] == "post_fader"
+        assert summary_map["ndi_audio_player_labels"] == ["primary"]
+        assert summary_map["ndi_audio_player_count"] == 1
+        assert summary_map["ndi_audio_buffer_frames"] == {"primary": 512}
+        assert summary_map["ndi_audio_send_count"] == 0
+        assert summary_map["ndi_audio_drop_count"] == 0
+        assert summary_map["ndi_audio_recovery_count"] == 0
         assert "size=1920x1080" in summary_map["current_video_probe"]
         details_map = dict(snapshot["players"][0]["details"])
         assert details_map["file_path"] == "clip.mp4"
         assert details_map["media_probe_has_video"] is True
         assert details_map["media_probe_width"] == 1920
         assert details_map["media_probe_height"] == 1080
+        assert details_map["is_ndi_audio_player"] is True
+        assert details_map["tap_pre_fader_frames"] == 0
+        assert details_map["tap_post_fader_frames"] == 0
     finally:
         window.close()

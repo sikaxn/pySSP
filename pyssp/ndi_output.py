@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import sys
 import threading
 import time
-from collections import deque
-from typing import Callable, Deque, Optional
+from typing import Callable, Optional
 
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -23,6 +23,9 @@ class NDIOutputConfig:
     audio_enabled: bool
 
 
+_NDI_AUDIO_FRAME_CAPACITY = 8192
+
+
 def _fps_fraction(value: float) -> Fraction:
     fps = max(1.0, float(value))
     common = {
@@ -34,6 +37,16 @@ def _fps_fraction(value: float) -> Fraction:
         if abs(fps - target) < 0.02:
             return fraction
     return Fraction(str(fps)).limit_denominator(1000)
+
+
+def _print_ndi_error(message: str) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    try:
+        print(f"[pySSP][NDI] {text}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 class NDIOutputSender:
@@ -51,8 +64,11 @@ class NDIOutputSender:
         self._config: Optional[NDIOutputConfig] = None
         self._initialize_failed = False
         self._audio_format: tuple[int, int, int] = (0, 0, 0)
+        self._audio_target_spec: tuple[int, int, int] = (48000, 2, _NDI_AUDIO_FRAME_CAPACITY)
         self._last_audio_error = ""
         self._last_audio_mode = ""
+        self._audio_recovery_count = 0
+        self._last_reported_audio_error = ""
         self._load_module()
 
     def _load_module(self) -> None:
@@ -109,10 +125,11 @@ class NDIOutputSender:
             sender.set_video_frame(video_frame)
             audio_frame = None
             if normalized.audio_enabled:
+                rate, channels, capacity = self._normalized_audio_target_spec()
                 audio_frame = self._create_audio_frame(
-                    sample_rate=48000,
-                    channels=2,
-                    sample_count=max(1, int(round(48000.0 / normalized.fps))),
+                    sample_rate=rate,
+                    channels=channels,
+                    sample_count=capacity,
                 )
                 sender.set_audio_frame(audio_frame)
             sender.open()
@@ -125,7 +142,7 @@ class NDIOutputSender:
             return True
         except Exception as exc:
             self._initialize_failed = True
-            self._last_audio_error = f"{type(exc).__name__}: {exc}"
+            self._set_audio_error(f"{type(exc).__name__}: {exc}")
             self._sender = None
             self._video_frame = None
             self._audio_frame = None
@@ -137,7 +154,7 @@ class NDIOutputSender:
         frame.sample_rate = max(1, int(sample_rate))
         frame.num_channels = max(1, int(channels))
         frame.reference_level = self._audio_reference.dBVU
-        frame.set_max_num_samples(max(1, int(sample_count)))
+        frame.set_max_num_samples(max(_NDI_AUDIO_FRAME_CAPACITY, int(sample_count)))
         self._audio_format = (frame.sample_rate, frame.num_channels, frame.max_num_samples)
         return frame
 
@@ -152,18 +169,12 @@ class NDIOutputSender:
             and current_capacity >= sample_count
         ):
             return True
-        try:
-            frame = self._create_audio_frame(
-                sample_rate=sample_rate,
-                channels=channels,
-                sample_count=sample_count,
-            )
-            self._sender.set_audio_frame(frame)
-            self._audio_frame = frame
-            return True
-        except Exception as exc:
-            self._last_audio_error = f"{type(exc).__name__}: {exc}"
-            return False
+        self._audio_target_spec = (
+            max(1, int(sample_rate)),
+            max(1, int(channels)),
+            max(_NDI_AUDIO_FRAME_CAPACITY, int(sample_count)),
+        )
+        return False
 
     def stop(self) -> None:
         sender = self._sender
@@ -211,15 +222,43 @@ class NDIOutputSender:
 
     def send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool:
         if self._sender is None or self._config is None or (not self._config.audio_enabled):
-            self._last_audio_error = "sender unavailable"
+            self._set_audio_error("sender unavailable")
             return False
         block = np.asarray(frames, dtype=np.float32)
         if block.ndim != 2 or len(block) <= 0:
-            self._last_audio_error = "invalid audio block"
+            self._set_audio_error("invalid audio block")
             return False
         channels = int(block.shape[1])
         if channels <= 0:
-            self._last_audio_error = "invalid channel count"
+            self._set_audio_error("invalid channel count")
+            return False
+        if not self._ensure_audio_frame(
+            sample_rate=max(1, int(sample_rate)),
+            channels=channels,
+            sample_count=max(1, int(block.shape[0])),
+        ):
+            if not self._recover_audio_sender():
+                return False
+            if not self._ensure_audio_frame(
+                sample_rate=max(1, int(sample_rate)),
+                channels=channels,
+                sample_count=max(1, int(block.shape[0])),
+            ):
+                current_rate, current_channels, current_capacity = self._audio_format
+                if not (
+                    current_rate == max(1, int(sample_rate))
+                    and current_channels == channels
+                    and current_capacity >= max(1, int(block.shape[0]))
+                ):
+                    self._set_audio_error("audio frame format mismatch after recovery")
+                    return False
+        payload = np.ascontiguousarray(block.T, dtype=np.float32)
+        ok, error_text = self._write_audio_payload(payload)
+        if ok:
+            return True
+        if not self._is_recoverable_audio_error(error_text):
+            return False
+        if not self._recover_audio_sender():
             return False
         if not self._ensure_audio_frame(
             sample_rate=max(1, int(sample_rate)),
@@ -227,15 +266,66 @@ class NDIOutputSender:
             sample_count=max(1, int(block.shape[0])),
         ):
             return False
-        payload = np.ascontiguousarray(block.T, dtype=np.float32)
+        ok, error_text = self._write_audio_payload(payload)
+        if ok:
+            self._last_audio_mode = "cyndilib_write_audio_recovered"
+            return True
+        self._set_audio_error(error_text)
+        return False
+
+    def _write_audio_payload(self, payload: np.ndarray) -> tuple[bool, str]:
         try:
             ok = bool(self._sender.write_audio(payload))
             self._last_audio_mode = "cyndilib_write_audio"
-            self._last_audio_error = "" if ok else "write_audio returned False"
-            return ok
+            self._clear_audio_error()
+            if not ok:
+                self._set_audio_error("write_audio returned False")
+            return ok, self._last_audio_error
         except Exception as exc:
-            self._last_audio_error = f"{type(exc).__name__}: {exc}"
+            message = f"{type(exc).__name__}: {exc}"
+            self._set_audio_error(message)
+            return False, message
+
+    @staticmethod
+    def _is_recoverable_audio_error(message: str) -> bool:
+        text = str(message or "").strip().lower()
+        return (
+            "buffer_write_item is not null" in text
+            or "no write frame available" in text
+            or "buffer item view count nonzero" in text
+        )
+
+    def _recover_audio_sender(self) -> bool:
+        config = self._config
+        if config is None:
             return False
+        try:
+            self.stop()
+        except Exception:
+            pass
+        self._audio_recovery_count += 1
+        if not self.configure(config):
+            return False
+        self._last_audio_mode = "cyndilib_audio_sender_reset"
+        return True
+
+    def _normalized_audio_target_spec(self) -> tuple[int, int, int]:
+        sample_rate, channels, capacity = self._audio_target_spec
+        return (
+            max(1, int(sample_rate)),
+            max(1, int(channels)),
+            max(_NDI_AUDIO_FRAME_CAPACITY, int(capacity)),
+        )
+
+    def _set_audio_error(self, message: str) -> None:
+        text = str(message or "").strip()
+        self._last_audio_error = text
+        if text and text != self._last_reported_audio_error:
+            _print_ndi_error(text)
+            self._last_reported_audio_error = text
+
+    def _clear_audio_error(self) -> None:
+        self._last_audio_error = ""
 
 
 class NDIOutputDispatcher:
@@ -256,12 +346,15 @@ class NDIOutputDispatcher:
         self._pending_config: Optional[NDIOutputConfig] = None
         self._config_dirty = False
         self._pending_video_frame: Optional[QImage] = None
-        self._pending_audio_blocks: Deque[tuple[np.ndarray, int]] = deque()
-        self._max_audio_queue_blocks = max(1, int(max_audio_queue_blocks))
         self._connection_poll_interval_sec = max(0.05, float(connection_poll_interval_sec))
         self._connection_count = 0
         self._last_audio_error = ""
         self._last_audio_mode = ""
+        self._audio_send_count = 0
+        self._audio_drop_count = 0
+        self._audio_recovery_count = 0
+        self._audio_next_send_at = 0.0
+        self._last_reported_audio_error = ""
         self._thread = threading.Thread(target=self._worker_loop, name="pyssp-ndi-output", daemon=True)
         self._thread.start()
 
@@ -293,7 +386,7 @@ class NDIOutputDispatcher:
             self._pending_config = None
             self._config_dirty = False
             self._pending_video_frame = None
-            self._pending_audio_blocks.clear()
+            self._audio_next_send_at = 0.0
             self._condition.notify_all()
 
     def shutdown(self) -> None:
@@ -322,24 +415,50 @@ class NDIOutputDispatcher:
 
     def send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool:
         if not self.available:
-            self._last_audio_error = "sender unavailable"
+            self._set_audio_error("sender unavailable")
             return False
         block = np.asarray(frames, dtype=np.float32)
         if block.ndim != 2 or len(block) <= 0:
-            self._last_audio_error = "invalid audio block"
+            self._set_audio_error("invalid audio block")
             return False
+        normalized_rate = max(1, int(sample_rate))
+        duration_sec = float(block.shape[0]) / float(normalized_rate)
+        now = time.perf_counter()
+        if now + 0.001 < self._audio_next_send_at:
+            self._audio_drop_count += 1
+            self._last_audio_mode = "dispatcher_audio_drop_realtime"
+            self._clear_audio_error()
+            return True
         try:
             with self._sender_lock:
-                ok = bool(self._sender.send_audio_frames(np.ascontiguousarray(block, dtype=np.float32), max(1, int(sample_rate))))
+                ok = bool(self._sender.send_audio_frames(np.ascontiguousarray(block, dtype=np.float32), normalized_rate))
         except Exception as exc:
-            self._last_audio_error = f"{type(exc).__name__}: {exc}"
+            self._set_audio_error(f"{type(exc).__name__}: {exc}")
             return False
+        if ok:
+            self._audio_send_count += 1
+            self._audio_next_send_at = max(self._audio_next_send_at, now) + max(0.005, duration_sec)
         self._sync_public_state()
         return bool(ok)
 
     def _sync_public_state(self) -> None:
-        self._last_audio_error = str(getattr(self._sender, "_last_audio_error", "") or "")
+        sender_error = str(getattr(self._sender, "_last_audio_error", "") or "")
+        if sender_error:
+            self._set_audio_error(sender_error)
+        else:
+            self._clear_audio_error()
         self._last_audio_mode = str(getattr(self._sender, "_last_audio_mode", "") or "")
+        self._audio_recovery_count = max(0, int(getattr(self._sender, "_audio_recovery_count", 0) or 0))
+
+    def _set_audio_error(self, message: str) -> None:
+        text = str(message or "").strip()
+        self._last_audio_error = text
+        if text and text != self._last_reported_audio_error:
+            _print_ndi_error(text)
+            self._last_reported_audio_error = text
+
+    def _clear_audio_error(self) -> None:
+        self._last_audio_error = ""
 
     def _worker_loop(self) -> None:
         last_connection_poll = 0.0
@@ -368,6 +487,7 @@ class NDIOutputDispatcher:
                 except Exception:
                     pass
                 self._connection_count = 0
+                self._audio_next_send_at = 0.0
                 self._sync_public_state()
             if config is not None:
                 try:
@@ -375,6 +495,7 @@ class NDIOutputDispatcher:
                         self._sender.configure(config)
                 except Exception:
                     pass
+                self._audio_next_send_at = 0.0
                 self._sync_public_state()
             if video_frame is not None:
                 try:

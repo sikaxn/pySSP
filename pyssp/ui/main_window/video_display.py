@@ -937,6 +937,18 @@ class VideoDisplayMixin:
         return self._render_widget_image(widget, width, height)
 
     def _ndi_audio_players(self) -> List[ExternalMediaPlayer]:
+        current_key = getattr(self, "current_playing", None)
+        if current_key is not None:
+            primary = self._player_for_slot_key(current_key)
+            players: List[ExternalMediaPlayer] = []
+            seen: set[int] = set()
+            for player in [primary, self._shadow_player_for(primary)]:
+                if player is None or id(player) in seen:
+                    continue
+                seen.add(id(player))
+                players.append(player)
+            if players:
+                return players
         players: List[ExternalMediaPlayer] = []
         seen: set[int] = set()
         primaries = [self.player, self.player_b, *self._multi_players]
@@ -1115,8 +1127,6 @@ class VideoDisplayMixin:
         sender = getattr(self, "_ndi_sender", None)
         if sender is None:
             return
-        if (not force) and (not self._ndi_sender_has_receivers()):
-            return
         frame_image = self._render_ndi_frame_image()
         if not frame_image.isNull():
             sender.send_video_frame(frame_image)
@@ -1126,8 +1136,6 @@ class VideoDisplayMixin:
 
     def _tick_ndi_audio_refresh(self) -> None:
         if not self._configure_ndi_sender():
-            return
-        if not self._ndi_sender_has_receivers():
             return
         self._send_ndi_audio()
 

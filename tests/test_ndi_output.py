@@ -120,6 +120,7 @@ def test_ndi_sender_uses_cyndilib_audio_and_video_shapes():
     assert sender._sender.video_frame.frame_rate == Fraction(30, 1)
     assert sender._sender.video_frame.fourcc == "bgrx"
     assert sender._sender.audio_frame.reference_level == "dbvu"
+    assert sender._sender.audio_frame.max_num_samples >= 8192
 
     frames = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
     assert sender.send_audio_frames(frames, 48000) is True
@@ -332,5 +333,138 @@ def test_ndi_dispatcher_sends_audio_immediately_via_backend():
         assert dispatcher.send_audio_frames(audio, 48000) is True
 
         assert dispatcher._last_audio_mode == "ok"
+    finally:
+        dispatcher.shutdown()
+
+
+def test_ndi_sender_recovers_after_buffer_write_item_error():
+    class _RecoveringSender:
+        instances = 0
+
+        def __init__(self, name: str, ndi_groups: str = "", clock_video: bool = True, clock_audio: bool = True) -> None:
+            _ = (name, ndi_groups, clock_video, clock_audio)
+            type(self).instances += 1
+            self.instance_index = type(self).instances
+            self.video_frame = None
+            self.audio_frame = None
+
+        def set_video_frame(self, frame) -> None:
+            self.video_frame = frame
+
+        def set_audio_frame(self, frame) -> None:
+            self.audio_frame = frame
+
+        def open(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def get_num_connections(self, _timeout: float = 0.0) -> int:
+            return 1
+
+        def write_video_async(self, _data) -> bool:
+            return True
+
+        def write_audio(self, data) -> bool:
+            _ = data
+            if self.instance_index == 1:
+                raise RuntimeError("buffer_write_item is not null")
+            return True
+
+    sender = NDIOutputSender(_ready_status())
+    sender._sender_cls = _RecoveringSender
+    sender._video_frame_cls = _DummyVideoFrame
+    sender._audio_frame_cls = _DummyAudioFrame
+    sender._audio_reference = _DummyAudioReference
+    sender._fourcc = _DummyFourCC
+    sender._initialize_failed = False
+
+    config = NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    assert sender.configure(config) is True
+
+    frames = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    assert sender.send_audio_frames(frames, 48000) is True
+    assert sender._audio_recovery_count == 1
+    assert sender._last_audio_mode == "cyndilib_write_audio_recovered"
+
+
+def test_ndi_sender_audio_capacity_is_not_limited_by_video_fps():
+    sender = NDIOutputSender(_ready_status())
+    sender._sender_cls = _DummySender
+    sender._video_frame_cls = _DummyVideoFrame
+    sender._audio_frame_cls = _DummyAudioFrame
+    sender._audio_reference = _DummyAudioReference
+    sender._fourcc = _DummyFourCC
+    sender._initialize_failed = False
+
+    config = NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=60.0,
+        audio_enabled=True,
+    )
+
+    assert sender.configure(config) is True
+    assert sender._sender.audio_frame.max_num_samples >= 8192
+
+    frames = np.ones((1024, 2), dtype=np.float32) * 0.25
+    assert sender.send_audio_frames(frames, 48000) is True
+    assert len(sender._sender.audio_payloads) == 1
+    assert sender._last_audio_error == ""
+
+
+def test_ndi_dispatcher_throttles_audio_to_realtime():
+    class _TrackingSender:
+        available = True
+
+        def __init__(self, _status) -> None:
+            self.audio_calls = 0
+            self._last_audio_error = ""
+            self._last_audio_mode = ""
+
+        def configure(self, _config) -> bool:
+            return True
+
+        def stop(self) -> None:
+            return None
+
+        def get_num_connections(self, _timeout: float = 0.0) -> int:
+            return 1
+
+        def send_video_frame(self, _image: QImage) -> bool:
+            return True
+
+        def send_audio_frames(self, _frames: np.ndarray, _sample_rate: int) -> bool:
+            self.audio_calls += 1
+            self._last_audio_mode = "ok"
+            self._last_audio_error = ""
+            return True
+
+    dispatcher = NDIOutputDispatcher(_ready_status(), sender_factory=_TrackingSender, connection_poll_interval_sec=0.05)
+    try:
+        config = NDIOutputConfig(
+            source_name="pyssp-video",
+            width=640,
+            height=360,
+            fps=30.0,
+            audio_enabled=True,
+        )
+        assert dispatcher.configure(config) is True
+
+        audio = np.ones((1024, 2), dtype=np.float32) * 0.25
+        assert dispatcher.send_audio_frames(audio, 48000) is True
+        assert dispatcher.send_audio_frames(audio, 48000) is True
+
+        assert dispatcher._sender.audio_calls == 1
+        assert dispatcher._audio_drop_count == 1
+        assert dispatcher._last_audio_mode == "dispatcher_audio_drop_realtime"
     finally:
         dispatcher.shutdown()

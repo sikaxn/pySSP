@@ -217,6 +217,8 @@ class AudioService(QObject):
                 mode=str(payload.get("mode", "post_fader") or "post_fader"),
             )
             return frames
+        if command == "outputTapFrameCounts":
+            return dict(player.outputTapFrameCounts())
         if command == "waveformPeaks":
             return player.waveformPeaks(int(payload.get("sample_count", 1024)))
         if command == "waveformPeaksAsync":
@@ -427,6 +429,15 @@ class AudioPlayerProxy(QObject):
             timeout=0.5,
         )
         return result
+
+    def outputTapFrameCounts(self) -> Dict[str, int]:
+        result = self._call("outputTapFrameCounts", timeout=0.5)
+        if isinstance(result, dict):
+            return {
+                "pre_fader": max(0, int(result.get("pre_fader", 0) or 0)),
+                "post_fader": max(0, int(result.get("post_fader", 0) or 0)),
+            }
+        return {"pre_fader": 0, "post_fader": 0}
 
     def waveformPeaks(self, sample_count: int = 1024):
         return self._call("waveformPeaks", {"sample_count": int(sample_count)}, timeout=20.0)

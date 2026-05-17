@@ -1580,6 +1580,7 @@ class NoAudioPlayer(QObject):
         self._duration_ms = 0
         self._position_ms = 0
         self._volume = 100
+        self._master_volume = 100
 
     def setNotifyInterval(self, interval_ms: int) -> None:
         _ = interval_ms
@@ -1626,6 +1627,12 @@ class NoAudioPlayer(QObject):
 
     def volume(self) -> int:
         return self._volume
+
+    def setMasterVolume(self, volume: int) -> None:
+        self._master_volume = max(0, min(100, int(volume)))
+
+    def masterVolume(self) -> int:
+        return self._master_volume
 
     def meterLevels(self) -> Tuple[float, float]:
         return (0.0, 0.0)
@@ -2098,5 +2105,4 @@ class LockScreenOverlay(QWidget):
             handle_w,
             self._slide_track_rect.height() - (inset * 2),
         )
-
 

@@ -1392,6 +1392,7 @@ class SettingsArchiveMixin:
         self.settings.main_transport_timeline_mode = self.main_transport_timeline_mode
         self.settings.main_progress_display_mode = self.main_progress_display_mode
         self.settings.main_progress_show_text = bool(self.main_progress_show_text)
+        self.settings.meter_output_tap_mode = str(getattr(self, "meter_output_tap_mode", "post_fader") or "post_fader").strip().lower()
         self.settings.main_jog_outside_cue_action = self.main_jog_outside_cue_action
         self.settings.color_empty = self.state_colors["empty"]
         self.settings.color_unplayed = self.state_colors["assigned"]

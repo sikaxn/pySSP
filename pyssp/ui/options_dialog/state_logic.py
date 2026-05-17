@@ -175,6 +175,11 @@ class StateLogicMixin:
         else:
             self.main_progress_display_progress_bar_radio.setChecked(True)
         self.main_progress_show_text_checkbox.setChecked(bool(d.get("main_progress_show_text", True)))
+        self._set_combo_data_or_default(
+            self.meter_output_tap_mode_combo,
+            str(d.get("meter_output_tap_mode", "post_fader")).strip().lower(),
+            "post_fader",
+        )
 
     def _restore_lock_defaults(self) -> None:
         d = self._DEFAULTS

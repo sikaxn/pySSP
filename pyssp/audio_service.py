@@ -210,6 +210,16 @@ class AudioService(QObject):
             return True
         if command == "volume":
             return int(player.volume())
+        if command == "setMasterVolume":
+            setter = getattr(player, "setMasterVolume", None)
+            if callable(setter):
+                setter(int(payload.get("volume", 100)))
+            return True
+        if command == "masterVolume":
+            getter = getattr(player, "masterVolume", None)
+            if callable(getter):
+                return int(getter())
+            return 100
         if command == "meterLevels":
             left, right = player.meterLevels()
             return float(left), float(right)
@@ -415,6 +425,15 @@ class AudioPlayerProxy(QObject):
 
     def volume(self) -> int:
         return int(self._volume)
+
+    def setMasterVolume(self, volume: int) -> None:
+        self._post("setMasterVolume", {"volume": max(0, min(100, int(volume)))})
+
+    def masterVolume(self) -> int:
+        try:
+            return int(self._call("masterVolume", timeout=0.5))
+        except Exception:
+            return 100
 
     def meterLevels(self) -> Tuple[float, float]:
         return float(self._meter_levels[0]), float(self._meter_levels[1])

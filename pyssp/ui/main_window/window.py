@@ -345,6 +345,9 @@ class MainWindow(
         if self.main_progress_display_mode not in {"progress_bar", "waveform"}:
             self.main_progress_display_mode = "progress_bar"
         self.main_progress_show_text = bool(getattr(self.settings, "main_progress_show_text", True))
+        self.meter_output_tap_mode = str(getattr(self.settings, "meter_output_tap_mode", "post_fader") or "post_fader").strip().lower()
+        if self.meter_output_tap_mode not in {"pre_fader", "post_fader"}:
+            self.meter_output_tap_mode = "post_fader"
         self.sound_button_view_mode = str(getattr(self.settings, "sound_button_view_mode", "grid") or "grid").strip().lower()
         if self.sound_button_view_mode not in {"grid", "list"}:
             self.sound_button_view_mode = "grid"

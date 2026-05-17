@@ -49,6 +49,21 @@ def test_main_progress_show_text_defaults_true_and_loads_false():
     assert settings.main_progress_show_text is False
 
 
+def test_meter_output_tap_mode_defaults_post_fader_and_loads_pre_fader():
+    parser = configparser.ConfigParser()
+    parser["main"] = {}
+    settings = _from_parser(parser)
+    assert settings.meter_output_tap_mode == "post_fader"
+
+    parser["main"]["meter_output_tap_mode"] = "pre_fader"
+    settings = _from_parser(parser)
+    assert settings.meter_output_tap_mode == "pre_fader"
+
+    parser["main"]["meter_output_tap_mode"] = "invalid-mode"
+    settings = _from_parser(parser)
+    assert settings.meter_output_tap_mode == "post_fader"
+
+
 def test_launchpad_empty_sound_button_lights_default_on_and_loads_false():
     parser = configparser.ConfigParser()
     parser["main"] = {}

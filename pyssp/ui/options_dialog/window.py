@@ -166,6 +166,7 @@ class OptionsDialog(
         "set_file_encoding": "utf8",
         "main_progress_display_mode": "progress_bar",
         "main_progress_show_text": True,
+        "meter_output_tap_mode": "post_fader",
         "ui_language": "en",
         "lock_allow_quit": True,
         "lock_allow_system_hotkeys": False,
@@ -483,6 +484,7 @@ class OptionsDialog(
         set_file_encoding: str,
         main_progress_display_mode: str,
         main_progress_show_text: bool,
+        meter_output_tap_mode: str,
         audio_output_device: str,
         available_audio_devices: List[str],
         available_midi_devices: List[tuple[str, str]],
@@ -923,6 +925,7 @@ class OptionsDialog(
                 set_file_encoding=set_file_encoding,
                 main_progress_display_mode=main_progress_display_mode,
                 main_progress_show_text=main_progress_show_text,
+                meter_output_tap_mode=meter_output_tap_mode,
             ),
         )
         self._add_page(

@@ -28,6 +28,10 @@ class SelectionMixin:
     def selected_main_progress_show_text(self) -> bool:
         return bool(self.main_progress_show_text_checkbox.isChecked())
 
+    def selected_meter_output_tap_mode(self) -> str:
+        value = str(self.meter_output_tap_mode_combo.currentData() or "post_fader").strip().lower()
+        return value if value in {"pre_fader", "post_fader"} else "post_fader"
+
     def selected_now_playing_display_mode(self) -> str:
         if self.now_playing_filename_radio.isChecked():
             return "filename"

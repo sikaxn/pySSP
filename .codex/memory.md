@@ -113,3 +113,49 @@
 - Audio architecture direction to preserve:
   - NDI audio should move away from main-window/player-proxy polling
   - prefer engine-callback-side monitor buffers or a true mix bus so NDI hears the same result as soundcard output, including fades, crossfades, and multi-play
+- Current audio path after the recent pre/post-fader work:
+
+```text
+Per player:
+
+source / stream / utility tone
+  -> tempo / pitch block handling
+  -> DSP block
+  -> program gain (_volume)
+     this now carries slot volume, fades, vocal-shadow routing, and talk-driven program changes
+  -> declick fade-in
+  -> PRE-FADER branch
+     -> engine pre meter store
+     -> player pre output tap buffer
+     -> player pre output monitor buffer
+  -> master gain (_master_volume)
+     this is the soundcard master/output fader stage
+  -> POST-FADER branch
+     -> soundcard outdata
+     -> engine post meter store
+     -> player post output tap buffer
+     -> player post output monitor buffer
+     -> declick tail / recent output history
+
+Consumers:
+
+Main transport meter
+  -> reads aggregated engine meter store
+  -> mode selectable in General:
+     pre_fader or post_fader (default)
+
+NDI audio
+  -> video_display timer
+  -> choose monitor mode from ndi_output_audio_tap_mode
+     pre_fader or post_fader
+  -> pull per-player monitor frames by player_id
+  -> accumulate pending per-player buffers
+  -> mix buffered chunks in UI-side NDI sender path
+  -> send to NDI runtime
+  -> if no audio is available, send silent keepalive frames
+  -> if a player stops but buffered audio remains, keep flushing that tail
+```
+
+- Important caveat on the current NDI design:
+  - NDI is closer to soundcard behavior now, but it is still not a true shared mix bus
+  - it mixes per-player monitor buffers later in `video_display.py`, so the remaining architectural gap is still “per-player monitor pull” vs “single engine mix bus”

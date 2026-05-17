@@ -598,6 +598,77 @@ def test_send_ndi_audio_keeps_buffers_when_sender_defers_block():
     assert host._ndi_audio_player_buffers["player-a"].shape == (1600, 2)
 
 
+def test_send_ndi_audio_flushes_pending_buffer_after_player_stops():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_last_sample_rate = 48000
+    host._ndi_audio_last_channel_count = 2
+    host._ndi_audio_player_buffers = {
+        "player-a": np.ones((600, 2), dtype=np.float32) * 0.375,
+    }
+    host._ndi_audio_players = lambda: []
+
+    host._send_ndi_audio()
+
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (600, 2)
+    assert np.allclose(chunk, np.ones((600, 2), dtype=np.float32) * 0.375)
+    assert host._ndi_audio_player_buffers == {}
+
+
+def test_send_ndi_audio_sends_silence_keepalive_when_idle():
+    class _DummySender:
+        def __init__(self):
+            self.chunks = []
+
+        def send_audio_frames(self, frames, sample_rate):
+            self.chunks.append((np.asarray(frames, dtype=np.float32), int(sample_rate)))
+            return True
+
+    host = _VideoRefreshHost()
+    host.ndi_output_audio_enabled = True
+    host.ndi_output_audio_tap_mode = "post_fader"
+    host._ndi_sender = _DummySender()
+    host._ndi_last_config = mw.NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+    )
+    host._ndi_audio_last_sample_rate = 48000
+    host._ndi_audio_last_channel_count = 2
+    host._ndi_audio_player_buffers = {}
+    host._ndi_audio_players = lambda: []
+
+    host._send_ndi_audio()
+
+    assert len(host._ndi_sender.chunks) == 1
+    chunk, sample_rate = host._ndi_sender.chunks[0]
+    assert sample_rate == 48000
+    assert chunk.shape == (1024, 2)
+    assert np.allclose(chunk, np.zeros((1024, 2), dtype=np.float32))
+
+
 def test_ndi_audio_players_prioritizes_current_playing_player_mapping_without_excluding_other_active_players():
     class _DummyPlayer:
         PlayingState = 1

@@ -729,6 +729,7 @@ class AppSettings:
     main_transport_timeline_mode: str = "cue_region"
     main_progress_display_mode: str = "progress_bar"
     main_progress_show_text: bool = True
+    meter_output_tap_mode: str = "post_fader"
     sound_button_view_mode: str = SOUND_BUTTON_VIEW_GRID
     sound_button_grid_columns: int = 8
     sound_button_grid_rows: int = 6
@@ -1202,6 +1203,7 @@ def save_settings(settings: AppSettings) -> None:
         "main_transport_timeline_mode": settings.main_transport_timeline_mode,
         "main_progress_display_mode": settings.main_progress_display_mode,
         "main_progress_show_text": "1" if settings.main_progress_show_text else "0",
+        "meter_output_tap_mode": str(settings.meter_output_tap_mode or "post_fader").strip().lower(),
         "sound_button_view_mode": normalize_sound_button_view_mode(settings.sound_button_view_mode),
         "sound_button_grid_columns": str(clamp_sound_button_grid_columns(settings.sound_button_grid_columns)),
         "sound_button_grid_rows": str(clamp_sound_button_grid_rows(settings.sound_button_grid_rows)),
@@ -1782,6 +1784,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     if main_progress_display_mode not in {"progress_bar", "waveform"}:
         main_progress_display_mode = "progress_bar"
     main_progress_show_text = _get_bool(section, "main_progress_show_text", True)
+    meter_output_tap_mode = str(section.get("meter_output_tap_mode", "post_fader")).strip().lower()
+    if meter_output_tap_mode not in {"pre_fader", "post_fader"}:
+        meter_output_tap_mode = "post_fader"
     sound_button_view_mode = normalize_sound_button_view_mode(section.get("sound_button_view_mode", SOUND_BUTTON_VIEW_GRID))
     sound_button_grid_columns = clamp_sound_button_grid_columns(section.get("sound_button_grid_columns", 8))
     sound_button_grid_rows = clamp_sound_button_grid_rows(section.get("sound_button_grid_rows", 6))
@@ -2172,6 +2177,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         main_transport_timeline_mode=timeline_mode_raw,
         main_progress_display_mode=main_progress_display_mode,
         main_progress_show_text=main_progress_show_text,
+        meter_output_tap_mode=meter_output_tap_mode,
         sound_button_view_mode=sound_button_view_mode,
         sound_button_grid_columns=sound_button_grid_columns,
         sound_button_grid_rows=sound_button_grid_rows,

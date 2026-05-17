@@ -51,7 +51,8 @@ _WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp
 _WAVEFORM_CACHE_LOCK = threading.RLock()
 _OUTPUT_METER_LOCK = threading.RLock()
 _OUTPUT_METER_ACTIVE_WINDOW_SEC = 0.25
-_OUTPUT_METER_SOURCES: Dict[int, Tuple[float, float, float]] = {}
+_OUTPUT_METER_PRE_SOURCES: Dict[int, Tuple[float, float, float]] = {}
+_OUTPUT_METER_POST_SOURCES: Dict[int, Tuple[float, float, float]] = {}
 _OUTPUT_MONITOR_LOCK = threading.RLock()
 _OUTPUT_MONITOR_CAPACITY_FRAMES = _DEFAULT_AUDIO_SAMPLE_RATE * 4
 _OUTPUT_MONITOR_PRE: Dict[str, deque[np.ndarray]] = {}
@@ -215,31 +216,34 @@ def shutdown_audio_preload() -> None:
     _shutdown_waveform_executor()
 
 
-def get_engine_output_meter_levels() -> Tuple[float, float]:
+def get_engine_output_meter_levels(mode: str = "post_fader") -> Tuple[float, float]:
     now = time.perf_counter()
     left = 0.0
     right = 0.0
     stale_ids: List[int] = []
+    sources = _OUTPUT_METER_PRE_SOURCES if str(mode or "").strip().lower() == "pre_fader" else _OUTPUT_METER_POST_SOURCES
     with _OUTPUT_METER_LOCK:
-        for stream_id, (updated_at, src_left, src_right) in _OUTPUT_METER_SOURCES.items():
+        for stream_id, (updated_at, src_left, src_right) in sources.items():
             if (now - float(updated_at)) > _OUTPUT_METER_ACTIVE_WINDOW_SEC:
                 stale_ids.append(int(stream_id))
                 continue
             left += max(0.0, float(src_left))
             right += max(0.0, float(src_right))
         for stream_id in stale_ids:
-            _OUTPUT_METER_SOURCES.pop(stream_id, None)
+            sources.pop(stream_id, None)
     return min(1.0, left), min(1.0, right)
 
 
-def _update_engine_output_meter(stream_id: int, left: float, right: float) -> None:
+def _update_engine_output_meter(stream_id: int, left: float, right: float, *, mode: str = "post_fader") -> None:
+    sources = _OUTPUT_METER_PRE_SOURCES if str(mode or "").strip().lower() == "pre_fader" else _OUTPUT_METER_POST_SOURCES
     with _OUTPUT_METER_LOCK:
-        _OUTPUT_METER_SOURCES[int(stream_id)] = (time.perf_counter(), max(0.0, float(left)), max(0.0, float(right)))
+        sources[int(stream_id)] = (time.perf_counter(), max(0.0, float(left)), max(0.0, float(right)))
 
 
 def _clear_engine_output_meter(stream_id: int) -> None:
     with _OUTPUT_METER_LOCK:
-        _OUTPUT_METER_SOURCES.pop(int(stream_id), None)
+        _OUTPUT_METER_PRE_SOURCES.pop(int(stream_id), None)
+        _OUTPUT_METER_POST_SOURCES.pop(int(stream_id), None)
 
 
 def clear_output_monitor_frames(player_id: str = "") -> None:
@@ -1281,6 +1285,7 @@ class ExternalMediaPlayer(QObject):
         self._duration_ms = 0
         self._position_ms = 0
         self._volume = 100
+        self._master_volume = 100
         self._started_at = 0.0
         self._meter_levels: Tuple[float, float] = (0.0, 0.0)
 
@@ -1579,6 +1584,14 @@ class ExternalMediaPlayer(QObject):
         with self._lock:
             return self._volume
 
+    def setMasterVolume(self, volume: int) -> None:
+        with self._lock:
+            self._master_volume = max(0, min(100, int(volume)))
+
+    def masterVolume(self) -> int:
+        with self._lock:
+            return self._master_volume
+
     def meterLevels(self) -> Tuple[float, float]:
         with self._lock:
             return self._meter_levels
@@ -1816,14 +1829,26 @@ class ExternalMediaPlayer(QObject):
                 self._meter_levels = (mono, mono)
             else:
                 self._meter_levels = (0.0, 0.0)
-            _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1])
+            _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1], mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1], mode="post_fader")
         else:
             self._meter_levels = (0.0, 0.0)
             self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-            _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
         if len(self._declick_tail) <= 0 and self._state != self.PlayingState:
             _clear_engine_output_meter(self._stream_id)
         return True
+
+    @staticmethod
+    def _peak_levels_from_block(block: np.ndarray) -> Tuple[float, float]:
+        peaks = np.max(np.abs(block), axis=0)
+        if len(peaks) >= 2:
+            return float(peaks[0]), float(peaks[1])
+        if len(peaks) == 1:
+            mono = float(peaks[0])
+            return mono, mono
+        return 0.0, 0.0
 
     def _apply_pending_dsp_config_locked(self) -> None:
         pending = self._pending_dsp_config
@@ -1967,7 +1992,8 @@ class ExternalMediaPlayer(QObject):
         if not self._lock.acquire(blocking=False):
             self._meter_levels = (0.0, 0.0)
             self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-            _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
             return
         try:
             self._apply_pending_dsp_config_locked()
@@ -1979,13 +2005,15 @@ class ExternalMediaPlayer(QObject):
                 self._meter_levels = (0.0, 0.0)
                 self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
                 return
             if (self._source_frames is None) and (not self._streaming_mode) and self._utility_spec is None:
                 self._meter_levels = (0.0, 0.0)
                 self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
                 return
 
             if self._streaming_mode:
@@ -1999,7 +2027,8 @@ class ExternalMediaPlayer(QObject):
                     self._meter_levels = (0.0, 0.0)
                     self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                     self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                    _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+                    _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+                    _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
                     return
                 tempo_ratio = 1.0
                 user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
@@ -2025,7 +2054,8 @@ class ExternalMediaPlayer(QObject):
                 self._meter_levels = (0.0, 0.0)
                 self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
                 return
 
             if abs(effective_pitch_ratio - 1.0) > 1e-4:
@@ -2033,11 +2063,18 @@ class ExternalMediaPlayer(QObject):
 
             if self._dsp_active:
                 block = self._dsp_processor.process_block(block)
-            self._append_output_tap_locked(block, mode="pre_fader")
-            append_output_monitor_frames(self._output_monitor_id, block, mode="pre_fader")
             if self._volume != 100:
                 block = block * (self._volume / 100.0)
             block = self._apply_declick_fade_in_locked(block)
+            if len(block) > 0:
+                pre_left, pre_right = self._peak_levels_from_block(block)
+                _update_engine_output_meter(self._stream_id, pre_left, pre_right, mode="pre_fader")
+            else:
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            self._append_output_tap_locked(block, mode="pre_fader")
+            append_output_monitor_frames(self._output_monitor_id, block, mode="pre_fader")
+            if self._master_volume != 100:
+                block = block * (self._master_volume / 100.0)
 
             n = min(len(block), frames)
             outdata[:n, :] = block[:n, :]
@@ -2050,12 +2087,12 @@ class ExternalMediaPlayer(QObject):
                 elif len(peaks) == 1:
                     mono = float(peaks[0])
                     self._meter_levels = (mono, mono)
-                _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1])
+                _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1], mode="post_fader")
             else:
                 self._meter_levels = (0.0, 0.0)
                 self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
                 self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
             if n < frames:
                 outdata[n:, :] = 0.0
                 if self._streaming_mode:

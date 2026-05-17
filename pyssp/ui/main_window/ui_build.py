@@ -1380,10 +1380,13 @@ class UiBuildMixin:
         about_text += (
             "\n\n---\n\n"
             "## NDI Output\n\n"
+            "pySSP uses NDI® technology through pySSP binding code that dynamically loads the installed NDI runtime/SDK.\n\n"
             f"- `{ndi_backend}` version: `{ndi_version}`\n"
             f"- Runtime status: `{ndi_state}`\n"
             f"- Download: {NDI_DOWNLOAD_URL}\n"
-            "- NDI SDK/runtime is separately licensed and may need to be installed on the target machine.\n"
+            "- pySSP does not include NDI library source code or bundled NDI runtime/SDK binaries.\n"
+            "- NDI runtime/SDK components are licensed separately and may need to be installed on the target machine.\n"
+            "- NDI® is a registered trademark of Vizrt NDI AB.\n"
         )
         self._about_window.set_version_and_website(
             self.app_version_text,
@@ -1436,7 +1439,8 @@ class UiBuildMixin:
 
     def _audio_engine_insight_snapshot_data(self) -> dict:
         ref_player, ref_key = self._timecode_reference_context()
-        engine_left, engine_right = get_engine_output_meter_levels()
+        meter_mode = str(getattr(self, "meter_output_tap_mode", "post_fader") or "post_fader").strip().lower()
+        engine_left, engine_right = get_engine_output_meter_levels(meter_mode)
         ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
         ffprobe_path = str(get_ffprobe_executable() or "").strip()
         current_video_slot = None
@@ -1463,6 +1467,7 @@ class UiBuildMixin:
             ("fade_jobs", len(self._fade_jobs)),
             ("global_volume", self.volume_slider.value() if self.volume_slider is not None else 100),
             ("dsp_config", self._describe_dsp_config(self._dsp_config)),
+            ("meter_output_tap_mode", meter_mode),
             ("engine_output_meter", f"({engine_left:.4f}, {engine_right:.4f})"),
             ("timecode_reference", "none" if ref_player is None else f"{self._audio_player_label(ref_player)} slot={ref_key}"),
             ("ffmpeg_available", ffmpeg_available()),

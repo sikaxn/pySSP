@@ -17,6 +17,7 @@ class GeneralPageMixin:
         set_file_encoding: str,
         main_progress_display_mode: str,
         main_progress_show_text: bool,
+        meter_output_tap_mode: str,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -128,7 +129,15 @@ class GeneralPageMixin:
         self.main_progress_show_text_checkbox = QCheckBox("Show transport text on progress display")
         self.main_progress_show_text_checkbox.setChecked(bool(main_progress_show_text))
         transport_layout.addWidget(self.main_progress_show_text_checkbox)
+        meter_row = QHBoxLayout()
+        meter_row.addWidget(QLabel("Meters:"))
+        self.meter_output_tap_mode_combo = QComboBox()
+        self.meter_output_tap_mode_combo.addItem("Post fader (Default)", "post_fader")
+        self.meter_output_tap_mode_combo.addItem("Pre fader", "pre_fader")
+        self._set_combo_data_or_default(self.meter_output_tap_mode_combo, str(meter_output_tap_mode or "post_fader"), "post_fader")
+        meter_row.addWidget(self.meter_output_tap_mode_combo)
+        meter_row.addStretch(1)
+        transport_layout.addLayout(meter_row)
         layout.addWidget(transport_group)
         layout.addStretch(1)
         return page
-

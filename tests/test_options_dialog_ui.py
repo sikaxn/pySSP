@@ -150,6 +150,7 @@ def _build_dialog(**overrides):
         set_file_encoding=defaults["set_file_encoding"],
         main_progress_display_mode=defaults["main_progress_display_mode"],
         main_progress_show_text=defaults["main_progress_show_text"],
+        meter_output_tap_mode=defaults["meter_output_tap_mode"],
         audio_output_device="",
         available_audio_devices=["Device A", "Device B"],
         available_midi_devices=[(MIDI_OUTPUT_DEVICE_NONE, "None")],
@@ -847,6 +848,7 @@ def test_selected_value_methods_follow_toggles(qapp):
     dialog.timecode_mode_combo.setCurrentIndex(dialog.timecode_mode_combo.findData(TIMECODE_MODE_FOLLOW))
     dialog.main_progress_display_waveform_radio.setChecked(True)
     dialog.main_progress_show_text_checkbox.setChecked(False)
+    dialog.meter_output_tap_mode_combo.setCurrentIndex(dialog.meter_output_tap_mode_combo.findData("pre_fader"))
 
     assert dialog.selected_search_double_click_action() == "play_highlight"
     assert dialog.selected_click_playing_action() == "stop_it"
@@ -863,6 +865,7 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_timecode_timeline_mode() == "audio_file"
     assert dialog.selected_main_progress_display_mode() == "waveform"
     assert dialog.selected_main_progress_show_text() is False
+    assert dialog.selected_meter_output_tap_mode() == "pre_fader"
 
 
 def test_lock_screen_settings_round_trip_and_restore_defaults(qapp):

@@ -1310,7 +1310,7 @@ class PlaybackMixin:
         for extra in self._multi_players:
             if extra.state() == ExternalMediaPlayer.PlayingState:
                 any_playing = True
-        target_left, target_right = get_engine_output_meter_levels()
+        target_left, target_right = get_engine_output_meter_levels(getattr(self, "meter_output_tap_mode", "post_fader"))
         target_left = min(1.0, max(0.0, float(target_left)))
         target_right = min(1.0, max(0.0, float(target_right)))
         attack = 0.92
@@ -1374,6 +1374,7 @@ class PlaybackMixin:
         shadow.setNotifyInterval(90)
         shadow.setDSPConfig(self._dsp_config)
         shadow.setVolume(0)
+        self._set_player_master_volume(shadow, self._effective_master_volume())
         shadow.mediaLoadFinished.connect(self._on_vocal_shadow_media_load_finished)
         return shadow
 
@@ -1430,8 +1431,10 @@ class PlaybackMixin:
             primary_volume = 0
             shadow_volume = logical
         player.setVolume(primary_volume)
+        self._set_player_master_volume(player, self._effective_master_volume())
         if shadow is not None:
             shadow.setVolume(shadow_volume)
+            self._set_player_master_volume(shadow, self._effective_master_volume())
 
     def _cancel_vocal_toggle_fade_for_player(self, player: Optional[ExternalMediaPlayer]) -> None:
         if player is None:
@@ -1913,6 +1916,10 @@ class PlaybackMixin:
 
     def _effective_master_volume(self) -> int:
         base = self.volume_slider.value()
+        return max(0, min(100, base))
+
+    def _effective_output_base_volume(self) -> int:
+        base = self._effective_master_volume()
         if self.talk_active:
             talk_level = max(0, min(100, int(self.talk_volume_level)))
             if self.talk_volume_mode == "set_exact":
@@ -1924,8 +1931,22 @@ class PlaybackMixin:
         return max(0, min(100, base))
 
     def _effective_slot_target_volume(self, slot_volume_pct: int) -> int:
+        slot = max(0, min(100, int(slot_volume_pct)))
         master = self._effective_master_volume()
-        return max(0, min(100, int(master * (max(0, min(100, slot_volume_pct)) / 100.0))))
+        output_base = self._effective_output_base_volume()
+        if master <= 0:
+            unity_base = 100
+            if self.talk_active:
+                talk_level = max(0, min(100, int(self.talk_volume_level)))
+                if self.talk_volume_mode == "set_exact":
+                    unity_base = talk_level
+                elif self.talk_volume_mode == "lower_only":
+                    unity_base = min(100, talk_level)
+                else:
+                    unity_base = int(100 * (talk_level / 100.0))
+            return max(0, min(100, int(round(slot * (unity_base / 100.0)))))
+        output_target = output_base * (slot / 100.0)
+        return max(0, min(100, int(round(output_target * (100.0 / master)))))
 
     def _slot_pct_for_player(self, player: ExternalMediaPlayer) -> int:
         if player is self.player:
@@ -2063,6 +2084,16 @@ class PlaybackMixin:
 
     def _set_player_volume(self, player: ExternalMediaPlayer, volume: int) -> None:
         self._apply_player_mix_volumes(player, volume)
+
+    @staticmethod
+    def _set_player_master_volume(player: object, volume: int) -> None:
+        setter = getattr(player, "setMasterVolume", None)
+        if not callable(setter):
+            return
+        try:
+            setter(max(0, min(100, int(volume))))
+        except Exception:
+            pass
 
     def _cancel_fade_for_player(self, player: ExternalMediaPlayer) -> None:
         self._fade_jobs = [job for job in self._fade_jobs if job["player"] is not player]
@@ -2324,4 +2355,3 @@ class PlaybackMixin:
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
         self.player_b.positionChanged.connect(self._on_secondary_position_changed)
-

@@ -1770,6 +1770,7 @@ class ActionsInputMixin:
             set_file_encoding=self.set_file_encoding,
             main_progress_display_mode=self.main_progress_display_mode,
             main_progress_show_text=self.main_progress_show_text,
+            meter_output_tap_mode=self.meter_output_tap_mode,
             audio_output_device=self.audio_output_device,
             available_audio_devices=available_devices,
             available_midi_devices=available_midi_output_devices,
@@ -2100,6 +2101,7 @@ class ActionsInputMixin:
         self.main_transport_timeline_mode = dialog.selected_main_transport_timeline_mode()
         self.main_progress_display_mode = dialog.selected_main_progress_display_mode()
         self.main_progress_show_text = dialog.selected_main_progress_show_text()
+        self.meter_output_tap_mode = dialog.selected_meter_output_tap_mode()
         self.progress_label.set_display_mode(self.main_progress_display_mode)
         if self.main_progress_display_mode == "waveform":
             self._schedule_main_waveform_refresh(0)

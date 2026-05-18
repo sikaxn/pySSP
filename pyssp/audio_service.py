@@ -7,9 +7,12 @@ import queue
 from typing import Any, Dict, Optional, Tuple
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QImage
 
 from pyssp.audio_engine import ExternalMediaPlayer
 from pyssp.dsp import DSPConfig
+from pyssp.engine import EngineDiagnosticsSnapshot, MediaRuntime, RuntimeSessionSnapshot, TransportSnapshot, VideoDestinationSnapshot
+from pyssp.ndi_support import NDICapabilityStatus
 
 
 @dataclass(frozen=True)
@@ -123,25 +126,60 @@ class AudioService(QObject):
             except Exception:
                 pass
 
-    def __init__(self) -> None:
+    def __init__(self, runtime: Optional[MediaRuntime] = None) -> None:
         super().__init__()
-        self._players: Dict[str, ExternalMediaPlayer] = {}
+        self._runtime = runtime or MediaRuntime()
 
     def _player(self, player_id: str) -> ExternalMediaPlayer:
-        player = self._players.get(str(player_id))
-        if player is None:
-            raise RuntimeError(f"Audio player not found: {player_id}")
-        return player
+        return self._runtime.player_for_session(str(player_id))
 
     def _dispatch(self, player_id: str, command: str, payload: dict):
+        if command == "transportSnapshot":
+            return self._runtime.transport_snapshot()
+        if command == "engineDiagnostics":
+            return self._runtime.diagnostics_snapshot()
+        if command == "runtimeSessionSnapshots":
+            return self._runtime.session_snapshots()
+        if command == "videoDestinationSnapshots":
+            return self._runtime.video_destination_snapshots()
+        if command == "setMultiPlayEnabled":
+            self._runtime.set_multi_play_enabled(bool(payload.get("enabled", False)))
+            return True
+        if command == "setSessionSlotKey":
+            raw = payload.get("slot_key")
+            slot_key = tuple(raw) if isinstance(raw, (list, tuple)) and len(raw) == 3 else None
+            return self._runtime.set_session_slot_key(player_id, slot_key)
+        if command == "configureVideoDestination":
+            ndi_status = _payload_ndi_status(payload.get("ndi_status"))
+            return self._runtime.configure_video_destination(
+                str(payload.get("destination_id", "ndi_program")),
+                enabled=bool(payload.get("enabled", False)),
+                route_mode=str(payload.get("route_mode", "blank") or "blank"),
+                width=max(2, int(payload.get("width", 1920) or 1920)),
+                height=max(2, int(payload.get("height", 1080) or 1080)),
+                fps=max(1.0, float(payload.get("fps", 30.0) or 30.0)),
+                source_name=str(payload.get("source_name", "pyssp-video") or "pyssp-video"),
+                audio_enabled=bool(payload.get("audio_enabled", False)),
+                audio_tap_mode=str(payload.get("audio_tap_mode", "post_fader") or "post_fader"),
+                ndi_status=ndi_status,
+            )
+        if command == "submitVideoDestinationFrame":
+            image = payload.get("image")
+            if not isinstance(image, QImage):
+                return False
+            route_mode = str(payload.get("route_mode", "") or "").strip()
+            return self._runtime.submit_video_destination_frame(
+                str(payload.get("destination_id", "ndi_program")),
+                image,
+                route_mode=route_mode if route_mode else None,
+                pts_ms=max(0, int(payload.get("pts_ms", 0) or 0)),
+                source_path=str(payload.get("source_path", "") or ""),
+            )
+        if command == "clearVideoDestinationFrame":
+            return self._runtime.clear_video_destination_frame(str(payload.get("destination_id", "ndi_program")))
         if command == "create":
-            if player_id not in self._players:
-                player = ExternalMediaPlayer()
-                try:
-                    player.setOutputMonitorId(player_id)
-                except Exception:
-                    pass
-                self._players[player_id] = player
+            if not self._runtime.has_session(player_id):
+                player = self._runtime.create_legacy_session(player_id)
                 player.positionChanged.connect(lambda value, pid=player_id: self.positionChanged.emit(pid, int(value)))
                 player.durationChanged.connect(lambda value, pid=player_id: self.durationChanged.emit(pid, int(value)))
                 player.stateChanged.connect(lambda value, pid=player_id: self.stateChanged.emit(pid, int(value)))
@@ -152,16 +190,10 @@ class AudioService(QObject):
                 )
             return True
         if command == "delete":
-            player = self._players.pop(player_id, None)
-            if player is not None:
-                try:
-                    player.stop()
-                finally:
-                    player.deleteLater()
+            self._runtime.delete_session(player_id)
             return True
         if command == "shutdown":
-            for pid in list(self._players.keys()):
-                self._dispatch(pid, "delete", {})
+            self._runtime.shutdown()
             return True
 
         player = self._player(player_id)
@@ -249,10 +281,10 @@ class AudioServiceController(QObject):
     stateChanged = pyqtSignal(str, int)
     mediaLoadFinished = pyqtSignal(str, int, bool, str)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None, runtime: Optional[MediaRuntime] = None) -> None:
         super().__init__(parent)
         self._thread = QThread(self)
-        self._service = AudioService()
+        self._service = AudioService(runtime=runtime)
         self._service.moveToThread(self._thread)
         self.commandRequested.connect(self._service.handle_command, type=Qt.QueuedConnection)
         self.state_cache = AudioStateCache()
@@ -301,6 +333,113 @@ class AudioServiceController(QObject):
             pass
         self._thread.quit()
         self._thread.wait(1500)
+
+    def transport_snapshot(self) -> TransportSnapshot:
+        result = self.call("__runtime__", "transportSnapshot", {}, timeout=0.5)
+        if isinstance(result, TransportSnapshot):
+            return result
+        return TransportSnapshot(
+            generated_at=0.0,
+            reference_session_id=None,
+            active_session_ids=(),
+            playing_session_ids=(),
+            multi_play_enabled=False,
+        )
+
+    def engine_diagnostics_snapshot(self) -> EngineDiagnosticsSnapshot:
+        result = self.call("__runtime__", "engineDiagnostics", {}, timeout=0.5)
+        if isinstance(result, EngineDiagnosticsSnapshot):
+            return result
+        return EngineDiagnosticsSnapshot(
+            generated_at=0.0,
+            session_count=0,
+            active_session_ids=(),
+            playing_session_ids=(),
+            reference_session_id=None,
+            ffmpeg_available=False,
+            ffmpeg_source="none",
+            ffmpeg_version="",
+            audio_bus_ids=(),
+            video_destination_ids=(),
+        )
+
+    def set_multi_play_enabled(self, enabled: bool) -> None:
+        self.post("__runtime__", "setMultiPlayEnabled", {"enabled": bool(enabled)})
+
+    def runtime_session_snapshots(self) -> tuple[RuntimeSessionSnapshot, ...]:
+        result = self.call("__runtime__", "runtimeSessionSnapshots", {}, timeout=0.5)
+        if isinstance(result, tuple) and all(isinstance(item, RuntimeSessionSnapshot) for item in result):
+            return result
+        if isinstance(result, list) and all(isinstance(item, RuntimeSessionSnapshot) for item in result):
+            return tuple(result)
+        return ()
+
+    def video_destination_snapshots(self) -> tuple[VideoDestinationSnapshot, ...]:
+        result = self.call("__runtime__", "videoDestinationSnapshots", {}, timeout=0.5)
+        if isinstance(result, tuple) and all(isinstance(item, VideoDestinationSnapshot) for item in result):
+            return result
+        if isinstance(result, list) and all(isinstance(item, VideoDestinationSnapshot) for item in result):
+            return tuple(result)
+        return ()
+
+    def set_session_slot_key(self, player_id: str, slot_key: Optional[tuple[str, int, int]]) -> None:
+        payload = {"slot_key": list(slot_key) if slot_key is not None else None}
+        self.post(str(player_id), "setSessionSlotKey", payload)
+
+    def configure_video_destination(
+        self,
+        destination_id: str,
+        *,
+        enabled: bool,
+        route_mode: str,
+        width: int,
+        height: int,
+        fps: float,
+        source_name: str,
+        audio_enabled: bool,
+        audio_tap_mode: str,
+        ndi_status: Optional[NDICapabilityStatus],
+    ) -> None:
+        self.post(
+            "__runtime__",
+            "configureVideoDestination",
+            {
+                "destination_id": str(destination_id),
+                "enabled": bool(enabled),
+                "route_mode": str(route_mode or "blank"),
+                "width": int(width),
+                "height": int(height),
+                "fps": float(fps),
+                "source_name": str(source_name or "pyssp-video"),
+                "audio_enabled": bool(audio_enabled),
+                "audio_tap_mode": str(audio_tap_mode or "post_fader"),
+                "ndi_status": _serialize_ndi_status(ndi_status),
+            },
+        )
+
+    def submit_video_destination_frame(
+        self,
+        destination_id: str,
+        image: QImage,
+        *,
+        route_mode: str,
+        pts_ms: int,
+        source_path: str,
+    ) -> None:
+        self.post(
+            "__runtime__",
+            "submitVideoDestinationFrame",
+            {
+                "destination_id": str(destination_id),
+                "image": image,
+                "route_mode": str(route_mode or ""),
+                "pts_ms": int(pts_ms),
+                "source_path": str(source_path or ""),
+            },
+        )
+
+    def clear_video_destination_frame(self, destination_id: str) -> None:
+        self.post("__runtime__", "clearVideoDestinationFrame", {"destination_id": str(destination_id)})
 
     def _on_service_position_changed(self, player_id: str, value: int) -> None:
         self.state_cache.update_position(player_id, value)
@@ -553,3 +692,35 @@ def _payload_source(payload: dict) -> Any:
     if isinstance(source, dict):
         return dict(source)
     return str(payload.get("file_path", ""))
+
+
+def _serialize_ndi_status(status: Optional[NDICapabilityStatus]) -> Optional[dict]:
+    if status is None:
+        return None
+    return {
+        "ndi_backend_name": str(getattr(status, "ndi_backend_name", "") or ""),
+        "ndi_python_available": bool(getattr(status, "ndi_python_available", False)),
+        "ndi_python_version": str(getattr(status, "ndi_python_version", "") or ""),
+        "ndi_module_importable": bool(getattr(status, "ndi_module_importable", False)),
+        "ndi_runtime_or_sdk_detected": bool(getattr(status, "ndi_runtime_or_sdk_detected", False)),
+        "availability_reason": str(getattr(status, "availability_reason", "") or ""),
+        "runtime_library_path": str(getattr(status, "runtime_library_path", "") or ""),
+        "ndi_runtime_version": str(getattr(status, "ndi_runtime_version", "") or ""),
+    }
+
+
+def _payload_ndi_status(payload: object) -> Optional[NDICapabilityStatus]:
+    if isinstance(payload, NDICapabilityStatus):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    return NDICapabilityStatus(
+        ndi_backend_name=str(payload.get("ndi_backend_name", "") or ""),
+        ndi_python_available=bool(payload.get("ndi_python_available", False)),
+        ndi_python_version=str(payload.get("ndi_python_version", "") or ""),
+        ndi_module_importable=bool(payload.get("ndi_module_importable", False)),
+        ndi_runtime_or_sdk_detected=bool(payload.get("ndi_runtime_or_sdk_detected", False)),
+        availability_reason=str(payload.get("availability_reason", "") or ""),
+        runtime_library_path=str(payload.get("runtime_library_path", "") or ""),
+        ndi_runtime_version=str(payload.get("ndi_runtime_version", "") or ""),
+    )

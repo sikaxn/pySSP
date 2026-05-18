@@ -898,8 +898,9 @@ class MainWindow(
         self._multi_players: List[ExternalMediaPlayer] = []
         self._player_slot_pct_map: Dict[int, int] = {}
         self._player_started_map: Dict[int, float] = {}
+        self._player_runtime_local_id_map: Dict[int, int] = {}
+        self._player_runtime_local_id_next = 0
         self._player_slot_key_map: Dict[int, Tuple[str, int, int]] = {}
-        self._playback_runtime = PlaybackRuntimeTracker()
         self._player_end_override_ms: Dict[int, int] = {}
         self._player_ignore_cue_end: set[int] = set()
         self._active_playing_keys: set[Tuple[str, int, int]] = set()
@@ -989,12 +990,11 @@ class MainWindow(
         self.video_mode_playing_combo: Optional[QComboBox] = None
         self.video_mode_idle_combo: Optional[QComboBox] = None
         self._video_refresh_timer: Optional[QTimer] = None
-        self._ndi_refresh_timer: Optional[QTimer] = None
-        self._ndi_audio_refresh_timer: Optional[QTimer] = None
         self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
-        self._ndi_sender = NDIOutputDispatcher(self._ndi_status)
         self._ndi_last_config: Optional[NDIOutputConfig] = None
         self._ndi_audio_player_buffers: Dict[int, np.ndarray] = {}
+        self._ndi_audio_last_sample_rate = 48000
+        self._ndi_audio_last_channel_count = 2
         self._video_requested_frame_key: Optional[Tuple[str, int]] = None
         self._video_requested_frame_path: str = ""
         self._video_decode_inflight_key: Optional[Tuple[str, int]] = None
@@ -1137,15 +1137,8 @@ class MainWindow(
         self._video_refresh_timer.setTimerType(Qt.PreciseTimer)
         self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
         self._video_refresh_timer.start(33)
-        self._ndi_refresh_timer = QTimer(self)
-        self._ndi_refresh_timer.setTimerType(Qt.PreciseTimer)
-        self._ndi_refresh_timer.timeout.connect(self._tick_ndi_refresh)
-        self._ndi_refresh_timer.start(33)
-        self._ndi_audio_refresh_timer = QTimer(self)
-        self._ndi_audio_refresh_timer.setTimerType(Qt.PreciseTimer)
-        self._ndi_audio_refresh_timer.timeout.connect(self._tick_ndi_audio_refresh)
-        self._ndi_audio_refresh_timer.start(10)
         self._sync_ndi_timer_intervals()
+        self._configure_ndi_sender()
 
         self.timecode_mtc_timer = QTimer(self)
         self.timecode_mtc_timer.timeout.connect(self._tick_timecode_mtc)
@@ -1202,32 +1195,10 @@ class MainWindow(
                 timer.stop()
             except Exception:
                 pass
-        ndi_timer = getattr(self, "_ndi_refresh_timer", None)
-        if ndi_timer is not None:
-            try:
-                ndi_timer.stop()
-            except Exception:
-                pass
-        ndi_audio_timer = getattr(self, "_ndi_audio_refresh_timer", None)
-        if ndi_audio_timer is not None:
-            try:
-                ndi_audio_timer.stop()
-            except Exception:
-                pass
         dispatcher = getattr(self, "_video_frame_dispatcher", None)
         if dispatcher is not None:
             try:
                 dispatcher.stop()
-            except Exception:
-                pass
-        ndi_sender = getattr(self, "_ndi_sender", None)
-        if ndi_sender is not None:
-            try:
-                shutdown = getattr(ndi_sender, "shutdown", None)
-                if callable(shutdown):
-                    shutdown()
-                else:
-                    ndi_sender.stop()
             except Exception:
                 pass
         ndi_preview = getattr(self, "ndi_preview_widget", None)

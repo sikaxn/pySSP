@@ -283,6 +283,7 @@ class PlaybackMixin:
     def _init_audio_players(self) -> None:
         self.player = self._audio_service.create_player(self)
         self.player_b = self._audio_service.create_player(self)
+        self._audio_service.set_multi_play_enabled(False)
         self.player.setNotifyInterval(90)
         self.player_b.setNotifyInterval(90)
         self._player_mix_volume_map[id(self.player)] = self.player.volume()
@@ -1968,8 +1969,9 @@ class PlaybackMixin:
     def _mark_player_started(self, player: ExternalMediaPlayer) -> None:
         slot_key = self._player_slot_key_map.get(id(player))
         self._player_started_map[id(player)] = time.monotonic()
+        self._player_runtime_local_id_map[id(player)] = int(self._player_runtime_local_id_next)
+        self._player_runtime_local_id_next += 1
         if slot_key is not None:
-            self._playback_runtime.mark_started(player, slot_key)
             self._prime_automation_script_player(player, slot_key)
             slot = self._slot_for_key(slot_key)
             if slot is not None:
@@ -1982,6 +1984,12 @@ class PlaybackMixin:
             self._active_playing_keys.discard(old_key)
         self._clear_player_cue_behavior_override(player)
         self._player_slot_key_map[pid] = slot_key
+        player_id = str(getattr(player, "player_id", "") or "").strip()
+        if player_id:
+            try:
+                self._audio_service.set_session_slot_key(player_id, slot_key)
+            except Exception:
+                pass
         self._active_playing_keys.add(slot_key)
         self._update_status_now_playing()
         self._refresh_vocal_removed_warning_banner()
@@ -1989,11 +1997,17 @@ class PlaybackMixin:
     def _clear_player_slot_key(self, player: ExternalMediaPlayer) -> None:
         pid = id(player)
         key = self._player_slot_key_map.pop(pid, None)
-        self._playback_runtime.clear(player)
+        player_id = str(getattr(player, "player_id", "") or "").strip()
+        if player_id:
+            try:
+                self._audio_service.set_session_slot_key(player_id, None)
+            except Exception:
+                pass
         self._automation_script_runtime.pop(pid, None)
         if key is not None:
             self._active_playing_keys.discard(key)
         self._clear_player_cue_behavior_override(player)
+        self._player_runtime_local_id_map.pop(pid, None)
         if self.current_playing == key:
             self._refresh_current_playing_from_active_players()
         self._update_status_now_playing()
@@ -2001,9 +2015,9 @@ class PlaybackMixin:
 
     def _clear_all_player_slot_keys(self) -> None:
         self._player_slot_key_map.clear()
-        self._playback_runtime.clear_all()
         self._automation_script_runtime.clear()
         self._active_playing_keys.clear()
+        self._player_runtime_local_id_map.clear()
         self._player_end_override_ms.clear()
         self._player_ignore_cue_end.clear()
         self.current_playing = None
@@ -2056,7 +2070,20 @@ class PlaybackMixin:
         if self.multi_play_limit_action == "disallow_more_play":
             self._show_info_notice_banner(f"Maximum Multi-Play songs reached ({max_allowed}).")
             return False
-        oldest = self._playback_runtime.oldest_active_player(active_players)
+        runtime_by_player_id = {
+            str(session.session_id): session
+            for session in self._audio_service.runtime_session_snapshots()
+        }
+        oldest = None
+        ranked_players: list[tuple[int, float, str, ExternalMediaPlayer]] = []
+        for player in active_players:
+            player_id = str(getattr(player, "player_id", "") or "").strip()
+            session = runtime_by_player_id.get(player_id)
+            if session is None:
+                continue
+            ranked_players.append((int(session.runtime_id), float(session.started_at), player_id, player))
+        if ranked_players:
+            oldest = min(ranked_players, key=lambda item: (item[0], item[1], item[2]))[-1]
         if oldest is None:
             oldest = min(active_players, key=lambda p: self._player_started_map.get(id(p), 0.0))
         self._stop_single_player(oldest)

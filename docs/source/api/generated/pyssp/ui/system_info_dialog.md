@@ -13,7 +13,7 @@ No module docstring.
 ### Public
 
 - `detect_supported_audio_format_extensions(timeout_sec: float = 10.0, register_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None) -> List[str]` [function] (pyssp/ui/system_info_dialog.py:347)
-- `build_system_information_text(app_version_text: str, app_build_text: str = '', register_probe_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None) -> str` [function] (pyssp/ui/system_info_dialog.py:439)
+- `build_system_information_text(app_version_text: str, app_build_text: str = '', register_probe_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None, runtime_debug_info: Optional[dict] = None) -> str` [function] (pyssp/ui/system_info_dialog.py:439)
 
 ### Internal
 
@@ -40,38 +40,38 @@ No module docstring.
 
 ### `_SystemInfoWorker`
 
-- Defined at `pyssp/ui/system_info_dialog.py:529`
+- Defined at `pyssp/ui/system_info_dialog.py:557`
 - Bases: QObject
 
 #### Public Members
 
-- `run(self) -> None` [method] (pyssp/ui/system_info_dialog.py:541)
-- `cancel(self) -> None` [method] (pyssp/ui/system_info_dialog.py:561)
+- `run(self) -> None` [method] (pyssp/ui/system_info_dialog.py:570)
+- `cancel(self) -> None` [method] (pyssp/ui/system_info_dialog.py:592)
 
 #### Internal Members
 
-- `__init__(self, app_version_text: str, app_build_text: str = '') -> None` [constructor] (pyssp/ui/system_info_dialog.py:534)
-- `_set_probe_process(self, proc: Optional[subprocess.Popen[str]]) -> None` [method] (pyssp/ui/system_info_dialog.py:558)
+- `__init__(self, app_version_text: str, app_build_text: str = '', runtime_debug_info: Optional[dict] = None) -> None` [constructor] (pyssp/ui/system_info_dialog.py:562)
+- `_set_probe_process(self, proc: Optional[subprocess.Popen[str]]) -> None` [method] (pyssp/ui/system_info_dialog.py:589)
 
 ### `SystemInformationDialog`
 
-- Defined at `pyssp/ui/system_info_dialog.py:579`
+- Defined at `pyssp/ui/system_info_dialog.py:610`
 - Bases: QDialog
 
 #### Public Members
 
-- `set_app_version_text(self, value: str) -> None` [method] (pyssp/ui/system_info_dialog.py:626)
-- `set_app_build_text(self, value: str) -> None` [method] (pyssp/ui/system_info_dialog.py:629)
-- `refresh(self) -> None` [method] (pyssp/ui/system_info_dialog.py:632)
-- `closeEvent(self, event) -> None` [method] (pyssp/ui/system_info_dialog.py:671)
+- `set_app_version_text(self, value: str) -> None` [method] (pyssp/ui/system_info_dialog.py:664)
+- `set_app_build_text(self, value: str) -> None` [method] (pyssp/ui/system_info_dialog.py:667)
+- `refresh(self) -> None` [method] (pyssp/ui/system_info_dialog.py:670)
+- `closeEvent(self, event) -> None` [method] (pyssp/ui/system_info_dialog.py:715)
 
 #### Internal Members
 
-- `__init__(self, app_version_text: str, app_build_text: str = '', parent = None) -> None` [constructor] (pyssp/ui/system_info_dialog.py:580)
-- `_set_refresh_in_progress(self, active: bool) -> None` [method] (pyssp/ui/system_info_dialog.py:653)
-- `_handle_refresh_finished(self, text: str) -> None` [method] (pyssp/ui/system_info_dialog.py:659)
-- `_handle_refresh_failed(self, error: str) -> None` [method] (pyssp/ui/system_info_dialog.py:663)
-- `_clear_refresh_thread(self) -> None` [method] (pyssp/ui/system_info_dialog.py:667)
-- `_copy_text(self) -> None` [method] (pyssp/ui/system_info_dialog.py:690)
-- `_export_text(self) -> None` [method] (pyssp/ui/system_info_dialog.py:695)
-- `_export_settings_ini(self) -> None` [method] (pyssp/ui/system_info_dialog.py:714)
+- `__init__(self, app_version_text: str, app_build_text: str = '', runtime_debug_provider: Optional[Callable[[], dict]] = None, parent = None) -> None` [constructor] (pyssp/ui/system_info_dialog.py:611)
+- `_set_refresh_in_progress(self, active: bool) -> None` [method] (pyssp/ui/system_info_dialog.py:697)
+- `_handle_refresh_finished(self, text: str) -> None` [method] (pyssp/ui/system_info_dialog.py:703)
+- `_handle_refresh_failed(self, error: str) -> None` [method] (pyssp/ui/system_info_dialog.py:707)
+- `_clear_refresh_thread(self) -> None` [method] (pyssp/ui/system_info_dialog.py:711)
+- `_copy_text(self) -> None` [method] (pyssp/ui/system_info_dialog.py:734)
+- `_export_text(self) -> None` [method] (pyssp/ui/system_info_dialog.py:739)
+- `_export_settings_ini(self) -> None` [method] (pyssp/ui/system_info_dialog.py:758)

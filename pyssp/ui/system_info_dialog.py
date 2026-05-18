@@ -440,6 +440,7 @@ def build_system_information_text(
     app_version_text: str,
     app_build_text: str = "",
     register_probe_process: Optional[Callable[[Optional[subprocess.Popen[str]]], None]] = None,
+    runtime_debug_info: Optional[dict] = None,
 ) -> str:
     now_local = time.strftime("%Y-%m-%d %H:%M:%S")
     system_name = f"{platform.system()} {platform.release()} ({platform.machine()})"
@@ -506,6 +507,33 @@ def build_system_information_text(
         lines.append(f"- {item}")
     lines.append("")
 
+    if runtime_debug_info:
+        lines.append("Runtime engine diagnostics:")
+        engine_diagnostics = runtime_debug_info.get("engine_diagnostics", {})
+        transport_snapshot = runtime_debug_info.get("transport_snapshot", {})
+        runtime_sessions = runtime_debug_info.get("runtime_sessions", [])
+        for key, value in engine_diagnostics.items():
+            lines.append(f"- engine.{key}: {value}")
+        for key, value in transport_snapshot.items():
+            lines.append(f"- transport.{key}: {value}")
+        if runtime_sessions:
+            lines.append("- sessions:")
+            for session in runtime_sessions:
+                if not isinstance(session, dict):
+                    continue
+                lines.append(
+                    "  - "
+                    f"id={session.get('session_id')} "
+                    f"runtime_id={session.get('runtime_id')} "
+                    f"state={session.get('state')} "
+                    f"slot={session.get('slot_key')} "
+                    f"pos={session.get('position_ms')} "
+                    f"dur={session.get('duration_ms')}"
+                )
+        else:
+            lines.append("- sessions: []")
+        lines.append("")
+
     lines.append("Available NIC MAC/IP:")
     interfaces = _get_network_interfaces()
     if interfaces:
@@ -531,10 +559,11 @@ class _SystemInfoWorker(QObject):
     failed = pyqtSignal(str)
     cancel_requested = pyqtSignal()
 
-    def __init__(self, app_version_text: str, app_build_text: str = "") -> None:
+    def __init__(self, app_version_text: str, app_build_text: str = "", runtime_debug_info: Optional[dict] = None) -> None:
         super().__init__()
         self._app_version_text = str(app_version_text or "")
         self._app_build_text = str(app_build_text or "")
+        self._runtime_debug_info = dict(runtime_debug_info or {})
         self._probe_process: Optional[subprocess.Popen[str]] = None
         self.cancel_requested.connect(self.cancel)
 
@@ -545,11 +574,13 @@ class _SystemInfoWorker(QObject):
                     self._app_version_text,
                     self._app_build_text,
                     register_probe_process=self._set_probe_process,
+                    runtime_debug_info=self._runtime_debug_info,
                 )
             else:
                 text = build_system_information_text(
                     self._app_version_text,
                     register_probe_process=self._set_probe_process,
+                    runtime_debug_info=self._runtime_debug_info,
                 )
             self.finished.emit(text)
         except Exception as exc:
@@ -577,10 +608,17 @@ class _SystemInfoWorker(QObject):
 
 
 class SystemInformationDialog(QDialog):
-    def __init__(self, app_version_text: str, app_build_text: str = "", parent=None) -> None:
+    def __init__(
+        self,
+        app_version_text: str,
+        app_build_text: str = "",
+        runtime_debug_provider: Optional[Callable[[], dict]] = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._app_version_text = str(app_version_text or "")
         self._app_build_text = str(app_build_text or "")
+        self._runtime_debug_provider = runtime_debug_provider
         self._refresh_thread: Optional[QThread] = None
         self._refresh_worker: Optional[_SystemInfoWorker] = None
         self.setWindowTitle("System Information")
@@ -634,8 +672,14 @@ class SystemInformationDialog(QDialog):
             return
         self._set_refresh_in_progress(True)
         self._text_box.setPlainText("Refreshing system information...")
+        runtime_debug_info: dict = {}
+        if callable(self._runtime_debug_provider):
+            try:
+                runtime_debug_info = dict(self._runtime_debug_provider() or {})
+            except Exception as exc:
+                runtime_debug_info = {"provider_error": str(exc)}
         thread = QThread(self)
-        worker = _SystemInfoWorker(self._app_version_text, self._app_build_text)
+        worker = _SystemInfoWorker(self._app_version_text, self._app_build_text, runtime_debug_info=runtime_debug_info)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._handle_refresh_finished)

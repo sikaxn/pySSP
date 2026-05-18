@@ -2,7 +2,7 @@
 
 Generated from `.`.
 
-This index covers `110` Python modules under this path.
+This index covers `114` Python modules under this path.
 
 ```{toctree}
 :maxdepth: 1
@@ -16,7 +16,7 @@ root/test_http_5050_server
 
 ## Subdirectories
 
-- [`pyssp/`](pyssp/index.md): `104` modules - pySSP package.
+- [`pyssp/`](pyssp/index.md): `108` modules - pySSP package.
 - [`scripts/`](scripts/index.md): `2` modules
 - [`spleeter-cli/`](spleeter-cli/index.md): `2` modules
 

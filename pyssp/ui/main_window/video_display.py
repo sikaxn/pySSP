@@ -891,34 +891,30 @@ class VideoDisplayMixin:
         return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
 
     def _sync_ndi_timer_intervals(self) -> None:
-        video_timer = getattr(self, "_ndi_refresh_timer", None)
-        if video_timer is not None:
-            fps = max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30))
-            interval_ms = max(5, int(round(1000.0 / fps)))
-            try:
-                video_timer.setInterval(interval_ms)
-            except Exception:
-                pass
-        audio_timer = getattr(self, "_ndi_audio_refresh_timer", None)
-        if audio_timer is not None:
-            try:
-                sample_rate = 48000
-                try:
-                    for player in list(self._ndi_audio_players() or []):
-                        getter = getattr(player, "sampleRate", None)
-                        if not callable(getter):
-                            continue
-                        rate = max(1, int(getter()))
-                        if rate > 0:
-                            sample_rate = rate
-                            break
-                except Exception:
-                    sample_rate = 48000
-                block_frames = self._ndi_audio_output_block_frames()
-                interval_ms = max(5, int(round((1000.0 * float(max(1, block_frames))) / float(max(1, sample_rate)))))
-                audio_timer.setInterval(interval_ms)
-            except Exception:
-                pass
+        try:
+            for player in list(self._ndi_audio_players() or []):
+                getter = getattr(player, "sampleRate", None)
+                if not callable(getter):
+                    continue
+                rate = max(1, int(getter()))
+                if rate > 0:
+                    self._ndi_audio_last_sample_rate = rate
+                    break
+        except Exception:
+            self._ndi_audio_last_sample_rate = int(getattr(self, "_ndi_audio_last_sample_rate", 48000) or 48000)
+
+    def _runtime_video_destination_snapshot(self, destination_id: str) -> Optional[object]:
+        service = getattr(self, "_audio_service", None)
+        getter = getattr(service, "video_destination_snapshots", None)
+        if not callable(getter):
+            return None
+        try:
+            for snapshot in getter():
+                if str(getattr(snapshot, "destination_id", "") or "") == str(destination_id):
+                    return snapshot
+        except Exception:
+            return None
+        return None
 
     def _ensure_ndi_preview_widget(self) -> VideoDisplayWidget:
         widget = getattr(self, "ndi_preview_widget", None)
@@ -928,6 +924,15 @@ class VideoDisplayMixin:
             self.ndi_preview_widget = widget
         return widget
 
+    def _current_ndi_video_frame_image(self) -> QImage:
+        image = QImage(getattr(self, "_video_current_frame_image", QImage()))
+        if not image.isNull():
+            return image
+        pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        if pixmap.isNull():
+            return QImage()
+        return pixmap.toImage()
+
     def _render_ndi_frame_image(self) -> QImage:
         width, height = self._ndi_output_dimensions()
         mode = self._active_ndi_route_mode()
@@ -936,16 +941,14 @@ class VideoDisplayMixin:
             and (not bool(getattr(self, "video_display_show_lyric_overlay", False)))
             and (not (bool(getattr(self, "video_display_show_stage_alert", False)) and self._stage_alert_active()))
         ):
-            pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
-            if not pixmap.isNull():
-                image = pixmap.toImage()
-                if not image.isNull():
-                    return image.scaled(
-                        max(1, int(width)),
-                        max(1, int(height)),
-                        Qt.IgnoreAspectRatio,
-                        Qt.FastTransformation,
-                    )
+            image = self._current_ndi_video_frame_image()
+            if not image.isNull():
+                return image.scaled(
+                    max(1, int(width)),
+                    max(1, int(height)),
+                    Qt.IgnoreAspectRatio,
+                    Qt.FastTransformation,
+                )
         widget = self._ensure_ndi_preview_widget()
         self._sync_output_surface_widget(widget, mode, force=True)
         return self._render_widget_image(widget, width, height)
@@ -988,6 +991,9 @@ class VideoDisplayMixin:
         return players
 
     def _ndi_sender_has_receivers(self) -> bool:
+        snapshot = self._runtime_video_destination_snapshot("ndi_program")
+        if snapshot is not None:
+            return bool(getattr(snapshot, "connection_count", 0) or 0)
         sender = getattr(self, "_ndi_sender", None)
         if sender is None:
             return False
@@ -1033,18 +1039,35 @@ class VideoDisplayMixin:
             return False
 
     def _configure_ndi_sender(self) -> bool:
-        sender = getattr(self, "_ndi_sender", None)
-        if sender is None:
-            return False
         enabled = bool(getattr(self, "ndi_output_enabled", False))
         if (not enabled) or (not getattr(self, "_ndi_status", None) or not self._ndi_status.ready):
-            try:
-                sender.stop()
-            except Exception:
-                pass
             self._ndi_last_config = None
             self._ndi_audio_last_sample_rate = 48000
             self._ndi_audio_last_channel_count = 2
+            service = getattr(self, "_audio_service", None)
+            clear_method = getattr(service, "clear_video_destination_frame", None)
+            configure_method = getattr(service, "configure_video_destination", None)
+            if callable(clear_method):
+                try:
+                    clear_method("ndi_program")
+                except Exception:
+                    pass
+            if callable(configure_method):
+                try:
+                    configure_method(
+                        "ndi_program",
+                        enabled=False,
+                        route_mode="blank",
+                        width=max(2, int(getattr(self, "ndi_output_width", 1920) or 1920)),
+                        height=max(2, int(getattr(self, "ndi_output_height", 1080) or 1080)),
+                        fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
+                        source_name=str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video"),
+                        audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
+                        audio_tap_mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader"),
+                        ndi_status=getattr(self, "_ndi_status", None),
+                    )
+                except Exception:
+                    pass
             return False
         width, height = self._ndi_output_dimensions()
         config = NDIOutputConfig(
@@ -1054,14 +1077,39 @@ class VideoDisplayMixin:
             fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
             audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
         )
-        if sender.configure(config):
-            self._ndi_last_config = config
+        self._ndi_last_config = config
+        service = getattr(self, "_audio_service", None)
+        configure_method = getattr(service, "configure_video_destination", None)
+        if callable(configure_method):
+            try:
+                configure_method(
+                    "ndi_program",
+                    enabled=True,
+                    route_mode=self._active_ndi_route_mode(),
+                    width=config.width,
+                    height=config.height,
+                    fps=config.fps,
+                    source_name=config.source_name,
+                    audio_enabled=config.audio_enabled,
+                    audio_tap_mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader"),
+                    ndi_status=getattr(self, "_ndi_status", None),
+                )
+                return True
+            except Exception:
+                self._ndi_last_config = None
+                return False
+        sender = getattr(self, "_ndi_sender", None)
+        if sender is not None and sender.configure(config):
             return True
         self._ndi_last_config = None
         return False
 
     def _send_ndi_audio(self) -> None:
         if not bool(getattr(self, "ndi_output_audio_enabled", True)):
+            return
+        service = getattr(self, "_audio_service", None)
+        if callable(getattr(service, "configure_video_destination", None)):
+            self._configure_ndi_sender()
             return
         sender = getattr(self, "_ndi_sender", None)
         config = getattr(self, "_ndi_last_config", None)
@@ -1125,12 +1173,60 @@ class VideoDisplayMixin:
     def _refresh_ndi_output(self, force: bool = False) -> None:
         if not self._configure_ndi_sender():
             return
-        sender = getattr(self, "_ndi_sender", None)
-        if sender is None:
+        mode = self._active_ndi_route_mode()
+        live_video_frame = self._current_ndi_video_frame_image() if mode == "video" else QImage()
+        if mode == "video" and live_video_frame.isNull():
+            queue_refresh = getattr(self, "_queue_video_frame_refresh", None)
+            if callable(queue_refresh):
+                try:
+                    queue_refresh(force=bool(force))
+                except Exception:
+                    pass
+            cached = QImage(getattr(self, "_ndi_last_video_frame_image", QImage()))
+            if not cached.isNull():
+                service = getattr(self, "_audio_service", None)
+                submit = getattr(service, "submit_video_destination_frame", None)
+                if callable(submit):
+                    try:
+                        submit(
+                            "ndi_program",
+                            cached,
+                            route_mode=mode,
+                            pts_ms=max(0, int(getattr(self, "_video_last_frame_pts_ms", 0) or 0)),
+                            source_path=str(getattr(self, "_video_requested_frame_path", "") or ""),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    sender = getattr(self, "_ndi_sender", None)
+                    if sender is not None:
+                        sender.send_video_frame(cached)
             return
         frame_image = self._render_ndi_frame_image()
         if not frame_image.isNull():
-            sender.send_video_frame(frame_image)
+            service = getattr(self, "_audio_service", None)
+            submit = getattr(service, "submit_video_destination_frame", None)
+            if callable(submit):
+                source_path = ""
+                slot, _info = self._current_video_slot_and_probe()
+                if slot is not None:
+                    source_path = str(slot.file_path or "").strip()
+                try:
+                    submit(
+                        "ndi_program",
+                        frame_image,
+                        route_mode=mode,
+                        pts_ms=max(0, int(getattr(self, "_video_last_frame_pts_ms", 0) or 0)),
+                        source_path=source_path,
+                    )
+                except Exception:
+                    pass
+            else:
+                sender = getattr(self, "_ndi_sender", None)
+                if sender is not None:
+                    sender.send_video_frame(frame_image)
+            if mode == "video":
+                self._ndi_last_video_frame_image = frame_image.copy()
 
     def _tick_ndi_refresh(self) -> None:
         self._refresh_ndi_output()
@@ -1163,6 +1259,13 @@ class VideoDisplayMixin:
         if not preserve_current_frame:
             self._video_current_frame_key = None
             self._video_current_frame_pixmap = QPixmap()
+            self._video_current_frame_image = QImage()
+            clear_method = getattr(getattr(self, "_audio_service", None), "clear_video_destination_frame", None)
+            if callable(clear_method):
+                try:
+                    clear_method("ndi_program")
+                except Exception:
+                    pass
         dispatcher = getattr(self, "_video_frame_dispatcher", None)
         if dispatcher is not None:
             try:
@@ -1230,13 +1333,14 @@ class VideoDisplayMixin:
                 self._video_decode_inflight_key = ("stream", bucket_ms)
                 dispatcher.request_stream(tag, path, bucket_ms, width, height, interval_ms)
             return
-        cached = self._video_frame_cache.get(cache_key)
-        if cached is not None:
-            if force or self._video_current_frame_key != cache_key:
-                self._video_current_frame_key = cache_key
-                self._video_current_frame_pixmap = QPixmap(cached)
-                self._apply_video_frame_to_targets()
-            return
+            cached = self._video_frame_cache.get(cache_key)
+            if cached is not None:
+                if force or self._video_current_frame_key != cache_key:
+                    self._video_current_frame_key = cache_key
+                    self._video_current_frame_pixmap = QPixmap(cached)
+                    self._video_current_frame_image = QImage()
+                    self._apply_video_frame_to_targets()
+                return
         if self._video_decode_inflight_key == cache_key:
             return
         self._video_stream_path_key = ""
@@ -1303,9 +1407,11 @@ class VideoDisplayMixin:
         if active_key != cache_key[0]:
             return
         self._video_current_frame_key = cache_key
+        self._video_current_frame_image = QImage(frame_image)
         self._video_current_frame_pixmap = QPixmap(pixmap)
         self._video_last_frame_pts_ms = bucket_ms
         self._apply_video_frame_to_targets()
+        self._refresh_ndi_output(force=False)
         desired_key = getattr(self, "_video_requested_frame_key", None)
         desired_path = str(getattr(self, "_video_requested_frame_path", "") or "").strip()
         if self._stage_playback_status() == "playing":
@@ -1340,6 +1446,7 @@ class VideoDisplayMixin:
             self._sync_video_surface_widget(self._video_display_window.display_widget, force=force)
         if self._active_video_route_mode() == "video":
             self._queue_video_frame_refresh(force=force)
+        self._refresh_ndi_output(force=force)
 
     def _slot_or_media_has_audio(self, slot: Optional[SoundButtonData]) -> bool:
         if slot is None:

@@ -748,6 +748,7 @@ def test_refresh_ndi_output_sends_video_even_when_receiver_count_is_zero():
     host._ndi_sender = _DummySender()
     image = mw.QImage(8, 8, mw.QImage.Format_RGB32)
     image.fill(0)
+    host._video_current_frame_image = image
     host._render_ndi_frame_image = lambda: image
 
     host._refresh_ndi_output()

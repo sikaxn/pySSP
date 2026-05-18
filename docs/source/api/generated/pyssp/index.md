@@ -4,11 +4,12 @@ Generated from `pyssp`.
 
 Package summary: pySSP package.
 
-This index covers `104` Python modules under this path.
+This index covers `108` Python modules under this path.
 
 ```{toctree}
 :maxdepth: 1
 
+engine/index
 ui/index
 package_api
 app
@@ -47,6 +48,7 @@ web_remote
 
 ## Subdirectories
 
+- [`pyssp/engine/`](engine/index.md): `4` modules
 - [`pyssp/ui/`](ui/index.md): `71` modules - UI package for pySSP.
 
 ## Package API

@@ -1413,6 +1413,7 @@ class UiBuildMixin:
             self._system_info_window = SystemInformationDialog(
                 app_version_text=self.app_version_text,
                 app_build_text=self.app_build_text,
+                runtime_debug_provider=self._runtime_debug_payload,
                 parent=self,
             )
             self._system_info_window.destroyed.connect(lambda _=None: self._clear_system_info_window_ref())
@@ -1441,6 +1442,10 @@ class UiBuildMixin:
         ref_player, ref_key = self._timecode_reference_context()
         meter_mode = str(getattr(self, "meter_output_tap_mode", "post_fader") or "post_fader").strip().lower()
         engine_left, engine_right = get_engine_output_meter_levels(meter_mode)
+        runtime_transport = self._audio_service.transport_snapshot()
+        runtime_diagnostics = self._audio_service.engine_diagnostics_snapshot()
+        runtime_sessions = self._audio_service.runtime_session_snapshots()
+        runtime_session_map = {session.session_id: session for session in runtime_sessions}
         ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
         ffprobe_path = str(get_ffprobe_executable() or "").strip()
         current_video_slot = None
@@ -1449,7 +1454,11 @@ class UiBuildMixin:
             current_video_slot, current_video_probe = self._current_video_slot_and_probe()
         except Exception:
             current_video_slot, current_video_probe = None, MediaProbeInfo()
-        ndi_sender = getattr(self, "_ndi_sender", None)
+        ndi_runtime_snapshot = None
+        for destination in runtime_diagnostics.video_destinations:
+            if str(getattr(destination, "destination_id", "") or "") == "ndi_program":
+                ndi_runtime_snapshot = destination
+                break
         ndi_audio_players = []
         try:
             ndi_audio_players = list(getattr(self, "_ndi_audio_players", lambda: [])() or [])
@@ -1464,6 +1473,47 @@ class UiBuildMixin:
             ("multi_play_enabled", self._is_multi_play_enabled()),
             ("active_playing_keys", len(self._active_playing_keys)),
             ("current_playing", self.current_playing),
+            ("runtime_reference_session", runtime_transport.reference_session_id),
+            ("runtime_active_session_ids", list(runtime_transport.active_session_ids)),
+            ("runtime_playing_session_ids", list(runtime_transport.playing_session_ids)),
+            ("runtime_transport_position_ms", int(runtime_transport.position_ms)),
+            ("runtime_transport_duration_ms", int(runtime_transport.duration_ms)),
+            ("runtime_session_count", int(runtime_diagnostics.session_count)),
+            (
+                "runtime_sessions",
+                [
+                    {
+                        "session_id": session.session_id,
+                        "runtime_id": session.runtime_id,
+                        "state": int(session.state),
+                        "slot_key": session.slot_key,
+                        "position_ms": session.position_ms,
+                        "duration_ms": session.duration_ms,
+                    }
+                    for session in runtime_sessions
+                ],
+            ),
+            ("runtime_audio_buses", list(runtime_diagnostics.audio_bus_ids)),
+            ("runtime_video_destinations", list(runtime_diagnostics.video_destination_ids)),
+            (
+                "runtime_destination_snapshots",
+                [
+                    {
+                        "destination_id": snapshot.destination_id,
+                        "enabled": bool(snapshot.enabled),
+                        "route_mode": str(snapshot.route_mode),
+                        "sender_ready": bool(snapshot.sender_ready),
+                        "connection_count": int(snapshot.connection_count),
+                        "video_send_count": int(snapshot.video_send_count),
+                        "audio_send_count": int(snapshot.audio_send_count),
+                        "audio_drop_count": int(snapshot.audio_drop_count),
+                        "frame_submit_count": int(snapshot.frame_submit_count),
+                        "has_current_frame": bool(snapshot.has_current_frame),
+                        "last_video_pts_ms": int(snapshot.last_video_pts_ms),
+                    }
+                    for snapshot in runtime_diagnostics.video_destinations
+                ],
+            ),
             ("fade_jobs", len(self._fade_jobs)),
             ("global_volume", self.volume_slider.value() if self.volume_slider is not None else 100),
             ("dsp_config", self._describe_dsp_config(self._dsp_config)),
@@ -1485,15 +1535,19 @@ class UiBuildMixin:
             ("ndi_route_mode", getattr(self, "_active_ndi_route_mode", lambda: "unknown")()),
             ("ndi_audio_enabled", bool(getattr(self, "ndi_output_audio_enabled", True))),
             ("ndi_audio_tap_mode", str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader")),
-            ("ndi_connection_count", int(getattr(ndi_sender, "get_num_connections", lambda _timeout=0.0: 0)(0.0))),
+            ("ndi_connection_count", int(getattr(ndi_runtime_snapshot, "connection_count", 0) or 0)),
             ("ndi_audio_player_labels", ndi_audio_player_labels),
             ("ndi_audio_player_count", len(ndi_audio_player_labels)),
             ("ndi_audio_buffer_frames", ndi_buffer_frames),
-            ("ndi_audio_send_count", int(getattr(ndi_sender, "_audio_send_count", 0) or 0)),
-            ("ndi_audio_drop_count", int(getattr(ndi_sender, "_audio_drop_count", 0) or 0)),
-            ("ndi_audio_recovery_count", int(getattr(ndi_sender, "_audio_recovery_count", 0) or 0)),
-            ("ndi_last_audio_mode", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_mode", "") or "")),
-            ("ndi_last_audio_error", str(getattr(getattr(self, "_ndi_sender", None), "_last_audio_error", "") or "")),
+            ("ndi_audio_send_count", int(getattr(ndi_runtime_snapshot, "audio_send_count", 0) or 0)),
+            ("ndi_audio_drop_count", int(getattr(ndi_runtime_snapshot, "audio_drop_count", 0) or 0)),
+            ("ndi_audio_recovery_count", int(getattr(ndi_runtime_snapshot, "audio_recovery_count", 0) or 0)),
+            ("ndi_video_send_count", int(getattr(ndi_runtime_snapshot, "video_send_count", 0) or 0)),
+            ("ndi_frame_submit_count", int(getattr(ndi_runtime_snapshot, "frame_submit_count", 0) or 0)),
+            ("ndi_last_audio_mode", str(getattr(ndi_runtime_snapshot, "last_audio_mode", "") or "")),
+            ("ndi_last_audio_error", str(getattr(ndi_runtime_snapshot, "last_audio_error", "") or "")),
+            ("ndi_has_current_frame", bool(getattr(ndi_runtime_snapshot, "has_current_frame", False))),
+            ("ndi_last_video_pts_ms", int(getattr(ndi_runtime_snapshot, "last_video_pts_ms", 0) or 0)),
             ("video_route_mode", getattr(self, "_active_video_route_mode", lambda: "unknown")()),
             ("video_targets_visible", bool(getattr(self, "_video_display_target_visible", lambda: False)())),
             ("video_transport_revision", int(getattr(self, "_video_transport_revision", 0) or 0)),
@@ -1513,8 +1567,79 @@ class UiBuildMixin:
         player_records: List[dict] = []
         runtime_players = self._insight_runtime_players()
         for index, player in enumerate(runtime_players):
-            player_records.append(self._audio_player_insight_record(player, index))
+            player_records.append(self._audio_player_insight_record(player, index, runtime_session_map))
         return {"summary": summary, "players": player_records}
+
+    def _runtime_debug_payload(self) -> dict:
+        diagnostics = self._audio_service.engine_diagnostics_snapshot()
+        transport = self._audio_service.transport_snapshot()
+        sessions = self._audio_service.runtime_session_snapshots()
+        return {
+            "engine_diagnostics": {
+                "generated_at": float(diagnostics.generated_at),
+                "session_count": int(diagnostics.session_count),
+                "active_session_ids": list(diagnostics.active_session_ids),
+                "playing_session_ids": list(diagnostics.playing_session_ids),
+                "reference_session_id": diagnostics.reference_session_id,
+                "ffmpeg_available": bool(diagnostics.ffmpeg_available),
+                "ffmpeg_source": str(diagnostics.ffmpeg_source),
+                "ffmpeg_version": str(diagnostics.ffmpeg_version),
+                "audio_bus_ids": list(diagnostics.audio_bus_ids),
+                "video_destination_ids": list(diagnostics.video_destination_ids),
+                "video_destinations": [
+                    {
+                        "destination_id": snapshot.destination_id,
+                        "enabled": bool(snapshot.enabled),
+                        "route_mode": str(snapshot.route_mode),
+                        "source_name": str(snapshot.source_name),
+                        "width": int(snapshot.width),
+                        "height": int(snapshot.height),
+                        "fps": float(snapshot.fps),
+                        "audio_enabled": bool(snapshot.audio_enabled),
+                        "audio_tap_mode": str(snapshot.audio_tap_mode),
+                        "sender_ready": bool(snapshot.sender_ready),
+                        "connection_count": int(snapshot.connection_count),
+                        "has_current_frame": bool(snapshot.has_current_frame),
+                        "current_frame_width": int(snapshot.current_frame_width),
+                        "current_frame_height": int(snapshot.current_frame_height),
+                        "last_video_pts_ms": int(snapshot.last_video_pts_ms),
+                        "last_video_source_path": str(snapshot.last_video_source_path),
+                        "frame_submit_count": int(snapshot.frame_submit_count),
+                        "video_send_count": int(snapshot.video_send_count),
+                        "audio_send_count": int(snapshot.audio_send_count),
+                        "audio_drop_count": int(snapshot.audio_drop_count),
+                        "audio_recovery_count": int(snapshot.audio_recovery_count),
+                        "last_audio_sample_rate": int(snapshot.last_audio_sample_rate),
+                        "last_audio_channel_count": int(snapshot.last_audio_channel_count),
+                        "last_audio_mode": str(snapshot.last_audio_mode),
+                        "last_audio_error": str(snapshot.last_audio_error),
+                    }
+                    for snapshot in diagnostics.video_destinations
+                ],
+            },
+            "transport_snapshot": {
+                "generated_at": float(transport.generated_at),
+                "reference_session_id": transport.reference_session_id,
+                "active_session_ids": list(transport.active_session_ids),
+                "playing_session_ids": list(transport.playing_session_ids),
+                "multi_play_enabled": bool(transport.multi_play_enabled),
+                "position_ms": int(transport.position_ms),
+                "duration_ms": int(transport.duration_ms),
+                "state": int(transport.state),
+            },
+            "runtime_sessions": [
+                {
+                    "session_id": session.session_id,
+                    "runtime_id": int(session.runtime_id),
+                    "started_at": float(session.started_at),
+                    "state": int(session.state),
+                    "position_ms": int(session.position_ms),
+                    "duration_ms": int(session.duration_ms),
+                    "slot_key": session.slot_key,
+                }
+                for session in sessions
+            ],
+        }
 
     def _insight_runtime_players(self) -> List[ExternalMediaPlayer]:
         players: List[ExternalMediaPlayer] = [self.player, self.player_b, *self._multi_players]
@@ -1551,9 +1676,10 @@ class UiBuildMixin:
             f"plugin_paths={cfg.plugin_paths}"
         )
 
-    def _audio_player_insight_record(self, player: object, index: int) -> dict:
+    def _audio_player_insight_record(self, player: object, index: int, runtime_session_map: dict[str, object]) -> dict:
         label = self._audio_player_label(player)
         pid = id(player)
+        player_token = str(getattr(player, "player_id", "") or "").strip()
         ndi_audio_players = []
         try:
             ndi_audio_players = list(getattr(self, "_ndi_audio_players", lambda: [])() or [])
@@ -1567,8 +1693,33 @@ class UiBuildMixin:
                 if shadow is player:
                     slot_key = self._player_slot_key_map.get(id(primary))
                     break
+        runtime_session = runtime_session_map.get(player_token) if player_token else None
+        if runtime_session is None and slot_key is not None:
+            for candidate in runtime_session_map.values():
+                if getattr(candidate, "slot_key", None) == slot_key:
+                    runtime_session = candidate
+                    break
+        if runtime_session is None:
+            try:
+                player_state = int(getattr(player, "state", lambda: -1)())
+            except Exception:
+                player_state = -1
+            state_matches = [
+                candidate
+                for candidate in runtime_session_map.values()
+                if int(getattr(candidate, "state", -1)) == player_state
+            ]
+            if len(state_matches) == 1:
+                runtime_session = state_matches[0]
+        if runtime_session is None and len(runtime_session_map) == 1:
+            runtime_session = next(iter(runtime_session_map.values()))
         slot = self._slot_for_key(slot_key) if slot_key is not None else None
-        runtime_id = self._playback_runtime.runtime_id_for(player)
+        runtime_id = getattr(runtime_session, "runtime_id", None)
+        if runtime_id in {None, "", -1}:
+            runtime_id = self._player_runtime_local_id_map.get(pid)
+        if runtime_id in {None, "", -1}:
+            started_at = float(self._player_started_map.get(pid, 0.0) or 0.0)
+            runtime_id = None if started_at <= 0.0 else f"ui-fallback@{started_at:.6f}"
         meter = getattr(player, "meterLevels", lambda: (0.0, 0.0))()
         try:
             state_name = self._api_player_state_name(player)  # type: ignore[arg-type]
@@ -1611,6 +1762,9 @@ class UiBuildMixin:
             ("label", label),
             ("object_id", pid),
             ("runtime_id", runtime_id if runtime_id is not None else "inactive"),
+            ("runtime_session_id", player_token or "n/a"),
+            ("runtime_started_at", getattr(runtime_session, "started_at", "n/a")),
+            ("runtime_slot_key", getattr(runtime_session, "slot_key", None)),
             ("state", state_name),
             ("slot_key", slot_key),
             ("title", title),
@@ -1653,13 +1807,21 @@ class UiBuildMixin:
 
     def _ndi_audio_buffer_frame_summary(self) -> dict[str, int]:
         summary: dict[str, int] = {}
+        legacy_buffers = getattr(self, "_ndi_audio_player_buffers", {})
         for player in self._insight_runtime_players():
             player_token = str(getattr(player, "player_id", "") or "").strip()
             if not player_token:
                 continue
             counts = output_monitor_frame_counts(player_token)
             mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
-            summary[self._audio_player_label(player)] = max(0, int(counts.get(mode, 0) or 0))
+            frame_count = max(0, int(counts.get(mode, 0) or 0))
+            if frame_count <= 0 and isinstance(legacy_buffers, dict):
+                buffer_block = legacy_buffers.get(player_token)
+                try:
+                    frame_count = max(0, int(len(buffer_block))) if buffer_block is not None else 0
+                except Exception:
+                    frame_count = 0
+            summary[self._audio_player_label(player)] = frame_count
         return summary
 
     def _open_help_window(self) -> None:

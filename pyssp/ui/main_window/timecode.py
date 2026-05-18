@@ -160,18 +160,52 @@ class TimecodeMixin:
         return int(max(0.0, self._timecode_follow_anchor_ms))
 
     def _timecode_reference_context(self) -> Tuple[Optional[ExternalMediaPlayer], Optional[Tuple[str, int, int]]]:
+        transport = self._audio_service.transport_snapshot()
+        runtime_sessions = {
+            str(session.session_id): session
+            for session in self._audio_service.runtime_session_snapshots()
+        }
+        reference_session_id = str(getattr(transport, "reference_session_id", "") or "").strip()
+        if reference_session_id:
+            for player in self._all_active_players():
+                if str(getattr(player, "player_id", "") or "").strip() != reference_session_id:
+                    continue
+                session = runtime_sessions.get(reference_session_id)
+                if session is not None:
+                    return player, session.slot_key
+                return player, self._player_slot_key_map.get(id(player))
         active_players = self._all_active_players()
-        reference_player = self._playback_runtime.timecode_player(active_players, self._is_multi_play_enabled())
+        ranked_players: list[tuple[int, float, str, ExternalMediaPlayer]] = []
+        for player in active_players:
+            player_id = str(getattr(player, "player_id", "") or "").strip()
+            session = runtime_sessions.get(player_id)
+            if session is None:
+                continue
+            ranked_players.append((int(session.runtime_id), float(session.started_at), player_id, player))
+        reference_player = None
+        if ranked_players:
+            chooser = min if self._is_multi_play_enabled() else max
+            reference_player = chooser(ranked_players, key=lambda item: (item[0], item[1], item[2]))[-1]
         if reference_player is None:
             return None, None
         reference_key = self._player_slot_key_map.get(id(reference_player))
         return reference_player, reference_key
 
     def _newest_active_playing_key(self) -> Optional[Tuple[str, int, int]]:
+        runtime_sessions = [
+            session
+            for session in self._audio_service.runtime_session_snapshots()
+            if session.state == ExternalMediaPlayer.PlayingState and session.slot_key is not None
+        ]
+        if runtime_sessions:
+            newest = max(runtime_sessions, key=lambda session: (session.runtime_id, session.started_at, session.session_id))
+            return newest.slot_key
+        newest_from_started = None
         active_players = self._all_active_players()
-        newest_player = self._playback_runtime.newest_active_player(active_players)
-        if newest_player is not None:
-            newest_key = self._player_slot_key_map.get(id(newest_player))
+        if active_players:
+            newest_from_started = max(active_players, key=lambda player: self._player_started_map.get(id(player), 0.0))
+        if newest_from_started is not None:
+            newest_key = self._player_slot_key_map.get(id(newest_from_started))
             if newest_key is not None:
                 return newest_key
         if self._active_playing_keys:

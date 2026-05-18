@@ -26,14 +26,15 @@ def qapp():
 def test_refresh_runs_async_without_blocking_ui(qapp, monkeypatch):
     observed_versions = []
 
-    def fake_build_system_information_text(version: str, register_probe_process=None) -> str:
+    def fake_build_system_information_text(version: str, register_probe_process=None, runtime_debug_info=None) -> str:
         observed_versions.append(version)
+        assert runtime_debug_info == {"engine": "ok"}
         time.sleep(0.2)
         return f"system info for {version}"
 
     monkeypatch.setattr(system_info_dialog, "build_system_information_text", fake_build_system_information_text)
 
-    dialog = SystemInformationDialog("v1.2.3")
+    dialog = SystemInformationDialog("v1.2.3", runtime_debug_provider=lambda: {"engine": "ok"})
     start = time.perf_counter()
     dialog.refresh()
     elapsed = time.perf_counter() - start
@@ -73,3 +74,37 @@ def test_build_system_information_text_includes_ndi_status(monkeypatch):
     assert "NDI status:" in text
     assert "- NDI ready" in text
     assert "- NDI backend version: 0.1.1" in text
+
+
+def test_build_system_information_text_includes_runtime_debug_info(monkeypatch):
+    monkeypatch.setattr(system_info_dialog, "list_output_devices", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "list_midi_input_devices", lambda force_refresh=False: [])
+    monkeypatch.setattr(system_info_dialog, "_list_midi_outputs_cross_platform", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "_get_pygame_decoder_report", lambda register_process=None: ["ok"])
+    monkeypatch.setattr(system_info_dialog, "_get_current_running_config_report", lambda: ["cfg"])
+    monkeypatch.setattr(system_info_dialog, "_get_library_versions", lambda: ["lib"])
+    monkeypatch.setattr(system_info_dialog, "_get_network_interfaces", lambda: [])
+    monkeypatch.setattr(system_info_dialog, "ndi_status_lines", lambda: ["NDI ready"])
+
+    text = system_info_dialog.build_system_information_text(
+        "v1.2.3",
+        runtime_debug_info={
+            "engine_diagnostics": {"session_count": 2, "reference_session_id": "player-1"},
+            "transport_snapshot": {"position_ms": 1200},
+            "runtime_sessions": [
+                {
+                    "session_id": "player-1",
+                    "runtime_id": 0,
+                    "state": 1,
+                    "slot_key": ("A", 0, 0),
+                    "position_ms": 1200,
+                    "duration_ms": 5000,
+                }
+            ],
+        },
+    )
+
+    assert "Runtime engine diagnostics:" in text
+    assert "- engine.session_count: 2" in text
+    assert "- transport.position_ms: 1200" in text
+    assert "id=player-1 runtime_id=0 state=1" in text

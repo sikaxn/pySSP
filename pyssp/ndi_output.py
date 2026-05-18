@@ -203,6 +203,7 @@ class NDIOutputDispatcher:
         self._pending_audio_blocks: deque[tuple[np.ndarray, int]] = deque()
         self._max_audio_queue_blocks = max(2, int(max_audio_queue_blocks))
         self._connection_poll_interval_sec = max(0.05, float(connection_poll_interval_sec))
+        self._max_audio_blocks_per_cycle = 1
         self._connection_count = 0
         self._last_audio_error = ""
         self._last_audio_mode = ""
@@ -325,8 +326,9 @@ class NDIOutputDispatcher:
                 self._config_dirty = False
                 video_frame = self._pending_video_frame
                 self._pending_video_frame = None
-                audio_blocks = list(self._pending_audio_blocks)
-                self._pending_audio_blocks.clear()
+                audio_blocks: list[tuple[np.ndarray, int]] = []
+                while self._pending_audio_blocks and len(audio_blocks) < self._max_audio_blocks_per_cycle:
+                    audio_blocks.append(self._pending_audio_blocks.popleft())
             if disable_sender:
                 try:
                     with self._sender_lock:
@@ -342,6 +344,13 @@ class NDIOutputDispatcher:
                 except Exception:
                     pass
                 self._sync_public_state()
+            if video_frame is not None:
+                try:
+                    with self._sender_lock:
+                        self._sender.send_video_frame(video_frame)
+                except Exception:
+                    pass
+                self._sync_public_state()
             for frames, sample_rate in audio_blocks:
                 try:
                     with self._sender_lock:
@@ -353,13 +362,6 @@ class NDIOutputDispatcher:
                     self._audio_send_count += 1
                 else:
                     self._audio_drop_count += 1
-                self._sync_public_state()
-            if video_frame is not None:
-                try:
-                    with self._sender_lock:
-                        self._sender.send_video_frame(video_frame)
-                except Exception:
-                    pass
                 self._sync_public_state()
             now = time.perf_counter()
             if (now - last_connection_poll) >= self._connection_poll_interval_sec:

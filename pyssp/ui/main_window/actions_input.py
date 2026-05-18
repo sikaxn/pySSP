@@ -426,6 +426,10 @@ class ActionsInputMixin:
         multi_btn = self.control_buttons.get("Multi-Play")
         if multi_btn:
             multi_btn.setChecked(checked)
+        try:
+            self._audio_service.set_multi_play_enabled(bool(checked))
+        except Exception:
+            pass
         self._update_timecode_multiplay_warning_banner()
         if checked:
             self.page_playlist_enabled[self.current_group][self.current_page] = False

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 
 import numpy as np
@@ -371,5 +372,68 @@ def test_ndi_dispatcher_bounds_audio_queue():
         while time.time() < deadline and dispatcher._sender.audio_calls <= 0:
             time.sleep(0.01)
         assert dispatcher._audio_drop_count > 0
+    finally:
+        dispatcher.shutdown()
+
+
+def test_ndi_dispatcher_prioritizes_video_when_audio_backlog_exists():
+    class _TrackingSender:
+        available = True
+
+        def __init__(self, _status) -> None:
+            self.order = []
+            self._allow_config = threading.Event()
+            self._last_audio_error = ""
+            self._last_audio_mode = ""
+            self._audio_recovery_count = 0
+
+        def configure(self, _config) -> bool:
+            self.order.append("configure")
+            self._allow_config.wait(timeout=1.0)
+            return True
+
+        def stop(self) -> None:
+            return None
+
+        def get_num_connections(self, _timeout: float = 0.0) -> int:
+            return 1
+
+        def send_video_frame(self, _image: QImage) -> bool:
+            self.order.append("video")
+            return True
+
+        def send_audio_frames(self, _frames: np.ndarray, _sample_rate: int) -> bool:
+            self.order.append("audio")
+            self._last_audio_mode = "ok"
+            return True
+
+    dispatcher = NDIOutputDispatcher(_ready_status(), sender_factory=_TrackingSender, connection_poll_interval_sec=0.05)
+    try:
+        config = NDIOutputConfig(
+            source_name="pyssp-video",
+            width=640,
+            height=360,
+            fps=30.0,
+            audio_enabled=True,
+        )
+        assert dispatcher.configure(config) is True
+
+        audio = np.ones((1024, 2), dtype=np.float32) * 0.25
+        image = QImage(640, 360, QImage.Format_RGB32)
+        image.fill(0x112233)
+
+        for _ in range(3):
+            assert dispatcher.send_audio_frames(audio, 48000) is True
+        assert dispatcher.send_video_frame(image) is True
+
+        dispatcher._sender._allow_config.set()
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if dispatcher._sender.order.count("video") >= 1 and dispatcher._sender.order.count("audio") >= 1:
+                break
+            time.sleep(0.01)
+
+        assert dispatcher._sender.order[:3] == ["configure", "video", "audio"]
     finally:
         dispatcher.shutdown()

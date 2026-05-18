@@ -10,4 +10,5 @@ The docs build now runs that generator automatically, and `make api-check` can b
 
 generated/index
 audio_tap_bus
+media_runtime
 ```

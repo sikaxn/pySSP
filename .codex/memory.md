@@ -187,3 +187,34 @@ NDI audio
   - regenerate them with `python scripts/generate_api_docs.py`
   - `docs/Makefile` and `docs/build.bat` run API doc generation automatically before Sphinx builds
   - future code changes should keep the generated API docs in sync
+
+## 2026-05-18
+
+- Media backend rewrite implementation started in live code, not just planning.
+- New package `pyssp.engine` now exists with:
+  - `MediaRuntime`
+  - `FFmpegEngineServices`
+  - internal runtime contract dataclasses in `pyssp/engine/types.py`
+- Current cutover choice:
+  - keep `ExternalMediaPlayer` as the v1 execution node
+  - move session ownership, FFmpeg service ownership, transport snapshots, and engine diagnostics into `MediaRuntime`
+  - keep `AudioPlayerProxy` / `AudioServiceController` as the UI-facing compatibility layer
+- `pyssp/audio_service.py` now delegates player session ownership to `MediaRuntime` instead of owning the player registry directly.
+- `AudioServiceController` now exposes runtime helpers:
+  - `transport_snapshot()`
+  - `engine_diagnostics_snapshot()`
+  - `set_multi_play_enabled(...)`
+- `MainWindow` runtime integration started:
+  - audio player initialization sets runtime multi-play policy explicitly
+  - toggling Multi-Play now updates runtime transport policy
+  - Audio Engine Insight summary now includes runtime session/transport diagnostics
+- Follow-up runtime ownership cutover:
+  - `MediaRuntime` now exposes session snapshots including runtime id, state, position, duration, and slot key metadata
+  - `AudioServiceController` now exposes `runtime_session_snapshots()` and `set_session_slot_key(...)`
+  - `PlaybackMixin._set_player_slot_key()` / `_clear_player_slot_key()` now mirror slot-key ownership into the runtime
+  - `TimecodeMixin._timecode_reference_context()` now prefers runtime transport/session ownership over the old UI-side tracker
+  - `SystemInformationDialog` now accepts a runtime debug provider so MainWindow can export engine diagnostics, transport snapshot, and session inventory for troubleshooting
+  - `Audio Engine Insight` now shows runtime session fields (`runtime_session_id`, runtime slot metadata, runtime session inventory in summary) for easier debugging
+- FFmpeg direction is fixed in code as well as docs:
+  - FFmpeg remains a first-class subsystem for probing, format support, and preload-friendly decode workflows
+  - the rewrite should continue building on this instead of removing it

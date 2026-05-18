@@ -149,6 +149,8 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         assert summary_map["ffmpeg_path"] == r"C:\ffmpeg.exe"
         assert summary_map["ffprobe_path"] == "not found"
         assert summary_map["ffmpeg_version"] == "ffmpeg version test"
+        assert "runtime_reference_session" in summary_map
+        assert "runtime_session_count" in summary_map
         assert summary_map["ndi_ready"] is True
         assert summary_map["ndi_audio_tap_mode"] == "post_fader"
         assert summary_map["ndi_audio_player_labels"] == ["primary"]
@@ -159,6 +161,8 @@ def test_audio_engine_insight_snapshot_contains_player_sections(qapp, monkeypatc
         assert summary_map["ndi_audio_recovery_count"] == 0
         assert "size=1920x1080" in summary_map["current_video_probe"]
         details_map = dict(snapshot["players"][0]["details"])
+        assert details_map["runtime_session_id"] == "primary-player"
+        assert "runtime_slot_key" in details_map
         assert details_map["file_path"] == "clip.mp4"
         assert details_map["media_probe_has_video"] is True
         assert details_map["media_probe_width"] == 1920

@@ -48,18 +48,18 @@ No module docstring.
 
 #### Public Members
 
-- `available(self) -> bool` [property] (pyssp/ndi_output.py:217)
-- `configure(self, config: NDIOutputConfig) -> bool` [method] (pyssp/ndi_output.py:220)
-- `stop(self) -> None` [method] (pyssp/ndi_output.py:238)
-- `shutdown(self) -> None` [method] (pyssp/ndi_output.py:247)
-- `get_num_connections(self, timeout: float = 0.0) -> int` [method] (pyssp/ndi_output.py:259)
-- `send_video_frame(self, image: QImage) -> bool` [method] (pyssp/ndi_output.py:263)
-- `send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool` [method] (pyssp/ndi_output.py:271)
+- `available(self) -> bool` [property] (pyssp/ndi_output.py:218)
+- `configure(self, config: NDIOutputConfig) -> bool` [method] (pyssp/ndi_output.py:221)
+- `stop(self) -> None` [method] (pyssp/ndi_output.py:239)
+- `shutdown(self) -> None` [method] (pyssp/ndi_output.py:248)
+- `get_num_connections(self, timeout: float = 0.0) -> int` [method] (pyssp/ndi_output.py:260)
+- `send_video_frame(self, image: QImage) -> bool` [method] (pyssp/ndi_output.py:264)
+- `send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool` [method] (pyssp/ndi_output.py:272)
 
 #### Internal Members
 
 - `__init__(self, status: NDICapabilityStatus, *, sender_factory: Optional[Callable[[NDICapabilityStatus], NDIOutputSender]] = None, connection_poll_interval_sec: float = 0.25, max_audio_queue_blocks: int = 24) -> None` [constructor] (pyssp/ndi_output.py:186)
-- `_sync_public_state(self) -> None` [method] (pyssp/ndi_output.py:288)
-- `_set_audio_error(self, message: str) -> None` [method] (pyssp/ndi_output.py:297)
-- `_clear_audio_error(self) -> None` [method] (pyssp/ndi_output.py:304)
-- `_worker_loop(self) -> None` [method] (pyssp/ndi_output.py:307)
+- `_sync_public_state(self) -> None` [method] (pyssp/ndi_output.py:289)
+- `_set_audio_error(self, message: str) -> None` [method] (pyssp/ndi_output.py:298)
+- `_clear_audio_error(self) -> None` [method] (pyssp/ndi_output.py:305)
+- `_worker_loop(self) -> None` [method] (pyssp/ndi_output.py:308)

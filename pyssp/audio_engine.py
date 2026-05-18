@@ -19,6 +19,7 @@ import pygame
 import sounddevice as sd
 from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
+from pyssp.audio_tap_bus import SharedAudioTapBus
 from pyssp.dsp import DSPConfig, RealTimeDSPProcessor, has_active_processing, normalize_config
 from pyssp.ffmpeg_support import FFmpegPCMStream, ffmpeg_available, probe_media_duration_ms
 from pyssp.utility_audio import (
@@ -49,16 +50,13 @@ _PRELOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-
 _MEDIA_LOAD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyssp-audio-load")
 _WAVEFORM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyssp-waveform")
 _WAVEFORM_CACHE_LOCK = threading.RLock()
-_OUTPUT_METER_LOCK = threading.RLock()
 _OUTPUT_METER_ACTIVE_WINDOW_SEC = 0.25
-_OUTPUT_METER_PRE_SOURCES: Dict[int, Tuple[float, float, float]] = {}
-_OUTPUT_METER_POST_SOURCES: Dict[int, Tuple[float, float, float]] = {}
-_OUTPUT_MONITOR_LOCK = threading.RLock()
 _OUTPUT_MONITOR_CAPACITY_FRAMES = _DEFAULT_AUDIO_SAMPLE_RATE * 4
-_OUTPUT_MONITOR_PRE: Dict[str, deque[np.ndarray]] = {}
-_OUTPUT_MONITOR_POST: Dict[str, deque[np.ndarray]] = {}
-_OUTPUT_MONITOR_PRE_COUNTS: Dict[str, int] = {}
-_OUTPUT_MONITOR_POST_COUNTS: Dict[str, int] = {}
+_ENGINE_TAP_BUS = SharedAudioTapBus(
+    channel_count=_CHANNEL_COUNT,
+    meter_active_window_sec=_OUTPUT_METER_ACTIVE_WINDOW_SEC,
+    monitor_capacity_frames=_OUTPUT_MONITOR_CAPACITY_FRAMES,
+)
 _COREAUDIO_KEEPALIVE_LOCK = threading.RLock()
 _COREAUDIO_KEEPALIVE_STREAM = None
 _COREAUDIO_KEEPALIVE_REFS = 0
@@ -217,129 +215,48 @@ def shutdown_audio_preload() -> None:
 
 
 def get_engine_output_meter_levels(mode: str = "post_fader") -> Tuple[float, float]:
-    now = time.perf_counter()
-    left = 0.0
-    right = 0.0
-    stale_ids: List[int] = []
-    sources = _OUTPUT_METER_PRE_SOURCES if str(mode or "").strip().lower() == "pre_fader" else _OUTPUT_METER_POST_SOURCES
-    with _OUTPUT_METER_LOCK:
-        for stream_id, (updated_at, src_left, src_right) in sources.items():
-            if (now - float(updated_at)) > _OUTPUT_METER_ACTIVE_WINDOW_SEC:
-                stale_ids.append(int(stream_id))
-                continue
-            left += max(0.0, float(src_left))
-            right += max(0.0, float(src_right))
-        for stream_id in stale_ids:
-            sources.pop(stream_id, None)
-    return min(1.0, left), min(1.0, right)
+    return _ENGINE_TAP_BUS.get_meter_levels(mode)
 
 
 def _update_engine_output_meter(stream_id: int, left: float, right: float, *, mode: str = "post_fader") -> None:
-    sources = _OUTPUT_METER_PRE_SOURCES if str(mode or "").strip().lower() == "pre_fader" else _OUTPUT_METER_POST_SOURCES
-    with _OUTPUT_METER_LOCK:
-        sources[int(stream_id)] = (time.perf_counter(), max(0.0, float(left)), max(0.0, float(right)))
+    _ENGINE_TAP_BUS.update_meter(stream_id, left, right, mode=mode)
 
 
 def _clear_engine_output_meter(stream_id: int) -> None:
-    with _OUTPUT_METER_LOCK:
-        _OUTPUT_METER_PRE_SOURCES.pop(int(stream_id), None)
-        _OUTPUT_METER_POST_SOURCES.pop(int(stream_id), None)
+    _ENGINE_TAP_BUS.clear_meter(stream_id)
 
 
 def clear_output_monitor_frames(player_id: str = "") -> None:
-    token = str(player_id or "").strip()
-    with _OUTPUT_MONITOR_LOCK:
-        if not token:
-            _OUTPUT_MONITOR_PRE.clear()
-            _OUTPUT_MONITOR_POST.clear()
-            _OUTPUT_MONITOR_PRE_COUNTS.clear()
-            _OUTPUT_MONITOR_POST_COUNTS.clear()
-            return
-        _OUTPUT_MONITOR_PRE.pop(token, None)
-        _OUTPUT_MONITOR_POST.pop(token, None)
-        _OUTPUT_MONITOR_PRE_COUNTS.pop(token, None)
-        _OUTPUT_MONITOR_POST_COUNTS.pop(token, None)
-
-
-def _output_monitor_store(mode: str) -> tuple[Dict[str, deque[np.ndarray]], Dict[str, int]]:
-    token = str(mode or "post_fader").strip().lower()
-    if token == "pre_fader":
-        return _OUTPUT_MONITOR_PRE, _OUTPUT_MONITOR_PRE_COUNTS
-    return _OUTPUT_MONITOR_POST, _OUTPUT_MONITOR_POST_COUNTS
+    _ENGINE_TAP_BUS.clear_monitor_frames(player_id)
 
 
 def append_output_monitor_frames(player_id: str, frames_block: np.ndarray, *, mode: str) -> None:
-    token = str(player_id or "").strip()
-    if not token:
-        return
-    block = np.asarray(frames_block, dtype=np.float32)
-    if block.ndim != 2 or len(block) <= 0:
-        return
-    store, counts = _output_monitor_store(mode)
-    with _OUTPUT_MONITOR_LOCK:
-        queue_ref = store.get(token)
-        if queue_ref is None:
-            queue_ref = deque()
-            store[token] = queue_ref
-            counts[token] = 0
-        queue_ref.append(np.ascontiguousarray(block, dtype=np.float32).copy())
-        counts[token] = max(0, int(counts.get(token, 0))) + int(len(block))
-        while counts[token] > _OUTPUT_MONITOR_CAPACITY_FRAMES and queue_ref:
-            dropped = np.asarray(queue_ref.popleft(), dtype=np.float32)
-            counts[token] = max(0, int(counts[token]) - int(len(dropped)))
+    _ENGINE_TAP_BUS.append_monitor_frames(player_id, frames_block, mode=mode)
 
 
 def take_output_monitor_frames(player_id: str, max_frames: int = 0, mode: str = "post_fader") -> np.ndarray:
-    token = str(player_id or "").strip()
-    if not token:
-        return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
-    store, counts = _output_monitor_store(mode)
-    with _OUTPUT_MONITOR_LOCK:
-        queue_ref = store.get(token)
-        if not queue_ref:
-            return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
-        total_frames = max(0, int(counts.get(token, 0)))
-        if total_frames <= 0:
-            return np.zeros((0, _CHANNEL_COUNT), dtype=np.float32)
-        target_frames = total_frames if max_frames <= 0 else min(total_frames, max(1, int(max_frames)))
-        pieces: List[np.ndarray] = []
-        remaining = target_frames
-        channel_count = _CHANNEL_COUNT
-        while remaining > 0 and queue_ref:
-            head = np.asarray(queue_ref[0], dtype=np.float32)
-            if head.ndim != 2 or len(head) <= 0:
-                queue_ref.popleft()
-                continue
-            channel_count = int(head.shape[1])
-            take = min(remaining, int(head.shape[0]))
-            pieces.append(np.ascontiguousarray(head[:take, :], dtype=np.float32))
-            remaining -= take
-            if take >= int(head.shape[0]):
-                queue_ref.popleft()
-            else:
-                queue_ref[0] = np.ascontiguousarray(head[take:, :], dtype=np.float32)
-            counts[token] = max(0, int(counts.get(token, 0)) - take)
-        if counts.get(token, 0) <= 0:
-            counts[token] = 0
-        if not queue_ref:
-            store.pop(token, None)
-            counts.pop(token, None)
-        if not pieces:
-            return np.zeros((0, channel_count), dtype=np.float32)
-        if len(pieces) == 1:
-            return pieces[0]
-        return np.ascontiguousarray(np.vstack(pieces), dtype=np.float32)
+    return _ENGINE_TAP_BUS.take_monitor_frames(player_id, max_frames=max_frames, mode=mode)
 
 
 def output_monitor_frame_counts(player_id: str) -> Dict[str, int]:
-    token = str(player_id or "").strip()
-    if not token:
-        return {"pre_fader": 0, "post_fader": 0}
-    with _OUTPUT_MONITOR_LOCK:
-        return {
-            "pre_fader": max(0, int(_OUTPUT_MONITOR_PRE_COUNTS.get(token, 0))),
-            "post_fader": max(0, int(_OUTPUT_MONITOR_POST_COUNTS.get(token, 0))),
-        }
+    return _ENGINE_TAP_BUS.monitor_frame_counts(player_id)
+
+
+def list_output_monitor_players(mode: str = "post_fader") -> List[str]:
+    return _ENGINE_TAP_BUS.monitor_player_ids(mode)
+
+
+def mix_output_monitor_chunk(
+    player_ids: List[str],
+    *,
+    target_frames: int,
+    mode: str = "post_fader",
+) -> tuple[np.ndarray, Dict[str, int]] | None:
+    return _ENGINE_TAP_BUS.mix_monitor_chunk(player_ids, target_frames=target_frames, mode=mode)
+
+
+def consume_output_monitor_chunk(consume_map: Dict[str, int], mode: str = "post_fader") -> None:
+    _ENGINE_TAP_BUS.consume_monitor_frames(consume_map, mode=mode)
 
 
 def _coreaudio_keepalive_callback(outdata, frames, _time_info, _status) -> None:

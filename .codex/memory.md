@@ -171,3 +171,19 @@ NDI audio
   - player instances become engine voices feeding buses instead of owning independent output streams
   - explicit internal tap stages for `pre_fader`, `post_fader`, and final master
   - no downstream consumer should rebuild or remix audio independently in the UI thread
+- 2026-05-18 implementation start:
+  - extracted shared tap-side state into `pyssp/audio_tap_bus.py` as `SharedAudioTapBus`
+  - `pyssp/audio_engine.py` meter aggregation and per-player monitor-frame storage now delegate to that shared bus object
+  - this is the first engine-owned seam for the future master-bus rewrite; it does not yet create a single hardware render stream
+  - API docs for this foundation live in `docs/source/api/audio_tap_bus.md`
+  - docs index now includes an `API Docs` section intended for future engine/runtime contracts
+- 2026-05-18 NDI follow-up:
+  - NDI audio in `video_display.py` no longer owns a separate UI-side per-player pending-buffer mixer
+  - NDI now consumes pending monitor audio through shared-bus-backed helpers exposed by `pyssp/audio_engine.py`
+  - partial tail flush after stop is preserved: if fewer than one target block of frames remain, NDI still sends the smaller remainder chunk
+  - the architectural gap is now smaller: NDI is still fed by per-player monitor publication, but queue ownership and mixing have moved out of the UI buffer workaround layer
+- 2026-05-18 API docs process:
+  - full repository API docs now live under `docs/source/api/generated/`
+  - regenerate them with `python scripts/generate_api_docs.py`
+  - `docs/Makefile` and `docs/build.bat` run API doc generation automatically before Sphinx builds
+  - future code changes should keep the generated API docs in sync

@@ -1653,17 +1653,13 @@ class UiBuildMixin:
 
     def _ndi_audio_buffer_frame_summary(self) -> dict[str, int]:
         summary: dict[str, int] = {}
-        buffers = getattr(self, "_ndi_audio_player_buffers", {})
-        if not isinstance(buffers, dict):
-            return summary
         for player in self._insight_runtime_players():
             player_token = str(getattr(player, "player_id", "") or "").strip()
             if not player_token:
                 continue
-            pending = np.asarray(buffers.get(player_token), dtype=np.float32)
-            if pending.ndim != 2:
-                continue
-            summary[self._audio_player_label(player)] = max(0, int(len(pending)))
+            counts = output_monitor_frame_counts(player_token)
+            mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
+            summary[self._audio_player_label(player)] = max(0, int(counts.get(mode, 0) or 0))
         return summary
 
     def _open_help_window(self) -> None:

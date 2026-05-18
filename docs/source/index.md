@@ -14,5 +14,6 @@ troubleshooting
 midi_control
 settings
 web_remote_api
+api/index
 dev_notes/index
 ```

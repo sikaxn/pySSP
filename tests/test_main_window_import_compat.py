@@ -361,11 +361,14 @@ def test_send_ndi_audio_flushes_player_tap_blocks():
 
         def sampleRate(self):
             return 48000
-    monitor_calls = []
-    original_take = video_display_module.take_output_monitor_frames
-    video_display_module.take_output_monitor_frames = lambda player_id, max_frames=0, mode="post_fader": (
-        monitor_calls.append((str(player_id), int(max_frames), str(mode))) or (np.ones((3000, 2), dtype=np.float32) * 0.25)
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-a",
+        np.ones((3000, 2), dtype=np.float32) * 0.25,
+        mode="pre_fader",
     )
+    original_take = video_display_module.take_output_monitor_frames
+    video_display_module.take_output_monitor_frames = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy path"))
 
     host = _VideoRefreshHost()
     try:
@@ -379,7 +382,6 @@ def test_send_ndi_audio_flushes_player_tap_blocks():
             fps=30.0,
             audio_enabled=True,
         )
-        host._ndi_audio_player_buffers = {}
         player = _DummyPlayer()
         host._ndi_audio_players = lambda: [player]
 
@@ -387,12 +389,12 @@ def test_send_ndi_audio_flushes_player_tap_blocks():
     finally:
         video_display_module.take_output_monitor_frames = original_take
 
-    assert monitor_calls == [("player-a", 8192, "pre_fader")]
     assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
-    assert host._ndi_audio_player_buffers["player-a"].shape == (952, 2)
+    assert video_display_module.output_monitor_frame_counts("player-a") == {"pre_fader": 952, "post_fader": 0}
+    video_display_module.clear_output_monitor_frames()
 
 
 def test_send_ndi_audio_mixes_active_players():
@@ -411,8 +413,17 @@ def test_send_ndi_audio_mixes_active_players():
 
         def sampleRate(self):
             return 48000
-    original_take = video_display_module.take_output_monitor_frames
-    video_display_module.take_output_monitor_frames = lambda player_id, max_frames=0, mode="post_fader": np.ones((1600, 2), dtype=np.float32) * (0.25 if player_id == "player-0.25" else 0.5)
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-0.25",
+        np.ones((1600, 2), dtype=np.float32) * 0.25,
+        mode="post_fader",
+    )
+    video_display_module.append_output_monitor_frames(
+        "player-0.5",
+        np.ones((1600, 2), dtype=np.float32) * 0.5,
+        mode="post_fader",
+    )
 
     host = _VideoRefreshHost()
     host.ndi_output_audio_enabled = True
@@ -425,13 +436,12 @@ def test_send_ndi_audio_mixes_active_players():
         fps=30.0,
         audio_enabled=True,
     )
-    host._ndi_audio_player_buffers = {}
     host._ndi_audio_players = lambda: [_DummyPlayer(0.25), _DummyPlayer(0.5)]
 
     try:
         host._send_ndi_audio()
     finally:
-        video_display_module.take_output_monitor_frames = original_take
+        video_display_module.clear_output_monitor_frames()
 
     assert len(host._ndi_sender.chunks) == 1
     chunk, sample_rate = host._ndi_sender.chunks[0]
@@ -488,14 +498,17 @@ def test_send_ndi_audio_supports_audio_player_proxy():
         fps=30.0,
         audio_enabled=True,
     )
-    host._ndi_audio_player_buffers = {}
     host._ndi_audio_players = lambda: [player]
-    original_take = video_display_module.take_output_monitor_frames
-    video_display_module.take_output_monitor_frames = lambda player_id, max_frames=0, mode="post_fader": np.ones((3000, 2), dtype=np.float32) * 0.125
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-test",
+        np.ones((3000, 2), dtype=np.float32) * 0.125,
+        mode="post_fader",
+    )
     try:
         host._send_ndi_audio()
     finally:
-        video_display_module.take_output_monitor_frames = original_take
+        video_display_module.clear_output_monitor_frames()
 
     assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
@@ -520,11 +533,12 @@ def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
 
         def sampleRate(self):
             return 48000
-    original_take = video_display_module.take_output_monitor_frames
-    def _take(player_id, max_frames=0, mode="post_fader"):
-        _ = (max_frames, mode)
-        return np.ones((2048, 2), dtype=np.float32) * 0.5 if player_id == "player-2048" else np.zeros((0, 2), dtype=np.float32)
-    video_display_module.take_output_monitor_frames = _take
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-2048",
+        np.ones((2048, 2), dtype=np.float32) * 0.5,
+        mode="post_fader",
+    )
 
     host = _VideoRefreshHost()
     host.ndi_output_audio_enabled = True
@@ -537,7 +551,6 @@ def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
         fps=30.0,
         audio_enabled=True,
     )
-    host._ndi_audio_player_buffers = {}
     host._ndi_audio_players = lambda: [
         _DummyPlayer(np.ones((2048, 2), dtype=np.float32) * 0.5),
         _DummyPlayer(np.zeros((0, 2), dtype=np.float32)),
@@ -546,14 +559,14 @@ def test_send_ndi_audio_does_not_stall_when_one_playing_player_has_no_frames():
     try:
         host._send_ndi_audio()
     finally:
-        video_display_module.take_output_monitor_frames = original_take
+        video_display_module.clear_output_monitor_frames()
 
     assert len(host._ndi_sender.chunks) == 2
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (1024, 2)
     assert np.allclose(chunk, np.ones((1024, 2), dtype=np.float32) * 0.5)
-    assert all(np.asarray(value, dtype=np.float32).shape[0] == 0 for value in host._ndi_audio_player_buffers.values())
+    assert video_display_module.output_monitor_frame_counts("player-2048") == {"pre_fader": 0, "post_fader": 0}
 
 
 def test_send_ndi_audio_keeps_buffers_when_sender_defers_block():
@@ -571,8 +584,12 @@ def test_send_ndi_audio_keeps_buffers_when_sender_defers_block():
 
         def sampleRate(self):
             return 48000
-    original_take = video_display_module.take_output_monitor_frames
-    video_display_module.take_output_monitor_frames = lambda player_id, max_frames=0, mode="post_fader": np.ones((1600, 2), dtype=np.float32) * 0.5
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-a",
+        np.ones((1600, 2), dtype=np.float32) * 0.5,
+        mode="post_fader",
+    )
 
     host = _VideoRefreshHost()
     host.ndi_output_audio_enabled = True
@@ -585,17 +602,17 @@ def test_send_ndi_audio_keeps_buffers_when_sender_defers_block():
         fps=30.0,
         audio_enabled=True,
     )
-    host._ndi_audio_player_buffers = {}
     player = _DummyPlayer()
     host._ndi_audio_players = lambda: [player]
 
     try:
         host._send_ndi_audio()
     finally:
-        video_display_module.take_output_monitor_frames = original_take
+        pass
 
     assert host._ndi_sender.calls == 1
-    assert host._ndi_audio_player_buffers["player-a"].shape == (1600, 2)
+    assert video_display_module.output_monitor_frame_counts("player-a") == {"pre_fader": 0, "post_fader": 1600}
+    video_display_module.clear_output_monitor_frames()
 
 
 def test_send_ndi_audio_flushes_pending_buffer_after_player_stops():
@@ -620,19 +637,26 @@ def test_send_ndi_audio_flushes_pending_buffer_after_player_stops():
     )
     host._ndi_audio_last_sample_rate = 48000
     host._ndi_audio_last_channel_count = 2
-    host._ndi_audio_player_buffers = {
-        "player-a": np.ones((600, 2), dtype=np.float32) * 0.375,
-    }
+    video_display_module.clear_output_monitor_frames()
+    video_display_module.append_output_monitor_frames(
+        "player-a",
+        np.ones((600, 2), dtype=np.float32) * 0.375,
+        mode="post_fader",
+    )
     host._ndi_audio_players = lambda: []
 
-    host._send_ndi_audio()
+    try:
+        host._send_ndi_audio()
+    finally:
+        pass
 
     assert len(host._ndi_sender.chunks) == 1
     chunk, sample_rate = host._ndi_sender.chunks[0]
     assert sample_rate == 48000
     assert chunk.shape == (600, 2)
     assert np.allclose(chunk, np.ones((600, 2), dtype=np.float32) * 0.375)
-    assert host._ndi_audio_player_buffers == {}
+    assert video_display_module.output_monitor_frame_counts("player-a") == {"pre_fader": 0, "post_fader": 0}
+    video_display_module.clear_output_monitor_frames()
 
 
 def test_send_ndi_audio_sends_silence_keepalive_when_idle():
@@ -657,10 +681,13 @@ def test_send_ndi_audio_sends_silence_keepalive_when_idle():
     )
     host._ndi_audio_last_sample_rate = 48000
     host._ndi_audio_last_channel_count = 2
-    host._ndi_audio_player_buffers = {}
+    video_display_module.clear_output_monitor_frames()
     host._ndi_audio_players = lambda: []
 
-    host._send_ndi_audio()
+    try:
+        host._send_ndi_audio()
+    finally:
+        video_display_module.clear_output_monitor_frames()
 
     assert len(host._ndi_sender.chunks) == 1
     chunk, sample_rate = host._ndi_sender.chunks[0]

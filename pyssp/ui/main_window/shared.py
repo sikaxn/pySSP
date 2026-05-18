@@ -70,6 +70,7 @@ from pyssp.audio_format_support import (
 )
 from pyssp.audio_engine import (
     append_output_monitor_frames,
+    consume_output_monitor_chunk,
     ExternalMediaPlayer,
     can_decode_with_ffmpeg,
     can_stream_without_preload,
@@ -85,7 +86,9 @@ from pyssp.audio_engine import (
     get_preload_memory_limits_mb,
     get_media_ssp_units,
     is_audio_preloaded,
+    list_output_monitor_players,
     list_output_devices,
+    mix_output_monitor_chunk,
     output_monitor_frame_counts,
     request_audio_preload,
     set_audio_preload_paused,

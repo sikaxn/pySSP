@@ -16,15 +16,15 @@ fi
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 
 cd "${ROOT_DIR}"
-echo "[INFO] Running full pytest suite with \"${VENV_PY}\""
+echo "[INFO] Running test suite with \"${VENV_PY}\""
 set +e
-"${VENV_PY}" -m pytest "$@"
+"${VENV_PY}" scripts/run_tests_stable.py "$@"
 EXIT_CODE=$?
 set -e
 if [[ ${EXIT_CODE} -eq 0 ]]; then
-  echo "[INFO] Pytest completed successfully. Exit code: 0"
+  echo "[INFO] Test suite completed successfully. Exit code: 0"
 else
-  echo "[ERROR] Pytest exited with code ${EXIT_CODE}"
+  echo "[ERROR] Test suite exited with code ${EXIT_CODE}"
 fi
 exit ${EXIT_CODE}
 

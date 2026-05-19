@@ -39,6 +39,13 @@ class VideoDisplayPageMixin:
         ndi_output_fps: int,
         ndi_output_audio_enabled: bool,
         ndi_output_audio_tap_mode: str,
+        ndi_output_group: str,
+        ndi_output_discovery_servers: str,
+        ndi_output_allowed_adapters: str,
+        ndi_output_multicast_enabled: bool,
+        ndi_output_multicast_ttl: int,
+        ndi_output_multicast_netmask: str,
+        ndi_output_multicast_netprefix: str,
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -180,9 +187,30 @@ class VideoDisplayPageMixin:
         self.ndi_output_audio_tap_mode_combo.addItem("Pre volume fader", "pre_fader")
         self._set_combo_data_or_default(self.ndi_output_audio_tap_mode_combo, ndi_output_audio_tap_mode, "post_fader")
         ndi_form.addRow("Audio Tap:", self.ndi_output_audio_tap_mode_combo)
+        self.ndi_output_group_edit = QLineEdit(str(ndi_output_group or "Public"))
+        self.ndi_output_group_edit.setPlaceholderText("Public")
+        ndi_form.addRow("Group(s):", self.ndi_output_group_edit)
+        self.ndi_output_discovery_servers_edit = QLineEdit(str(ndi_output_discovery_servers or ""))
+        self.ndi_output_discovery_servers_edit.setPlaceholderText("discovery server host or IP, comma separated")
+        ndi_form.addRow("Discovery Server(s):", self.ndi_output_discovery_servers_edit)
+        self.ndi_output_allowed_adapters_edit = QLineEdit(str(ndi_output_allowed_adapters or ""))
+        self.ndi_output_allowed_adapters_edit.setPlaceholderText("adapter IPs, comma separated")
+        ndi_form.addRow("Allowed Adapters:", self.ndi_output_allowed_adapters_edit)
+        self.ndi_output_multicast_enabled_checkbox = QCheckBox("Enable multicast send")
+        self.ndi_output_multicast_enabled_checkbox.setChecked(bool(ndi_output_multicast_enabled))
+        ndi_form.addRow(self.ndi_output_multicast_enabled_checkbox)
+        self.ndi_output_multicast_ttl_spin = QSpinBox()
+        self.ndi_output_multicast_ttl_spin.setRange(1, 255)
+        self.ndi_output_multicast_ttl_spin.setValue(max(1, min(255, int(ndi_output_multicast_ttl))))
+        ndi_form.addRow("Multicast TTL:", self.ndi_output_multicast_ttl_spin)
+        self.ndi_output_multicast_netmask_edit = QLineEdit(str(ndi_output_multicast_netmask or "255.255.0.0"))
+        ndi_form.addRow("Multicast Netmask:", self.ndi_output_multicast_netmask_edit)
+        self.ndi_output_multicast_netprefix_edit = QLineEdit(str(ndi_output_multicast_netprefix or "239.255.0.0"))
+        ndi_form.addRow("Multicast Netprefix:", self.ndi_output_multicast_netprefix_edit)
         self._ndi_capability_ready = bool(ndi_ready)
         self.ndi_output_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_audio_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
+        self.ndi_output_multicast_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_resolution_mode_combo.currentIndexChanged.connect(self._sync_ndi_controls)
         self.video_display_mode_playing_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
         self.video_display_mode_idle_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
@@ -358,6 +386,10 @@ class VideoDisplayPageMixin:
             self.ndi_output_resolution_mode_combo,
             self.ndi_output_fps_combo,
             self.ndi_output_audio_enabled_checkbox,
+            self.ndi_output_group_edit,
+            self.ndi_output_discovery_servers_edit,
+            self.ndi_output_allowed_adapters_edit,
+            self.ndi_output_multicast_enabled_checkbox,
         ]:
             widget.setEnabled(ready)
         self.ndi_output_mode_playing_combo.setEnabled(False)
@@ -372,6 +404,10 @@ class VideoDisplayPageMixin:
         self.ndi_output_audio_tap_mode_combo.setEnabled(
             ready and enabled and self.ndi_output_audio_enabled_checkbox.isChecked()
         )
+        multicast_enabled = ready and enabled and self.ndi_output_multicast_enabled_checkbox.isChecked()
+        self.ndi_output_multicast_ttl_spin.setEnabled(multicast_enabled)
+        self.ndi_output_multicast_netmask_edit.setEnabled(multicast_enabled)
+        self.ndi_output_multicast_netprefix_edit.setEnabled(multicast_enabled)
 
     def _sync_ndi_route_controls(self) -> None:
         self._set_combo_data_or_default(

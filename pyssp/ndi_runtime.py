@@ -172,6 +172,7 @@ class NDIRuntimeSenderConfig:
     height: int
     fps: float
     audio_enabled: bool
+    groups: str = "Public"
 
 
 class NDIRuntimeSenderSession:
@@ -184,8 +185,10 @@ class NDIRuntimeSenderSession:
             height=max(2, int(config.height)),
             fps=max(1.0, float(config.fps)),
             audio_enabled=bool(config.audio_enabled),
+            groups=str(config.groups or "Public").strip() or "Public",
         )
         self._name_bytes = self._config.source_name.encode("utf-8", errors="ignore")
+        self._group_bytes = self._config.groups.encode("utf-8", errors="ignore")
         self._sender = self._create_sender()
         self._video_payload: Optional[np.ndarray] = None
         self._video_frame = self._build_video_frame()
@@ -197,7 +200,7 @@ class NDIRuntimeSenderSession:
     def _create_sender(self):
         create_desc = _NDIlib_send_create_t(
             p_ndi_name=self._name_bytes,
-            p_groups=None,
+            p_groups=self._group_bytes,
             clock_video=False,
             clock_audio=True,
         )

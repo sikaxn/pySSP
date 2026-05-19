@@ -6,7 +6,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController, AudioStateCache
-from pyssp.engine.types import RuntimeSessionSnapshot
+from pyssp.engine.types import EngineDiagnosticsSnapshot, RuntimeSessionSnapshot, TransportSnapshot, VideoDestinationSnapshot
 
 
 class _FakeAudioController(QObject):
@@ -135,5 +135,95 @@ def test_runtime_session_snapshots_returns_cached_value_on_timeout() -> None:
     controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
 
     result = AudioServiceController.runtime_session_snapshots(controller)
+
+    assert result == (cached,)
+
+
+def test_transport_snapshot_returns_cached_value_on_timeout() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    cached = TransportSnapshot(
+        generated_at=12.5,
+        reference_session_id="player-1",
+        active_session_ids=("player-1",),
+        playing_session_ids=("player-1",),
+        multi_play_enabled=True,
+        position_ms=1234,
+        duration_ms=5000,
+        state=1,
+    )
+    controller._last_transport_snapshot = cached
+    controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
+
+    result = AudioServiceController.transport_snapshot(controller)
+
+    assert result == cached
+
+
+def test_engine_diagnostics_snapshot_returns_cached_value_on_timeout() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    cached = EngineDiagnosticsSnapshot(
+        generated_at=12.5,
+        session_count=1,
+        active_session_ids=("player-1",),
+        playing_session_ids=("player-1",),
+        reference_session_id="player-1",
+        ffmpeg_available=True,
+        ffmpeg_source="bundled",
+        ffmpeg_version="test",
+        audio_bus_ids=(),
+        video_destination_ids=(),
+        render_core="runtime_shared_mix_graph_v1",
+        audio_output_stream_active=True,
+        audio_output_sample_rate=48000,
+        audio_output_channels=2,
+        audio_output_blocksize=1024,
+        local_video_runtime_enabled=True,
+    )
+    controller._last_engine_diagnostics_snapshot = cached
+    controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
+
+    result = AudioServiceController.engine_diagnostics_snapshot(controller)
+
+    assert result == cached
+
+
+def test_video_destination_snapshots_return_cached_value_on_timeout() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    cached = VideoDestinationSnapshot(
+        destination_id="ndi_program",
+        enabled=True,
+        route_mode="video",
+        source_name="pyssp-video",
+        width=1920,
+        height=1080,
+        fps=30.0,
+        audio_enabled=True,
+        audio_tap_mode="post_fader",
+        groups="Public",
+        discovery_servers="",
+        allowed_adapters=(),
+        multicast_enabled=False,
+        multicast_ttl=1,
+        multicast_netmask="255.255.0.0",
+        multicast_netprefix="239.255.0.0",
+        sender_ready=True,
+        connection_count=1,
+        has_current_frame=True,
+        current_frame_width=1920,
+        current_frame_height=1080,
+        last_video_pts_ms=0,
+        last_video_source_path="",
+        frame_submit_count=1,
+        video_send_count=1,
+        audio_send_count=1,
+        audio_drop_count=0,
+        audio_recovery_count=0,
+        last_audio_sample_rate=48000,
+        last_audio_channel_count=2,
+    )
+    controller._last_video_destination_snapshots = (cached,)
+    controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
+
+    result = AudioServiceController.video_destination_snapshots(controller)
 
     assert result == (cached,)

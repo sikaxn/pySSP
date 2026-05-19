@@ -16,13 +16,13 @@ if not exist "%VENV_PY%" (
 if "%QT_QPA_PLATFORM%"=="" set "QT_QPA_PLATFORM=offscreen"
 
 pushd "%ROOT_DIR%"
-echo [INFO] Running full pytest suite with "%VENV_PY%"
-"%VENV_PY%" -m pytest %*
+echo [INFO] Running test suite with "%VENV_PY%"
+"%VENV_PY%" scripts\run_tests_stable.py %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
-    echo [INFO] Pytest completed successfully. Exit code: 0
+    echo [INFO] Test suite completed successfully. Exit code: 0
 ) else (
-    echo [ERROR] Pytest exited with code %EXIT_CODE%
+    echo [ERROR] Test suite exited with code %EXIT_CODE%
 )
 popd
 

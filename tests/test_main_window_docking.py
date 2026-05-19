@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import os
 
 import pytest
@@ -29,6 +30,18 @@ def _cleanup_main_window(window, qapp: QApplication) -> None:
         window._dock_layout_save_pending = False
     except Exception:
         pass
+    shutdown_runtime_threads = getattr(window, "_shutdown_runtime_threads", None)
+    if callable(shutdown_runtime_threads):
+        try:
+            shutdown_runtime_threads()
+        except Exception:
+            pass
+    stop_companion_client = getattr(window, "_stop_companion_satellite_client", None)
+    if callable(stop_companion_client):
+        try:
+            stop_companion_client()
+        except Exception:
+            pass
     for timer_name in [
         "meter_timer",
         "timecode_mtc_timer",
@@ -49,6 +62,7 @@ def _cleanup_main_window(window, qapp: QApplication) -> None:
     except Exception:
         window.hide()
     window.deleteLater()
+    QApplication.sendPostedEvents(None, 0)
     for widget in list(qapp.topLevelWidgets()):
         try:
             if widget is window:
@@ -59,7 +73,10 @@ def _cleanup_main_window(window, qapp: QApplication) -> None:
                 widget.hide()
             except Exception:
                 pass
-    qapp.processEvents()
+    for _ in range(3):
+        qapp.processEvents()
+        QApplication.sendPostedEvents(None, 0)
+    gc.collect()
 
 
 def _patch_main_window_startup(monkeypatch, *, patch_close_event: bool = True) -> None:

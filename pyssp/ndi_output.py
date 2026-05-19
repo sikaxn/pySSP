@@ -10,7 +10,8 @@ from typing import Callable, Optional
 import numpy as np
 from PyQt5.QtGui import QImage
 
-from pyssp.ndi_runtime import NDIRuntimeError, NDIRuntimeSenderConfig, NDIRuntimeSenderSession
+from pyssp.ndi_config import NDIAccessManagerSettings, apply_ndi_access_manager_settings
+from pyssp.ndi_runtime import NDIRuntimeSenderConfig, NDIRuntimeSenderSession
 from pyssp.ndi_support import NDICapabilityStatus
 
 
@@ -24,6 +25,29 @@ def _print_ndi_error(message: str) -> None:
         pass
 
 
+def _normalize_csv(value: object) -> str:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw in str(value or "").replace(";", ",").split(","):
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tokens.append(token)
+    return ",".join(tokens)
+
+
+def _normalize_adapter_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple, set)):
+        text = _normalize_csv(",".join(str(item or "") for item in value))
+    else:
+        text = _normalize_csv(value)
+    return tuple(text.split(",")) if text else ()
+
+
 @dataclass(frozen=True)
 class NDIOutputConfig:
     source_name: str
@@ -31,6 +55,13 @@ class NDIOutputConfig:
     height: int
     fps: float
     audio_enabled: bool
+    groups: str = "Public"
+    discovery_servers: str = ""
+    allowed_adapters: tuple[str, ...] = ()
+    multicast_enabled: bool = False
+    multicast_ttl: int = 1
+    multicast_netmask: str = "255.255.0.0"
+    multicast_netprefix: str = "239.255.0.0"
 
 
 class NDIOutputSender:
@@ -48,12 +79,14 @@ class NDIOutputSender:
         self._last_audio_mode = ""
         self._audio_recovery_count = 0
         self._last_reported_audio_error = ""
+        self._last_network_config_error = ""
+        self._last_network_config_path = ""
 
     @property
     def available(self) -> bool:
         return bool(self._status.ready and self._status.runtime_library_path)
 
-    def configure(self, config: NDIOutputConfig) -> bool:
+    def configure(self, config: NDIOutputConfig, *, force_restart: bool = False) -> bool:
         if not self.available:
             self.stop()
             return False
@@ -63,10 +96,35 @@ class NDIOutputSender:
             height=max(2, int(config.height)),
             fps=max(1.0, float(config.fps)),
             audio_enabled=bool(config.audio_enabled),
+            groups=str(config.groups or "Public").strip() or "Public",
+            discovery_servers=_normalize_csv(config.discovery_servers),
+            allowed_adapters=_normalize_adapter_tuple(config.allowed_adapters),
+            multicast_enabled=bool(config.multicast_enabled),
+            multicast_ttl=max(1, min(255, int(config.multicast_ttl))),
+            multicast_netmask=str(config.multicast_netmask or "255.255.0.0").strip() or "255.255.0.0",
+            multicast_netprefix=str(config.multicast_netprefix or "239.255.0.0").strip() or "239.255.0.0",
         )
-        if self._config == normalized and self._session is not None:
+        if (not force_restart) and self._config == normalized and self._session is not None:
             return True
         self.stop()
+        self._last_network_config_error = ""
+        self._last_network_config_path = ""
+        try:
+            config_path = apply_ndi_access_manager_settings(
+                NDIAccessManagerSettings.normalized(
+                    send_groups=normalized.groups,
+                    discovery_servers=normalized.discovery_servers,
+                    allowed_adapters=normalized.allowed_adapters,
+                    multicast_send_enabled=normalized.multicast_enabled,
+                    multicast_send_ttl=normalized.multicast_ttl,
+                    multicast_send_netmask=normalized.multicast_netmask,
+                    multicast_send_netprefix=normalized.multicast_netprefix,
+                )
+            )
+            self._last_network_config_path = str(config_path)
+        except Exception as exc:
+            self._last_network_config_error = f"{type(exc).__name__}: {exc}"
+            _print_ndi_error(f"Unable to update NDI Access Manager config: {self._last_network_config_error}")
         try:
             self._session = self._session_factory(
                 str(self._status.runtime_library_path or "").strip(),
@@ -76,6 +134,7 @@ class NDIOutputSender:
                     height=normalized.height,
                     fps=normalized.fps,
                     audio_enabled=normalized.audio_enabled,
+                    groups=normalized.groups,
                 ),
             )
             self._config = normalized
@@ -97,6 +156,12 @@ class NDIOutputSender:
             session.close()
         except Exception:
             pass
+
+    def reconfigure_current(self) -> bool:
+        config = self._config
+        if config is None:
+            return False
+        return self.configure(config, force_restart=True)
 
     def get_num_connections(self, timeout: float = 0.0) -> int:
         session = self._session
@@ -169,7 +234,7 @@ class NDIOutputSender:
             return False
         self._audio_recovery_count += 1
         self.stop()
-        return self.configure(config)
+        return self.configure(config, force_restart=True)
 
     def _set_audio_error(self, message: str) -> None:
         text = str(message or "").strip()
@@ -206,12 +271,16 @@ class NDIOutputDispatcher:
         self._connection_poll_interval_sec = max(0.05, float(connection_poll_interval_sec))
         self._sender_configured = False
         self._connection_count = 0
+        self._last_connection_count = 0
+        self._needs_reconnect_rearm = False
         self._last_audio_error = ""
         self._last_audio_mode = ""
         self._audio_send_count = 0
         self._audio_drop_count = 0
         self._audio_recovery_count = 0
         self._last_reported_audio_error = ""
+        self._last_network_config_error = ""
+        self._last_network_config_path = ""
         self._thread = threading.Thread(target=self._worker_loop, name="pyssp-ndi-output", daemon=True)
         self._audio_thread = threading.Thread(target=self._audio_worker_loop, name="pyssp-ndi-audio", daemon=True)
         self._thread.start()
@@ -231,12 +300,20 @@ class NDIOutputDispatcher:
             height=max(2, int(config.height)),
             fps=max(1.0, float(config.fps)),
             audio_enabled=bool(config.audio_enabled),
+            groups=str(config.groups or "Public").strip() or "Public",
+            discovery_servers=_normalize_csv(config.discovery_servers),
+            allowed_adapters=_normalize_adapter_tuple(config.allowed_adapters),
+            multicast_enabled=bool(config.multicast_enabled),
+            multicast_ttl=max(1, min(255, int(config.multicast_ttl))),
+            multicast_netmask=str(config.multicast_netmask or "255.255.0.0").strip() or "255.255.0.0",
+            multicast_netprefix=str(config.multicast_netprefix or "239.255.0.0").strip() or "239.255.0.0",
         )
         with self._condition:
             self._pending_config = normalized
             self._config_dirty = True
             self._disable_sender = False
             self._sender_configured = False
+            self._needs_reconnect_rearm = False
             self._condition.notify_all()
         with self._audio_condition:
             self._audio_condition.notify_all()
@@ -249,6 +326,7 @@ class NDIOutputDispatcher:
             self._config_dirty = False
             self._pending_video_frame = None
             self._sender_configured = False
+            self._needs_reconnect_rearm = False
             self._condition.notify_all()
         with self._audio_condition:
             self._pending_audio_blocks.clear()
@@ -306,6 +384,8 @@ class NDIOutputDispatcher:
             self._clear_audio_error()
         self._last_audio_mode = str(getattr(self._sender, "_last_audio_mode", "") or "")
         self._audio_recovery_count = max(0, int(getattr(self._sender, "_audio_recovery_count", 0) or 0))
+        self._last_network_config_error = str(getattr(self._sender, "_last_network_config_error", "") or "")
+        self._last_network_config_path = str(getattr(self._sender, "_last_network_config_path", "") or "")
 
     def _set_audio_error(self, message: str) -> None:
         text = str(message or "").strip()
@@ -322,13 +402,10 @@ class NDIOutputDispatcher:
         while True:
             with self._condition:
                 while not self._stop_thread:
-                    if (
-                        self._disable_sender
-                        or self._config_dirty
-                        or self._pending_video_frame is not None
-                    ):
+                    if self._disable_sender or self._config_dirty or self._pending_video_frame is not None:
                         break
                     self._condition.wait(timeout=self._connection_poll_interval_sec)
+                    break
                 if self._stop_thread:
                     break
                 disable_sender = self._disable_sender
@@ -344,7 +421,9 @@ class NDIOutputDispatcher:
                 except Exception:
                     pass
                 self._connection_count = 0
+                self._last_connection_count = 0
                 self._sender_configured = False
+                self._needs_reconnect_rearm = False
                 with self._audio_condition:
                     self._audio_condition.notify_all()
                 self._sync_public_state()
@@ -356,6 +435,7 @@ class NDIOutputDispatcher:
                 except Exception:
                     configured = False
                 self._sender_configured = configured
+                self._needs_reconnect_rearm = False
                 with self._audio_condition:
                     self._audio_condition.notify_all()
                 self._sync_public_state()
@@ -375,18 +455,27 @@ class NDIOutputDispatcher:
                         self._connection_count = max(0, int(self._sender.get_num_connections(0.0)))
                 except Exception:
                     self._connection_count = 0
+                if self._last_connection_count > 0 and self._connection_count <= 0:
+                    self._needs_reconnect_rearm = True
+                elif self._needs_reconnect_rearm and self._connection_count > 0:
+                    try:
+                        with self._sender_lock:
+                            self._sender_configured = bool(self._sender.reconfigure_current())
+                    except Exception:
+                        self._sender_configured = False
+                    with self._audio_condition:
+                        self._pending_audio_blocks.clear()
+                        self._audio_condition.notify_all()
+                    self._needs_reconnect_rearm = False
+                    self._sync_public_state()
+                self._last_connection_count = int(self._connection_count)
                 self._sync_public_state()
 
     def _audio_worker_loop(self) -> None:
         while True:
             with self._audio_condition:
                 while not self._stop_thread:
-                    if (
-                        self._disable_sender
-                        or self._config_dirty
-                        or (not self._sender_configured)
-                        or (not self._pending_audio_blocks)
-                    ):
+                    if self._disable_sender or self._config_dirty or (not self._sender_configured) or (not self._pending_audio_blocks):
                         self._audio_condition.wait(timeout=self._connection_poll_interval_sec)
                         continue
                     frames, sample_rate = self._pending_audio_blocks.popleft()

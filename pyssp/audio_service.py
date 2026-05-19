@@ -4,6 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import itertools
 import queue
+import weakref
 from typing import Any, Dict, Optional, Tuple
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
@@ -163,6 +164,13 @@ class AudioService(QObject):
                 source_name=str(payload.get("source_name", "pyssp-video") or "pyssp-video"),
                 audio_enabled=bool(payload.get("audio_enabled", False)),
                 audio_tap_mode=str(payload.get("audio_tap_mode", "post_fader") or "post_fader"),
+                groups=str(payload.get("groups", "Public") or "Public"),
+                discovery_servers=str(payload.get("discovery_servers", "") or ""),
+                allowed_adapters=tuple(payload.get("allowed_adapters", ()) or ()),
+                multicast_enabled=bool(payload.get("multicast_enabled", False)),
+                multicast_ttl=max(1, int(payload.get("multicast_ttl", 1) or 1)),
+                multicast_netmask=str(payload.get("multicast_netmask", "255.255.0.0") or "255.255.0.0"),
+                multicast_netprefix=str(payload.get("multicast_netprefix", "239.255.0.0") or "239.255.0.0"),
                 ndi_status=ndi_status,
             )
         if command == "submitVideoDestinationFrame":
@@ -298,11 +306,38 @@ class AudioServiceController(QObject):
         self._counter = itertools.count(1)
         self._request_counter = itertools.count(1)
         self._pending_results: Dict[int, Future] = {}
+        self._last_transport_snapshot = TransportSnapshot(
+            generated_at=0.0,
+            reference_session_id=None,
+            active_session_ids=(),
+            playing_session_ids=(),
+            multi_play_enabled=False,
+        )
+        self._last_engine_diagnostics_snapshot = EngineDiagnosticsSnapshot(
+            generated_at=0.0,
+            session_count=0,
+            active_session_ids=(),
+            playing_session_ids=(),
+            reference_session_id=None,
+            ffmpeg_available=False,
+            ffmpeg_source="none",
+            ffmpeg_version="",
+            audio_bus_ids=(),
+            video_destination_ids=(),
+            render_core="unavailable",
+            audio_output_stream_active=False,
+            audio_output_sample_rate=0,
+            audio_output_channels=0,
+            audio_output_blocksize=0,
+            local_video_runtime_enabled=False,
+        )
         self._last_runtime_session_snapshots: tuple[RuntimeSessionSnapshot, ...] = ()
+        self._last_video_destination_snapshots: tuple[VideoDestinationSnapshot, ...] = ()
         self._shutdown = False
         self._thread.start()
         if parent is not None:
-            parent.destroyed.connect(lambda _obj=None, self_ref=self: self_ref.shutdown())
+            controller_ref = weakref.ref(self)
+            parent.destroyed.connect(lambda _obj=None, ref=controller_ref: (ref() and ref().shutdown()))
 
     def create_player(self, parent: Optional[QObject] = None) -> "AudioPlayerProxy":
         player_id = f"player-{next(self._counter)}"
@@ -335,8 +370,9 @@ class AudioServiceController(QObject):
         if self._shutdown:
             return
         self._shutdown = True
+        thread = self._thread
         try:
-            if self._thread.isRunning():
+            if thread.isRunning():
                 for player_id in ["__all__"]:
                     self.call(player_id, "shutdown", {}, timeout=2.0)
         except Exception:
@@ -362,53 +398,50 @@ class AudioServiceController(QObject):
         except Exception:
             pass
         try:
-            self._thread.quit()
-            self._thread.wait(1500)
+            thread.quit()
+            if not thread.wait(1500):
+                try:
+                    thread.requestInterruption()
+                except Exception:
+                    pass
+                thread.quit()
+                if not thread.wait(1000):
+                    try:
+                        thread.terminate()
+                    except Exception:
+                        pass
+                    thread.wait(1000)
         except Exception:
             pass
-        try:
-            self._service.deleteLater()
-        except Exception:
-            pass
-        try:
-            self._thread.deleteLater()
-        except Exception:
-            pass
+        if not thread.isRunning():
+            try:
+                self._service.deleteLater()
+            except Exception:
+                pass
+            try:
+                thread.deleteLater()
+            except Exception:
+                pass
 
     def transport_snapshot(self) -> TransportSnapshot:
-        result = self.call("__runtime__", "transportSnapshot", {}, timeout=0.5)
+        try:
+            result = self.call("__runtime__", "transportSnapshot", {}, timeout=0.5)
+        except Exception:
+            return self._last_transport_snapshot
         if isinstance(result, TransportSnapshot):
+            self._last_transport_snapshot = result
             return result
-        return TransportSnapshot(
-            generated_at=0.0,
-            reference_session_id=None,
-            active_session_ids=(),
-            playing_session_ids=(),
-            multi_play_enabled=False,
-        )
+        return self._last_transport_snapshot
 
     def engine_diagnostics_snapshot(self) -> EngineDiagnosticsSnapshot:
-        result = self.call("__runtime__", "engineDiagnostics", {}, timeout=0.5)
+        try:
+            result = self.call("__runtime__", "engineDiagnostics", {}, timeout=0.5)
+        except Exception:
+            return self._last_engine_diagnostics_snapshot
         if isinstance(result, EngineDiagnosticsSnapshot):
+            self._last_engine_diagnostics_snapshot = result
             return result
-        return EngineDiagnosticsSnapshot(
-            generated_at=0.0,
-            session_count=0,
-            active_session_ids=(),
-            playing_session_ids=(),
-            reference_session_id=None,
-            ffmpeg_available=False,
-            ffmpeg_source="none",
-            ffmpeg_version="",
-            audio_bus_ids=(),
-            video_destination_ids=(),
-            render_core="unavailable",
-            audio_output_stream_active=False,
-            audio_output_sample_rate=0,
-            audio_output_channels=0,
-            audio_output_blocksize=0,
-            local_video_runtime_enabled=False,
-        )
+        return self._last_engine_diagnostics_snapshot
 
     def set_multi_play_enabled(self, enabled: bool) -> None:
         self.post("__runtime__", "setMultiPlayEnabled", {"enabled": bool(enabled)})
@@ -428,12 +461,18 @@ class AudioServiceController(QObject):
         return tuple(self._last_runtime_session_snapshots)
 
     def video_destination_snapshots(self) -> tuple[VideoDestinationSnapshot, ...]:
-        result = self.call("__runtime__", "videoDestinationSnapshots", {}, timeout=0.5)
+        try:
+            result = self.call("__runtime__", "videoDestinationSnapshots", {}, timeout=0.5)
+        except Exception:
+            return tuple(self._last_video_destination_snapshots)
         if isinstance(result, tuple) and all(isinstance(item, VideoDestinationSnapshot) for item in result):
+            self._last_video_destination_snapshots = tuple(result)
             return result
         if isinstance(result, list) and all(isinstance(item, VideoDestinationSnapshot) for item in result):
-            return tuple(result)
-        return ()
+            snapshots = tuple(result)
+            self._last_video_destination_snapshots = snapshots
+            return snapshots
+        return tuple(self._last_video_destination_snapshots)
 
     def video_destination_frame(self, destination_id: str) -> QImage:
         result = self.call("__runtime__", "videoDestinationFrame", {"destination_id": str(destination_id)}, timeout=0.5)
@@ -457,6 +496,13 @@ class AudioServiceController(QObject):
         source_name: str,
         audio_enabled: bool,
         audio_tap_mode: str,
+        groups: str,
+        discovery_servers: str,
+        allowed_adapters: tuple[str, ...],
+        multicast_enabled: bool,
+        multicast_ttl: int,
+        multicast_netmask: str,
+        multicast_netprefix: str,
         ndi_status: Optional[NDICapabilityStatus],
     ) -> None:
         self.post(
@@ -472,6 +518,13 @@ class AudioServiceController(QObject):
                 "source_name": str(source_name or "pyssp-video"),
                 "audio_enabled": bool(audio_enabled),
                 "audio_tap_mode": str(audio_tap_mode or "post_fader"),
+                "groups": str(groups or "Public"),
+                "discovery_servers": str(discovery_servers or ""),
+                "allowed_adapters": list(allowed_adapters or ()),
+                "multicast_enabled": bool(multicast_enabled),
+                "multicast_ttl": int(multicast_ttl),
+                "multicast_netmask": str(multicast_netmask or "255.255.0.0"),
+                "multicast_netprefix": str(multicast_netprefix or "239.255.0.0"),
                 "ndi_status": _serialize_ndi_status(ndi_status),
             },
         )

@@ -1002,6 +1002,13 @@ class VideoDisplayMixin:
                 source_name=source_name,
                 audio_enabled=False,
                 audio_tap_mode="post_fader",
+                groups="Public",
+                discovery_servers="",
+                allowed_adapters=(),
+                multicast_enabled=False,
+                multicast_ttl=1,
+                multicast_netmask="255.255.0.0",
+                multicast_netprefix="239.255.0.0",
                 ndi_status=None,
             )
         except Exception:
@@ -1155,6 +1162,13 @@ class VideoDisplayMixin:
                         source_name=str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video"),
                         audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
                         audio_tap_mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader"),
+                        groups=str(getattr(self, "ndi_output_group", "Public") or "Public"),
+                        discovery_servers=str(getattr(self, "ndi_output_discovery_servers", "") or ""),
+                        allowed_adapters=self._ndi_allowed_adapter_tokens(),
+                        multicast_enabled=bool(getattr(self, "ndi_output_multicast_enabled", False)),
+                        multicast_ttl=max(1, int(getattr(self, "ndi_output_multicast_ttl", 1) or 1)),
+                        multicast_netmask=str(getattr(self, "ndi_output_multicast_netmask", "255.255.0.0") or "255.255.0.0"),
+                        multicast_netprefix=str(getattr(self, "ndi_output_multicast_netprefix", "239.255.0.0") or "239.255.0.0"),
                         ndi_status=getattr(self, "_ndi_status", None),
                     )
                 except Exception:
@@ -1167,6 +1181,13 @@ class VideoDisplayMixin:
             height=height,
             fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
             audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
+            groups=str(getattr(self, "ndi_output_group", "Public") or "Public").strip() or "Public",
+            discovery_servers=str(getattr(self, "ndi_output_discovery_servers", "") or "").strip(),
+            allowed_adapters=self._ndi_allowed_adapter_tokens(),
+            multicast_enabled=bool(getattr(self, "ndi_output_multicast_enabled", False)),
+            multicast_ttl=max(1, int(getattr(self, "ndi_output_multicast_ttl", 1) or 1)),
+            multicast_netmask=str(getattr(self, "ndi_output_multicast_netmask", "255.255.0.0") or "255.255.0.0").strip() or "255.255.0.0",
+            multicast_netprefix=str(getattr(self, "ndi_output_multicast_netprefix", "239.255.0.0") or "239.255.0.0").strip() or "239.255.0.0",
         )
         self._ndi_last_config = config
         service = getattr(self, "_audio_service", None)
@@ -1183,6 +1204,13 @@ class VideoDisplayMixin:
                     source_name=config.source_name,
                     audio_enabled=config.audio_enabled,
                     audio_tap_mode=str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader"),
+                    groups=config.groups,
+                    discovery_servers=config.discovery_servers,
+                    allowed_adapters=config.allowed_adapters,
+                    multicast_enabled=config.multicast_enabled,
+                    multicast_ttl=config.multicast_ttl,
+                    multicast_netmask=config.multicast_netmask,
+                    multicast_netprefix=config.multicast_netprefix,
                     ndi_status=getattr(self, "_ndi_status", None),
                 )
                 return True
@@ -1194,6 +1222,21 @@ class VideoDisplayMixin:
             return True
         self._ndi_last_config = None
         return False
+
+    def _ndi_allowed_adapter_tokens(self) -> tuple[str, ...]:
+        text = str(getattr(self, "ndi_output_allowed_adapters", "") or "").replace(";", ",")
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for raw in text.split(","):
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            key = token.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append(token)
+        return tuple(tokens)
 
     def _send_ndi_audio(self) -> None:
         if not bool(getattr(self, "ndi_output_audio_enabled", True)):

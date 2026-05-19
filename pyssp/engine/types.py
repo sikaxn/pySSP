@@ -123,6 +123,13 @@ class VideoDestinationSnapshot:
     fps: float
     audio_enabled: bool
     audio_tap_mode: str
+    groups: str
+    discovery_servers: str
+    allowed_adapters: tuple[str, ...]
+    multicast_enabled: bool
+    multicast_ttl: int
+    multicast_netmask: str
+    multicast_netprefix: str
     sender_ready: bool
     connection_count: int
     has_current_frame: bool
@@ -139,3 +146,5 @@ class VideoDestinationSnapshot:
     last_audio_channel_count: int
     last_audio_mode: str = ""
     last_audio_error: str = ""
+    last_network_config_error: str = ""
+    last_network_config_path: str = ""

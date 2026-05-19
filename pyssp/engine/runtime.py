@@ -63,6 +63,13 @@ class _DestinationRecord:
     fps: float = 30.0
     audio_enabled: bool = False
     audio_tap_mode: str = "post_fader"
+    groups: str = "Public"
+    discovery_servers: str = ""
+    allowed_adapters: tuple[str, ...] = ()
+    multicast_enabled: bool = False
+    multicast_ttl: int = 1
+    multicast_netmask: str = "255.255.0.0"
+    multicast_netprefix: str = "239.255.0.0"
     frame_image: Optional[QImage] = None
     last_video_pts_ms: int = 0
     last_video_source_path: str = ""
@@ -242,6 +249,11 @@ class MediaRuntime:
                     last_audio_error = str(getattr(dispatcher, "_last_audio_error", "") or "")
                     audio_drop_count = max(0, int(getattr(dispatcher, "_audio_drop_count", 0) or 0))
                     audio_recovery_count = max(0, int(getattr(dispatcher, "_audio_recovery_count", 0) or 0))
+                    last_network_config_error = str(getattr(dispatcher, "_last_network_config_error", "") or "")
+                    last_network_config_path = str(getattr(dispatcher, "_last_network_config_path", "") or "")
+                else:
+                    last_network_config_error = ""
+                    last_network_config_path = ""
                 snapshots.append(
                     VideoDestinationSnapshot(
                         destination_id=destination_id,
@@ -253,6 +265,13 @@ class MediaRuntime:
                         fps=max(0.0, float(record.fps)),
                         audio_enabled=bool(record.audio_enabled),
                         audio_tap_mode=str(record.audio_tap_mode or "post_fader"),
+                        groups=str(record.groups or "Public"),
+                        discovery_servers=str(record.discovery_servers or ""),
+                        allowed_adapters=tuple(record.allowed_adapters),
+                        multicast_enabled=bool(record.multicast_enabled),
+                        multicast_ttl=max(1, int(record.multicast_ttl)),
+                        multicast_netmask=str(record.multicast_netmask or "255.255.0.0"),
+                        multicast_netprefix=str(record.multicast_netprefix or "239.255.0.0"),
                         sender_ready=sender_ready,
                         connection_count=max(0, int(record.connection_count)),
                         has_current_frame=not frame.isNull(),
@@ -269,6 +288,8 @@ class MediaRuntime:
                         last_audio_channel_count=max(1, int(record.last_audio_channel_count)),
                         last_audio_mode=last_audio_mode,
                         last_audio_error=last_audio_error,
+                        last_network_config_error=last_network_config_error,
+                        last_network_config_path=last_network_config_path,
                     )
                 )
             return tuple(snapshots)
@@ -453,6 +474,13 @@ class MediaRuntime:
             height=record.height,
             fps=record.fps,
             audio_enabled=bool(record.audio_enabled),
+            groups=str(record.groups or "Public"),
+            discovery_servers=str(record.discovery_servers or ""),
+            allowed_adapters=tuple(record.allowed_adapters),
+            multicast_enabled=bool(record.multicast_enabled),
+            multicast_ttl=max(1, int(record.multicast_ttl)),
+            multicast_netmask=str(record.multicast_netmask or "255.255.0.0"),
+            multicast_netprefix=str(record.multicast_netprefix or "239.255.0.0"),
         )
         dispatcher.configure(config)
 
@@ -595,6 +623,13 @@ class MediaRuntime:
         source_name: str = "",
         audio_enabled: bool = False,
         audio_tap_mode: str = "post_fader",
+        groups: str = "Public",
+        discovery_servers: str = "",
+        allowed_adapters: tuple[str, ...] = (),
+        multicast_enabled: bool = False,
+        multicast_ttl: int = 1,
+        multicast_netmask: str = "255.255.0.0",
+        multicast_netprefix: str = "239.255.0.0",
         ndi_status: Optional[NDICapabilityStatus] = None,
     ) -> bool:
         destination_token = str(destination_id)
@@ -610,6 +645,13 @@ class MediaRuntime:
             record.fps = max(1.0, float(fps))
             record.audio_enabled = bool(audio_enabled)
             record.audio_tap_mode = str(audio_tap_mode or "post_fader").strip().lower() or "post_fader"
+            record.groups = str(groups or "Public").strip() or "Public"
+            record.discovery_servers = str(discovery_servers or "").strip()
+            record.allowed_adapters = tuple(str(item or "").strip() for item in allowed_adapters if str(item or "").strip())
+            record.multicast_enabled = bool(multicast_enabled)
+            record.multicast_ttl = max(1, min(255, int(multicast_ttl)))
+            record.multicast_netmask = str(multicast_netmask or "255.255.0.0").strip() or "255.255.0.0"
+            record.multicast_netprefix = str(multicast_netprefix or "239.255.0.0").strip() or "239.255.0.0"
             self._configure_ndi_destination_locked(record, ndi_status)
         self._destinations_wake.set()
         return True

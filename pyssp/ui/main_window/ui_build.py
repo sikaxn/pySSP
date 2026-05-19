@@ -1514,6 +1514,10 @@ class UiBuildMixin:
                         "audio_send_count": int(snapshot.audio_send_count),
                         "audio_drop_count": int(snapshot.audio_drop_count),
                         "frame_submit_count": int(snapshot.frame_submit_count),
+                        "groups": str(snapshot.groups),
+                        "discovery_servers": str(snapshot.discovery_servers),
+                        "allowed_adapters": list(snapshot.allowed_adapters),
+                        "multicast_enabled": bool(snapshot.multicast_enabled),
                         "has_current_frame": bool(snapshot.has_current_frame),
                         "last_video_pts_ms": int(snapshot.last_video_pts_ms),
                     }
@@ -1538,6 +1542,13 @@ class UiBuildMixin:
             ("ndi_runtime_library", str(getattr(getattr(self, "_ndi_status", None), "runtime_library_path", "") or "")),
             ("ndi_status", str(getattr(getattr(self, "_ndi_status", None), "availability_reason", "unknown"))),
             ("ndi_source_name", str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video")),
+            ("ndi_groups", str(getattr(self, "ndi_output_group", "Public") or "Public")),
+            ("ndi_discovery_servers", str(getattr(self, "ndi_output_discovery_servers", "") or "")),
+            ("ndi_allowed_adapters", str(getattr(self, "ndi_output_allowed_adapters", "") or "")),
+            ("ndi_multicast_enabled", bool(getattr(self, "ndi_output_multicast_enabled", False))),
+            ("ndi_multicast_ttl", int(getattr(self, "ndi_output_multicast_ttl", 1) or 1)),
+            ("ndi_multicast_netmask", str(getattr(self, "ndi_output_multicast_netmask", "255.255.0.0") or "255.255.0.0")),
+            ("ndi_multicast_netprefix", str(getattr(self, "ndi_output_multicast_netprefix", "239.255.0.0") or "239.255.0.0")),
             ("ndi_route_mode", getattr(self, "_active_ndi_route_mode", lambda: "unknown")()),
             ("ndi_audio_enabled", bool(getattr(self, "ndi_output_audio_enabled", True))),
             ("ndi_audio_tap_mode", str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader")),
@@ -1552,6 +1563,8 @@ class UiBuildMixin:
             ("ndi_frame_submit_count", int(getattr(ndi_runtime_snapshot, "frame_submit_count", 0) or 0)),
             ("ndi_last_audio_mode", str(getattr(ndi_runtime_snapshot, "last_audio_mode", "") or "")),
             ("ndi_last_audio_error", str(getattr(ndi_runtime_snapshot, "last_audio_error", "") or "")),
+            ("ndi_last_network_config_error", str(getattr(ndi_runtime_snapshot, "last_network_config_error", "") or "")),
+            ("ndi_last_network_config_path", str(getattr(ndi_runtime_snapshot, "last_network_config_path", "") or "")),
             ("ndi_has_current_frame", bool(getattr(ndi_runtime_snapshot, "has_current_frame", False))),
             ("ndi_last_video_pts_ms", int(getattr(ndi_runtime_snapshot, "last_video_pts_ms", 0) or 0)),
             ("video_route_mode", getattr(self, "_active_video_route_mode", lambda: "unknown")()),
@@ -1609,6 +1622,13 @@ class UiBuildMixin:
                         "fps": float(snapshot.fps),
                         "audio_enabled": bool(snapshot.audio_enabled),
                         "audio_tap_mode": str(snapshot.audio_tap_mode),
+                        "groups": str(snapshot.groups),
+                        "discovery_servers": str(snapshot.discovery_servers),
+                        "allowed_adapters": list(snapshot.allowed_adapters),
+                        "multicast_enabled": bool(snapshot.multicast_enabled),
+                        "multicast_ttl": int(snapshot.multicast_ttl),
+                        "multicast_netmask": str(snapshot.multicast_netmask),
+                        "multicast_netprefix": str(snapshot.multicast_netprefix),
                         "sender_ready": bool(snapshot.sender_ready),
                         "connection_count": int(snapshot.connection_count),
                         "has_current_frame": bool(snapshot.has_current_frame),
@@ -1625,6 +1645,8 @@ class UiBuildMixin:
                         "last_audio_channel_count": int(snapshot.last_audio_channel_count),
                         "last_audio_mode": str(snapshot.last_audio_mode),
                         "last_audio_error": str(snapshot.last_audio_error),
+                        "last_network_config_error": str(snapshot.last_network_config_error),
+                        "last_network_config_path": str(snapshot.last_network_config_path),
                     }
                     for snapshot in diagnostics.video_destinations
                 ],
@@ -2264,14 +2286,9 @@ class UiBuildMixin:
                 for key in visible_keys:
                     widths[key] = max(minimums[key], widths[key] - reductions[key])
             return widths
-        widths = {key: int(preferred.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS}
-        extra = target_budget - preferred_total
-        elastic_keys = [key for key in ["title", "notes", "status"] if key in visible_keys]
-        if extra > 0 and elastic_keys:
-            share, remainder = divmod(extra, len(elastic_keys))
-            for index, key in enumerate(elastic_keys):
-                widths[key] += share + (1 if index < remainder else 0)
-        return widths
+        # Treat configured widths as fixed user intent once the viewport has
+        # enough room; only shrink when space is constrained.
+        return {key: int(preferred.get(key, 72)) for key in SOUND_BUTTON_LIST_COLUMN_KEYS}
 
     def _apply_sound_button_list_column_widths(self) -> None:
         widths = self._effective_sound_button_list_width_map()

@@ -1010,6 +1010,13 @@ class AppSettings:
     ndi_output_fps: int = 30
     ndi_output_audio_enabled: bool = True
     ndi_output_audio_tap_mode: str = "post_fader"
+    ndi_output_group: str = "Public"
+    ndi_output_discovery_servers: str = ""
+    ndi_output_allowed_adapters: str = ""
+    ndi_output_multicast_enabled: bool = False
+    ndi_output_multicast_ttl: int = 1
+    ndi_output_multicast_netmask: str = "255.255.0.0"
+    ndi_output_multicast_netprefix: str = "239.255.0.0"
     window_layout: dict[str, object] = field(default_factory=default_window_layout)
     window_layout_locked: bool = False
     dock_layout_state: str = ""
@@ -1490,6 +1497,13 @@ def save_settings(settings: AppSettings) -> None:
         "ndi_output_fps": str(max(1, int(settings.ndi_output_fps))),
         "ndi_output_audio_enabled": "1" if settings.ndi_output_audio_enabled else "0",
         "ndi_output_audio_tap_mode": str(settings.ndi_output_audio_tap_mode or "post_fader").strip().lower(),
+        "ndi_output_group": _encode_ascii_setting(str(settings.ndi_output_group or "Public").strip() or "Public"),
+        "ndi_output_discovery_servers": _encode_ascii_setting(str(settings.ndi_output_discovery_servers or "").strip()),
+        "ndi_output_allowed_adapters": _encode_ascii_setting(str(settings.ndi_output_allowed_adapters or "").strip()),
+        "ndi_output_multicast_enabled": "1" if settings.ndi_output_multicast_enabled else "0",
+        "ndi_output_multicast_ttl": str(max(1, min(255, int(settings.ndi_output_multicast_ttl)))),
+        "ndi_output_multicast_netmask": _encode_ascii_setting(str(settings.ndi_output_multicast_netmask or "255.255.0.0").strip() or "255.255.0.0"),
+        "ndi_output_multicast_netprefix": _encode_ascii_setting(str(settings.ndi_output_multicast_netprefix or "239.255.0.0").strip() or "239.255.0.0"),
         "window_layout": json.dumps(
             normalize_window_layout(settings.window_layout),
             separators=(",", ":"),
@@ -1653,6 +1667,17 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     ndi_output_audio_tap_mode = str(section.get("ndi_output_audio_tap_mode", "post_fader")).strip().lower()
     if ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
         ndi_output_audio_tap_mode = "post_fader"
+    ndi_output_group = _decode_ascii_setting(str(section.get("ndi_output_group", "Public"))).strip() or "Public"
+    ndi_output_discovery_servers = _decode_ascii_setting(str(section.get("ndi_output_discovery_servers", ""))).strip()
+    ndi_output_allowed_adapters = _decode_ascii_setting(str(section.get("ndi_output_allowed_adapters", ""))).strip()
+    ndi_output_multicast_enabled = _get_bool(section, "ndi_output_multicast_enabled", False)
+    ndi_output_multicast_ttl = _clamp_int(_get_int(section, "ndi_output_multicast_ttl", 1), 1, 255)
+    ndi_output_multicast_netmask = (
+        _decode_ascii_setting(str(section.get("ndi_output_multicast_netmask", "255.255.0.0"))).strip() or "255.255.0.0"
+    )
+    ndi_output_multicast_netprefix = (
+        _decode_ascii_setting(str(section.get("ndi_output_multicast_netprefix", "239.255.0.0"))).strip() or "239.255.0.0"
+    )
     search_lyric_on_add_sound_button = _get_bool(section, "search_lyric_on_add_sound_button", True)
     new_lyric_file_format = str(section.get("new_lyric_file_format", "srt")).strip().lower()
     if new_lyric_file_format not in {"srt", "lrc"}:
@@ -2466,6 +2491,13 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ndi_output_fps=ndi_output_fps,
         ndi_output_audio_enabled=ndi_output_audio_enabled,
         ndi_output_audio_tap_mode=ndi_output_audio_tap_mode,
+        ndi_output_group=ndi_output_group,
+        ndi_output_discovery_servers=ndi_output_discovery_servers,
+        ndi_output_allowed_adapters=ndi_output_allowed_adapters,
+        ndi_output_multicast_enabled=ndi_output_multicast_enabled,
+        ndi_output_multicast_ttl=ndi_output_multicast_ttl,
+        ndi_output_multicast_netmask=ndi_output_multicast_netmask,
+        ndi_output_multicast_netprefix=ndi_output_multicast_netprefix,
         window_layout=window_layout,
         window_layout_locked=_get_bool(section, "window_layout_locked", False),
         dock_layout_state=str(section.get("dock_layout_state", "")).strip(),

@@ -1710,6 +1710,17 @@ class SettingsArchiveMixin:
         self.settings.ndi_output_fps = max(1, int(getattr(self, "ndi_output_fps", 30)))
         self.settings.ndi_output_audio_enabled = bool(getattr(self, "ndi_output_audio_enabled", True))
         self.settings.ndi_output_audio_tap_mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
+        self.settings.ndi_output_group = str(getattr(self, "ndi_output_group", "Public") or "Public").strip() or "Public"
+        self.settings.ndi_output_discovery_servers = str(getattr(self, "ndi_output_discovery_servers", "") or "").strip()
+        self.settings.ndi_output_allowed_adapters = str(getattr(self, "ndi_output_allowed_adapters", "") or "").strip()
+        self.settings.ndi_output_multicast_enabled = bool(getattr(self, "ndi_output_multicast_enabled", False))
+        self.settings.ndi_output_multicast_ttl = max(1, min(255, int(getattr(self, "ndi_output_multicast_ttl", 1) or 1)))
+        self.settings.ndi_output_multicast_netmask = (
+            str(getattr(self, "ndi_output_multicast_netmask", "255.255.0.0") or "255.255.0.0").strip() or "255.255.0.0"
+        )
+        self.settings.ndi_output_multicast_netprefix = (
+            str(getattr(self, "ndi_output_multicast_netprefix", "239.255.0.0") or "239.255.0.0").strip() or "239.255.0.0"
+        )
         self.settings.search_lyric_on_add_sound_button = bool(self.search_lyric_on_add_sound_button)
         self.settings.new_lyric_file_format = self.new_lyric_file_format
         self.settings.automation_script_editor_show_lyric = bool(self.automation_script_editor_show_lyric)

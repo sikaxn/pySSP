@@ -248,6 +248,27 @@ class SelectionMixin:
         value = str(self.ndi_output_audio_tap_mode_combo.currentData() or "post_fader").strip().lower()
         return value if value in {"pre_fader", "post_fader"} else "post_fader"
 
+    def selected_ndi_output_group(self) -> str:
+        return str(self.ndi_output_group_edit.text() or "").strip() or "Public"
+
+    def selected_ndi_output_discovery_servers(self) -> str:
+        return str(self.ndi_output_discovery_servers_edit.text() or "").strip()
+
+    def selected_ndi_output_allowed_adapters(self) -> str:
+        return str(self.ndi_output_allowed_adapters_edit.text() or "").strip()
+
+    def selected_ndi_output_multicast_enabled(self) -> bool:
+        return bool(self.ndi_output_multicast_enabled_checkbox.isChecked())
+
+    def selected_ndi_output_multicast_ttl(self) -> int:
+        return max(1, min(255, int(self.ndi_output_multicast_ttl_spin.value())))
+
+    def selected_ndi_output_multicast_netmask(self) -> str:
+        return str(self.ndi_output_multicast_netmask_edit.text() or "").strip() or "255.255.0.0"
+
+    def selected_ndi_output_multicast_netprefix(self) -> str:
+        return str(self.ndi_output_multicast_netprefix_edit.text() or "").strip() or "239.255.0.0"
+
     def selected_ui_language(self) -> str:
         return normalize_language(str(self.ui_language_combo.currentData() or "en"))
 

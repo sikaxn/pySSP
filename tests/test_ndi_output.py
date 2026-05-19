@@ -63,6 +63,7 @@ def test_ndi_sender_uses_runtime_session_for_audio_and_video():
     assert sender._session is not None
     assert sender._session.config.source_name == "pyssp-video"
     assert sender._session.config.width == 1920
+    assert sender._session.config.groups == "Public"
 
     frames = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
     assert sender.send_audio_frames(frames, 48000) is True
@@ -490,5 +491,87 @@ def test_ndi_dispatcher_prioritizes_video_when_audio_backlog_exists():
             time.sleep(0.01)
 
         assert dispatcher._sender.order[:3] == ["configure", "video", "audio"]
+    finally:
+        dispatcher.shutdown()
+
+
+def test_ndi_sender_propagates_groups_and_network_settings():
+    sender = NDIOutputSender(_ready_status(), session_factory=lambda path, config: _FakeSession(path, config))
+    config = NDIOutputConfig(
+        source_name="pyssp-video",
+        width=1280,
+        height=720,
+        fps=59.94,
+        audio_enabled=True,
+        groups="Public,Stage",
+        discovery_servers="10.0.0.2,10.0.0.3",
+        allowed_adapters=("10.0.0.177", "10.0.0.181"),
+        multicast_enabled=True,
+        multicast_ttl=4,
+        multicast_netmask="255.255.255.0",
+        multicast_netprefix="239.20.20.0",
+    )
+
+    assert sender.configure(config) is True
+    assert sender._session is not None
+    assert sender._session.config.groups == "Public,Stage"
+
+
+def test_ndi_dispatcher_rearms_sender_after_connection_drop_and_return():
+    class _ReconnectSender:
+        available = True
+
+        def __init__(self, _status) -> None:
+            self._connections = [1, 0, 1]
+            self.configure_calls = 0
+            self.reconfigure_calls = 0
+            self._last_audio_error = ""
+            self._last_audio_mode = ""
+            self._audio_recovery_count = 0
+            self._last_network_config_error = ""
+            self._last_network_config_path = ""
+
+        def configure(self, _config, *, force_restart: bool = False) -> bool:
+            self.configure_calls += 1
+            if force_restart:
+                self.reconfigure_calls += 1
+            return True
+
+        def reconfigure_current(self) -> bool:
+            self.reconfigure_calls += 1
+            return True
+
+        def stop(self) -> None:
+            return None
+
+        def get_num_connections(self, _timeout: float = 0.0) -> int:
+            if self._connections:
+                return self._connections.pop(0)
+            return 1
+
+        def send_video_frame(self, _image: QImage) -> bool:
+            return True
+
+        def send_audio_frames(self, _frames: np.ndarray, _sample_rate: int) -> bool:
+            self._last_audio_mode = "ok"
+            return True
+
+    dispatcher = NDIOutputDispatcher(_ready_status(), sender_factory=_ReconnectSender, connection_poll_interval_sec=0.05)
+    try:
+        config = NDIOutputConfig(
+            source_name="pyssp-video",
+            width=640,
+            height=360,
+            fps=30.0,
+            audio_enabled=True,
+        )
+        assert dispatcher.configure(config) is True
+
+        deadline = time.time() + 1.5
+        while time.time() < deadline and dispatcher._sender.reconfigure_calls <= 0:
+            time.sleep(0.01)
+
+        assert dispatcher._sender.configure_calls >= 1
+        assert dispatcher._sender.reconfigure_calls >= 1
     finally:
         dispatcher.shutdown()

@@ -403,6 +403,13 @@ class StateLogicMixin:
             str(d.get("ndi_output_audio_tap_mode", "post_fader")),
             "post_fader",
         )
+        self.ndi_output_group_edit.setText(str(d.get("ndi_output_group", "Public")))
+        self.ndi_output_discovery_servers_edit.setText(str(d.get("ndi_output_discovery_servers", "")))
+        self.ndi_output_allowed_adapters_edit.setText(str(d.get("ndi_output_allowed_adapters", "")))
+        self.ndi_output_multicast_enabled_checkbox.setChecked(bool(d.get("ndi_output_multicast_enabled", False)))
+        self.ndi_output_multicast_ttl_spin.setValue(int(d.get("ndi_output_multicast_ttl", 1)))
+        self.ndi_output_multicast_netmask_edit.setText(str(d.get("ndi_output_multicast_netmask", "255.255.0.0")))
+        self.ndi_output_multicast_netprefix_edit.setText(str(d.get("ndi_output_multicast_netprefix", "239.255.0.0")))
         self._sync_ndi_route_controls()
         self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()

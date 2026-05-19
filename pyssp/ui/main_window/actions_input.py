@@ -795,8 +795,10 @@ class ActionsInputMixin:
         )
         if self.playlist_play_mode == "any_available":
             if shuffle_enabled:
-                if current_idx is not None and len(valid_slots) > 1:
-                    return any(idx != current_idx for idx in valid_slots)
+                if current_idx is not None:
+                    if len(valid_slots) > 1:
+                        return any(idx != current_idx for idx in valid_slots)
+                    return self.loop_enabled and self.playlist_loop_mode == "loop_list" and bool(valid_slots)
                 return bool(valid_slots)
             start = 0
             if self.current_playlist_start is not None:
@@ -924,8 +926,11 @@ class ActionsInputMixin:
                     candidates = list(valid_slots)
                 else:
                     return None
-            if current_idx is not None and len(candidates) > 1 and current_idx in candidates:
-                candidates = [idx for idx in candidates if idx != current_idx]
+            if current_idx is not None and current_idx in candidates:
+                if len(candidates) > 1:
+                    candidates = [idx for idx in candidates if idx != current_idx]
+                elif not (self.loop_enabled and self.playlist_loop_mode == "loop_list"):
+                    return None
             if not candidates:
                 return None
             return random.choice(candidates)
@@ -1960,6 +1965,13 @@ class ActionsInputMixin:
             ndi_output_fps=self.ndi_output_fps,
             ndi_output_audio_enabled=self.ndi_output_audio_enabled,
             ndi_output_audio_tap_mode=self.ndi_output_audio_tap_mode,
+            ndi_output_group=self.ndi_output_group,
+            ndi_output_discovery_servers=self.ndi_output_discovery_servers,
+            ndi_output_allowed_adapters=self.ndi_output_allowed_adapters,
+            ndi_output_multicast_enabled=self.ndi_output_multicast_enabled,
+            ndi_output_multicast_ttl=self.ndi_output_multicast_ttl,
+            ndi_output_multicast_netmask=self.ndi_output_multicast_netmask,
+            ndi_output_multicast_netprefix=self.ndi_output_multicast_netprefix,
             sound_button_view_mode=self.sound_button_view_mode,
             sound_button_grid_columns=self.sound_button_grid_columns,
             sound_button_grid_rows=self.sound_button_grid_rows,
@@ -2065,6 +2077,13 @@ class ActionsInputMixin:
         self.ndi_output_fps = dialog.selected_ndi_output_fps()
         self.ndi_output_audio_enabled = dialog.selected_ndi_output_audio_enabled()
         self.ndi_output_audio_tap_mode = dialog.selected_ndi_output_audio_tap_mode()
+        self.ndi_output_group = dialog.selected_ndi_output_group()
+        self.ndi_output_discovery_servers = dialog.selected_ndi_output_discovery_servers()
+        self.ndi_output_allowed_adapters = dialog.selected_ndi_output_allowed_adapters()
+        self.ndi_output_multicast_enabled = dialog.selected_ndi_output_multicast_enabled()
+        self.ndi_output_multicast_ttl = dialog.selected_ndi_output_multicast_ttl()
+        self.ndi_output_multicast_netmask = dialog.selected_ndi_output_multicast_netmask()
+        self.ndi_output_multicast_netprefix = dialog.selected_ndi_output_multicast_netprefix()
         self.search_lyric_on_add_sound_button = dialog.selected_search_lyric_on_add_sound_button()
         self.new_lyric_file_format = dialog.selected_new_lyric_file_format()
         self.warn_dual_automation_sources = dialog.selected_warn_dual_automation_sources()

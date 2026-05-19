@@ -248,3 +248,46 @@ NDI audio
     - with `clock_audio=true`, `NDIlib_util_send_send_audio_interleaved_32f(...)` is itself clocked to the sample rate
     - if audio and video are submitted from separate threads, having both clocked can be useful
     - do not add redundant app-side sleep pacing on top of a dedicated audio sender thread unless live measurement proves it is necessary
+- NDI network/reconnect follow-up from 2026-05-19:
+  - current field symptom:
+    - when everything stays on Ethernet, NDI is mostly okay
+    - after unplugging and replugging Ethernet, video often comes back but audio does not
+  - likely backend requirement:
+    - rearm or recreate the NDI sender after a real connection-loss then connection-return transition
+    - do not rely on video recovery alone; audio sender state can remain stale after link flap
+  - interoperability / configuration requirements to keep in mind:
+    - default discovery is mDNS on the same network
+    - default group is `Public`
+    - app should expose `Groups`
+    - app should expose `Discovery Server(s)`
+    - default is unicast, with multicast as an option
+    - official Access Manager / SDK config file locations to remember:
+      - Windows: `C:\\ProgramData\\NDI\\ndi-config.v1.json`
+      - macOS: `$HOME/.ndi/ndi-config.v1.json`
+      - `NDI_CONFIG_DIR` can override the config directory before SDK initialization
+  - pySSP implementation direction:
+    - persist NDI network settings through the same Access Manager config surface (`ndi-config.v1.json`) instead of inventing a separate hidden backend-only source of truth
+    - sender group should also be passed directly into `NDIlib_send_create_t.p_groups` so the source uses the configured group immediately after sender recreation
+    - add pySSP-owned settings for:
+      - group(s), default `Public`
+      - discovery servers
+      - allowed adapters / multi-NIC binding
+      - multicast enable and send parameters
+  - vMix / network-isolation guidance to remember:
+    - NDI network separation problems are often NIC-selection and discovery-routing problems, not media-format problems
+    - on separated networks or multiple NICs, validate discovery server config and adapter binding explicitly
+  - macOS validation checklist for Access Manager related fixes:
+    - on the Mac, open NDI Access Manager and verify:
+      - Groups include the same group as the sender, normally `Public`
+      - Discovery Server is blank for same-subnet mDNS testing, or matches the intended server if using routed/subnet-separated discovery
+      - preferred / allowed network adapter matches the NIC that reaches the Windows sender
+      - multicast receive is enabled if multicast send is being tested
+    - after changing Access Manager settings on macOS:
+      - fully quit Studio Monitor and other NDI receiver apps, then reopen them
+      - if discovery still looks wrong, temporarily restart the Mac NDI tools or reboot before assuming the sender is at fault
+    - validation sequence on macOS after a pySSP NDI-network fix:
+      - confirm the pySSP source is listed in Studio Monitor or another NDI browser
+      - confirm video appears
+      - confirm audio meter stays present while idle
+      - confirm audio returns after unplugging and replugging Ethernet on the Windows sender side
+      - if source listing remains but audio is absent, compare Mac Access Manager group/discovery/adapter settings against the Windows sender settings before changing pySSP again

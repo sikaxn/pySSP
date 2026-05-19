@@ -570,6 +570,25 @@ def _build_dialog(**overrides):
         ndi_output_audio_tap_mode=str(
             overrides.get("ndi_output_audio_tap_mode", defaults["ndi_output_audio_tap_mode"])
         ),
+        ndi_output_group=str(overrides.get("ndi_output_group", defaults["ndi_output_group"])),
+        ndi_output_discovery_servers=str(
+            overrides.get("ndi_output_discovery_servers", defaults["ndi_output_discovery_servers"])
+        ),
+        ndi_output_allowed_adapters=str(
+            overrides.get("ndi_output_allowed_adapters", defaults["ndi_output_allowed_adapters"])
+        ),
+        ndi_output_multicast_enabled=bool(
+            overrides.get("ndi_output_multicast_enabled", defaults["ndi_output_multicast_enabled"])
+        ),
+        ndi_output_multicast_ttl=int(
+            overrides.get("ndi_output_multicast_ttl", defaults["ndi_output_multicast_ttl"])
+        ),
+        ndi_output_multicast_netmask=str(
+            overrides.get("ndi_output_multicast_netmask", defaults["ndi_output_multicast_netmask"])
+        ),
+        ndi_output_multicast_netprefix=str(
+            overrides.get("ndi_output_multicast_netprefix", defaults["ndi_output_multicast_netprefix"])
+        ),
         sound_button_view_mode=str(
             overrides.get("sound_button_view_mode", defaults["sound_button_view_mode"])
         ),
@@ -725,6 +744,13 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         ndi_output_fps=50,
         ndi_output_audio_enabled=True,
         ndi_output_audio_tap_mode="pre_fader",
+        ndi_output_group="Public,Stage",
+        ndi_output_discovery_servers="10.0.0.2,10.0.0.3",
+        ndi_output_allowed_adapters="10.0.0.177,10.0.0.181",
+        ndi_output_multicast_enabled=True,
+        ndi_output_multicast_ttl=8,
+        ndi_output_multicast_netmask="255.255.255.0",
+        ndi_output_multicast_netprefix="239.10.10.0",
         initial_page="Video Display",
     )
     try:
@@ -758,6 +784,13 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.ndi_output_fps_combo.currentData() == 50
         assert dialog.ndi_output_audio_enabled_checkbox.isChecked() is True
         assert dialog.ndi_output_audio_tap_mode_combo.currentData() == "pre_fader"
+        assert dialog.ndi_output_group_edit.text() == "Public,Stage"
+        assert dialog.ndi_output_discovery_servers_edit.text() == "10.0.0.2,10.0.0.3"
+        assert dialog.ndi_output_allowed_adapters_edit.text() == "10.0.0.177,10.0.0.181"
+        assert dialog.ndi_output_multicast_enabled_checkbox.isChecked() is True
+        assert dialog.ndi_output_multicast_ttl_spin.value() == 8
+        assert dialog.ndi_output_multicast_netmask_edit.text() == "255.255.255.0"
+        assert dialog.ndi_output_multicast_netprefix_edit.text() == "239.10.10.0"
         assert dialog.selected_ndi_output_name() == "Sanctuary Feed"
         assert dialog.selected_ndi_output_mode_playing() == "backdrop"
         assert dialog.selected_ndi_output_mode_idle() == "backdrop"
@@ -767,6 +800,13 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_ndi_output_fps() == 50
         assert dialog.selected_ndi_output_audio_enabled() is True
         assert dialog.selected_ndi_output_audio_tap_mode() == "pre_fader"
+        assert dialog.selected_ndi_output_group() == "Public,Stage"
+        assert dialog.selected_ndi_output_discovery_servers() == "10.0.0.2,10.0.0.3"
+        assert dialog.selected_ndi_output_allowed_adapters() == "10.0.0.177,10.0.0.181"
+        assert dialog.selected_ndi_output_multicast_enabled() is True
+        assert dialog.selected_ndi_output_multicast_ttl() == 8
+        assert dialog.selected_ndi_output_multicast_netmask() == "255.255.255.0"
+        assert dialog.selected_ndi_output_multicast_netprefix() == "239.10.10.0"
         assert dialog.selected_preload_video_enabled() is True
     finally:
         dialog.close()

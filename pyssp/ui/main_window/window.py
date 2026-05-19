@@ -568,6 +568,19 @@ class MainWindow(
         self.ndi_output_audio_tap_mode = str(getattr(self.settings, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
         if self.ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
             self.ndi_output_audio_tap_mode = "post_fader"
+        self.ndi_output_group = str(getattr(self.settings, "ndi_output_group", "Public") or "Public").strip() or "Public"
+        self.ndi_output_discovery_servers = str(getattr(self.settings, "ndi_output_discovery_servers", "") or "").strip()
+        self.ndi_output_allowed_adapters = str(getattr(self.settings, "ndi_output_allowed_adapters", "") or "").strip()
+        self.ndi_output_multicast_enabled = bool(getattr(self.settings, "ndi_output_multicast_enabled", False))
+        self.ndi_output_multicast_ttl = max(1, min(255, int(getattr(self.settings, "ndi_output_multicast_ttl", 1) or 1)))
+        self.ndi_output_multicast_netmask = (
+            str(getattr(self.settings, "ndi_output_multicast_netmask", "255.255.0.0") or "255.255.0.0").strip()
+            or "255.255.0.0"
+        )
+        self.ndi_output_multicast_netprefix = (
+            str(getattr(self.settings, "ndi_output_multicast_netprefix", "239.255.0.0") or "239.255.0.0").strip()
+            or "239.255.0.0"
+        )
         self._ndi_status = probe_ndi_capability()
         self.search_lyric_on_add_sound_button = bool(
             getattr(self.settings, "search_lyric_on_add_sound_button", True)

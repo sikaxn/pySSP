@@ -128,7 +128,7 @@ class AudioService(QObject):
 
     def __init__(self, runtime: Optional[MediaRuntime] = None) -> None:
         super().__init__()
-        self._runtime = runtime or MediaRuntime()
+        self._runtime = runtime or MediaRuntime(player_factory=lambda: ExternalMediaPlayer(owns_output_stream=False))
 
     def _player(self, player_id: str) -> ExternalMediaPlayer:
         return self._runtime.player_for_session(str(player_id))
@@ -142,6 +142,8 @@ class AudioService(QObject):
             return self._runtime.session_snapshots()
         if command == "videoDestinationSnapshots":
             return self._runtime.video_destination_snapshots()
+        if command == "videoDestinationFrame":
+            return self._runtime.video_destination_frame(str(payload.get("destination_id", "local_program")))
         if command == "setMultiPlayEnabled":
             self._runtime.set_multi_play_enabled(bool(payload.get("enabled", False)))
             return True
@@ -296,7 +298,10 @@ class AudioServiceController(QObject):
         self._counter = itertools.count(1)
         self._request_counter = itertools.count(1)
         self._pending_results: Dict[int, Future] = {}
+        self._shutdown = False
         self._thread.start()
+        if parent is not None:
+            parent.destroyed.connect(lambda _obj=None, self_ref=self: self_ref.shutdown())
 
     def create_player(self, parent: Optional[QObject] = None) -> "AudioPlayerProxy":
         player_id = f"player-{next(self._counter)}"
@@ -326,13 +331,48 @@ class AudioServiceController(QObject):
         return future
 
     def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
         try:
-            for player_id in ["__all__"]:
-                self.call(player_id, "shutdown", {}, timeout=2.0)
+            if self._thread.isRunning():
+                for player_id in ["__all__"]:
+                    self.call(player_id, "shutdown", {}, timeout=2.0)
         except Exception:
             pass
-        self._thread.quit()
-        self._thread.wait(1500)
+        try:
+            self.commandRequested.disconnect(self._service.handle_command)
+        except Exception:
+            pass
+        try:
+            self._service.positionChanged.disconnect(self._on_service_position_changed)
+        except Exception:
+            pass
+        try:
+            self._service.durationChanged.disconnect(self._on_service_duration_changed)
+        except Exception:
+            pass
+        try:
+            self._service.stateChanged.disconnect(self._on_service_state_changed)
+        except Exception:
+            pass
+        try:
+            self._service.mediaLoadFinished.disconnect(self.mediaLoadFinished)
+        except Exception:
+            pass
+        try:
+            self._thread.quit()
+            self._thread.wait(1500)
+        except Exception:
+            pass
+        try:
+            self._service.deleteLater()
+        except Exception:
+            pass
+        try:
+            self._thread.deleteLater()
+        except Exception:
+            pass
 
     def transport_snapshot(self) -> TransportSnapshot:
         result = self.call("__runtime__", "transportSnapshot", {}, timeout=0.5)
@@ -361,6 +401,12 @@ class AudioServiceController(QObject):
             ffmpeg_version="",
             audio_bus_ids=(),
             video_destination_ids=(),
+            render_core="unavailable",
+            audio_output_stream_active=False,
+            audio_output_sample_rate=0,
+            audio_output_channels=0,
+            audio_output_blocksize=0,
+            local_video_runtime_enabled=False,
         )
 
     def set_multi_play_enabled(self, enabled: bool) -> None:
@@ -381,6 +427,12 @@ class AudioServiceController(QObject):
         if isinstance(result, list) and all(isinstance(item, VideoDestinationSnapshot) for item in result):
             return tuple(result)
         return ()
+
+    def video_destination_frame(self, destination_id: str) -> QImage:
+        result = self.call("__runtime__", "videoDestinationFrame", {"destination_id": str(destination_id)}, timeout=0.5)
+        if isinstance(result, QImage):
+            return result
+        return QImage()
 
     def set_session_slot_key(self, player_id: str, slot_key: Optional[tuple[str, int, int]]) -> None:
         payload = {"slot_key": list(slot_key) if slot_key is not None else None}
@@ -442,14 +494,20 @@ class AudioServiceController(QObject):
         self.post("__runtime__", "clearVideoDestinationFrame", {"destination_id": str(destination_id)})
 
     def _on_service_position_changed(self, player_id: str, value: int) -> None:
+        if self._shutdown:
+            return
         self.state_cache.update_position(player_id, value)
         self.positionChanged.emit(str(player_id), int(value))
 
     def _on_service_duration_changed(self, player_id: str, value: int) -> None:
+        if self._shutdown:
+            return
         self.state_cache.update_duration(player_id, value)
         self.durationChanged.emit(str(player_id), int(value))
 
     def _on_service_state_changed(self, player_id: str, value: int) -> None:
+        if self._shutdown:
+            return
         self.state_cache.update_state(player_id, value)
         self.stateChanged.emit(str(player_id), int(value))
 
@@ -651,27 +709,51 @@ class AudioPlayerProxy(QObject):
         except Exception:
             pass
         self._controller.state_cache.remove(self._player_id)
+        try:
+            self._controller.positionChanged.disconnect(self._on_position_changed)
+        except Exception:
+            pass
+        try:
+            self._controller.durationChanged.disconnect(self._on_duration_changed)
+        except Exception:
+            pass
+        try:
+            self._controller.stateChanged.disconnect(self._on_state_changed)
+        except Exception:
+            pass
+        try:
+            self._controller.mediaLoadFinished.disconnect(self._on_media_load_finished)
+        except Exception:
+            pass
         super().deleteLater()
 
     def _on_position_changed(self, player_id: str, value: int) -> None:
+        if getattr(self._controller, "_shutdown", False):
+            return
         if str(player_id) != self._player_id:
             return
         self._position_ms = max(0, int(value))
         self.positionChanged.emit(self._position_ms)
 
     def _on_duration_changed(self, player_id: str, value: int) -> None:
+        if getattr(self._controller, "_shutdown", False):
+            return
         if str(player_id) != self._player_id:
             return
         self._duration_ms = max(0, int(value))
         self.durationChanged.emit(self._duration_ms)
 
     def _on_state_changed(self, player_id: str, value: int) -> None:
+        if getattr(self._controller, "_shutdown", False):
+            return
         if str(player_id) != self._player_id:
             return
         self._state = int(value)
         self.stateChanged.emit(self._state)
 
     def _on_media_load_finished(self, player_id: str, request_id: int, ok: bool, error: str) -> None:
+        if getattr(self._controller, "_shutdown", False):
+            return
         if str(player_id) != self._player_id:
             return
         self.mediaLoadFinished.emit(int(request_id), bool(ok), str(error))

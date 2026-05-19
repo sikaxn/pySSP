@@ -219,7 +219,7 @@ def _build_window(qapp: QApplication, monkeypatch, *, utility_controls: bool = T
     _configure_common_window_monkeypatches(monkeypatch, registry, _build_settings(utility_controls=utility_controls))
     window = mw.MainWindow()
     window.show()
-    _wait_until(qapp, registry, lambda: len(registry.snapshot()) >= 2, timeout_ms=2500, pump_count=0)
+    _wait_until(qapp, registry, lambda: len(registry.snapshot()) >= 1, timeout_ms=2500, pump_count=0)
     window.player.setNotifyInterval(20)
     window.player_b.setNotifyInterval(20)
     _process_events(qapp, delay_ms=40)

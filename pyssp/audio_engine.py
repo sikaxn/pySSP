@@ -535,6 +535,43 @@ class _NullOutputStream:
         return
 
 
+def create_output_stream(
+    callback,
+    *,
+    sample_rate: int = _DEFAULT_AUDIO_SAMPLE_RATE,
+    channels: int = _CHANNEL_COUNT,
+    blocksize: int = 1024,
+    latency: str = "low",
+) -> tuple[object, int]:
+    device_index = None
+    actual_blocksize = int(blocksize)
+    actual_latency = str(latency or "low")
+    stream_kwargs = {
+        "samplerate": int(sample_rate),
+        "channels": int(channels),
+        "dtype": "float32",
+        "callback": callback,
+        "device": device_index,
+        "blocksize": actual_blocksize,
+        "latency": actual_latency,
+    }
+    if _REQUESTED_DEVICE:
+        try:
+            device_index = _find_output_device_index(_REQUESTED_DEVICE)
+        except Exception:
+            device_index = None
+    stream_kwargs["device"] = device_index
+    if sys.platform == "darwin":
+        actual_blocksize = 2048
+        actual_latency = "high"
+        stream_kwargs["blocksize"] = actual_blocksize
+        stream_kwargs["latency"] = actual_latency
+    try:
+        return sd.OutputStream(**stream_kwargs), int(actual_blocksize)
+    except Exception:
+        return _NullOutputStream(), int(actual_blocksize)
+
+
 def _ensure_decoder() -> None:
     global _DECODER_READY
     desired_mixer_info = (_DEFAULT_AUDIO_SAMPLE_RATE, -16, _CHANNEL_COUNT)
@@ -1191,11 +1228,12 @@ class ExternalMediaPlayer(QObject):
     mediaLoadFinished = pyqtSignal(int, bool, str)
     _applyPreparedMedia = pyqtSignal(object)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None, *, owns_output_stream: bool = True) -> None:
         super().__init__(parent)
         _ensure_decoder()
 
         self._stream_id = _allocate_stream_id()
+        self._owns_output_stream = bool(owns_output_stream)
         self._media_source_type = FILE_SOURCE_TYPE
         self._media_path = ""
         self._state = self.StoppedState
@@ -1243,9 +1281,11 @@ class ExternalMediaPlayer(QObject):
         self._stream_blocksize = 1024 if sys.platform != "darwin" else 2048
 
         self._lock = threading.RLock()
-        _retain_coreaudio_keepalive(self._sample_rate, self._channels)
-        self._stream = self._create_stream()
-        self._stream.start()
+        self._stream = _NullOutputStream()
+        if self._owns_output_stream:
+            _retain_coreaudio_keepalive(self._sample_rate, self._channels)
+            self._stream = self._create_stream()
+            self._stream.start()
         self._applyPreparedMedia.connect(self._on_apply_prepared_media, type=Qt.QueuedConnection)
 
         self._poll_timer = QTimer(self)
@@ -1646,35 +1686,15 @@ class ExternalMediaPlayer(QObject):
                     pass
 
     def _create_stream(self):
-        device_index = None
-        blocksize = 1024
-        latency = "low"
-        stream_kwargs = {
-            "samplerate": self._sample_rate,
-            "channels": self._channels,
-            "dtype": "float32",
-            "callback": self._audio_callback,
-            "device": device_index,
-            "blocksize": blocksize,
-            "latency": latency,
-        }
-        if _REQUESTED_DEVICE:
-            try:
-                device_index = _find_output_device_index(_REQUESTED_DEVICE)
-            except Exception:
-                device_index = None
-        stream_kwargs["device"] = device_index
-        if sys.platform == "darwin":
-            # CoreAudio is more stable with a less aggressive callback cadence here.
-            blocksize = 2048
-            latency = "high"
-            stream_kwargs["blocksize"] = blocksize
-            stream_kwargs["latency"] = latency
-        self._stream_blocksize = int(blocksize)
-        try:
-            return sd.OutputStream(**stream_kwargs)
-        except Exception:
-            return _NullOutputStream()
+        stream, actual_blocksize = create_output_stream(
+            self._audio_callback,
+            sample_rate=self._sample_rate,
+            channels=self._channels,
+            blocksize=1024,
+            latency="low",
+        )
+        self._stream_blocksize = int(actual_blocksize)
+        return stream
 
     def _queue_declick_tail_locked(self) -> None:
         if (not self._declick_enabled) or self._declick_frames <= 0:
@@ -1902,141 +1922,160 @@ class ExternalMediaPlayer(QObject):
         self.durationChanged.emit(self._duration_ms)
         self.positionChanged.emit(0)
 
-    def _audio_callback(self, outdata, frames, _time_info, status) -> None:
-        if status:
-            pass
-        outdata.fill(0.0)
+    def wantsAudioRender(self) -> bool:
+        with self._lock:
+            return bool(self._state == self.PlayingState or len(self._declick_tail) > 0)
+
+    def renderAudioBlock(self, frames: int) -> np.ndarray:
+        frame_count = max(0, int(frames))
+        if frame_count <= 0:
+            return np.zeros((0, self._channels), dtype=np.float32)
         if not self._lock.acquire(blocking=False):
             self._meter_levels = (0.0, 0.0)
             self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
             _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
             _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-            return
+            return np.zeros((frame_count, self._channels), dtype=np.float32)
         try:
-            self._apply_pending_dsp_config_locked()
-            if self._emit_declick_tail_locked(outdata, frames):
-                self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
-                append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
-                return
-            if self._state != self.PlayingState:
-                self._meter_levels = (0.0, 0.0)
-                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
-                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-                return
-            if (self._source_frames is None) and (not self._streaming_mode) and self._utility_spec is None:
-                self._meter_levels = (0.0, 0.0)
-                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
-                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-                return
-
-            if self._streaming_mode:
-                block, consumed_frames, stream_eof = self._read_stream_block_locked(frames)
-                if consumed_frames <= 0 and stream_eof:
-                    self._ended = True
-                    if self._duration_ms > 0:
-                        self._position_ms = self._duration_ms
-                    else:
-                        self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
-                    self._meter_levels = (0.0, 0.0)
-                    self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
-                    self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                    _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
-                    _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-                    return
-                tempo_ratio = 1.0
-                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
-                effective_pitch_ratio = user_pitch_ratio
-            elif self._utility_spec is not None:
-                block = self._read_utility_block_locked(frames)
-                consumed_frames = len(block) if block is not None else 0
-                stream_eof = False
-                tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
-                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
-                effective_pitch_ratio = user_pitch_ratio / tempo_ratio
-            else:
-                block = self._read_source_block_locked(frames)
-                consumed_frames = len(block) if block is not None else 0
-                stream_eof = False
-                tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
-                user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
-                effective_pitch_ratio = user_pitch_ratio / tempo_ratio
-
-            if block is None:
-                self._ended = True
-                self._position_ms = self._duration_ms
-                self._meter_levels = (0.0, 0.0)
-                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
-                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-                return
-
-            if abs(effective_pitch_ratio - 1.0) > 1e-4:
-                block = self._apply_pitch_ratio_block(block, effective_pitch_ratio)
-
-            if self._dsp_active:
-                block = self._dsp_processor.process_block(block)
-            if self._volume != 100:
-                block = block * (self._volume / 100.0)
-            block = self._apply_declick_fade_in_locked(block)
-            if len(block) > 0:
-                pre_left, pre_right = self._peak_levels_from_block(block)
-                _update_engine_output_meter(self._stream_id, pre_left, pre_right, mode="pre_fader")
-            else:
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
-            self._append_output_tap_locked(block, mode="pre_fader")
-            append_output_monitor_frames(self._output_monitor_id, block, mode="pre_fader")
-            if self._master_volume != 100:
-                block = block * (self._master_volume / 100.0)
-
-            n = min(len(block), frames)
-            outdata[:n, :] = block[:n, :]
-            if n > 0:
-                self._last_output_frame = np.asarray(outdata[n - 1, :], dtype=np.float32).copy()
-                self._append_recent_output_locked(outdata[:n, :])
-                peaks = np.max(np.abs(outdata[:n, :]), axis=0)
-                if len(peaks) >= 2:
-                    self._meter_levels = (float(peaks[0]), float(peaks[1]))
-                elif len(peaks) == 1:
-                    mono = float(peaks[0])
-                    self._meter_levels = (mono, mono)
-                _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1], mode="post_fader")
-            else:
-                self._meter_levels = (0.0, 0.0)
-                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
-                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
-                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
-            if n < frames:
-                outdata[n:, :] = 0.0
-                if self._streaming_mode:
-                    self._ended = bool(stream_eof)
-                else:
-                    self._ended = True
-                    if self._source_frames is not None:
-                        self._source_pos = float(len(self._source_frames))
-                    elif self._utility_spec is not None:
-                        self._source_pos = float(_utility_duration_frames(self._utility_spec, self._sample_rate))
-                    else:
-                        self._source_pos = 0.0
-
-            if self._streaming_mode:
-                self._source_pos += float(consumed_frames)
-                self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
-                if self._duration_ms > 0:
-                    self._position_ms = max(0, min(self._position_ms, self._duration_ms))
-            else:
-                self._position_ms = self._position_from_source_pos_locked()
-            self._source_pos_anchor = self._source_pos
-            self._source_pos_anchor_t = time.perf_counter()
-            self._source_pos_anchor_tempo = tempo_ratio
-            self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
-            append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
+            return self._renderAudioBlockLocked(frame_count)
         finally:
             self._lock.release()
+
+    def _renderAudioBlockLocked(self, frames: int) -> np.ndarray:
+        outdata = np.zeros((max(1, int(frames)), self._channels), dtype=np.float32)
+        self._apply_pending_dsp_config_locked()
+        if self._emit_declick_tail_locked(outdata, frames):
+            self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
+            append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
+            return outdata
+        if self._state != self.PlayingState:
+            self._meter_levels = (0.0, 0.0)
+            self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
+            return outdata
+        if (self._source_frames is None) and (not self._streaming_mode) and self._utility_spec is None:
+            self._meter_levels = (0.0, 0.0)
+            self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
+            return outdata
+
+        if self._streaming_mode:
+            block, consumed_frames, stream_eof = self._read_stream_block_locked(frames)
+            if consumed_frames <= 0 and stream_eof:
+                self._ended = True
+                if self._duration_ms > 0:
+                    self._position_ms = self._duration_ms
+                else:
+                    self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+                self._meter_levels = (0.0, 0.0)
+                self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+                self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+                _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
+                return outdata
+            tempo_ratio = 1.0
+            user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+            effective_pitch_ratio = user_pitch_ratio
+        elif self._utility_spec is not None:
+            block = self._read_utility_block_locked(frames)
+            consumed_frames = len(block) if block is not None else 0
+            stream_eof = False
+            tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+            user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+            effective_pitch_ratio = user_pitch_ratio / tempo_ratio
+        else:
+            block = self._read_source_block_locked(frames)
+            consumed_frames = len(block) if block is not None else 0
+            stream_eof = False
+            tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+            user_pitch_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.pitch_pct / 100.0)))
+            effective_pitch_ratio = user_pitch_ratio / tempo_ratio
+
+        if block is None:
+            self._ended = True
+            self._position_ms = self._duration_ms
+            self._meter_levels = (0.0, 0.0)
+            self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
+            return outdata
+
+        if abs(effective_pitch_ratio - 1.0) > 1e-4:
+            block = self._apply_pitch_ratio_block(block, effective_pitch_ratio)
+
+        if self._dsp_active:
+            block = self._dsp_processor.process_block(block)
+        if self._volume != 100:
+            block = block * (self._volume / 100.0)
+        block = self._apply_declick_fade_in_locked(block)
+        if len(block) > 0:
+            pre_left, pre_right = self._peak_levels_from_block(block)
+            _update_engine_output_meter(self._stream_id, pre_left, pre_right, mode="pre_fader")
+        else:
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="pre_fader")
+        self._append_output_tap_locked(block, mode="pre_fader")
+        append_output_monitor_frames(self._output_monitor_id, block, mode="pre_fader")
+        if self._master_volume != 100:
+            block = block * (self._master_volume / 100.0)
+
+        n = min(len(block), frames)
+        outdata[:n, :] = block[:n, :]
+        if n > 0:
+            self._last_output_frame = np.asarray(outdata[n - 1, :], dtype=np.float32).copy()
+            self._append_recent_output_locked(outdata[:n, :])
+            peaks = np.max(np.abs(outdata[:n, :]), axis=0)
+            if len(peaks) >= 2:
+                self._meter_levels = (float(peaks[0]), float(peaks[1]))
+            elif len(peaks) == 1:
+                mono = float(peaks[0])
+                self._meter_levels = (mono, mono)
+            _update_engine_output_meter(self._stream_id, self._meter_levels[0], self._meter_levels[1], mode="post_fader")
+        else:
+            self._meter_levels = (0.0, 0.0)
+            self._recent_output_frames = np.zeros((0, self._channels), dtype=np.float32)
+            self._last_output_frame = np.zeros((self._channels,), dtype=np.float32)
+            _update_engine_output_meter(self._stream_id, 0.0, 0.0, mode="post_fader")
+        if n < frames:
+            outdata[n:, :] = 0.0
+            if self._streaming_mode:
+                self._ended = bool(stream_eof)
+            else:
+                self._ended = True
+                if self._source_frames is not None:
+                    self._source_pos = float(len(self._source_frames))
+                elif self._utility_spec is not None:
+                    self._source_pos = float(_utility_duration_frames(self._utility_spec, self._sample_rate))
+                else:
+                    self._source_pos = 0.0
+
+        if self._streaming_mode:
+            self._source_pos += float(consumed_frames)
+            self._position_ms = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+            if self._duration_ms > 0:
+                self._position_ms = max(0, min(self._position_ms, self._duration_ms))
+        else:
+            self._position_ms = self._position_from_source_pos_locked()
+        self._source_pos_anchor = self._source_pos
+        self._source_pos_anchor_t = time.perf_counter()
+        self._source_pos_anchor_tempo = tempo_ratio
+        self._append_output_tap_locked(outdata[: int(frames), :], mode="post_fader")
+        append_output_monitor_frames(self._output_monitor_id, outdata[: int(frames), :], mode="post_fader")
+        return outdata
+
+    def _audio_callback(self, outdata, frames, _time_info, status) -> None:
+        if status:
+            pass
+        outdata.fill(0.0)
+        block = self.renderAudioBlock(int(frames))
+        if len(block) <= 0:
+            return
+        n = min(int(frames), int(len(block)))
+        outdata[:n, :] = block[:n, :]
 
     def _read_source_block_locked(self, frames: int) -> Optional[np.ndarray]:
         assert self._source_frames is not None
@@ -2176,6 +2215,7 @@ class ExternalMediaPlayer(QObject):
         except Exception:
             pass
         try:
-            _release_coreaudio_keepalive()
+            if bool(getattr(self, "_owns_output_stream", False)):
+                _release_coreaudio_keepalive()
         except Exception:
             pass

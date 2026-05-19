@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from pyssp.audio_service import AudioService
+import pyssp.engine.runtime as runtime_module
 from pyssp.engine import FFmpegEngineServices, MediaRuntime
 from pyssp.engine.types import MediaProbeResult
 
@@ -44,6 +46,12 @@ class _FakePlayer(QObject):
 
     def deleteLater(self) -> None:
         self.deleted = True
+
+    def sampleRate(self) -> int:
+        return 48000
+
+    def outputBlockSize(self) -> int:
+        return 1024
 
 
 def test_media_runtime_tracks_reference_session_and_multi_play_policy():
@@ -154,3 +162,94 @@ def test_ffmpeg_engine_services_wrap_existing_support_module(monkeypatch):
         )
     finally:
         services.shutdown()
+
+
+class _CapturingDispatcher:
+    def __init__(self) -> None:
+        self.audio_payloads = []
+
+    def send_audio_frames(self, frames, sample_rate: int) -> bool:
+        self.audio_payloads.append((frames.copy(), int(sample_rate)))
+        return True
+
+
+def test_media_runtime_ndi_audio_keepalive_uses_nominal_block_size(monkeypatch):
+    runtime = MediaRuntime(player_factory=_FakePlayer)
+    try:
+        runtime._audio_sample_rate = 48000
+        runtime._audio_channels = 2
+        runtime._audio_stream_blocksize = 1024
+        runtime._ndi_dispatcher = _CapturingDispatcher()
+        runtime._video_destinations["ndi_program"].enabled = True
+        runtime._video_destinations["ndi_program"].audio_enabled = True
+        monkeypatch.setattr(runtime_module, "list_output_monitor_players", lambda mode="post_fader": ["a"])
+        monkeypatch.setattr(runtime_module, "mix_output_monitor_chunk", lambda *args, **kwargs: None)
+        monkeypatch.setattr(runtime_module, "consume_output_monitor_chunk", lambda *args, **kwargs: None)
+
+        runtime._service_ndi_audio_from_render(1024)
+
+        assert len(runtime._ndi_dispatcher.audio_payloads) == 1
+        frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
+        assert sample_rate == 48000
+        assert frames.shape == (1024, 2)
+        assert runtime._video_destinations["ndi_program"].audio_send_count == 1
+    finally:
+        runtime.shutdown()
+
+
+def test_media_runtime_ndi_audio_keepalive_uses_runtime_stream_format_without_players(monkeypatch):
+    runtime = MediaRuntime(player_factory=_FakePlayer)
+    try:
+        runtime._audio_sample_rate = 44100
+        runtime._audio_channels = 4
+        runtime._audio_stream_blocksize = 2048
+        runtime._ndi_dispatcher = _CapturingDispatcher()
+        runtime._video_destinations["ndi_program"].enabled = True
+        runtime._video_destinations["ndi_program"].audio_enabled = True
+        monkeypatch.setattr(runtime_module, "list_output_monitor_players", lambda mode="post_fader": [])
+        monkeypatch.setattr(runtime_module, "mix_output_monitor_chunk", lambda *args, **kwargs: None)
+        monkeypatch.setattr(runtime_module, "consume_output_monitor_chunk", lambda *args, **kwargs: None)
+
+        runtime._service_ndi_audio_from_render(2048)
+
+        assert len(runtime._ndi_dispatcher.audio_payloads) == 1
+        frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
+        assert sample_rate == 44100
+        assert frames.shape == (2048, 4)
+        assert runtime._video_destinations["ndi_program"].last_audio_sample_rate == 44100
+        assert runtime._video_destinations["ndi_program"].last_audio_channel_count == 4
+    finally:
+        runtime.shutdown()
+
+
+def test_media_runtime_ndi_audio_sends_one_block_per_render_tick(monkeypatch):
+    runtime = MediaRuntime(player_factory=_FakePlayer)
+    call_count = {"mix": 0, "consume": 0}
+
+    def _mix(*_args, **_kwargs):
+        call_count["mix"] += 1
+        return np.ones((1024, 2), dtype=np.float32) * 0.25, {"a": 1024}
+
+    def _consume(consume_map, mode="post_fader"):
+        _ = mode
+        call_count["consume"] += int(consume_map.get("a", 0) > 0)
+
+    try:
+        runtime._audio_sample_rate = 48000
+        runtime._audio_channels = 2
+        runtime._audio_stream_blocksize = 1024
+        runtime._ndi_dispatcher = _CapturingDispatcher()
+        runtime._video_destinations["ndi_program"].enabled = True
+        runtime._video_destinations["ndi_program"].audio_enabled = True
+        monkeypatch.setattr(runtime_module, "list_output_monitor_players", lambda mode="post_fader": ["a"])
+        monkeypatch.setattr(runtime_module, "mix_output_monitor_chunk", _mix)
+        monkeypatch.setattr(runtime_module, "consume_output_monitor_chunk", _consume)
+
+        runtime._service_ndi_audio_from_render(1024)
+
+        assert len(runtime._ndi_dispatcher.audio_payloads) == 1
+        assert call_count["mix"] == 1
+        assert call_count["consume"] == 1
+        assert runtime._video_destinations["ndi_program"].audio_send_count == 1
+    finally:
+        runtime.shutdown()

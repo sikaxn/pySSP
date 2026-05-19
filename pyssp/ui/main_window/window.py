@@ -64,6 +64,7 @@ class MainWindow(
         super().__init__()
         self._suspend_settings_save = True
         self._show_getting_started_on_startup = bool(show_getting_started_on_startup)
+        self._shutdown_in_progress = False
         self.app_version_text = get_display_version()
         self.app_build_text = get_display_build_id()
         self.app_title_base = get_app_title_base()
@@ -1189,6 +1190,25 @@ class MainWindow(
             QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
 
     def _shutdown_runtime_threads(self) -> None:
+        self._shutdown_in_progress = True
+        cancel_waveform = getattr(self, "_cancel_main_waveform_refresh", None)
+        if callable(cancel_waveform):
+            try:
+                cancel_waveform()
+            except Exception:
+                pass
+        waveform_timer = getattr(self, "_main_waveform_poll_timer", None)
+        if waveform_timer is not None:
+            try:
+                waveform_timer.stop()
+            except Exception:
+                pass
+        disconnect_players = getattr(self, "_disconnect_audio_players_for_shutdown", None)
+        if callable(disconnect_players):
+            try:
+                disconnect_players()
+            except Exception:
+                pass
         timer = getattr(self, "_video_refresh_timer", None)
         if timer is not None:
             try:
@@ -1230,6 +1250,37 @@ class MainWindow(
 
     def close(self) -> bool:
         self._shutdown_runtime_threads()
+        release_launchpad = getattr(self, "_release_launchpad_output", None)
+        if callable(release_launchpad):
+            try:
+                release_launchpad()
+            except Exception:
+                pass
+        for attr_name in [
+            "_stage_display_window",
+            "_lyric_display_window",
+            "_lyric_navigator_window",
+            "_companion_satellite_window",
+        ]:
+            child_window = getattr(self, attr_name, None)
+            if child_window is None:
+                continue
+            try:
+                child_window.close()
+            except Exception:
+                pass
+        stop_web_remote = getattr(self, "_stop_web_remote_service", None)
+        if callable(stop_web_remote):
+            try:
+                stop_web_remote()
+            except Exception:
+                pass
+        stop_companion_client = getattr(self, "_stop_companion_satellite_client", None)
+        if callable(stop_companion_client):
+            try:
+                stop_companion_client()
+            except Exception:
+                pass
         return QMainWindow.close(self)
 
 

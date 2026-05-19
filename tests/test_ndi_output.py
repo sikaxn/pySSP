@@ -289,6 +289,63 @@ def test_ndi_dispatcher_queues_audio_via_backend_thread():
         dispatcher.shutdown()
 
 
+def test_ndi_dispatcher_spaces_audio_blocks_by_sample_duration():
+    class _TrackingSender:
+        available = True
+
+        def __init__(self, _status) -> None:
+            self.audio_call_times = []
+            self._last_audio_error = ""
+            self._last_audio_mode = ""
+            self._audio_recovery_count = 0
+
+        def configure(self, _config) -> bool:
+            return True
+
+        def stop(self) -> None:
+            return None
+
+        def get_num_connections(self, _timeout: float = 0.0) -> int:
+            return 1
+
+        def send_video_frame(self, _image: QImage) -> bool:
+            return True
+
+        def send_audio_frames(self, _frames: np.ndarray, _sample_rate: int) -> bool:
+            self.audio_call_times.append(time.perf_counter())
+            self._last_audio_mode = "paced"
+            self._last_audio_error = ""
+            return True
+
+    dispatcher = NDIOutputDispatcher(_ready_status(), sender_factory=_TrackingSender, connection_poll_interval_sec=0.05)
+    try:
+        config = NDIOutputConfig(
+            source_name="pyssp-video",
+            width=640,
+            height=360,
+            fps=30.0,
+            audio_enabled=True,
+        )
+        assert dispatcher.configure(config) is True
+
+        audio = np.ones((100, 2), dtype=np.float32) * 0.25
+        for _ in range(3):
+            assert dispatcher.send_audio_frames(audio, 1000) is True
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline and len(dispatcher._sender.audio_call_times) < 3:
+            time.sleep(0.01)
+        assert len(dispatcher._sender.audio_call_times) == 3
+        deltas = [
+            dispatcher._sender.audio_call_times[index + 1] - dispatcher._sender.audio_call_times[index]
+            for index in range(2)
+        ]
+        assert min(deltas) >= 0.06
+        assert dispatcher._last_audio_mode == "paced"
+    finally:
+        dispatcher.shutdown()
+
+
 def test_ndi_sender_recovers_after_runtime_error():
     class _RecoveringSession(_FakeSession):
         instances = 0

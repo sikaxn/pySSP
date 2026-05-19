@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import weakref
 
 from .shared import *
 from .constants import *
@@ -40,6 +41,9 @@ class _VideoFrameDecodeDispatcher(QObject):
         self._frame_signal_pending = False
         self._thread = threading.Thread(target=self._run, name="pyssp-video-frame-decode", daemon=True)
         self._thread.start()
+        if parent is not None:
+            self_ref = weakref.ref(self)
+            parent.destroyed.connect(lambda _obj=None, ref=self_ref: (ref() and ref().stop()))
 
     def request_stream(self, tag: int, path: str, start_ms: int, width: int, height: int, interval_ms: int) -> None:
         candidate = str(path or "").strip()
@@ -861,7 +865,11 @@ class VideoDisplayMixin:
         backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
         widget.configure_backdrop(show_message=bool(backdrop_message), message_text=backdrop_message)
         if mode == "video":
-            widget.set_video_pixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+            runtime_image = self._runtime_video_destination_frame("local_program")
+            if not runtime_image.isNull():
+                widget.set_video_pixmap(QPixmap.fromImage(runtime_image))
+            else:
+                widget.set_video_pixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
             widget.set_content_pixmap(QPixmap())
             widget.set_lyric_html(self._current_video_lyric_html())
             return
@@ -915,6 +923,53 @@ class VideoDisplayMixin:
         except Exception:
             return None
         return None
+
+    def _runtime_video_destination_frame(self, destination_id: str) -> QImage:
+        service = getattr(self, "_audio_service", None)
+        getter = getattr(service, "video_destination_frame", None)
+        if not callable(getter):
+            return QImage()
+        try:
+            image = getter(str(destination_id))
+        except Exception:
+            return QImage()
+        return image if isinstance(image, QImage) else QImage()
+
+    def _configure_local_video_destination(self) -> None:
+        service = getattr(self, "_audio_service", None)
+        configure = getattr(service, "configure_video_destination", None)
+        if not callable(configure):
+            return
+        slot, info = self._current_video_slot_and_probe()
+        target_width, target_height = self._video_target_surface_pixel_size()
+        source_width, source_height = self._video_output_dimensions(info)
+        width = max(2, int(target_width or source_width or 640))
+        height = max(2, int(target_height or source_height or 360))
+        fps = 30.0
+        try:
+            fps = max(1.0, float(getattr(info, "fps", 0.0) or 0.0))
+        except Exception:
+            fps = 30.0
+        if fps <= 0.0:
+            fps = 30.0
+        source_name = "local-program"
+        if slot is not None:
+            source_name = str(slot.file_path or "").strip() or source_name
+        try:
+            configure(
+                "local_program",
+                enabled=bool(self._video_display_target_visible()),
+                route_mode=self._active_video_route_mode(),
+                width=width,
+                height=height,
+                fps=fps,
+                source_name=source_name,
+                audio_enabled=False,
+                audio_tap_mode="post_fader",
+                ndi_status=None,
+            )
+        except Exception:
+            pass
 
     def _ensure_ndi_preview_widget(self) -> VideoDisplayWidget:
         widget = getattr(self, "ndi_preview_widget", None)
@@ -1263,6 +1318,10 @@ class VideoDisplayMixin:
             clear_method = getattr(getattr(self, "_audio_service", None), "clear_video_destination_frame", None)
             if callable(clear_method):
                 try:
+                    clear_method("local_program")
+                except Exception:
+                    pass
+                try:
                     clear_method("ndi_program")
                 except Exception:
                     pass
@@ -1358,6 +1417,8 @@ class VideoDisplayMixin:
         self._queue_video_frame_refresh()
 
     def _on_video_frame_ready(self) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         dispatcher = getattr(self, "_video_frame_dispatcher", None)
         if dispatcher is None:
             return
@@ -1410,6 +1471,18 @@ class VideoDisplayMixin:
         self._video_current_frame_image = QImage(frame_image)
         self._video_current_frame_pixmap = QPixmap(pixmap)
         self._video_last_frame_pts_ms = bucket_ms
+        submit_method = getattr(getattr(self, "_audio_service", None), "submit_video_destination_frame", None)
+        if callable(submit_method):
+            try:
+                submit_method(
+                    "local_program",
+                    frame_image,
+                    route_mode="video",
+                    pts_ms=max(0, int(bucket_ms)),
+                    source_path=active_path,
+                )
+            except Exception:
+                pass
         self._apply_video_frame_to_targets()
         self._refresh_ndi_output(force=False)
         desired_key = getattr(self, "_video_requested_frame_key", None)
@@ -1432,6 +1505,7 @@ class VideoDisplayMixin:
         dispatcher.request_frame(tag, desired_path, desired_key[1], width, height)
 
     def _refresh_video_display(self, force: bool = False) -> None:
+        self._configure_local_video_destination()
         if force and self._active_video_route_mode() != "video":
             self._clear_video_frame_runtime()
         preview = getattr(self, "video_preview_widget", None)

@@ -92,6 +92,12 @@ class EngineDiagnosticsSnapshot:
     ffmpeg_version: str
     audio_bus_ids: tuple[AudioBusId, ...]
     video_destination_ids: tuple[VideoDestinationId, ...]
+    render_core: str = "legacy_player"
+    audio_output_stream_active: bool = False
+    audio_output_sample_rate: int = 0
+    audio_output_channels: int = 0
+    audio_output_blocksize: int = 0
+    local_video_runtime_enabled: bool = False
     video_destinations: tuple["VideoDestinationSnapshot", ...] = ()
 
 

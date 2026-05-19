@@ -324,6 +324,40 @@ class PlaybackMixin:
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
 
+    def _disconnect_audio_players_for_shutdown(self) -> None:
+        for signal, handler in [
+            (getattr(getattr(self, "player", None), "positionChanged", None), self._on_position_changed),
+            (getattr(getattr(self, "player", None), "durationChanged", None), self._on_duration_changed),
+            (getattr(getattr(self, "player", None), "stateChanged", None), self._on_state_changed),
+            (getattr(getattr(self, "player", None), "mediaLoadFinished", None), self._on_player_media_load_finished),
+            (getattr(getattr(self, "player_b", None), "positionChanged", None), self._on_secondary_position_changed),
+            (getattr(getattr(self, "player_b", None), "durationChanged", None), self._on_duration_changed),
+            (getattr(getattr(self, "player_b", None), "stateChanged", None), self._on_state_changed),
+            (getattr(getattr(self, "player_b", None), "mediaLoadFinished", None), self._on_player_media_load_finished),
+        ]:
+            if signal is None:
+                continue
+            try:
+                signal.disconnect(handler)
+            except Exception:
+                pass
+        for player in [getattr(self, "player", None), getattr(self, "player_b", None), *list(getattr(self, "_multi_players", []))]:
+            if player is None:
+                continue
+            try:
+                player.blockSignals(True)
+            except Exception:
+                pass
+        for shadow in list(getattr(self, "_vocal_shadow_players", {}).values()):
+            try:
+                shadow.mediaLoadFinished.disconnect(self._on_vocal_shadow_media_load_finished)
+            except Exception:
+                pass
+            try:
+                shadow.blockSignals(True)
+            except Exception:
+                pass
+
     def _recover_from_stuck_mouse_state(self) -> None:
         # Defensive UI recovery for platform-specific pointer grab issues after
         # closing context-launched modal dialogs.
@@ -887,6 +921,8 @@ class PlaybackMixin:
         self._append_play_log(slot.file_path)
 
     def _on_player_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         player = self.sender()
         if not self._is_audio_player(player):
             return
@@ -1070,6 +1106,8 @@ class PlaybackMixin:
         self.now_playing_label.set_now_playing_html(tr("NOW PLAYING:"), value_html)
 
     def _on_position_changed(self, pos: int) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         self._process_automation_script_player(self.player)
         display_pos = self._transport_display_ms_for_absolute(pos)
         if not self._is_scrubbing:
@@ -1091,9 +1129,13 @@ class PlaybackMixin:
             refresh_video()
 
     def _on_secondary_position_changed(self, _pos: int) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         self._process_automation_script_player(self.player_b)
 
     def _on_duration_changed(self, duration: int) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         self.current_duration_ms = duration
         if self.main_progress_display_mode == "waveform":
             self._schedule_main_waveform_refresh(120)
@@ -1205,6 +1247,8 @@ class PlaybackMixin:
             timer.stop()
 
     def _on_state_changed(self, _state: int) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         print(
             f"[TCDBG] {time.perf_counter():.6f} state_changed "
             f"primary={self.player.state()} secondary={self.player_b.state()}"
@@ -1671,6 +1715,8 @@ class PlaybackMixin:
             self._clear_vocal_shadow_player(player)
 
     def _on_vocal_shadow_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         shadow = self.sender()
         if not self._is_audio_player(shadow):
             return

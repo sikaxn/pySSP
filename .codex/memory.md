@@ -218,3 +218,29 @@ NDI audio
 - FFmpeg direction is fixed in code as well as docs:
   - FFmpeg remains a first-class subsystem for probing, format support, and preload-friendly decode workflows
   - the rewrite should continue building on this instead of removing it
+- NDI live-analysis procedure to remember:
+  - if local audio is clean but NDI audio skips, test the live sender with the installed NDI SDK/runtime directly before changing app code
+  - use `scripts/ndi_audio_probe.py` against the running source, usually `pyssp-video`
+  - example command:
+    - `.venv\\Scripts\\python.exe scripts\\ndi_audio_probe.py --source pyssp-video --duration 30`
+  - the script uses `ctypes` against `Processing.NDI.Lib.x64.dll`, receives audio-only frames, and reports:
+    - sender timestamp deltas
+    - receiver wall-clock deltas
+    - queue depth samples
+    - SDK performance counters including dropped frames
+    - sample-rate/channel/sample-count stability
+    - silent-frame presence during idle keepalive
+- NDI live-analysis findings from 2026-05-18:
+  - source stayed connected
+  - receiver-side dropped audio frames stayed at `0`
+  - format stayed stable at `48000 Hz`, `2 ch`, `1024 samples`
+  - silent frames were present at idle, so the sender was not fully disappearing
+  - skips were traced to sender-side cadence jitter, not receiver disconnects or packet loss
+  - measured sender timestamp pattern showed many near-zero intervals followed by `~40-47 ms` gaps, indicating bursty submission
+  - this points at timer/worker-loop-driven audio submission in the backend, not Studio Monitor itself
+- NDI audio timing redesign after that probe:
+  - do not drive NDI audio from the `MediaRuntime` 10 ms destination polling loop
+  - feed NDI audio from the shared audio render callback cadence instead
+  - `NDIOutputDispatcher` now uses a dedicated audio worker thread with sample-duration pacing, separate from the control/video worker
+  - avoid burst-flushing queued audio blocks; pacing should preserve one-block-per-render-tick behavior as closely as possible
+  - direct runtime sender sessions now request `clock_audio=True`

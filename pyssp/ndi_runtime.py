@@ -199,7 +199,7 @@ class NDIRuntimeSenderSession:
             p_ndi_name=self._name_bytes,
             p_groups=None,
             clock_video=False,
-            clock_audio=False,
+            clock_audio=True,
         )
         sender = self._runtime._dll.NDIlib_send_create(ctypes.byref(create_desc))
         if not sender:

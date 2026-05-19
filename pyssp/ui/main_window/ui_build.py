@@ -1479,6 +1479,12 @@ class UiBuildMixin:
             ("runtime_transport_position_ms", int(runtime_transport.position_ms)),
             ("runtime_transport_duration_ms", int(runtime_transport.duration_ms)),
             ("runtime_session_count", int(runtime_diagnostics.session_count)),
+            ("runtime_render_core", str(getattr(runtime_diagnostics, "render_core", "") or "")),
+            ("runtime_audio_output_stream_active", bool(getattr(runtime_diagnostics, "audio_output_stream_active", False))),
+            ("runtime_audio_sample_rate", int(getattr(runtime_diagnostics, "audio_output_sample_rate", 0) or 0)),
+            ("runtime_audio_channels", int(getattr(runtime_diagnostics, "audio_output_channels", 0) or 0)),
+            ("runtime_audio_blocksize", int(getattr(runtime_diagnostics, "audio_output_blocksize", 0) or 0)),
+            ("runtime_local_video_enabled", bool(getattr(runtime_diagnostics, "local_video_runtime_enabled", False))),
             (
                 "runtime_sessions",
                 [
@@ -1586,6 +1592,12 @@ class UiBuildMixin:
                 "ffmpeg_version": str(diagnostics.ffmpeg_version),
                 "audio_bus_ids": list(diagnostics.audio_bus_ids),
                 "video_destination_ids": list(diagnostics.video_destination_ids),
+                "render_core": str(getattr(diagnostics, "render_core", "") or ""),
+                "audio_output_stream_active": bool(getattr(diagnostics, "audio_output_stream_active", False)),
+                "audio_output_sample_rate": int(getattr(diagnostics, "audio_output_sample_rate", 0) or 0),
+                "audio_output_channels": int(getattr(diagnostics, "audio_output_channels", 0) or 0),
+                "audio_output_blocksize": int(getattr(diagnostics, "audio_output_blocksize", 0) or 0),
+                "local_video_runtime_enabled": bool(getattr(diagnostics, "local_video_runtime_enabled", False)),
                 "video_destinations": [
                     {
                         "destination_id": snapshot.destination_id,

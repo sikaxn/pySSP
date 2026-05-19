@@ -298,6 +298,7 @@ class AudioServiceController(QObject):
         self._counter = itertools.count(1)
         self._request_counter = itertools.count(1)
         self._pending_results: Dict[int, Future] = {}
+        self._last_runtime_session_snapshots: tuple[RuntimeSessionSnapshot, ...] = ()
         self._shutdown = False
         self._thread.start()
         if parent is not None:
@@ -413,12 +414,18 @@ class AudioServiceController(QObject):
         self.post("__runtime__", "setMultiPlayEnabled", {"enabled": bool(enabled)})
 
     def runtime_session_snapshots(self) -> tuple[RuntimeSessionSnapshot, ...]:
-        result = self.call("__runtime__", "runtimeSessionSnapshots", {}, timeout=0.5)
+        try:
+            result = self.call("__runtime__", "runtimeSessionSnapshots", {}, timeout=0.5)
+        except Exception:
+            return tuple(self._last_runtime_session_snapshots)
         if isinstance(result, tuple) and all(isinstance(item, RuntimeSessionSnapshot) for item in result):
+            self._last_runtime_session_snapshots = tuple(result)
             return result
         if isinstance(result, list) and all(isinstance(item, RuntimeSessionSnapshot) for item in result):
-            return tuple(result)
-        return ()
+            snapshots = tuple(result)
+            self._last_runtime_session_snapshots = snapshots
+            return snapshots
+        return tuple(self._last_runtime_session_snapshots)
 
     def video_destination_snapshots(self) -> tuple[VideoDestinationSnapshot, ...]:
         result = self.call("__runtime__", "videoDestinationSnapshots", {}, timeout=0.5)

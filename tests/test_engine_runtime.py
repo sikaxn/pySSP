@@ -257,3 +257,32 @@ def test_media_runtime_ndi_audio_sends_one_block_per_render_tick(monkeypatch):
         assert runtime._video_destinations["ndi_program"].audio_send_count == 1
     finally:
         runtime.shutdown()
+
+
+def test_media_runtime_ndi_audio_post_fader_uses_direct_mixed_block(monkeypatch):
+    runtime = MediaRuntime(player_factory=_FakePlayer)
+    try:
+        runtime._audio_sample_rate = 48000
+        runtime._audio_channels = 2
+        runtime._audio_stream_blocksize = 1024
+        runtime._ndi_dispatcher = _CapturingDispatcher()
+        runtime._video_destinations["ndi_program"].enabled = True
+        runtime._video_destinations["ndi_program"].audio_enabled = True
+        runtime._video_destinations["ndi_program"].audio_tap_mode = "post_fader"
+        monkeypatch.setattr(
+            runtime_module,
+            "mix_output_monitor_chunk",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("monitor mix should not be used")),
+        )
+        monkeypatch.setattr(runtime_module, "consume_output_monitor_chunk", lambda *args, **kwargs: None)
+
+        direct = np.ones((1024, 2), dtype=np.float32) * 0.125
+        runtime._service_ndi_audio_from_render(1024, mixed_post_fader=direct)
+
+        assert len(runtime._ndi_dispatcher.audio_payloads) == 1
+        frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
+        assert sample_rate == 48000
+        assert frames.shape == (1024, 2)
+        assert np.allclose(frames, direct)
+    finally:
+        runtime.shutdown()

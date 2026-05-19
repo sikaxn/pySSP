@@ -80,6 +80,9 @@ class _VideoRefreshHost(VideoDisplayMixin):
         self._video_last_frame_pts_ms = 0
         self._video_current_frame_key = None
         self._video_current_frame_pixmap = _NullPixmap()
+        self._video_current_frame_image = mw.QImage()
+        self._video_force_blank_until_frame = False
+        self._video_force_blank_expected_path = ""
         self.preload_video_enabled = False
         self._video_display_window = None
         self.video_preview_widget = None
@@ -343,6 +346,116 @@ def test_video_decoder_ignores_stale_request_tags():
     host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
 
     assert host._video_current_frame_key is None
+
+
+def test_video_route_forces_blank_during_video_switch_until_cleared():
+    class _VideoSwitchRouteHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self._slot = mw.SoundButtonData(file_path="clip.mp4")
+            self._media_probe_cache = {}
+            self._video_force_blank_until_frame = False
+            self._video_force_blank_expected_path = ""
+            self.refresh_calls = []
+
+        def _media_probe_for_path(self, path: str) -> MediaProbeInfo:
+            if str(path or "").strip().lower().endswith(".mp4"):
+                return MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
+            return MediaProbeInfo()
+
+        def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
+            return None
+
+        def _refresh_video_display(self, force: bool = False) -> None:
+            self.refresh_calls.append(bool(force))
+
+    host = _VideoSwitchRouteHost()
+
+    host._start_video_switch_blank("clip.mp4")
+    assert host._active_video_route_mode() == "blank"
+    assert host.refresh_calls == [True]
+
+    host._clear_video_switch_blank()
+    assert host._active_video_route_mode() == "video"
+
+
+def test_video_route_stays_blank_during_switch_even_without_current_playing_key():
+    class _VideoSwitchRouteHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.current_playing = None
+            self._media_probe_cache = {}
+            self._video_force_blank_until_frame = False
+            self._video_force_blank_expected_path = ""
+
+        def _media_probe_for_path(self, path: str) -> MediaProbeInfo:
+            if str(path or "").strip().lower().endswith(".mp4"):
+                return MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
+            return MediaProbeInfo()
+
+        def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
+            return None
+
+        def _refresh_video_display(self, force: bool = False) -> None:
+            return None
+
+    host = _VideoSwitchRouteHost()
+
+    host._start_video_switch_blank("clip.mp4")
+
+    assert host._active_video_route_mode() == "blank"
+
+
+def test_video_refresh_continues_decoding_during_switch_blank():
+    host = _VideoRefreshHost()
+    host._start_video_switch_blank("clip.mp4")
+
+    host._queue_video_frame_refresh()
+
+    assert host._video_frame_dispatcher.requests[-1] == ("stream", 1, "clip.mp4", 80, 640, 360, 40)
+    assert host._active_video_route_mode() == "blank"
+
+
+def test_video_prestart_hold_uses_video_route_before_play_state():
+    app = QApplication.instance() or QApplication([])
+
+    class _VideoPrestartHost(_VideoRefreshHost):
+        def _stage_playback_status(self) -> str:
+            return "not_playing"
+
+    host = _VideoPrestartHost()
+
+    host._begin_video_prestart_hold("clip.mp4")
+    host._queue_video_frame_refresh()
+
+    assert host._active_video_route_mode() == "video"
+    assert host._video_frame_dispatcher.requests[-1] == ("frame", 1, "clip.mp4", 80, 640, 360)
+    assert app is not None
+
+
+def test_video_frame_decode_completes_pending_video_synced_start():
+    app = QApplication.instance() or QApplication([])
+
+    class _VideoPrestartHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.completed_paths = []
+
+        def _stage_playback_status(self) -> str:
+            return "not_playing"
+
+        def _complete_pending_video_synced_start(self, path_key: str) -> None:
+            self.completed_paths.append(path_key)
+
+    host = _VideoPrestartHost()
+    host._begin_video_prestart_hold("clip.mp4")
+    host._video_active_request_tag = 1
+
+    host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
+
+    assert host.completed_paths == [host._normalized_media_probe_key("clip.mp4")]
+    assert host._video_current_frame_key == (host._normalized_media_probe_key("clip.mp4"), 80)
+    assert app is not None
 
 
 def test_send_ndi_audio_flushes_player_tap_blocks():

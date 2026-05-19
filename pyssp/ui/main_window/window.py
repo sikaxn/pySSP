@@ -85,6 +85,8 @@ class MainWindow(
         self._pending_start_token = 0
         self._pending_deferred_audio_request: Optional[Tuple[str, int, int, str, float]] = None
         self._pending_deferred_audio_token = 0
+        self._pending_video_synced_start: Optional[dict] = None
+        self._pending_video_synced_start_token = 0
         self._pending_player_media_loads: Dict[int, dict] = {}
         self.current_duration_ms = 0
         self._main_progress_waveform: List[float] = []

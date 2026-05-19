@@ -469,6 +469,22 @@ class VideoDisplayMixin:
 
     def _active_video_route_mode(self) -> str:
         slot, info = self._current_video_slot_and_probe()
+        if bool(getattr(self, "_video_prestart_hold_until_frame", False)):
+            expected_path = str(getattr(self, "_video_prestart_hold_expected_path", "") or "").strip()
+            if expected_path and self._path_may_have_video(expected_path):
+                expected_info = self._media_probe_for_path(expected_path)
+                if expected_info.has_video:
+                    return "video"
+            if slot is not None and info.has_video:
+                return "video"
+        if bool(getattr(self, "_video_force_blank_until_frame", False)):
+            expected_path = str(getattr(self, "_video_force_blank_expected_path", "") or "").strip()
+            if expected_path and self._path_may_have_video(expected_path):
+                expected_info = self._media_probe_for_path(expected_path)
+                if expected_info.has_video:
+                    return "blank"
+            if slot is not None and info.has_video:
+                return "blank"
         if slot is None or not info.has_video:
             return str(self.video_display_mode_idle or "blank")
         status = self._stage_playback_status()
@@ -636,6 +652,26 @@ class VideoDisplayMixin:
         self._clear_video_frame_runtime(preserve_current_frame=True)
         if refresh:
             self._refresh_video_display(force=True)
+
+    def _start_video_switch_blank(self, expected_path: str = "") -> None:
+        self._video_force_blank_until_frame = True
+        self._video_force_blank_expected_path = self._normalized_media_probe_key(expected_path) if expected_path else ""
+        self._clear_video_frame_runtime(preserve_current_frame=False)
+        self._refresh_video_display(force=True)
+
+    def _clear_video_switch_blank(self) -> None:
+        self._video_force_blank_until_frame = False
+        self._video_force_blank_expected_path = ""
+
+    def _begin_video_prestart_hold(self, expected_path: str = "") -> None:
+        self._video_prestart_hold_until_frame = True
+        self._video_prestart_hold_expected_path = self._normalized_media_probe_key(expected_path) if expected_path else ""
+        self._clear_video_frame_runtime(preserve_current_frame=False)
+        self._refresh_video_display(force=True)
+
+    def _clear_video_prestart_hold(self) -> None:
+        self._video_prestart_hold_until_frame = False
+        self._video_prestart_hold_expected_path = ""
 
     def _video_frame_bucket_ms(self, position_ms: int, info: Optional[MediaProbeInfo] = None) -> int:
         interval_ms = self._video_frame_interval_ms(info)
@@ -1334,13 +1370,21 @@ class VideoDisplayMixin:
         if (not self.preload_video_enabled) and (not preserve_current_frame):
             self._video_frame_cache.clear()
 
+    def _video_decode_allowed_during_switch_blank(self) -> bool:
+        if not bool(getattr(self, "_video_force_blank_until_frame", False)):
+            return False
+        slot, info = self._current_video_slot_and_probe()
+        return slot is not None and bool(info.has_video)
+
     def _queue_video_frame_refresh(self, *, force: bool = False) -> None:
         if not self._video_display_target_visible():
             if force or self._video_stream_path_key or self._video_decode_inflight_key is not None:
                 self._clear_video_frame_runtime()
             return
         slot, info = self._current_video_slot_and_probe()
-        if slot is None or (not info.has_video) or self._active_video_route_mode() != "video":
+        route_mode = self._active_video_route_mode()
+        allow_decode_while_blank = self._video_decode_allowed_during_switch_blank()
+        if slot is None or (not info.has_video) or (route_mode != "video" and not allow_decode_while_blank):
             if force:
                 self._clear_video_frame_runtime()
             return
@@ -1412,7 +1456,7 @@ class VideoDisplayMixin:
         dispatcher.request_frame(tag, path, bucket_ms, width, height)
 
     def _tick_video_refresh(self) -> None:
-        if self._active_video_route_mode() != "video":
+        if self._active_video_route_mode() != "video" and not self._video_decode_allowed_during_switch_blank():
             return
         self._queue_video_frame_refresh()
 
@@ -1437,6 +1481,9 @@ class VideoDisplayMixin:
         if int(tag) != int(getattr(self, "_video_active_request_tag", 0) or 0):
             return
         cache_key = (self._normalized_media_probe_key(candidate), max(0, int(bucket_ms)))
+        expected_blank_key = str(getattr(self, "_video_force_blank_expected_path", "") or "")
+        if bool(getattr(self, "_video_force_blank_until_frame", False)) and expected_blank_key and cache_key[0] == expected_blank_key:
+            self._clear_video_switch_blank()
         image = QImage(payload, max(1, int(width)), max(1, int(height)), max(1, int(width)) * 3, QImage.Format_RGB888)
         if image.isNull():
             return
@@ -1485,6 +1532,12 @@ class VideoDisplayMixin:
                 pass
         self._apply_video_frame_to_targets()
         self._refresh_ndi_output(force=False)
+        complete_pending_start = getattr(self, "_complete_pending_video_synced_start", None)
+        if callable(complete_pending_start):
+            try:
+                complete_pending_start(active_key)
+            except Exception:
+                pass
         desired_key = getattr(self, "_video_requested_frame_key", None)
         desired_path = str(getattr(self, "_video_requested_frame_path", "") or "").strip()
         if self._stage_playback_status() == "playing":

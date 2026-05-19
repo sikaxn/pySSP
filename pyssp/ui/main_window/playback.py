@@ -445,6 +445,7 @@ class PlaybackMixin:
         self._pending_start_request = None
         self._pending_start_token += 1
         self._clear_pending_deferred_audio_start()
+        self._clear_pending_video_synced_start()
         old_player, new_player = self._select_transition_players()
         any_playing = old_player is not None
         mode = self._current_fade_mode()
@@ -460,6 +461,21 @@ class PlaybackMixin:
         cross_mode = mode == "cross_fade"
         if any_playing:
             self._emit_interruption_events_for_active_players(trigger_source)
+        start_video_switch_blank = getattr(self, "_start_video_switch_blank", None)
+        clear_video_switch_blank = getattr(self, "_clear_video_switch_blank", None)
+        current_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+        slot_has_video = bool(getattr(self, "_slot_has_video_media", lambda _slot: False)(slot))
+        current_has_video = bool(getattr(self, "_slot_has_video_media", lambda _slot: False)(current_slot))
+        if callable(start_video_switch_blank) and any_playing and slot_has_video and current_has_video and self.current_playing != playing_key:
+            try:
+                start_video_switch_blank(str(slot.file_path or "").strip())
+            except Exception:
+                pass
+        elif callable(clear_video_switch_blank):
+            try:
+                clear_video_switch_blank()
+            except Exception:
+                pass
         if (
             any_playing
             and fade_out_on
@@ -506,6 +522,11 @@ class PlaybackMixin:
                     f"[TCDBG] {time.perf_counter():.6f} media_load_failed cross "
                     f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
                 )
+                if callable(clear_video_switch_blank):
+                    try:
+                        clear_video_switch_blank()
+                    except Exception:
+                        pass
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
@@ -514,40 +535,8 @@ class PlaybackMixin:
                 f"[TCDBG] {time.perf_counter():.6f} media_load_ok cross "
                 f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
             )
-            if new_player is self.player:
-                self._player_slot_volume_pct = slot_pct
-            else:
-                self._player_b_slot_volume_pct = slot_pct
-            target_volume = self._effective_slot_target_volume(slot_pct)
-            seek_t = time.perf_counter()
-            self._seek_player_to_slot_start_cue(new_player, slot)
-            print(
-                f"[TCDBG] {time.perf_counter():.6f} media_seek_done cross "
-                f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
-            )
-            self._set_player_volume(new_player, 0)
-            print(f"[TCDBG] {time.perf_counter():.6f} player_play cross key={playing_key}")
-            self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
-            new_player.play()
-            self._sync_shadow_transport_from_primary(new_player)
-            started_playback = True
-            self._set_player_slot_key(new_player, playing_key)
-            self._mark_player_started(new_player)
-            fade_seconds = self.cross_fade_sec
-            self._start_fade(
-                new_player,
-                target_volume,
-                fade_seconds,
-                stop_on_complete=False,
-                automation_slot_key=playing_key,
-                automation_start_events=("on_fade_in_start",),
-                automation_end_events=("on_fade_in_end",),
-            )
-            if old_player is not None:
-                self._start_fade(old_player, 0, fade_seconds, stop_on_complete=True)
-            # Keep the "primary" player bound to the newest track for UI updates.
-            if self.player is not new_player:
-                self._swap_primary_secondary_players()
+            self._finish_cross_loaded_playback(old_player, new_player, slot, playing_key, slot_pct)
+            return True
         else:
             self._clear_all_player_slot_keys()
             self._stop_player_internal(self.player_b)
@@ -570,6 +559,11 @@ class PlaybackMixin:
                     f"[TCDBG] {time.perf_counter():.6f} media_load_failed primary "
                     f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
                 )
+                if callable(clear_video_switch_blank):
+                    try:
+                        clear_video_switch_blank()
+                    except Exception:
+                        pass
                 self.current_playing = None
                 self._refresh_sound_grid()
                 self._update_now_playing_label("")
@@ -578,42 +572,8 @@ class PlaybackMixin:
                 f"[TCDBG] {time.perf_counter():.6f} media_load_ok primary "
                 f"dt_ms={(time.perf_counter() - load_t) * 1000.0:.1f} key={playing_key}"
             )
-            self._player_slot_volume_pct = slot_pct
-            target_volume = self._effective_slot_target_volume(slot_pct)
-            seek_t = time.perf_counter()
-            self._seek_player_to_slot_start_cue(self.player, slot)
-            self._prepare_vocal_shadow_player(self.player, slot, start_playing=False)
-            print(
-                f"[TCDBG] {time.perf_counter():.6f} media_seek_done primary "
-                f"dt_ms={(time.perf_counter() - seek_t) * 1000.0:.1f} key={playing_key}"
-            )
-            if fade_in_on:
-                self._set_player_volume(self.player, 0)
-                print(f"[TCDBG] {time.perf_counter():.6f} player_play fade_in key={playing_key}")
-                self.player.play()
-                self._sync_shadow_transport_from_primary(self.player)
-                started_playback = True
-                self._set_player_slot_key(self.player, playing_key)
-                self._mark_player_started(self.player)
-                self.current_playing = playing_key
-                self._start_fade(
-                    self.player,
-                    target_volume,
-                    self.fade_in_sec,
-                    stop_on_complete=False,
-                    automation_slot_key=playing_key,
-                    automation_start_events=("on_fade_in_start",),
-                    automation_end_events=("on_fade_in_end",),
-                )
-            else:
-                self._set_player_volume(self.player, target_volume)
-                print(f"[TCDBG] {time.perf_counter():.6f} player_play direct key={playing_key}")
-                self.player.play()
-                self._sync_shadow_transport_from_primary(self.player)
-                started_playback = True
-                self._set_player_slot_key(self.player, playing_key)
-                self._mark_player_started(self.player)
-                self.current_playing = playing_key
+            self._finish_primary_loaded_playback(self.player, slot, playing_key, slot_pct, fade_in_on)
+            return True
 
         if started_playback:
             self._trigger_sound_button_started_event(playing_key, include_advanced=True)
@@ -780,24 +740,88 @@ class PlaybackMixin:
                 except Exception:
                     pass
 
-    def _finish_primary_loaded_playback(
+    def _clear_pending_video_synced_start(self) -> None:
+        self._pending_video_synced_start_token += 1
+        self._pending_video_synced_start = None
+        clear_hold = getattr(self, "_clear_video_prestart_hold", None)
+        if callable(clear_hold):
+            try:
+                clear_hold()
+            except Exception:
+                pass
+
+    def _arm_video_synced_start(
+        self,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        start_callback: Callable[[], None],
+    ) -> bool:
+        has_video = bool(getattr(self, "_slot_has_video_media", lambda _slot: False)(slot))
+        if not has_video:
+            return False
+        path = str(slot.file_path or "").strip()
+        if not path:
+            return False
+        begin_hold = getattr(self, "_begin_video_prestart_hold", None)
+        if not callable(begin_hold):
+            return False
+        self._pending_video_synced_start_token += 1
+        token = int(self._pending_video_synced_start_token)
+        normalized_path = str(getattr(self, "_normalized_media_probe_key", lambda value: value)(path) or "").strip()
+        self.current_playing = playing_key
+        self._pending_video_synced_start = {
+            "token": token,
+            "path_key": normalized_path,
+            "callback": start_callback,
+            "playing_key": playing_key,
+            "armed_at": time.monotonic(),
+        }
+        try:
+            begin_hold(path)
+        except Exception:
+            self._pending_video_synced_start = None
+            return False
+        QTimer.singleShot(500, lambda t=token: self._force_pending_video_synced_start(t))
+        return True
+
+    def _complete_pending_video_synced_start(self, path_key: str) -> None:
+        pending = getattr(self, "_pending_video_synced_start", None)
+        if not isinstance(pending, dict):
+            return
+        expected_path = str(pending.get("path_key", "") or "").strip()
+        if expected_path and str(path_key or "").strip() != expected_path:
+            return
+        callback = pending.get("callback")
+        token = int(pending.get("token", 0) or 0)
+        if token != int(getattr(self, "_pending_video_synced_start_token", 0) or 0):
+            return
+        self._pending_video_synced_start = None
+        if callable(callback):
+            callback()
+        clear_hold = getattr(self, "_clear_video_prestart_hold", None)
+        if callable(clear_hold):
+            try:
+                clear_hold()
+            except Exception:
+                pass
+
+    def _force_pending_video_synced_start(self, token: int) -> None:
+        pending = getattr(self, "_pending_video_synced_start", None)
+        if not isinstance(pending, dict):
+            return
+        if int(pending.get("token", 0) or 0) != int(token):
+            return
+        path_key = str(pending.get("path_key", "") or "").strip()
+        self._complete_pending_video_synced_start(path_key)
+
+    def _start_primary_loaded_playback(
         self,
         player: ExternalMediaPlayer,
         slot: SoundButtonData,
         playing_key: Tuple[str, int, int],
-        slot_pct: int,
+        target_volume: int,
         fade_in_on: bool,
     ) -> None:
-        self.current_playing = playing_key
-        self._clear_track_end_transition_state()
-        self._player_slot_volume_pct = slot_pct
-        resolved_duration = max(0, int(player.duration()))
-        if resolved_duration > 0:
-            self.current_duration_ms = resolved_duration
-            slot.duration_ms = resolved_duration
-        target_volume = self._effective_slot_target_volume(slot_pct)
-        self._seek_player_to_slot_start_cue(player, slot)
-        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
         if fade_in_on:
             self._set_player_volume(player, 0)
             player.play()
@@ -819,6 +843,7 @@ class PlaybackMixin:
             self._sync_shadow_transport_from_primary(player)
             self._set_player_slot_key(player, playing_key)
             self._mark_player_started(player)
+        self.current_playing = playing_key
         self._timecode_on_playback_start(slot)
         self._trigger_sound_button_started_event(playing_key, include_advanced=True)
         self._prepare_transport_for_new_playback()
@@ -826,27 +851,14 @@ class PlaybackMixin:
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
 
-    def _finish_cross_loaded_playback(
+    def _start_cross_loaded_playback(
         self,
         old_player: Optional[ExternalMediaPlayer],
         new_player: ExternalMediaPlayer,
         slot: SoundButtonData,
         playing_key: Tuple[str, int, int],
-        slot_pct: int,
+        target_volume: int,
     ) -> None:
-        self.current_playing = playing_key
-        self._clear_track_end_transition_state()
-        if new_player is self.player:
-            self._player_slot_volume_pct = slot_pct
-        else:
-            self._player_b_slot_volume_pct = slot_pct
-        resolved_duration = max(0, int(new_player.duration()))
-        if resolved_duration > 0:
-            self.current_duration_ms = resolved_duration
-            slot.duration_ms = resolved_duration
-        target_volume = self._effective_slot_target_volume(slot_pct)
-        self._seek_player_to_slot_start_cue(new_player, slot)
-        self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
         self._set_player_volume(new_player, 0)
         new_player.play()
         self._sync_shadow_transport_from_primary(new_player)
@@ -866,6 +878,7 @@ class PlaybackMixin:
             self._start_fade(old_player, 0, fade_seconds, stop_on_complete=True)
         if self.player is not new_player:
             self._swap_primary_secondary_players()
+        self.current_playing = playing_key
         self._timecode_on_playback_start(slot)
         self._trigger_sound_button_started_event(playing_key, include_advanced=True)
         self._prepare_transport_for_new_playback()
@@ -873,23 +886,14 @@ class PlaybackMixin:
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
 
-    def _finish_multi_loaded_playback(
+    def _start_multi_loaded_playback(
         self,
         player: ExternalMediaPlayer,
         slot: SoundButtonData,
         playing_key: Tuple[str, int, int],
-        slot_pct: int,
+        target_volume: int,
+        fade_in_on: bool,
     ) -> None:
-        self._set_player_slot_pct(player, slot_pct)
-        self._clear_track_end_transition_state()
-        resolved_duration = max(0, int(player.duration()))
-        if resolved_duration > 0:
-            self.current_duration_ms = resolved_duration
-            slot.duration_ms = resolved_duration
-        target_volume = self._effective_slot_target_volume(slot_pct)
-        self._seek_player_to_slot_start_cue(player, slot)
-        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
-        fade_in_on = self._is_fade_in_enabled()
         if fade_in_on and self.fade_in_sec > 0:
             self._set_player_volume(player, 0)
         else:
@@ -919,6 +923,89 @@ class PlaybackMixin:
         self._refresh_sound_grid()
         self._update_now_playing_label(self._build_now_playing_text(slot))
         self._append_play_log(slot.file_path)
+
+    def _finish_primary_loaded_playback(
+        self,
+        player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+        fade_in_on: bool,
+    ) -> None:
+        self.current_playing = playing_key
+        self._clear_track_end_transition_state()
+        self._player_slot_volume_pct = slot_pct
+        resolved_duration = max(0, int(player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
+        start_callback = lambda p=player, s=slot, key=playing_key, target=target_volume, fade=fade_in_on: self._start_primary_loaded_playback(
+            p, s, key, target, fade
+        )
+        if self._arm_video_synced_start(slot, playing_key, start_callback):
+            self._refresh_sound_grid()
+            self._update_now_playing_label(self._build_now_playing_text(slot))
+            return
+        start_callback()
+
+    def _finish_cross_loaded_playback(
+        self,
+        old_player: Optional[ExternalMediaPlayer],
+        new_player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+    ) -> None:
+        self.current_playing = playing_key
+        self._clear_track_end_transition_state()
+        if new_player is self.player:
+            self._player_slot_volume_pct = slot_pct
+        else:
+            self._player_b_slot_volume_pct = slot_pct
+        resolved_duration = max(0, int(new_player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(new_player, slot)
+        self._prepare_vocal_shadow_player(new_player, slot, start_playing=False)
+        start_callback = lambda old=old_player, new=new_player, s=slot, key=playing_key, target=target_volume: self._start_cross_loaded_playback(
+            old, new, s, key, target
+        )
+        if self._arm_video_synced_start(slot, playing_key, start_callback):
+            self._refresh_sound_grid()
+            self._update_now_playing_label(self._build_now_playing_text(slot))
+            return
+        start_callback()
+
+    def _finish_multi_loaded_playback(
+        self,
+        player: ExternalMediaPlayer,
+        slot: SoundButtonData,
+        playing_key: Tuple[str, int, int],
+        slot_pct: int,
+    ) -> None:
+        self._set_player_slot_pct(player, slot_pct)
+        self._clear_track_end_transition_state()
+        resolved_duration = max(0, int(player.duration()))
+        if resolved_duration > 0:
+            self.current_duration_ms = resolved_duration
+            slot.duration_ms = resolved_duration
+        target_volume = self._effective_slot_target_volume(slot_pct)
+        self._seek_player_to_slot_start_cue(player, slot)
+        self._prepare_vocal_shadow_player(player, slot, start_playing=False)
+        fade_in_on = self._is_fade_in_enabled()
+        start_callback = lambda p=player, s=slot, key=playing_key, target=target_volume, fade=fade_in_on: self._start_multi_loaded_playback(
+            p, s, key, target, fade
+        )
+        if self._arm_video_synced_start(slot, playing_key, start_callback):
+            self._refresh_sound_grid()
+            self._update_now_playing_label(self._build_now_playing_text(slot))
+            return
+        start_callback()
 
     def _on_player_media_load_finished(self, request_id: int, ok: bool, error: str) -> None:
         if bool(getattr(self, "_shutdown_in_progress", False)):
@@ -1291,6 +1378,7 @@ class PlaybackMixin:
             refresh_video(force=True)
 
     def _stop_player_internal(self, player: ExternalMediaPlayer) -> None:
+        self._clear_pending_video_synced_start()
         self._cancel_pending_player_media_load(player)
         self._ignore_state_changes += 1
         try:

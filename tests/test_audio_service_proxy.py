@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import queue
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
-from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
+from pyssp.audio_service import AudioPlayerProxy, AudioServiceController, AudioStateCache
+from pyssp.engine.types import RuntimeSessionSnapshot
 
 
 class _FakeAudioController(QObject):
@@ -116,3 +118,22 @@ def test_proxy_exposes_output_tap_frame_counts_via_controller() -> None:
     assert controller.calls == [
         ("player-test", "outputTapFrameCounts", None, 0.5),
     ]
+
+
+def test_runtime_session_snapshots_returns_cached_value_on_timeout() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    cached = RuntimeSessionSnapshot(
+        session_id="player-1",
+        runtime_id=7,
+        started_at=12.5,
+        state=1,
+        position_ms=1200,
+        duration_ms=5000,
+        slot_key=("A", 0, 1),
+    )
+    controller._last_runtime_session_snapshots = (cached,)
+    controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
+
+    result = AudioServiceController.runtime_session_snapshots(controller)
+
+    assert result == (cached,)

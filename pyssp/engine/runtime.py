@@ -408,7 +408,7 @@ class MediaRuntime:
             mixed[:take, :channels] += block[:take, :channels]
         np.clip(mixed, -1.0, 1.0, out=mixed)
         outdata[:frame_count, : mixed.shape[1]] = mixed
-        self._service_ndi_audio_from_render(frame_count)
+        self._service_ndi_audio_from_render(frame_count, mixed_post_fader=mixed)
 
     def _configure_ndi_destination_locked(
         self,
@@ -515,7 +515,7 @@ class MediaRuntime:
             ordered.append(token)
         return ordered
 
-    def _service_ndi_audio_from_render(self, frames: int) -> None:
+    def _service_ndi_audio_from_render(self, frames: int, mixed_post_fader: Optional[np.ndarray] = None) -> None:
         frame_count = max(0, int(frames))
         if frame_count <= 0:
             return
@@ -525,7 +525,6 @@ class MediaRuntime:
             if record is None or dispatcher is None or (not record.enabled) or (not record.audio_enabled):
                 return
             mode = str(record.audio_tap_mode or "post_fader")
-            ordered_player_ids = self._ordered_output_monitor_players_locked(mode)
             sample_rate = max(1, int(getattr(self, "_audio_sample_rate", record.last_audio_sample_rate or 48000) or 48000))
             channel_count = max(
                 1,
@@ -533,14 +532,21 @@ class MediaRuntime:
             )
         chunk = None
         consume_map: dict[str, int] = {}
-        if ordered_player_ids:
-            mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
-            if mixed is not None:
-                mixed_chunk, mixed_consume_map = mixed
-                if mixed_chunk.ndim == 2 and len(mixed_chunk) > 0 and mixed_chunk.shape[1] > 0:
-                    chunk = np.ascontiguousarray(mixed_chunk, dtype=np.float32)
-                    channel_count = int(chunk.shape[1])
-                    consume_map = dict(mixed_consume_map)
+        if mode == "post_fader" and mixed_post_fader is not None:
+            direct = np.asarray(mixed_post_fader, dtype=np.float32)
+            if direct.ndim == 2 and len(direct) > 0 and direct.shape[1] > 0:
+                chunk = np.ascontiguousarray(direct[:frame_count, :], dtype=np.float32)
+                channel_count = int(chunk.shape[1])
+        else:
+            ordered_player_ids = self._ordered_output_monitor_players_locked(mode)
+            if ordered_player_ids:
+                mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
+                if mixed is not None:
+                    mixed_chunk, mixed_consume_map = mixed
+                    if mixed_chunk.ndim == 2 and len(mixed_chunk) > 0 and mixed_chunk.shape[1] > 0:
+                        chunk = np.ascontiguousarray(mixed_chunk, dtype=np.float32)
+                        channel_count = int(chunk.shape[1])
+                        consume_map = dict(mixed_consume_map)
         if chunk is None:
             chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
         elif not np.any(np.abs(chunk) > 1.0e-7):

@@ -135,6 +135,7 @@ class MediaRuntime:
         self._audio_stream_blocksize = 1024
         self._audio_sample_rate = 48000
         self._audio_channels = 2
+        self._ndi_idle_phase = 0.0
         self._start_counter = 0
         self._multi_play_enabled = False
         self._ndi_dispatcher: Optional[NDIOutputDispatcher] = None
@@ -541,7 +542,9 @@ class MediaRuntime:
                     channel_count = int(chunk.shape[1])
                     consume_map = dict(mixed_consume_map)
         if chunk is None:
-            chunk = np.zeros((frame_count, channel_count), dtype=np.float32)
+            chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
+        elif not np.any(np.abs(chunk) > 1.0e-7):
+            chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
         sent = False
         if chunk.ndim == 2 and len(chunk) > 0 and chunk.shape[1] > 0:
             try:
@@ -560,6 +563,19 @@ class MediaRuntime:
             record.last_audio_channel_count = channel_count
             if sent:
                 record.audio_send_count += 1
+
+    def _ndi_idle_audio_block(self, frames: int, channel_count: int, sample_rate: int) -> np.ndarray:
+        frame_count = max(1, int(frames))
+        channels = max(1, int(channel_count))
+        sr = max(1, int(sample_rate))
+        amplitude = 5.0e-4
+        frequency_hz = 997.0
+        phase_step = (2.0 * np.pi * frequency_hz) / float(sr)
+        phase = float(self._ndi_idle_phase)
+        angles = phase + (np.arange(frame_count, dtype=np.float32) * phase_step)
+        tone = (np.sin(angles) * amplitude).astype(np.float32, copy=False)
+        self._ndi_idle_phase = float((phase + (frame_count * phase_step)) % (2.0 * np.pi))
+        return np.repeat(tone[:, np.newaxis], channels, axis=1)
 
     def configure_video_destination(
         self,

@@ -205,7 +205,6 @@ class NDIOutputDispatcher:
         self._max_audio_queue_blocks = max(2, int(max_audio_queue_blocks))
         self._connection_poll_interval_sec = max(0.05, float(connection_poll_interval_sec))
         self._sender_configured = False
-        self._next_audio_send_at = 0.0
         self._connection_count = 0
         self._last_audio_error = ""
         self._last_audio_mode = ""
@@ -240,7 +239,6 @@ class NDIOutputDispatcher:
             self._sender_configured = False
             self._condition.notify_all()
         with self._audio_condition:
-            self._next_audio_send_at = 0.0
             self._audio_condition.notify_all()
         return True
 
@@ -254,7 +252,6 @@ class NDIOutputDispatcher:
             self._condition.notify_all()
         with self._audio_condition:
             self._pending_audio_blocks.clear()
-            self._next_audio_send_at = 0.0
             self._audio_condition.notify_all()
 
     def shutdown(self) -> None:
@@ -349,7 +346,6 @@ class NDIOutputDispatcher:
                 self._connection_count = 0
                 self._sender_configured = False
                 with self._audio_condition:
-                    self._next_audio_send_at = 0.0
                     self._audio_condition.notify_all()
                 self._sync_public_state()
             if config is not None:
@@ -361,7 +357,6 @@ class NDIOutputDispatcher:
                     configured = False
                 self._sender_configured = configured
                 with self._audio_condition:
-                    self._next_audio_send_at = 0.0
                     self._audio_condition.notify_all()
                 self._sync_public_state()
             if video_frame is not None:
@@ -398,18 +393,6 @@ class NDIOutputDispatcher:
                     break
                 else:
                     return
-            interval_sec = 0.0
-            try:
-                interval_sec = float(len(frames)) / float(max(1, int(sample_rate)))
-            except Exception:
-                interval_sec = 0.0
-            now = time.perf_counter()
-            target_send_at = self._next_audio_send_at if self._next_audio_send_at > 0.0 else now
-            if target_send_at > now:
-                time.sleep(target_send_at - now)
-                now = time.perf_counter()
-            elif interval_sec > 0.0 and (now - target_send_at) > interval_sec:
-                target_send_at = now
             try:
                 with self._sender_lock:
                     ok = bool(self._sender.send_audio_frames(frames, sample_rate)) if self._sender_configured else False
@@ -421,16 +404,6 @@ class NDIOutputDispatcher:
             else:
                 self._audio_drop_count += 1
             self._sync_public_state()
-            next_send_at = max(target_send_at, now)
-            if interval_sec > 0.0:
-                next_send_at += interval_sec
-            else:
-                next_send_at = time.perf_counter()
-            with self._audio_condition:
-                if self._disable_sender or self._config_dirty or (not self._sender_configured):
-                    self._next_audio_send_at = 0.0
-                else:
-                    self._next_audio_send_at = next_send_at
 
 
 __all__ = ["NDIOutputConfig", "NDIOutputDispatcher", "NDIOutputSender"]

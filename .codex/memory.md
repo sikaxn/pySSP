@@ -242,5 +242,9 @@ NDI audio
   - do not drive NDI audio from the `MediaRuntime` 10 ms destination polling loop
   - feed NDI audio from the shared audio render callback cadence instead
   - `NDIOutputDispatcher` now uses a dedicated audio worker thread with sample-duration pacing, separate from the control/video worker
-  - avoid burst-flushing queued audio blocks; pacing should preserve one-block-per-render-tick behavior as closely as possible
+  - avoid burst-flushing queued audio blocks; preserve one-block-per-render-tick behavior as closely as possible
   - direct runtime sender sessions now request `clock_audio=True`
+  - SDK note from `NDIlib_Send_AudioFile.cpp` / `Processing.NDI.Send.h`:
+    - with `clock_audio=true`, `NDIlib_util_send_send_audio_interleaved_32f(...)` is itself clocked to the sample rate
+    - if audio and video are submitted from separate threads, having both clocked can be useful
+    - do not add redundant app-side sleep pacing on top of a dedicated audio sender thread unless live measurement proves it is necessary

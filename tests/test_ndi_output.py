@@ -289,7 +289,7 @@ def test_ndi_dispatcher_queues_audio_via_backend_thread():
         dispatcher.shutdown()
 
 
-def test_ndi_dispatcher_spaces_audio_blocks_by_sample_duration():
+def test_ndi_dispatcher_does_not_add_extra_sleep_pacing():
     class _TrackingSender:
         available = True
 
@@ -332,15 +332,13 @@ def test_ndi_dispatcher_spaces_audio_blocks_by_sample_duration():
         for _ in range(3):
             assert dispatcher.send_audio_frames(audio, 1000) is True
 
+        started = time.perf_counter()
         deadline = time.time() + 1.0
         while time.time() < deadline and len(dispatcher._sender.audio_call_times) < 3:
             time.sleep(0.01)
         assert len(dispatcher._sender.audio_call_times) == 3
-        deltas = [
-            dispatcher._sender.audio_call_times[index + 1] - dispatcher._sender.audio_call_times[index]
-            for index in range(2)
-        ]
-        assert min(deltas) >= 0.06
+        elapsed = dispatcher._sender.audio_call_times[-1] - started
+        assert elapsed < 0.25
         assert dispatcher._last_audio_mode == "paced"
     finally:
         dispatcher.shutdown()

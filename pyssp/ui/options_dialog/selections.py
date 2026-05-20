@@ -138,7 +138,46 @@ class SelectionMixin:
         return bool(self.disable_path_safety_checkbox.isChecked())
 
     def selected_video_display_mode_playing(self) -> str:
-        return str(self.video_display_mode_playing_combo.currentData() or "video")
+        return normalize_display_focus_override(
+            str(getattr(self, "_video_display_mode_playing_value", DISPLAY_FOCUS_FOLLOW) or DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
+
+    def selected_display_focus_default_video(self) -> str:
+        return normalize_display_focus(str(self.video_display_mode_playing_combo.currentData() or "video"), default="video")
+
+    def selected_display_focus_default_audio(self) -> str:
+        return normalize_display_focus(str(self.display_focus_default_audio_combo.currentData() or "none"), default="none")
+
+    def selected_display_focus_default_audio_with_lyric(self) -> str:
+        return normalize_display_focus(
+            str(self.display_focus_default_audio_with_lyric_combo.currentData() or "lyric_display"),
+            default="lyric_display",
+        )
+
+    def selected_display_focus_default_utility_blank(self) -> str:
+        return normalize_display_focus(str(self.display_focus_default_utility_blank_combo.currentData() or "none"), default="none")
+
+    def selected_display_focus_default_utility_noise(self) -> str:
+        return normalize_display_focus(
+            str(self.display_focus_default_utility_noise_combo.currentData() or "colour_bars"),
+            default="colour_bars",
+        )
+
+    def selected_display_focus_default_utility_tone(self) -> str:
+        return normalize_display_focus(
+            str(self.display_focus_default_utility_tone_combo.currentData() or "colour_bars"),
+            default="colour_bars",
+        )
+
+    def selected_display_focus_default_utility_metronome(self) -> str:
+        return normalize_display_focus(
+            str(self.display_focus_default_utility_metronome_combo.currentData() or "metronome_display"),
+            default="metronome_display",
+        )
+
+    def selected_display_focus_default_automation(self) -> str:
+        return normalize_display_focus(str(self.display_focus_default_automation_combo.currentData() or "none"), default="none")
 
     def selected_video_display_mode_idle(self) -> str:
         return str(self.video_display_mode_idle_combo.currentData() or "blank")
@@ -223,7 +262,10 @@ class SelectionMixin:
         return str(self.ndi_output_name_edit.text() or "").strip() or "pyssp-video"
 
     def selected_ndi_output_mode_playing(self) -> str:
-        return str(self.video_display_mode_playing_combo.currentData() or "video")
+        return normalize_display_focus_override(
+            str(getattr(self, "_video_display_mode_playing_value", DISPLAY_FOCUS_FOLLOW) or DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
 
     def selected_ndi_output_mode_idle(self) -> str:
         return str(self.video_display_mode_idle_combo.currentData() or "blank")

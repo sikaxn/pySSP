@@ -8,6 +8,7 @@ from pyssp.automation_command import (
     AutomationCommandSpec,
     SoundButtonAutomationConfig,
 )
+from pyssp.display_focus import DISPLAY_FOCUS_NONE
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
@@ -89,6 +90,8 @@ class SoundButtonData:
     volume_override_pct: Optional[int] = None
     cue_start_ms: Optional[int] = None
     cue_end_ms: Optional[int] = None
+    display_focus: str = ""
+    display_image_path: str = ""
     timecode_offset_ms: Optional[int] = None
     timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""

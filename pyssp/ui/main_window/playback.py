@@ -2024,6 +2024,8 @@ class PlaybackMixin:
                     timecode_timeline_mode=slot.timecode_timeline_mode,
                     sound_hotkey=slot.sound_hotkey,
                     sound_midi_hotkey=slot.sound_midi_hotkey,
+                    display_focus=normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE),
+                    display_image_path=str(slot.display_image_path or "").strip(),
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)

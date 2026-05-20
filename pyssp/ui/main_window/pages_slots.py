@@ -417,6 +417,13 @@ class PagesSlotsMixin:
                 lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
                 if notes:
                     lines.append(f"pysspautomationnotes{slot_index}={notes}")
+                if slot.display_focus:
+                    lines.append(
+                        f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                    )
+                display_image_path = clean_set_value(slot.display_image_path)
+                if display_image_path:
+                    lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
                 if slot.custom_color:
                     lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
                 hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
@@ -449,6 +456,13 @@ class PagesSlotsMixin:
                 lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
                 if notes:
                     lines.append(f"pyssputilitynotes{slot_index}={notes}")
+                if slot.display_focus:
+                    lines.append(
+                        f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                    )
+                display_image_path = clean_set_value(slot.display_image_path)
+                if display_image_path:
+                    lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
                 lyric_file = clean_set_value(slot.lyric_file)
                 if lyric_file:
                     lines.append(f"pyssputilitylyric{slot_index}={lyric_file}")
@@ -492,6 +506,13 @@ class PagesSlotsMixin:
             lines.append(f"s{slot_index}={clean_set_value(slot.file_path)}")
             if bool(slot.disable_video_loading):
                 lines.append(f"pysspdisablevideo{slot_index}=1")
+            if slot.display_focus:
+                lines.append(
+                    f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                )
+            display_image_path = clean_set_value(slot.display_image_path)
+            if display_image_path:
+                lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
             vocal_removed_file = clean_set_value(slot.vocal_removed_file)
             if vocal_removed_file:
                 lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -638,6 +659,17 @@ class PagesSlotsMixin:
                 timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspmidi{i}", "").strip()),
+                display_focus=normalize_display_focus(
+                    section.get(f"pysspdisplayfocus{i}", "").strip(),
+                    allow_empty=True,
+                    default=DISPLAY_FOCUS_NONE,
+                ),
+                display_image_path=section.get(f"pysspdisplayimage{i}", "").strip(),
+            )
+            self._apply_display_focus_to_slot(
+                slots[i - 1],
+                explicit_focus=section.get(f"pysspdisplayfocus{i}", "").strip(),
+                display_image_path=section.get(f"pysspdisplayimage{i}", "").strip(),
             )
         return {
             "page_name": page_name,
@@ -1537,8 +1569,26 @@ class PagesSlotsMixin:
         )
         return answer == QMessageBox.Yes
 
+    def _apply_display_focus_to_slot(
+        self,
+        slot: SoundButtonData,
+        *,
+        explicit_focus: str = "",
+        display_image_path: str = "",
+    ) -> None:
+        slot.display_image_path = str(display_image_path or "").strip()
+        normalized = normalize_display_focus(explicit_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE)
+        if normalized:
+            slot.display_focus = normalized
+            return
+        resolver = getattr(self, "_resolved_display_focus_for_slot", None)
+        if callable(resolver):
+            slot.display_focus = resolver(slot, persist=False)
+            return
+        slot.display_focus = DISPLAY_FOCUS_NONE
+
     def _clone_slot(self, slot: SoundButtonData) -> SoundButtonData:
-        return SoundButtonData(
+        clone = SoundButtonData(
             source_type=slot.source_type,
             file_path=slot.file_path,
             disable_video_loading=bool(slot.disable_video_loading),
@@ -1567,7 +1617,15 @@ class PagesSlotsMixin:
             timecode_timeline_mode=slot.timecode_timeline_mode,
             sound_hotkey=slot.sound_hotkey,
             sound_midi_hotkey=slot.sound_midi_hotkey,
+            display_focus=normalize_display_focus(slot.display_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE),
+            display_image_path=str(slot.display_image_path or "").strip(),
         )
+        self._apply_display_focus_to_slot(
+            clone,
+            explicit_focus=slot.display_focus,
+            display_image_path=slot.display_image_path,
+        )
+        return clone
 
     def _edit_sound_button_automation(self, slot_index: int) -> None:
         page = self._current_page_slots()
@@ -1662,7 +1720,7 @@ class PagesSlotsMixin:
             internal_params_json=section.get(f"pysspautomationinternalparams{index}", "").strip(),
         )
         played = str(section.get(f"pysspautomationplayed{index}", "0")).strip() in {"1", "true", "True"}
-        return SoundButtonData(
+        slot = SoundButtonData(
             source_type=AUTOMATION_SOURCE_TYPE,
             file_path="",
             vocal_removed_file="",
@@ -1685,7 +1743,19 @@ class PagesSlotsMixin:
             timecode_timeline_mode="global",
             sound_hotkey=self._parse_sound_hotkey(section.get(f"pysspautomationhotkey{index}", "").strip()),
             sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspautomationmidi{index}", "").strip()),
+            display_focus=normalize_display_focus(
+                section.get(f"pysspdisplayfocus{index}", "").strip(),
+                allow_empty=True,
+                default=DISPLAY_FOCUS_NONE,
+            ),
+            display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
         )
+        self._apply_display_focus_to_slot(
+            slot,
+            explicit_focus=section.get(f"pysspdisplayfocus{index}", "").strip(),
+            display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
+        )
+        return slot
 
     def _parse_utility_slot_from_section(self, section: configparser.SectionProxy, index: int) -> Optional[SoundButtonData]:
         source_type = str(section.get(f"pysspsourcetype{index}", "")).strip().lower()
@@ -1732,7 +1802,7 @@ class PagesSlotsMixin:
                 spec.duration_ms,
             )
         played = str(section.get(f"pyssputilityplayed{index}", "0")).strip() in {"1", "true", "True"}
-        return SoundButtonData(
+        slot = SoundButtonData(
             source_type=UTILITY_SOURCE_TYPE,
             file_path="",
             vocal_removed_file="",
@@ -1764,7 +1834,19 @@ class PagesSlotsMixin:
             ),
             sound_hotkey=self._parse_sound_hotkey(section.get(f"h{index}", "").strip()),
             sound_midi_hotkey=self._parse_sound_midi_hotkey(section.get(f"pysspmidi{index}", "").strip()),
+            display_focus=normalize_display_focus(
+                section.get(f"pysspdisplayfocus{index}", "").strip(),
+                allow_empty=True,
+                default=DISPLAY_FOCUS_NONE,
+            ),
+            display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
         )
+        self._apply_display_focus_to_slot(
+            slot,
+            explicit_focus=section.get(f"pysspdisplayfocus{index}", "").strip(),
+            display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
+        )
+        return slot
 
     def _parse_sound_button_automation_from_section(
         self,
@@ -1863,6 +1945,8 @@ class PagesSlotsMixin:
         volume_override_pct = slot.volume_override_pct
         sound_hotkey = slot.sound_hotkey
         sound_midi_hotkey = slot.sound_midi_hotkey
+        display_focus = slot.display_focus
+        display_image_path = slot.display_image_path
         while True:
             dialog = EditSoundButtonDialog(
                 file_path=file_path,
@@ -1875,6 +1959,8 @@ class PagesSlotsMixin:
                 volume_override_pct=volume_override_pct,
                 sound_hotkey=sound_hotkey,
                 sound_midi_hotkey=sound_midi_hotkey,
+                display_focus=display_focus,
+                display_image_path=display_image_path,
                 available_midi_input_devices=list_midi_input_devices(),
                 selected_midi_input_device_ids=self.midi_input_device_ids,
                 start_dir=start_dir,
@@ -1897,6 +1983,8 @@ class PagesSlotsMixin:
                 volume_override_pct,
                 sound_hotkey,
                 sound_midi_hotkey,
+                display_focus,
+                display_image_path,
             ) = dialog.values()
             if result_code == EditSoundButtonDialog.REGENERATE_RESULT:
                 generated_path = self._generate_vocal_removed_file_for_slot(file_path, vocal_removed_file)
@@ -1928,6 +2016,10 @@ class PagesSlotsMixin:
         vocal_removed_path_reason = self._path_safety_reason(vocal_removed_file) if vocal_removed_file else None
         if vocal_removed_path_reason:
             QMessageBox.warning(self, "Invalid File Path", f"Vocal removed file path rejected.\n\n{vocal_removed_path_reason}")
+            return
+        display_image_path_reason = self._path_safety_reason(display_image_path) if display_image_path else None
+        if display_image_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Display image path rejected.\n\n{display_image_path_reason}")
             return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, (self._view_group_key(), self.current_page, slot_index))
         if conflict is not None:
@@ -1965,6 +2057,11 @@ class PagesSlotsMixin:
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        self._apply_display_focus_to_slot(
+            slot,
+            explicit_focus=display_focus,
+            display_image_path=display_image_path,
+        )
         if previous_file_path != file_path:
             slot.cue_start_ms = None
             slot.cue_end_ms = None
@@ -1991,6 +2088,8 @@ class PagesSlotsMixin:
             volume_override_pct=slot.volume_override_pct,
             sound_hotkey=slot.sound_hotkey,
             sound_midi_hotkey=slot.sound_midi_hotkey,
+            display_focus=slot.display_focus,
+            display_image_path=slot.display_image_path,
             available_midi_input_devices=list_midi_input_devices(),
             selected_midi_input_device_ids=self.midi_input_device_ids,
             start_dir=self.settings.last_sound_dir or self.settings.last_open_dir or "",
@@ -2013,6 +2112,8 @@ class PagesSlotsMixin:
             volume_override_pct,
             sound_hotkey,
             sound_midi_hotkey,
+            display_focus,
+            display_image_path,
         ) = dialog.values()
         lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
@@ -2025,6 +2126,10 @@ class PagesSlotsMixin:
                 "Invalid File Path",
                 f"Automation script path rejected.\n\n{automation_script_path_reason}",
             )
+            return
+        display_image_path_reason = self._path_safety_reason(display_image_path) if display_image_path else None
+        if display_image_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Display image path rejected.\n\n{display_image_path_reason}")
             return
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, slot_key)
         if conflict is not None:
@@ -2058,6 +2163,11 @@ class PagesSlotsMixin:
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        self._apply_display_focus_to_slot(
+            slot,
+            explicit_focus=display_focus,
+            display_image_path=display_image_path,
+        )
         slot.cue_start_ms, slot.cue_end_ms = self._normalize_cue_points(
             slot.cue_start_ms,
             slot.cue_end_ms,
@@ -2149,6 +2259,7 @@ class PagesSlotsMixin:
         slot.timecode_timeline_mode = "global"
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        self._apply_display_focus_to_slot(slot)
         self._set_dirty(True)
         self._warn_dual_automation_sources_if_needed(slot)
         self._refresh_page_list()
@@ -2828,18 +2939,27 @@ class PagesSlotsMixin:
                 break
             target = page[target_index]
             file_path = file_paths[file_idx]
+            target.source_type = FILE_SOURCE_TYPE
             target.file_path = file_path
+            target.disable_video_loading = False
+            target.vocal_removed_file = ""
             target.title = os.path.splitext(os.path.basename(file_path))[0]
             target.notes = ""
             target.lyric_file = lyric_links[file_idx] if file_idx < len(lyric_links) else ""
+            target.automation_script_path = ""
             target.duration_ms = 0
+            target.automation_spec = None
+            target.utility_spec = None
             target.custom_color = None
             target.marker = False
             target.played = False
             target.activity_code = "8"
             target.load_failed = False
+            target.volume_override_pct = None
             target.cue_start_ms = None
             target.cue_end_ms = None
+            target.display_image_path = ""
+            self._apply_display_focus_to_slot(target)
             changed = True
 
         if changed:
@@ -2876,6 +2996,8 @@ class PagesSlotsMixin:
             volume_override_pct=None,
             sound_hotkey="",
             sound_midi_hotkey="",
+            display_focus="",
+            display_image_path="",
             available_midi_input_devices=list_midi_input_devices(),
             selected_midi_input_device_ids=self.midi_input_device_ids,
             start_dir=self.settings.last_sound_dir or self.settings.last_open_dir or "",
@@ -2898,6 +3020,8 @@ class PagesSlotsMixin:
             volume_override_pct,
             sound_hotkey,
             sound_midi_hotkey,
+            display_focus,
+            display_image_path,
         ) = dialog.values()
         lyric_path_reason = self._path_safety_reason(lyric_file) if lyric_file else None
         if lyric_path_reason:
@@ -2910,6 +3034,10 @@ class PagesSlotsMixin:
                 "Invalid File Path",
                 f"Automation script path rejected.\n\n{automation_script_path_reason}",
             )
+            return
+        display_image_path_reason = self._path_safety_reason(display_image_path) if display_image_path else None
+        if display_image_path_reason:
+            QMessageBox.warning(self, "Invalid File Path", f"Display image path rejected.\n\n{display_image_path_reason}")
             return
         slot_key = (self._view_group_key(), self.current_page, slot_index)
         conflict = self._find_sound_hotkey_conflict(sound_hotkey, slot_key)
@@ -2946,6 +3074,13 @@ class PagesSlotsMixin:
             volume_override_pct=volume_override_pct,
             sound_hotkey=self._parse_sound_hotkey(sound_hotkey),
             sound_midi_hotkey=self._parse_sound_midi_hotkey(sound_midi_hotkey),
+            display_focus=normalize_display_focus(display_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE),
+            display_image_path=str(display_image_path or "").strip(),
+        )
+        self._apply_display_focus_to_slot(
+            page[slot_index],
+            explicit_focus=display_focus,
+            display_image_path=display_image_path,
         )
         self._set_dirty(True)
         self._warn_dual_automation_sources_if_needed(page[slot_index])

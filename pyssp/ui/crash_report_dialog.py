@@ -64,12 +64,15 @@ class CrashReportDialog(QDialog):
         buttons = QHBoxLayout()
         self.copy_button = QPushButton(tr("Copy Report"), self)
         self.save_button = QPushButton(tr("Save Report..."), self)
+        self.shutdown_button = QPushButton(tr("Shutdown pySSP"), self)
         self.close_button = QPushButton(tr("Close"), self)
         self.copy_button.clicked.connect(self._copy_report)
         self.save_button.clicked.connect(self._save_report)
+        self.shutdown_button.clicked.connect(self._shutdown_pyssp)
         self.close_button.clicked.connect(self.accept)
         buttons.addWidget(self.copy_button)
         buttons.addWidget(self.save_button)
+        buttons.addWidget(self.shutdown_button)
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         root.addLayout(buttons)
@@ -116,3 +119,13 @@ class CrashReportDialog(QDialog):
         except OSError as exc:
             QMessageBox.warning(self, tr("Save Failed"), f"{tr('Failed to save crash report.')}\n\n{exc}")
 
+    def _shutdown_pyssp(self) -> None:
+        app = QApplication.instance()
+        self.accept()
+        if app is None:
+            return
+        try:
+            app.closeAllWindows()
+        except Exception:
+            pass
+        app.quit()

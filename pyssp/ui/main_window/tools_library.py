@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+
 from .shared import *
 from .constants import *
 from .helpers import *
@@ -54,6 +56,142 @@ class ToolsLibraryMixin:
     def _launchpad_cheatsheet_action_label(self, action_key: str) -> str:
         key = str(action_key or "").strip()
         return self._LAUNCHPAD_CHEATSHEET_ACTION_LABELS.get(key, key.replace("_", " ").title() if key else "(Unused)")
+
+    def _capture_clean_set_snapshot(self) -> None:
+        try:
+            self._clean_set_snapshot_lines = list(self._build_set_file_lines())
+        except Exception:
+            self._clean_set_snapshot_lines = []
+
+    def _current_set_change_report(self) -> tuple[str, bool]:
+        baseline_lines = list(getattr(self, "_clean_set_snapshot_lines", []) or [])
+        try:
+            current_lines = list(self._build_set_file_lines())
+        except Exception as exc:
+            return (f"Could not build current .set snapshot.\n\n{exc}", bool(getattr(self, "_dirty", False)))
+
+        diff_lines = list(
+            difflib.unified_diff(
+                baseline_lines,
+                current_lines,
+                fromfile="clean_snapshot.set",
+                tofile="current_state.set",
+                lineterm="",
+            )
+        )
+        added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+        removed = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+        dirty = bool(getattr(self, "_dirty", False))
+        path = str(getattr(self, "current_set_path", "") or "").strip() or "(unsaved new set)"
+        summary = [
+            f"Set Path: {path}",
+            f"Dirty: {'Yes' if dirty else 'No'}",
+            f"Added Lines: {added}",
+            f"Removed Lines: {removed}",
+            "",
+        ]
+        if diff_lines:
+            summary.append("Unified Diff:")
+            summary.append("")
+            summary.extend(diff_lines)
+        else:
+            summary.append("No line-level .set changes detected.")
+            if dirty:
+                summary.append("")
+                summary.append("The set is still marked dirty by runtime state.")
+        return ("\n".join(summary), dirty)
+
+    def _discard_current_set_changes(self) -> None:
+        if not bool(getattr(self, "_dirty", False)):
+            self._show_info_notice_banner("The current set has no unsaved changes.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Discard Changes",
+            "Discard all unsaved changes for the current set?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        current_path = str(getattr(self, "current_set_path", "") or "").strip()
+        if current_path:
+            self._load_set(current_path, show_message=False, restore_last_position=False)
+        else:
+            self._new_set()
+        self._show_save_notice_banner("Unsaved set changes discarded.")
+
+    def _open_set_changes_window(self) -> None:
+        key = "set_changes"
+        window = self._tool_windows.get(key)
+        if window is not None:
+            refresh = getattr(window, "_refresh_state", None)
+            if callable(refresh):
+                refresh()
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Changes")
+        dialog.resize(920, 620)
+        dialog.setModal(False)
+        dialog.setWindowModality(Qt.NonModal)
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        note = QLabel(
+            "Current dirty-state report for the open .set. Save writes the current state. "
+            "Discard reloads the last clean snapshot for this set.",
+            dialog,
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        root.addWidget(text, 1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        refresh_btn = QPushButton("Refresh", dialog)
+        save_btn = QPushButton("Save", dialog)
+        discard_btn = QPushButton("Discard Changes", dialog)
+        close_btn = QPushButton("Close", dialog)
+        button_row.addWidget(refresh_btn)
+        button_row.addWidget(save_btn)
+        button_row.addWidget(discard_btn)
+        button_row.addWidget(close_btn)
+        root.addLayout(button_row)
+
+        def _refresh_state() -> None:
+            report, dirty = self._current_set_change_report()
+            text.setPlainText(report)
+            save_btn.setEnabled(True)
+            discard_btn.setEnabled(dirty)
+
+        def _save_and_refresh() -> None:
+            self._save_set()
+            _refresh_state()
+
+        def _discard_and_refresh() -> None:
+            self._discard_current_set_changes()
+            _refresh_state()
+
+        refresh_btn.clicked.connect(_refresh_state)
+        save_btn.clicked.connect(_save_and_refresh)
+        discard_btn.clicked.connect(_discard_and_refresh)
+        close_btn.clicked.connect(dialog.close)
+        setattr(dialog, "_refresh_state", _refresh_state)
+        dialog.destroyed.connect(lambda _=None, k=key: self._tool_windows.pop(k, None))
+        self._tool_windows[key] = dialog
+        _refresh_state()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _launchpad_cheatsheet_cell(self, title: str, body: str, role: str = "normal") -> QLabel:
         label = QLabel(f"<b>{html.escape(title)}</b><br>{html.escape(body)}")
@@ -399,6 +537,45 @@ class ToolsLibraryMixin:
             close_button.clicked.connect(dialog.accept)
         root.addWidget(buttons)
         dialog.exec_()
+
+    def _clear_all_display_focus(self) -> None:
+        refs = self._iter_all_sound_button_slot_refs(include_cue=True)
+        candidates = [
+            ref
+            for ref in refs
+            if bool(getattr(ref.get("slot_ref"), "assigned", False))
+            and (not bool(getattr(ref.get("slot_ref"), "marker", False)))
+            and bool(str(getattr(ref.get("slot_ref"), "display_focus", "") or "").strip())
+        ]
+        if not candidates:
+            self._show_info_notice_banner("No sound buttons have display focus overrides.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Clear Display Focus",
+            "Clear display focus overrides from all sound buttons in this set and cue page?\n\n"
+            "Buttons will use their default display focus again.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        changed = 0
+        for ref in candidates:
+            slot = ref["slot_ref"]
+            slot.display_focus = ""
+            changed += 1
+
+        if changed <= 0:
+            return
+        self._set_dirty(True)
+        self._refresh_sound_grid()
+        refresh_video_display = getattr(self, "_refresh_video_display", None)
+        if callable(refresh_video_display):
+            refresh_video_display(force=True)
+        self._show_save_notice_banner(f"Cleared display focus on {changed} sound button(s).")
 
     def _print_lines(self, title: str, lines: List[str]) -> None:
         text = "\n".join(lines).strip() or "(no items)"

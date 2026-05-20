@@ -1092,6 +1092,14 @@ class UiBuildMixin:
         remove_linked_lyrics_action.triggered.connect(self._remove_all_linked_lyric_files)
         tools_menu.addAction(remove_linked_lyrics_action)
 
+        set_changes_action = QAction("Set Changes", self)
+        set_changes_action.triggered.connect(self._open_set_changes_window)
+        tools_menu.addAction(set_changes_action)
+
+        clear_display_focus_action = QAction("Clear Display Focus", self)
+        clear_display_focus_action.triggered.connect(self._clear_all_display_focus)
+        tools_menu.addAction(clear_display_focus_action)
+
         bulk_generate_vocal_removed_action = QAction("Bulk Generate Vocal Removed Track", self)
         bulk_generate_vocal_removed_action.triggered.connect(self._bulk_generate_vocal_removed_tracks)
         tools_menu.addAction(bulk_generate_vocal_removed_action)

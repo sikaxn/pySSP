@@ -1664,8 +1664,43 @@ class SettingsArchiveMixin:
         self.settings.lyric_display_played_italic = bool(self.lyric_display_role_italic.get("played", False))
         self.settings.lyric_display_current_italic = bool(self.lyric_display_role_italic.get("current", False))
         self.settings.lyric_display_next_italic = bool(self.lyric_display_role_italic.get("next", False))
-        self.settings.video_display_mode_playing = str(getattr(self, "video_display_mode_playing", "video") or "video").strip().lower()
+        self.settings.video_display_mode_playing = normalize_display_focus_override(
+            getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
         self.settings.video_display_mode_idle = str(getattr(self, "video_display_mode_idle", "blank") or "blank").strip().lower()
+        self.settings.display_focus_default_video = normalize_display_focus(
+            getattr(self, "display_focus_default_video", DISPLAY_FOCUS_VIDEO),
+            default=DISPLAY_FOCUS_VIDEO,
+        )
+        self.settings.display_focus_default_audio = normalize_display_focus(
+            getattr(self, "display_focus_default_audio", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
+        self.settings.display_focus_default_audio_with_lyric = normalize_display_focus(
+            getattr(self, "display_focus_default_audio_with_lyric", DISPLAY_FOCUS_LYRIC),
+            default=DISPLAY_FOCUS_LYRIC,
+        )
+        self.settings.display_focus_default_utility_blank = normalize_display_focus(
+            getattr(self, "display_focus_default_utility_blank", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
+        self.settings.display_focus_default_utility_noise = normalize_display_focus(
+            getattr(self, "display_focus_default_utility_noise", DISPLAY_FOCUS_COLOUR_BARS),
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        )
+        self.settings.display_focus_default_utility_tone = normalize_display_focus(
+            getattr(self, "display_focus_default_utility_tone", DISPLAY_FOCUS_COLOUR_BARS),
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        )
+        self.settings.display_focus_default_utility_metronome = normalize_display_focus(
+            getattr(self, "display_focus_default_utility_metronome", DISPLAY_FOCUS_METRONOME),
+            default=DISPLAY_FOCUS_METRONOME,
+        )
+        self.settings.display_focus_default_automation = normalize_display_focus(
+            getattr(self, "display_focus_default_automation", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
         self.settings.video_display_use_default_backdrop = bool(
             getattr(self, "video_display_use_default_backdrop", True)
         )
@@ -1702,7 +1737,10 @@ class SettingsArchiveMixin:
         self.settings.video_display_lyric_next_italic = bool(self.video_display_lyric_role_italic.get("next", False))
         self.settings.ndi_output_enabled = bool(getattr(self, "ndi_output_enabled", False))
         self.settings.ndi_output_name = str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video"
-        self.settings.ndi_output_mode_playing = str(getattr(self, "ndi_output_mode_playing", "video") or "video").strip().lower()
+        self.settings.ndi_output_mode_playing = normalize_display_focus_override(
+            getattr(self, "ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
         self.settings.ndi_output_mode_idle = str(getattr(self, "ndi_output_mode_idle", "backdrop") or "backdrop").strip().lower()
         self.settings.ndi_output_resolution_mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
         self.settings.ndi_output_width = max(2, int(getattr(self, "ndi_output_width", 1920)))

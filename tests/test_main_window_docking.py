@@ -618,6 +618,155 @@ def test_build_set_file_lines_persists_disable_video_loading_flag(qapp, monkeypa
         _cleanup_main_window(window, qapp)
 
 
+def test_build_set_file_lines_persists_display_focus_fields(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        slot = window.data["A"][0][0]
+        slot.file_path = r"C:\Media\theme.mp3"
+        slot.title = "Theme"
+        slot.notes = "Theme"
+        slot.duration_ms = 1000
+        slot.activity_code = "8"
+        slot.display_focus = "image"
+        slot.display_image_path = r"C:\Media\theme.png"
+
+        lines = window._build_set_file_lines()
+
+        assert "pysspdisplayfocus1=image" in lines
+        assert "pysspdisplayimage1=C:\\Media\\theme.png" in lines
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_tools_clear_display_focus_clears_assigned_button_overrides(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        tools_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Tools"
+        )
+        tool_items = {action.text().replace("&", "") for action in tools_menu.actions()}
+        assert "Clear Display Focus" in tool_items
+
+        main_slot = window.data["A"][0][0]
+        main_slot.file_path = r"C:\Media\theme.mp3"
+        main_slot.title = "Theme"
+        main_slot.duration_ms = 1000
+        main_slot.activity_code = "8"
+        main_slot.display_focus = "image"
+
+        cue_slot = window.cue_page[0]
+        cue_slot.file_path = r"C:\Media\cue.mp3"
+        cue_slot.title = "Cue"
+        cue_slot.duration_ms = 1000
+        cue_slot.activity_code = "8"
+        cue_slot.display_focus = "lyric_display"
+
+        untouched_slot = window.data["A"][0][1]
+        untouched_slot.file_path = r"C:\Media\plain.mp3"
+        untouched_slot.title = "Plain"
+        untouched_slot.duration_ms = 1000
+        untouched_slot.activity_code = "8"
+        untouched_slot.display_focus = ""
+
+        monkeypatch.setattr(mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.Yes)
+
+        window._clear_all_display_focus()
+
+        assert main_slot.display_focus == ""
+        assert cue_slot.display_focus == ""
+        assert untouched_slot.display_focus == ""
+        assert window._dirty is True
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_tools_set_changes_reports_dirty_set_lines(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        tools_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Tools"
+        )
+        tool_items = {action.text().replace("&", "") for action in tools_menu.actions()}
+        assert "Set Changes" in tool_items
+
+        window._capture_clean_set_snapshot()
+        slot = window.data["A"][0][0]
+        slot.file_path = r"C:\Media\theme.mp3"
+        slot.title = "Theme"
+        slot.duration_ms = 1000
+        slot.activity_code = "8"
+        window._set_dirty(True)
+
+        report, dirty = window._current_set_change_report()
+
+        assert dirty is True
+        assert "Dirty: Yes" in report
+        assert "Unified Diff:" in report
+        assert "+s1=C:\\Media\\theme.mp3" in report
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_discard_current_set_changes_reloads_current_set(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        calls: list[tuple[str, object]] = []
+        window.current_set_path = r"C:\Sets\service.set"
+        window._set_dirty(True)
+
+        monkeypatch.setattr(mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.Yes)
+        monkeypatch.setattr(
+            window,
+            "_load_set",
+            lambda path, show_message=False, restore_last_position=False: calls.append(
+                ("load", path, show_message, restore_last_position)
+            ),
+        )
+
+        window._discard_current_set_changes()
+
+        assert calls == [("load", r"C:\Sets\service.set", False, False)]
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_discard_current_set_changes_resets_unsaved_new_set(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        calls: list[str] = []
+        window.current_set_path = ""
+        window._set_dirty(True)
+
+        monkeypatch.setattr(mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.Yes)
+        monkeypatch.setattr(window, "_new_set", lambda: calls.append("new"))
+
+        window._discard_current_set_changes()
+
+        assert calls == ["new"]
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
 def test_playing_sound_button_is_revealed_after_page_switch_and_in_list_view(qapp, monkeypatch):
     _patch_main_window_startup(monkeypatch)
     window = mw.MainWindow()

@@ -319,10 +319,53 @@ class StateLogicMixin:
 
     def _restore_video_display_defaults(self) -> None:
         d = self._DEFAULTS
+        self._video_display_mode_playing_value = normalize_display_focus_override(
+            str(d.get("video_display_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
+        self._ndi_output_mode_playing_value = normalize_display_focus_override(
+            str(d.get("ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
         self._set_combo_data_or_default(
             self.video_display_mode_playing_combo,
-            str(d.get("video_display_mode_playing", "video")),
+            str(d.get("display_focus_default_video", d.get("video_display_mode_playing", "video"))),
             "video",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_audio_combo,
+            str(d.get("display_focus_default_audio", "none")),
+            "none",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_audio_with_lyric_combo,
+            str(d.get("display_focus_default_audio_with_lyric", "lyric_display")),
+            "lyric_display",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_utility_blank_combo,
+            str(d.get("display_focus_default_utility_blank", "none")),
+            "none",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_utility_noise_combo,
+            str(d.get("display_focus_default_utility_noise", "colour_bars")),
+            "colour_bars",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_utility_tone_combo,
+            str(d.get("display_focus_default_utility_tone", "colour_bars")),
+            "colour_bars",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_utility_metronome_combo,
+            str(d.get("display_focus_default_utility_metronome", "metronome_display")),
+            "metronome_display",
+        )
+        self._set_combo_data_or_default(
+            self.display_focus_default_automation_combo,
+            str(d.get("display_focus_default_automation", "none")),
+            "none",
         )
         self._set_combo_data_or_default(
             self.video_display_mode_idle_combo,

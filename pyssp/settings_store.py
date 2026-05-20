@@ -7,6 +7,17 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pyssp.display_focus import (
+    DISPLAY_FOCUS_COLOUR_BARS,
+    DISPLAY_FOCUS_FOLLOW,
+    DISPLAY_FOCUS_LYRIC,
+    DISPLAY_FOCUS_METRONOME,
+    DISPLAY_FOCUS_NONE,
+    DISPLAY_FOCUS_VIDEO,
+    normalize_display_focus,
+    normalize_display_focus_override,
+    normalize_display_output_mode,
+)
 from pyssp.set_loader import parse_delphi_color
 
 
@@ -972,8 +983,16 @@ class AppSettings:
     stage_display_lyric_played_italic: bool = False
     stage_display_lyric_current_italic: bool = False
     stage_display_lyric_next_italic: bool = False
-    video_display_mode_playing: str = "video"
+    video_display_mode_playing: str = DISPLAY_FOCUS_FOLLOW
     video_display_mode_idle: str = "blank"
+    display_focus_default_video: str = DISPLAY_FOCUS_VIDEO
+    display_focus_default_audio: str = DISPLAY_FOCUS_NONE
+    display_focus_default_audio_with_lyric: str = DISPLAY_FOCUS_LYRIC
+    display_focus_default_utility_blank: str = DISPLAY_FOCUS_NONE
+    display_focus_default_utility_noise: str = DISPLAY_FOCUS_COLOUR_BARS
+    display_focus_default_utility_tone: str = DISPLAY_FOCUS_COLOUR_BARS
+    display_focus_default_utility_metronome: str = DISPLAY_FOCUS_METRONOME
+    display_focus_default_automation: str = DISPLAY_FOCUS_NONE
     video_display_use_default_backdrop: bool = True
     video_display_backdrop_path: str = ""
     video_display_show_backdrop_message: bool = True
@@ -1002,7 +1021,7 @@ class AppSettings:
     video_display_lyric_next_italic: bool = False
     ndi_output_enabled: bool = False
     ndi_output_name: str = "pyssp-video"
-    ndi_output_mode_playing: str = "video"
+    ndi_output_mode_playing: str = DISPLAY_FOCUS_FOLLOW
     ndi_output_mode_idle: str = "backdrop"
     ndi_output_resolution_mode: str = "source"
     ndi_output_width: int = 1920
@@ -1456,8 +1475,43 @@ def save_settings(settings: AppSettings) -> None:
         "stage_display_lyric_played_italic": "1" if settings.stage_display_lyric_played_italic else "0",
         "stage_display_lyric_current_italic": "1" if settings.stage_display_lyric_current_italic else "0",
         "stage_display_lyric_next_italic": "1" if settings.stage_display_lyric_next_italic else "0",
-        "video_display_mode_playing": str(settings.video_display_mode_playing or "video").strip().lower(),
+        "video_display_mode_playing": normalize_display_focus_override(
+            settings.video_display_mode_playing,
+            default=DISPLAY_FOCUS_FOLLOW,
+        ),
         "video_display_mode_idle": str(settings.video_display_mode_idle or "blank").strip().lower(),
+        "display_focus_default_video": normalize_display_focus(
+            settings.display_focus_default_video,
+            default=DISPLAY_FOCUS_VIDEO,
+        ),
+        "display_focus_default_audio": normalize_display_focus(
+            settings.display_focus_default_audio,
+            default=DISPLAY_FOCUS_NONE,
+        ),
+        "display_focus_default_audio_with_lyric": normalize_display_focus(
+            settings.display_focus_default_audio_with_lyric,
+            default=DISPLAY_FOCUS_LYRIC,
+        ),
+        "display_focus_default_utility_blank": normalize_display_focus(
+            settings.display_focus_default_utility_blank,
+            default=DISPLAY_FOCUS_NONE,
+        ),
+        "display_focus_default_utility_noise": normalize_display_focus(
+            settings.display_focus_default_utility_noise,
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        ),
+        "display_focus_default_utility_tone": normalize_display_focus(
+            settings.display_focus_default_utility_tone,
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        ),
+        "display_focus_default_utility_metronome": normalize_display_focus(
+            settings.display_focus_default_utility_metronome,
+            default=DISPLAY_FOCUS_METRONOME,
+        ),
+        "display_focus_default_automation": normalize_display_focus(
+            settings.display_focus_default_automation,
+            default=DISPLAY_FOCUS_NONE,
+        ),
         "video_display_use_default_backdrop": "1" if settings.video_display_use_default_backdrop else "0",
         "video_display_backdrop_path": _encode_ascii_setting(settings.video_display_backdrop_path),
         "video_display_show_backdrop_message": "1" if settings.video_display_show_backdrop_message else "0",
@@ -1489,7 +1543,10 @@ def save_settings(settings: AppSettings) -> None:
         "video_display_lyric_next_italic": "1" if settings.video_display_lyric_next_italic else "0",
         "ndi_output_enabled": "1" if settings.ndi_output_enabled else "0",
         "ndi_output_name": _encode_ascii_setting(settings.ndi_output_name),
-        "ndi_output_mode_playing": str(settings.ndi_output_mode_playing or "video").strip().lower(),
+        "ndi_output_mode_playing": normalize_display_focus_override(
+            settings.ndi_output_mode_playing,
+            default=DISPLAY_FOCUS_FOLLOW,
+        ),
         "ndi_output_mode_idle": str(settings.ndi_output_mode_idle or "backdrop").strip().lower(),
         "ndi_output_resolution_mode": str(settings.ndi_output_resolution_mode or "source").strip().lower(),
         "ndi_output_width": str(max(2, int(settings.ndi_output_width))),
@@ -1592,12 +1649,45 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     lyric_display_played_italic = _get_bool(section, "lyric_display_played_italic", False)
     lyric_display_current_italic = _get_bool(section, "lyric_display_current_italic", False)
     lyric_display_next_italic = _get_bool(section, "lyric_display_next_italic", False)
-    video_display_mode_playing = str(section.get("video_display_mode_playing", "video")).strip().lower()
-    if video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-        video_display_mode_playing = "video"
+    video_display_mode_playing = normalize_display_focus_override(
+        section.get("video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+        default=DISPLAY_FOCUS_FOLLOW,
+    )
     video_display_mode_idle = str(section.get("video_display_mode_idle", "blank")).strip().lower()
     if video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
         video_display_mode_idle = "blank"
+    display_focus_default_video = normalize_display_focus(
+        section.get("display_focus_default_video", DISPLAY_FOCUS_VIDEO),
+        default=DISPLAY_FOCUS_VIDEO,
+    )
+    display_focus_default_audio = normalize_display_focus(
+        section.get("display_focus_default_audio", DISPLAY_FOCUS_NONE),
+        default=DISPLAY_FOCUS_NONE,
+    )
+    display_focus_default_audio_with_lyric = normalize_display_focus(
+        section.get("display_focus_default_audio_with_lyric", DISPLAY_FOCUS_LYRIC),
+        default=DISPLAY_FOCUS_LYRIC,
+    )
+    display_focus_default_utility_blank = normalize_display_focus(
+        section.get("display_focus_default_utility_blank", DISPLAY_FOCUS_NONE),
+        default=DISPLAY_FOCUS_NONE,
+    )
+    display_focus_default_utility_noise = normalize_display_focus(
+        section.get("display_focus_default_utility_noise", DISPLAY_FOCUS_COLOUR_BARS),
+        default=DISPLAY_FOCUS_COLOUR_BARS,
+    )
+    display_focus_default_utility_tone = normalize_display_focus(
+        section.get("display_focus_default_utility_tone", DISPLAY_FOCUS_COLOUR_BARS),
+        default=DISPLAY_FOCUS_COLOUR_BARS,
+    )
+    display_focus_default_utility_metronome = normalize_display_focus(
+        section.get("display_focus_default_utility_metronome", DISPLAY_FOCUS_METRONOME),
+        default=DISPLAY_FOCUS_METRONOME,
+    )
+    display_focus_default_automation = normalize_display_focus(
+        section.get("display_focus_default_automation", DISPLAY_FOCUS_NONE),
+        default=DISPLAY_FOCUS_NONE,
+    )
     video_display_use_default_backdrop = _get_bool(section, "video_display_use_default_backdrop", True)
     video_display_backdrop_path = _decode_ascii_setting(str(section.get("video_display_backdrop_path", ""))).strip()
     video_display_show_backdrop_message = _get_bool(section, "video_display_show_backdrop_message", True)
@@ -1651,9 +1741,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     video_display_lyric_next_italic = _get_bool(section, "video_display_lyric_next_italic", False)
     ndi_output_enabled = _get_bool(section, "ndi_output_enabled", False)
     ndi_output_name = _decode_ascii_setting(str(section.get("ndi_output_name", "pyssp-video"))).strip() or "pyssp-video"
-    ndi_output_mode_playing = str(section.get("ndi_output_mode_playing", "video")).strip().lower()
-    if ndi_output_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-        ndi_output_mode_playing = "video"
+    ndi_output_mode_playing = normalize_display_focus_override(
+        section.get("ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW),
+        default=DISPLAY_FOCUS_FOLLOW,
+    )
     ndi_output_mode_idle = str(section.get("ndi_output_mode_idle", "backdrop")).strip().lower()
     if ndi_output_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
         ndi_output_mode_idle = "backdrop"
@@ -2455,6 +2546,14 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         stage_display_lyric_next_italic=stage_display_lyric_next_italic,
         video_display_mode_playing=video_display_mode_playing,
         video_display_mode_idle=video_display_mode_idle,
+        display_focus_default_video=display_focus_default_video,
+        display_focus_default_audio=display_focus_default_audio,
+        display_focus_default_audio_with_lyric=display_focus_default_audio_with_lyric,
+        display_focus_default_utility_blank=display_focus_default_utility_blank,
+        display_focus_default_utility_noise=display_focus_default_utility_noise,
+        display_focus_default_utility_tone=display_focus_default_utility_tone,
+        display_focus_default_utility_metronome=display_focus_default_utility_metronome,
+        display_focus_default_automation=display_focus_default_automation,
         video_display_use_default_backdrop=video_display_use_default_backdrop,
         video_display_backdrop_path=video_display_backdrop_path,
         video_display_show_backdrop_message=video_display_show_backdrop_message,

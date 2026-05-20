@@ -10,6 +10,14 @@ class VideoDisplayPageMixin:
         *,
         mode_playing: str,
         mode_idle: str,
+        display_focus_default_video: str,
+        display_focus_default_audio: str,
+        display_focus_default_audio_with_lyric: str,
+        display_focus_default_utility_blank: str,
+        display_focus_default_utility_noise: str,
+        display_focus_default_utility_tone: str,
+        display_focus_default_utility_metronome: str,
+        display_focus_default_automation: str,
         use_default_backdrop: bool,
         backdrop_path: str,
         show_backdrop_message: bool,
@@ -49,22 +57,57 @@ class VideoDisplayPageMixin:
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        self._video_display_mode_playing_value = normalize_display_focus_override(
+            mode_playing,
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
+        self._ndi_output_mode_playing_value = normalize_display_focus_override(
+            ndi_output_mode_playing,
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
 
         routing_group = QGroupBox("Routing Defaults")
         routing_form = QFormLayout(routing_group)
         self.video_display_mode_playing_combo = QComboBox()
-        for label, value in [
-            ("Video", "video"),
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
-        ]:
-            self.video_display_mode_playing_combo.addItem(label, value)
-        self._set_combo_data_or_default(self.video_display_mode_playing_combo, mode_playing, "video")
-        routing_form.addRow("When video is playing:", self.video_display_mode_playing_combo)
+        self._add_display_focus_items(self.video_display_mode_playing_combo)
+        self._set_combo_data_or_default(self.video_display_mode_playing_combo, display_focus_default_video, "video")
+        routing_form.addRow("Video sound buttons:", self.video_display_mode_playing_combo)
+        self.display_focus_default_audio_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_audio_combo)
+        self._set_combo_data_or_default(self.display_focus_default_audio_combo, display_focus_default_audio, "none")
+        routing_form.addRow("Audio sound buttons:", self.display_focus_default_audio_combo)
+        self.display_focus_default_audio_with_lyric_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_audio_with_lyric_combo)
+        self._set_combo_data_or_default(
+            self.display_focus_default_audio_with_lyric_combo,
+            display_focus_default_audio_with_lyric,
+            "lyric_display",
+        )
+        routing_form.addRow("Audio With Lyric:", self.display_focus_default_audio_with_lyric_combo)
+        self.display_focus_default_utility_blank_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_utility_blank_combo)
+        self._set_combo_data_or_default(self.display_focus_default_utility_blank_combo, display_focus_default_utility_blank, "none")
+        routing_form.addRow("Utility Blank:", self.display_focus_default_utility_blank_combo)
+        self.display_focus_default_utility_noise_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_utility_noise_combo)
+        self._set_combo_data_or_default(self.display_focus_default_utility_noise_combo, display_focus_default_utility_noise, "colour_bars")
+        routing_form.addRow("Utility Noise:", self.display_focus_default_utility_noise_combo)
+        self.display_focus_default_utility_tone_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_utility_tone_combo)
+        self._set_combo_data_or_default(self.display_focus_default_utility_tone_combo, display_focus_default_utility_tone, "colour_bars")
+        routing_form.addRow("Utility Tone:", self.display_focus_default_utility_tone_combo)
+        self.display_focus_default_utility_metronome_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_utility_metronome_combo)
+        self._set_combo_data_or_default(
+            self.display_focus_default_utility_metronome_combo,
+            display_focus_default_utility_metronome,
+            "metronome_display",
+        )
+        routing_form.addRow("Utility Metronome:", self.display_focus_default_utility_metronome_combo)
+        self.display_focus_default_automation_combo = QComboBox()
+        self._add_display_focus_items(self.display_focus_default_automation_combo)
+        self._set_combo_data_or_default(self.display_focus_default_automation_combo, display_focus_default_automation, "none")
+        routing_form.addRow("Automation Buttons:", self.display_focus_default_automation_combo)
         self.video_display_mode_idle_combo = QComboBox()
         for label, value in [
             ("Lyric Display", "lyric_display"),
@@ -76,7 +119,7 @@ class VideoDisplayPageMixin:
         ]:
             self.video_display_mode_idle_combo.addItem(label, value)
         self._set_combo_data_or_default(self.video_display_mode_idle_combo, mode_idle, "blank")
-        routing_form.addRow("When video is not playing:", self.video_display_mode_idle_combo)
+        routing_form.addRow("When not playing:", self.video_display_mode_idle_combo)
         layout.addWidget(routing_group)
 
         backdrop_group = QGroupBox("Backdrop")
@@ -118,7 +161,7 @@ class VideoDisplayPageMixin:
         ndi_form.addRow(self.ndi_output_enabled_checkbox)
         self.ndi_output_name_edit = QLineEdit(str(ndi_output_name or ""))
         ndi_form.addRow("Source Name:", self.ndi_output_name_edit)
-        self.ndi_output_route_note_label = QLabel("Source routing follows Video Control.")
+        self.ndi_output_route_note_label = QLabel("Source routing follows sound button display focus.")
         self.ndi_output_route_note_label.setWordWrap(True)
         ndi_form.addRow("Source:", self.ndi_output_route_note_label)
         self.ndi_output_mode_playing_combo = QComboBox()
@@ -133,7 +176,7 @@ class VideoDisplayPageMixin:
         ]:
             self.ndi_output_mode_playing_combo.addItem(label, value)
         self._set_combo_data_or_default(self.ndi_output_mode_playing_combo, ndi_output_mode_playing, "video")
-        ndi_form.addRow("When video is playing:", self.ndi_output_mode_playing_combo)
+        ndi_form.addRow("Video sound buttons:", self.ndi_output_mode_playing_combo)
         self.ndi_output_mode_idle_combo = QComboBox()
         for label, value in [
             ("Lyric Display", "lyric_display"),
@@ -145,7 +188,7 @@ class VideoDisplayPageMixin:
         ]:
             self.ndi_output_mode_idle_combo.addItem(label, value)
         self._set_combo_data_or_default(self.ndi_output_mode_idle_combo, ndi_output_mode_idle, "backdrop")
-        ndi_form.addRow("When video is not playing:", self.ndi_output_mode_idle_combo)
+        ndi_form.addRow("When not playing:", self.ndi_output_mode_idle_combo)
         self.ndi_output_resolution_mode_combo = QComboBox()
         for label, value in [
             ("Source / Native", "source"),
@@ -377,6 +420,20 @@ class VideoDisplayPageMixin:
         enabled = not bool(self.video_display_use_default_backdrop_checkbox.isChecked())
         self.video_display_backdrop_path_edit.setEnabled(enabled)
         self.video_display_backdrop_path_browse_button.setEnabled(enabled)
+
+    def _add_display_focus_items(self, combo: QComboBox) -> None:
+        for value in [
+            "none",
+            "video",
+            "image",
+            "lyric_display",
+            "stage_display",
+            "backdrop",
+            "white_screen",
+            "colour_bars",
+            "metronome_display",
+        ]:
+            combo.addItem(DISPLAY_FOCUS_LABELS.get(value, value), value)
 
     def _sync_ndi_controls(self) -> None:
         ready = bool(getattr(self, "_ndi_capability_ready", False))

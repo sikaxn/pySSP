@@ -1345,6 +1345,9 @@ class ActionsInputMixin:
         self._queue_current_page_audio_preload()
         self._update_now_playing_label("")
         self._set_dirty(False)
+        capture_clean_set_snapshot = getattr(self, "_capture_clean_set_snapshot", None)
+        if callable(capture_clean_set_snapshot):
+            capture_clean_set_snapshot()
         self.seek_slider.setValue(0)
         self.seek_slider.setRange(0, 0)
         self._vu_levels = [0.0, 0.0]
@@ -1389,6 +1392,9 @@ class ActionsInputMixin:
             return
 
         self.current_set_path = file_path
+        capture_clean_set_snapshot = getattr(self, "_capture_clean_set_snapshot", None)
+        if callable(capture_clean_set_snapshot):
+            capture_clean_set_snapshot()
         self._set_dirty(False)
         self.settings.last_set_path = file_path
         self.settings.last_save_dir = os.path.dirname(file_path)
@@ -1481,6 +1487,13 @@ class ActionsInputMixin:
                             lines.append(f"pysspautomationplayed{slot_index}={'1' if slot.played else '0'}")
                             if notes:
                                 lines.append(f"pysspautomationnotes{slot_index}={notes}")
+                            if slot.display_focus:
+                                lines.append(
+                                    f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                                )
+                            display_image_path = clean_set_value(slot.display_image_path)
+                            if display_image_path:
+                                lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
                             if slot.custom_color:
                                 lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
                             hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
@@ -1512,6 +1525,13 @@ class ActionsInputMixin:
                             lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
                             if notes:
                                 lines.append(f"pyssputilitynotes{slot_index}={notes}")
+                            if slot.display_focus:
+                                lines.append(
+                                    f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                                )
+                            display_image_path = clean_set_value(slot.display_image_path)
+                            if display_image_path:
+                                lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
                             if slot.lyric_file:
                                 lyric_path = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                                 lines.append(
@@ -1568,6 +1588,13 @@ class ActionsInputMixin:
                         lines.append(f"s{slot_index}={clean_set_value(effective_file_path)}")
                         if bool(slot.disable_video_loading):
                             lines.append(f"pysspdisablevideo{slot_index}=1")
+                        if slot.display_focus:
+                            lines.append(
+                                f"pysspdisplayfocus{slot_index}={normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE)}"
+                            )
+                        display_image_path = clean_set_value(slot.display_image_path)
+                        if display_image_path:
+                            lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
                         vocal_removed_file = clean_set_value(vocal_removed_overrides.get(slot_key, slot.vocal_removed_file))
                         if vocal_removed_file:
                             lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -1682,7 +1709,16 @@ class ActionsInputMixin:
                         timecode_timeline_mode=src.timecode_timeline_mode,
                         sound_hotkey=src.sound_hotkey,
                         sound_midi_hotkey=src.sound_midi_hotkey,
+                        display_focus=normalize_display_focus(src.display_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE),
+                        display_image_path=str(src.display_image_path or "").strip(),
                     )
+                    apply_display_focus = getattr(self, "_apply_display_focus_to_slot", None)
+                    if callable(apply_display_focus):
+                        apply_display_focus(
+                            self.data[group][page_index][slot_index],
+                            explicit_focus=src.display_focus,
+                            display_image_path=src.display_image_path,
+                        )
                 self._ensure_page_slot_capacity(self.data[group][page_index], max(self._runtime_sound_button_slot_cap(), len(src_page)))
 
         self.current_set_path = file_path
@@ -1710,6 +1746,9 @@ class ActionsInputMixin:
         self._update_group_status()
         self._update_page_status()
         self._update_now_playing_label("")
+        capture_clean_set_snapshot = getattr(self, "_capture_clean_set_snapshot", None)
+        if callable(capture_clean_set_snapshot):
+            capture_clean_set_snapshot()
         self._set_dirty(bool(result.migrated_legacy_cues))
         self._refresh_lyric_display(force=True)
         self.settings.last_set_path = file_path
@@ -1949,6 +1988,14 @@ class ActionsInputMixin:
             stage_display_lyric_next_italic=self.stage_display_lyric_role_italic["next"],
             video_display_mode_playing=self.video_display_mode_playing,
             video_display_mode_idle=self.video_display_mode_idle,
+            display_focus_default_video=self.display_focus_default_video,
+            display_focus_default_audio=self.display_focus_default_audio,
+            display_focus_default_audio_with_lyric=self.display_focus_default_audio_with_lyric,
+            display_focus_default_utility_blank=self.display_focus_default_utility_blank,
+            display_focus_default_utility_noise=self.display_focus_default_utility_noise,
+            display_focus_default_utility_tone=self.display_focus_default_utility_tone,
+            display_focus_default_utility_metronome=self.display_focus_default_utility_metronome,
+            display_focus_default_automation=self.display_focus_default_automation,
             video_display_use_default_backdrop=self.video_display_use_default_backdrop,
             video_display_backdrop_path=self.video_display_backdrop_path,
             video_display_show_backdrop_message=self.video_display_show_backdrop_message,
@@ -2071,6 +2118,14 @@ class ActionsInputMixin:
         self.lyric_display_role_italic = dialog.selected_lyric_display_role_italic()
         self.video_display_mode_playing = dialog.selected_video_display_mode_playing()
         self.video_display_mode_idle = dialog.selected_video_display_mode_idle()
+        self.display_focus_default_video = dialog.selected_display_focus_default_video()
+        self.display_focus_default_audio = dialog.selected_display_focus_default_audio()
+        self.display_focus_default_audio_with_lyric = dialog.selected_display_focus_default_audio_with_lyric()
+        self.display_focus_default_utility_blank = dialog.selected_display_focus_default_utility_blank()
+        self.display_focus_default_utility_noise = dialog.selected_display_focus_default_utility_noise()
+        self.display_focus_default_utility_tone = dialog.selected_display_focus_default_utility_tone()
+        self.display_focus_default_utility_metronome = dialog.selected_display_focus_default_utility_metronome()
+        self.display_focus_default_automation = dialog.selected_display_focus_default_automation()
         self.video_display_use_default_backdrop = dialog.selected_video_display_use_default_backdrop()
         self.video_display_backdrop_path = dialog.selected_video_display_backdrop_path()
         self.video_display_show_backdrop_message = dialog.selected_video_display_show_backdrop_message()

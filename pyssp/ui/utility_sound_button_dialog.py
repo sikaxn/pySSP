@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from pyssp.display_focus import DISPLAY_FOCUS_LABELS, normalize_display_focus
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.midi_control import (
     midi_binding_to_display,
@@ -57,6 +58,8 @@ class UtilitySoundButtonDialog(QDialog):
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         sound_midi_hotkey: str = "",
+        display_focus: str = "",
+        display_image_path: str = "",
         available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
         selected_midi_input_device_ids: Optional[list[str]] = None,
         start_dir: str = "",
@@ -79,6 +82,39 @@ class UtilitySoundButtonDialog(QDialog):
 
         self.notes_edit = QLineEdit(notes)
         form.addRow(tr("Notes"), self.notes_edit)
+
+        self.display_focus_combo = QComboBox()
+        for value in [
+            "none",
+            "image",
+            "lyric_display",
+            "stage_display",
+            "backdrop",
+            "white_screen",
+            "colour_bars",
+            "metronome_display",
+            "video",
+        ]:
+            self.display_focus_combo.addItem(DISPLAY_FOCUS_LABELS.get(value, value), value)
+        normalized_display_focus = normalize_display_focus(display_focus, allow_empty=True, default="none")
+        focus_index = self.display_focus_combo.findData(normalized_display_focus or "none")
+        self.display_focus_combo.setCurrentIndex(focus_index if focus_index >= 0 else 0)
+        form.addRow(tr("Display Focus"), self.display_focus_combo)
+
+        display_image_row = QWidget()
+        display_image_layout = QHBoxLayout(display_image_row)
+        display_image_layout.setContentsMargins(0, 0, 0, 0)
+        self.display_image_edit = QLineEdit(display_image_path)
+        display_image_browse_btn = QPushButton(tr("Browse"))
+        display_image_browse_btn.clicked.connect(self._browse_display_image_file)
+        display_image_clear_btn = QPushButton(tr("Clear"))
+        display_image_clear_btn.clicked.connect(lambda _=False: self.display_image_edit.setText(""))
+        self.display_image_browse_btn = display_image_browse_btn
+        self.display_image_clear_btn = display_image_clear_btn
+        display_image_layout.addWidget(self.display_image_edit, 1)
+        display_image_layout.addWidget(display_image_browse_btn)
+        display_image_layout.addWidget(display_image_clear_btn)
+        form.addRow(tr("Display Image"), display_image_row)
 
         lyric_row = QWidget()
         lyric_layout = QHBoxLayout(lyric_row)
@@ -241,6 +277,7 @@ class UtilitySoundButtonDialog(QDialog):
 
         self.volume_slider.valueChanged.connect(_sync_volume_label)
         self.custom_volume_checkbox.toggled.connect(_sync_slider_enabled)
+        self.display_focus_combo.currentIndexChanged.connect(self._sync_display_focus_controls)
         _sync_volume_label(self.volume_slider.value())
         _sync_slider_enabled(self.custom_volume_checkbox.isChecked())
 
@@ -253,9 +290,10 @@ class UtilitySoundButtonDialog(QDialog):
         root.addWidget(buttons)
         self._refresh_mode_visibility()
         self._sync_infinite_duration_state(self.infinite_duration_checkbox.isChecked())
+        self._sync_display_focus_controls()
         localize_widget_tree(self, language)
 
-    def values(self) -> tuple[str, str, str, str, UtilitySoundSpec, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, str, UtilitySoundSpec, Optional[int], str, str, str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -283,6 +321,8 @@ class UtilitySoundButtonDialog(QDialog):
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
             self._midi_binding,
+            normalize_display_focus(str(self.display_focus_combo.currentData() or ""), default="none"),
+            self.display_image_edit.text().strip(),
         )
 
     def handle_midi_message(
@@ -351,6 +391,28 @@ class UtilitySoundButtonDialog(QDialog):
         if file_path:
             self.automation_script_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
+
+    def _browse_display_image_file(self) -> None:
+        start_dir = self._start_dir
+        current = self.display_image_edit.text().strip()
+        if current:
+            start_dir = os.path.dirname(current) or start_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Select Display Image"),
+            start_dir,
+            tr("Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*.*)"),
+        )
+        if file_path:
+            self.display_image_edit.setText(file_path)
+            self._start_dir = os.path.dirname(file_path)
+
+    def _sync_display_focus_controls(self) -> None:
+        mode = normalize_display_focus(str(self.display_focus_combo.currentData() or ""), default="none")
+        enabled = mode == "image"
+        self.display_image_edit.setEnabled(enabled)
+        self.display_image_browse_btn.setEnabled(enabled)
+        self.display_image_clear_btn.setEnabled(enabled)
 
     def _set_midi_binding(self, token: str) -> None:
         normalized = normalize_midi_binding(token)

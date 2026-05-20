@@ -496,12 +496,45 @@ class MainWindow(
             "current": bool(getattr(self.settings, "lyric_display_current_italic", False)),
             "next": bool(getattr(self.settings, "lyric_display_next_italic", False)),
         }
-        self.video_display_mode_playing = str(getattr(self.settings, "video_display_mode_playing", "video") or "video").strip().lower()
-        if self.video_display_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-            self.video_display_mode_playing = "video"
+        self.video_display_mode_playing = normalize_display_focus_override(
+            getattr(self.settings, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
         self.video_display_mode_idle = str(getattr(self.settings, "video_display_mode_idle", "blank") or "blank").strip().lower()
         if self.video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
             self.video_display_mode_idle = "blank"
+        self.display_focus_default_video = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_video", DISPLAY_FOCUS_VIDEO),
+            default=DISPLAY_FOCUS_VIDEO,
+        )
+        self.display_focus_default_audio = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_audio", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
+        self.display_focus_default_audio_with_lyric = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_audio_with_lyric", DISPLAY_FOCUS_LYRIC),
+            default=DISPLAY_FOCUS_LYRIC,
+        )
+        self.display_focus_default_utility_blank = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_utility_blank", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
+        self.display_focus_default_utility_noise = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_utility_noise", DISPLAY_FOCUS_COLOUR_BARS),
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        )
+        self.display_focus_default_utility_tone = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_utility_tone", DISPLAY_FOCUS_COLOUR_BARS),
+            default=DISPLAY_FOCUS_COLOUR_BARS,
+        )
+        self.display_focus_default_utility_metronome = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_utility_metronome", DISPLAY_FOCUS_METRONOME),
+            default=DISPLAY_FOCUS_METRONOME,
+        )
+        self.display_focus_default_automation = normalize_display_focus(
+            getattr(self.settings, "display_focus_default_automation", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
         self.video_display_use_default_backdrop = bool(getattr(self.settings, "video_display_use_default_backdrop", True))
         self.video_display_backdrop_path = str(getattr(self.settings, "video_display_backdrop_path", "") or "").strip()
         self.video_display_show_backdrop_message = bool(
@@ -552,9 +585,10 @@ class MainWindow(
         }
         self.ndi_output_enabled = bool(getattr(self.settings, "ndi_output_enabled", False))
         self.ndi_output_name = str(getattr(self.settings, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video"
-        self.ndi_output_mode_playing = str(getattr(self.settings, "ndi_output_mode_playing", "video") or "video").strip().lower()
-        if self.ndi_output_mode_playing not in {"video", "lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-            self.ndi_output_mode_playing = "video"
+        self.ndi_output_mode_playing = normalize_display_focus_override(
+            getattr(self.settings, "ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
         self.ndi_output_mode_idle = str(getattr(self.settings, "ndi_output_mode_idle", "backdrop") or "backdrop").strip().lower()
         if self.ndi_output_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
             self.ndi_output_mode_idle = "backdrop"
@@ -933,6 +967,7 @@ class MainWindow(
         self._track_started_at = 0.0
         self._ignore_state_changes = 0
         self._dirty = False
+        self._clean_set_snapshot_lines: List[str] = []
         self._copied_page_buffer: Optional[dict] = None
         self._copied_slot_buffer: Optional[SoundButtonData] = None
         self._search_window: Optional[SearchWindow] = None
@@ -1198,6 +1233,10 @@ class MainWindow(
         self._apply_companion_satellite_state()
         if startup_audio_warning:
             QMessageBox.warning(self, "Audio Device", startup_audio_warning)
+        if not self._dirty:
+            capture_clean_set_snapshot = getattr(self, "_capture_clean_set_snapshot", None)
+            if callable(capture_clean_set_snapshot):
+                capture_clean_set_snapshot()
         self._suspend_settings_save = False
         if self._show_getting_started_on_startup:
             QTimer.singleShot(0, lambda: self._open_getting_started_window(startup=True))

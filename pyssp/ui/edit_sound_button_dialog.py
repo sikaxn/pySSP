@@ -7,6 +7,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -20,6 +21,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyssp.audio_format_support import build_audio_file_dialog_filter
+from pyssp.display_focus import DISPLAY_FOCUS_LABELS, DISPLAY_FOCUS_VALUES, normalize_display_focus
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.midi_control import (
     midi_binding_to_display,
@@ -84,6 +86,8 @@ class EditSoundButtonDialog(QDialog):
         volume_override_pct: Optional[int] = None,
         sound_hotkey: str = "",
         sound_midi_hotkey: str = "",
+        display_focus: str = "",
+        display_image_path: str = "",
         available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
         selected_midi_input_device_ids: Optional[list[str]] = None,
         start_dir: str = "",
@@ -117,6 +121,37 @@ class EditSoundButtonDialog(QDialog):
 
         self.notes_edit = QLineEdit(notes)
         form.addRow(tr("Notes"), self.notes_edit)
+
+        self.display_focus_combo = QComboBox()
+        for value in [
+            "none",
+            "video",
+            "image",
+            "lyric_display",
+            "stage_display",
+            "backdrop",
+            "white_screen",
+            "colour_bars",
+            "metronome_display",
+        ]:
+            self.display_focus_combo.addItem(DISPLAY_FOCUS_LABELS.get(value, value), value)
+        normalized_display_focus = normalize_display_focus(display_focus, allow_empty=True, default="none")
+        focus_index = self.display_focus_combo.findData(normalized_display_focus or "none")
+        self.display_focus_combo.setCurrentIndex(focus_index if focus_index >= 0 else 0)
+        form.addRow(tr("Display Focus"), self.display_focus_combo)
+
+        display_image_row = QWidget()
+        display_image_layout = QHBoxLayout(display_image_row)
+        display_image_layout.setContentsMargins(0, 0, 0, 0)
+        self.display_image_edit = QLineEdit(display_image_path)
+        self.display_image_browse_btn = QPushButton(tr("Browse"))
+        self.display_image_browse_btn.clicked.connect(self._browse_display_image_file)
+        self.display_image_clear_btn = QPushButton(tr("Clear"))
+        self.display_image_clear_btn.clicked.connect(lambda _=False: self.display_image_edit.setText(""))
+        display_image_layout.addWidget(self.display_image_edit, 1)
+        display_image_layout.addWidget(self.display_image_browse_btn)
+        display_image_layout.addWidget(self.display_image_clear_btn)
+        form.addRow(tr("Display Image"), display_image_row)
 
         vocal_row = QWidget()
         vocal_layout = QHBoxLayout(vocal_row)
@@ -223,8 +258,10 @@ class EditSoundButtonDialog(QDialog):
 
         self.volume_slider.valueChanged.connect(_sync_volume_label)
         self.custom_volume_checkbox.toggled.connect(_sync_slider_enabled)
+        self.display_focus_combo.currentIndexChanged.connect(self._sync_display_focus_controls)
         _sync_volume_label(self.volume_slider.value())
         _sync_slider_enabled(self.custom_volume_checkbox.isChecked())
+        self._sync_display_focus_controls()
 
         root.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -248,7 +285,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, bool, str, str, str, Optional[int], str, str]:
+    def values(self) -> tuple[str, str, str, bool, str, str, str, Optional[int], str, str, str, str]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -263,6 +300,8 @@ class EditSoundButtonDialog(QDialog):
             volume_override_pct,
             self.sound_hotkey_edit.hotkey(),
             self._midi_binding,
+            normalize_display_focus(str(self.display_focus_combo.currentData() or ""), default="none"),
+            self.display_image_edit.text().strip(),
         )
 
     def _browse_lyric_file(self) -> None:
@@ -309,6 +348,30 @@ class EditSoundButtonDialog(QDialog):
         if file_path:
             self.automation_script_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
+
+    def _browse_display_image_file(self) -> None:
+        start_dir = self._start_dir
+        current = self.display_image_edit.text().strip()
+        if current:
+            start_dir = os.path.dirname(current) or start_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("Select Display Image"),
+            start_dir,
+            tr("Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*.*)"),
+        )
+        if file_path:
+            self.display_image_edit.setText(file_path)
+            self._start_dir = os.path.dirname(file_path)
+
+    def _sync_display_focus_controls(self) -> None:
+        mode = normalize_display_focus(str(self.display_focus_combo.currentData() or ""), default="none")
+        enabled = mode == "image"
+        self.display_image_edit.setEnabled(enabled)
+        self.display_image_browse_btn.setEnabled(enabled)
+        self.display_image_clear_btn.setEnabled(enabled)
+        if not enabled:
+            self.display_image_edit.setText(self.display_image_edit.text().strip())
 
     def _request_regenerate_vocal_removed(self) -> None:
         self.done(self.REGENERATE_RESULT)

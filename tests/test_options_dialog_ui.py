@@ -441,6 +441,36 @@ def _build_dialog(**overrides):
         video_display_mode_idle=str(
             overrides.get("video_display_mode_idle", defaults["video_display_mode_idle"])
         ),
+        display_focus_default_video=str(
+            overrides.get("display_focus_default_video", defaults["display_focus_default_video"])
+        ),
+        display_focus_default_audio=str(
+            overrides.get("display_focus_default_audio", defaults["display_focus_default_audio"])
+        ),
+        display_focus_default_audio_with_lyric=str(
+            overrides.get(
+                "display_focus_default_audio_with_lyric",
+                defaults["display_focus_default_audio_with_lyric"],
+            )
+        ),
+        display_focus_default_utility_blank=str(
+            overrides.get("display_focus_default_utility_blank", defaults["display_focus_default_utility_blank"])
+        ),
+        display_focus_default_utility_noise=str(
+            overrides.get("display_focus_default_utility_noise", defaults["display_focus_default_utility_noise"])
+        ),
+        display_focus_default_utility_tone=str(
+            overrides.get("display_focus_default_utility_tone", defaults["display_focus_default_utility_tone"])
+        ),
+        display_focus_default_utility_metronome=str(
+            overrides.get(
+                "display_focus_default_utility_metronome",
+                defaults["display_focus_default_utility_metronome"],
+            )
+        ),
+        display_focus_default_automation=str(
+            overrides.get("display_focus_default_automation", defaults["display_focus_default_automation"])
+        ),
         video_display_use_default_backdrop=bool(
             overrides.get("video_display_use_default_backdrop", defaults["video_display_use_default_backdrop"])
         ),
@@ -728,6 +758,14 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
     dialog = _build_dialog(
         preload_video_enabled=True,
         video_display_mode_playing="backdrop",
+        display_focus_default_video="backdrop",
+        display_focus_default_audio="none",
+        display_focus_default_audio_with_lyric="lyric_display",
+        display_focus_default_utility_blank="none",
+        display_focus_default_utility_noise="colour_bars",
+        display_focus_default_utility_tone="colour_bars",
+        display_focus_default_utility_metronome="metronome_display",
+        display_focus_default_automation="none",
         video_display_mode_idle="backdrop",
         video_display_use_default_backdrop=False,
         video_display_backdrop_path=r"C:\Media\fallback.png",
@@ -759,6 +797,13 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
 
         assert dialog.select_page("Video Display")
         assert dialog.video_display_mode_playing_combo.currentData() == "backdrop"
+        assert dialog.display_focus_default_audio_combo.currentData() == "none"
+        assert dialog.display_focus_default_audio_with_lyric_combo.currentData() == "lyric_display"
+        assert dialog.display_focus_default_utility_blank_combo.currentData() == "none"
+        assert dialog.display_focus_default_utility_noise_combo.currentData() == "colour_bars"
+        assert dialog.display_focus_default_utility_tone_combo.currentData() == "colour_bars"
+        assert dialog.display_focus_default_utility_metronome_combo.currentData() == "metronome_display"
+        assert dialog.display_focus_default_automation_combo.currentData() == "none"
         assert dialog.video_display_mode_idle_combo.currentData() == "backdrop"
         assert dialog.video_display_use_default_backdrop_checkbox.isChecked() is False
         assert dialog.video_display_backdrop_path_edit.text() == r"C:\Media\fallback.png"
@@ -766,6 +811,14 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.video_display_show_lyric_overlay_checkbox.isChecked() is True
         assert dialog.video_display_show_stage_alert_checkbox.isChecked() is True
         assert dialog.selected_video_display_mode_playing() == "backdrop"
+        assert dialog.selected_display_focus_default_video() == "backdrop"
+        assert dialog.selected_display_focus_default_audio() == "none"
+        assert dialog.selected_display_focus_default_audio_with_lyric() == "lyric_display"
+        assert dialog.selected_display_focus_default_utility_blank() == "none"
+        assert dialog.selected_display_focus_default_utility_noise() == "colour_bars"
+        assert dialog.selected_display_focus_default_utility_tone() == "colour_bars"
+        assert dialog.selected_display_focus_default_utility_metronome() == "metronome_display"
+        assert dialog.selected_display_focus_default_automation() == "none"
         assert dialog.selected_video_display_mode_idle() == "backdrop"
         assert dialog.selected_video_display_use_default_backdrop() is False
         assert dialog.selected_video_display_backdrop_path() == r"C:\Media\fallback.png"
@@ -773,7 +826,7 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_video_display_show_lyric_overlay() is True
         assert dialog.selected_video_display_show_stage_alert() is True
         assert dialog.ndi_output_name_edit.text() == "Sanctuary Feed"
-        assert dialog.ndi_output_route_note_label.text() == "Source routing follows Video Control."
+        assert dialog.ndi_output_route_note_label.text() == "Source routing follows sound button display focus."
         assert dialog.ndi_output_mode_playing_combo.currentData() == "backdrop"
         assert dialog.ndi_output_mode_idle_combo.currentData() == "backdrop"
         assert dialog.ndi_output_mode_playing_combo.isEnabled() is False

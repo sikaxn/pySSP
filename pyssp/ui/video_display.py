@@ -177,9 +177,11 @@ class VideoDisplayWidget(QWidget):
             self._draw_colour_bars(painter, bounds)
         elif mode == "video":
             self._draw_scaled_pixmap(painter, bounds, self._video_pixmap, keep_aspect=True)
+        elif mode == "image":
+            self._draw_scaled_pixmap(painter, bounds, self._content_pixmap, keep_aspect=True)
         elif mode == "backdrop":
             self._draw_scaled_pixmap(painter, bounds, self._backdrop_pixmap, keep_aspect=False)
-        elif mode in {"stage_display", "lyric_display"}:
+        elif mode in {"stage_display", "lyric_display", "metronome_display"}:
             self._draw_scaled_pixmap(painter, bounds, self._content_pixmap, keep_aspect=False)
         if mode == "video" and self._show_lyric_overlay and self._lyric_html.strip():
             overlay = _normalized_rect(self._overlay_rect, bounds)

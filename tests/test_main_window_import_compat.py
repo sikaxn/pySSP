@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from pyssp.ffmpeg_support import MediaProbeInfo
 from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtGui import QPaintEvent
-from PyQt5.QtWidgets import QApplication
+from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, AutomationCommandSpec
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtGui import QPaintEvent, QPixmap
+from PyQt5.QtWidgets import QApplication, QLabel
 
 from pyssp.ui import main_window as mw
 from pyssp.ui.main_window import MainWindow, SLOTS_PER_PAGE, _equal_power_crossfade_volume
 from pyssp.ui.main_window import video_display as video_display_module
 from pyssp.ui.main_window.video_display import VideoDisplayMixin
 from pyssp.ui.video_display import VideoDisplayWidget
+from pyssp.utility_audio import UTILITY_SOURCE_TYPE, UtilitySoundSpec
 
 
 def test_main_window_import_surface_stays_compatible():
@@ -38,7 +41,7 @@ class _AudioOnlyVideoRouteHost(VideoDisplayMixin):
         self._media_probe_cache = {}
         self.current_playing = ("A", 0, 0)
         self.video_display_mode_idle = "blank"
-        self.video_display_mode_playing = "video"
+        self.video_display_mode_playing = "follow_sound_button"
         self.video_display_show_backdrop_message = True
         self.video_display_use_default_backdrop = True
         self.video_display_backdrop_path = ""
@@ -63,7 +66,7 @@ class _VideoRefreshHost(VideoDisplayMixin):
         self._media_probe_cache = {}
         self.current_playing = ("A", 0, 0)
         self.video_display_mode_idle = "blank"
-        self.video_display_mode_playing = "video"
+        self.video_display_mode_playing = "follow_sound_button"
         self._slot = mw.SoundButtonData(file_path="clip.mp4")
         self._probe = MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
         self._video_frame_cache = {}
@@ -189,6 +192,178 @@ def test_backdrop_mode_uses_default_asset_and_message_for_idle_state():
     assert host._video_backdrop_message_text() == "No video is playing"
 
 
+def test_metronome_utility_defaults_to_metronome_display_route():
+    host = _AudioOnlyVideoRouteHost()
+    host._slot = mw.SoundButtonData(
+        source_type=UTILITY_SOURCE_TYPE,
+        title="Count In",
+        duration_ms=10000,
+        utility_spec=UtilitySoundSpec(mode="metronome", tempo_bpm=120.0, time_signature_num=4, time_signature_den=4),
+    )
+    host.display_focus_default_utility_metronome = "metronome_display"
+
+    assert host._active_video_route_mode() == "metronome_display"
+
+
+def test_automation_button_uses_idle_video_route():
+    host = _AudioOnlyVideoRouteHost()
+    host.video_display_mode_idle = "backdrop"
+    host.video_display_mode_playing = "stage_display"
+    host._slot = mw.SoundButtonData(
+        source_type=AUTOMATION_SOURCE_TYPE,
+        title="Automation",
+        automation_spec=AutomationCommandSpec(location="5/1/2", button_text="Take"),
+    )
+
+    assert host._active_video_route_mode() == "backdrop"
+    assert host._active_ndi_route_mode() == "backdrop"
+
+
+def test_video_route_override_can_replace_sound_button_focus():
+    host = _AudioOnlyVideoRouteHost()
+    host.video_display_mode_playing = "stage_display"
+    host._slot = mw.SoundButtonData(file_path="theme_song.mp3")
+
+    assert host._active_video_route_mode() == "stage_display"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_html", "expect_content"),
+    [
+        ("video", "<b>Lyric</b>", False),
+        ("stage_display", "", True),
+        ("lyric_display", "", True),
+        ("image", "", True),
+        ("metronome_display", "", True),
+        ("backdrop", "", False),
+        ("blank", "", False),
+        ("white_screen", "", False),
+        ("colour_bars", "", False),
+    ],
+)
+def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_html, expect_content):
+    class _CaptureWidget:
+        def __init__(self) -> None:
+            self.mode = ""
+            self.alert_text = ""
+            self.backdrop_message = ""
+            self.show_backdrop_message = False
+            self.lyric_html = ""
+            self.video_pixmap = QPixmap()
+            self.content_pixmap = QPixmap()
+            self.backdrop_pixmap = QPixmap()
+            self.overlay_args = None
+
+        def configure_overlay(self, **kwargs) -> None:
+            self.overlay_args = dict(kwargs)
+
+        def set_mode(self, mode_value: str) -> None:
+            self.mode = str(mode_value)
+
+        def set_alert_text(self, text: str) -> None:
+            self.alert_text = str(text)
+
+        def set_backdrop_pixmap(self, pixmap) -> None:
+            self.backdrop_pixmap = QPixmap(pixmap)
+
+        def configure_backdrop(self, *, show_message: bool = False, message_text: str = "") -> None:
+            self.show_backdrop_message = bool(show_message)
+            self.backdrop_message = str(message_text)
+
+        def set_video_pixmap(self, pixmap) -> None:
+            self.video_pixmap = QPixmap(pixmap)
+
+        def set_content_pixmap(self, pixmap) -> None:
+            self.content_pixmap = QPixmap(pixmap)
+
+        def set_lyric_html(self, html: str) -> None:
+            self.lyric_html = str(html)
+
+        def width(self) -> int:
+            return 320
+
+        def height(self) -> int:
+            return 180
+
+    class _OutputWidgetHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.video_display_lyric_overlay_rect = {"x": 0, "y": 0, "w": 10000, "h": 10000}
+            self.video_display_show_lyric_overlay = True
+            self.video_display_show_stage_alert = True
+            self._stage_alert_message = "Alert"
+            self._video_current_frame_pixmap = QPixmap(8, 8)
+            self._video_current_frame_pixmap.fill(Qt.black)
+            self.stage_snapshot_calls = 0
+            self.lyric_snapshot_calls = 0
+            self.metronome_snapshot_calls = 0
+            self._slot.display_image_path = "image.png"
+
+        def _stage_alert_active(self) -> bool:
+            return False
+
+        def _video_backdrop_pixmap(self) -> QPixmap:
+            pixmap = QPixmap(8, 8)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+        def _video_backdrop_message_text(self) -> str:
+            return "No video is playing"
+
+        def _runtime_video_destination_frame(self, _destination_id: str):
+            return mw.QImage()
+
+        def _current_video_lyric_html(self) -> str:
+            return "<b>Lyric</b>"
+
+        def _render_stage_display_snapshot(self, target_width=None, target_height=None) -> QPixmap:
+            _ = (target_width, target_height)
+            self.stage_snapshot_calls += 1
+            pixmap = QPixmap(12, 12)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+        def _render_lyric_display_snapshot(self, target_width=None, target_height=None) -> QPixmap:
+            _ = (target_width, target_height)
+            self.lyric_snapshot_calls += 1
+            pixmap = QPixmap(10, 10)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+        def _slot_display_image_pixmap(self, slot) -> QPixmap:
+            _ = slot
+            pixmap = QPixmap(14, 14)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+        def _render_metronome_display_snapshot(self, slot, width: int, height: int) -> QPixmap:
+            _ = (slot, width, height)
+            self.metronome_snapshot_calls += 1
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+    app = QApplication.instance() or QApplication([])
+    host = _OutputWidgetHost()
+    widget = _CaptureWidget()
+
+    host._sync_output_surface_widget(widget, mode, force=True)
+
+    assert widget.mode == mode
+    assert widget.lyric_html == expected_html
+    assert widget.content_pixmap.isNull() is (not expect_content)
+    if mode == "stage_display":
+        assert host.stage_snapshot_calls == 1
+    if mode == "lyric_display":
+        assert host.lyric_snapshot_calls == 1
+    if mode == "metronome_display":
+        assert host.metronome_snapshot_calls == 1
+    if mode == "backdrop":
+        assert widget.show_backdrop_message is True
+        assert widget.backdrop_message == "No video is playing"
+    assert app is not None
+
+
 def test_video_widget_paints_lyric_overlay_without_type_error():
     app = QApplication.instance() or QApplication([])
     widget = VideoDisplayWidget()
@@ -205,6 +380,151 @@ def test_video_widget_paints_lyric_overlay_without_type_error():
     widget.paintEvent(QPaintEvent(widget.rect()))
 
     assert widget._lyric_html
+
+
+def test_stage_display_snapshot_reuses_hidden_renderer_and_cached_pixmap(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    created = []
+
+    class _FakeStageWindow:
+        def __init__(self, _parent):
+            created.append(self)
+            self.values = None
+            self.alert = None
+            self.status = ""
+
+        def configure_gadgets(self, _gadgets) -> None:
+            return None
+
+        def configure_font_settings(self, **_kwargs) -> None:
+            return None
+
+        def update_values(self, **kwargs) -> None:
+            self.values = dict(kwargs)
+
+        def set_alert(self, text: str, active: bool) -> None:
+            self.alert = (text, bool(active))
+
+        def set_playback_status(self, status: str) -> None:
+            self.status = str(status)
+
+    monkeypatch.setattr(video_display_module, "GadgetStageDisplayWindow", _FakeStageWindow)
+
+    class _StageSnapshotHost(VideoDisplayMixin):
+        def __init__(self) -> None:
+            self.current_playing = None
+            self.stage_display_gadgets = {}
+            self.stage_display_font_family = ""
+            self.stage_display_font_size = 24
+            self.stage_display_lyric_font_family = ""
+            self.stage_display_lyric_font_size = 32
+            self.stage_display_lyric_role_colors = {"played": "#AAA", "current": "#FFF000", "next": "#FFF"}
+            self.stage_display_lyric_role_sizes = {"played": 16, "current": 24, "next": 20}
+            self.stage_display_lyric_auto_adjust_role_sizes = True
+            self.stage_display_lyric_role_scale_percents = {"played": 70, "current": 115, "next": 90}
+            self.stage_display_lyric_role_bold = {"played": True, "current": True, "next": True}
+            self.stage_display_lyric_role_italic = {"played": False, "current": False, "next": False}
+            self.seek_slider = type("_Slider", (), {"value": lambda _self: 1000})()
+            self.total_time = QLabel("00:01:00")
+            self.elapsed_time = QLabel("00:00:01")
+            self.remaining_time = QLabel("00:00:59")
+            self.progress_label = QLabel("1%")
+            self._stage_alert_message = ""
+            self.render_calls = 0
+
+        def _transport_total_ms(self) -> int:
+            return 60000
+
+        def _current_transport_cue_bounds(self):
+            return None, None
+
+        def _stage_display_current_lyric(self) -> str:
+            return "Current lyric"
+
+        def _next_stage_song_name(self) -> str:
+            return "Next song"
+
+        def _build_progress_bar_stylesheet(self, _progress_ratio: float, _cue_in_ms, _cue_out_ms) -> str:
+            return "style"
+
+        def _stage_alert_active(self) -> bool:
+            return False
+
+        def _stage_playback_status(self) -> str:
+            return "playing"
+
+        def _render_widget_snapshot(self, widget, width: int = 960, height: int = 540) -> QPixmap:
+            _ = widget
+            self.render_calls += 1
+            pixmap = QPixmap(width, height)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+    host = _StageSnapshotHost()
+
+    first = host._render_stage_display_snapshot(640, 360)
+    second = host._render_stage_display_snapshot(640, 360)
+
+    assert len(created) == 1
+    assert host.render_calls == 1
+    assert not first.isNull()
+    assert not second.isNull()
+    assert app is not None
+
+
+def test_lyric_display_snapshot_reuses_hidden_renderer_and_cached_pixmap(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    created = []
+
+    class _FakeLyricWindow:
+        def __init__(self, _parent):
+            created.append(self)
+
+        def set_transparent_mode_enabled(self, _enabled: bool) -> None:
+            return None
+
+        def configure_display_settings(self, **_kwargs) -> None:
+            return None
+
+        def update_playback_state(self, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(video_display_module, "LyricDisplayWindow", _FakeLyricWindow)
+
+    class _LyricSnapshotHost(VideoDisplayMixin):
+        def __init__(self) -> None:
+            self.current_playing = None
+            self.lyric_display_font_family = ""
+            self.lyric_display_font_size = 36
+            self.lyric_display_show_not_playing_message = True
+            self.lyric_display_previous_line_count = 1
+            self.lyric_display_next_line_count = 2
+            self.lyric_display_role_colors = {"played": "#AAA", "current": "#FFF000", "next": "#FFF"}
+            self.lyric_display_role_sizes = {"played": 18, "current": 28, "next": 22}
+            self.lyric_display_auto_adjust_role_sizes = True
+            self.lyric_display_role_scale_percents = {"played": 70, "current": 115, "next": 90}
+            self.lyric_display_role_bold = {"played": True, "current": True, "next": True}
+            self.lyric_display_role_italic = {"played": False, "current": False, "next": False}
+            self._lyric_force_blank = False
+            self.render_calls = 0
+
+        def _render_widget_snapshot(self, widget, width: int = 960, height: int = 540) -> QPixmap:
+            _ = widget
+            self.render_calls += 1
+            pixmap = QPixmap(width, height)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+    host = _LyricSnapshotHost()
+
+    first = host._render_lyric_display_snapshot(640, 360)
+    second = host._render_lyric_display_snapshot(640, 360)
+
+    assert len(created) == 1
+    assert host.render_calls == 1
+    assert not first.isNull()
+    assert not second.isNull()
+    assert app is not None
 
 
 def test_video_frame_bucket_uses_media_fps():
@@ -306,6 +626,7 @@ def test_video_refresh_restarts_stream_after_transport_invalidation():
 
 
 def test_video_surface_geometry_change_preserves_current_frame():
+    app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
     host._video_current_frame_key = ("clip.mp4", 80)
     current_pixmap = host._video_current_frame_pixmap
@@ -315,9 +636,12 @@ def test_video_surface_geometry_change_preserves_current_frame():
     assert host._video_current_frame_key == ("clip.mp4", 80)
     assert host._video_current_frame_pixmap is current_pixmap
     assert host._video_frame_dispatcher.requests == [("clear",), ("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+    assert app is not None
 
 
 def test_stage_display_geometry_change_triggers_snapshot_refresh():
+    app = QApplication.instance() or QApplication([])
+
     class _StageRefreshHost(_VideoRefreshHost):
         def __init__(self) -> None:
             super().__init__()
@@ -337,6 +661,7 @@ def test_stage_display_geometry_change_triggers_snapshot_refresh():
 
     assert host.refresh_calls == [True]
     assert host.clear_calls == []
+    assert app is not None
 
 
 def test_video_decoder_ignores_stale_request_tags():

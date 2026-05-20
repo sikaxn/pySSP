@@ -106,6 +106,57 @@ def test_load_set_disable_video_loading_flag(tmp_path):
     assert result.pages["A"][0][0].disable_video_loading is True
 
 
+def test_load_set_display_focus_and_image_fields(tmp_path):
+    set_path = tmp_path / "display_focus.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Theme Song",
+                "s1=C:\\\\Music\\\\theme.mp3",
+                "pysspdisplayfocus1=image",
+                "pysspdisplayimage1=C:\\\\Media\\\\theme.png",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.display_focus == "image"
+    assert slot.display_image_path == "C:\\Media\\theme.png"
+
+
+def test_load_set_missing_display_focus_keeps_slot_unset_for_runtime_defaults(tmp_path):
+    set_path = tmp_path / "display_focus_default.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Theme Song",
+                "s1=C:\\\\Music\\\\theme.mp3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.display_focus == ""
+
+
 def test_load_set_cue_points_in_ms(tmp_path):
     set_path = tmp_path / "cue_ms.set"
     set_path.write_text(

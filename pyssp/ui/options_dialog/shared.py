@@ -43,6 +43,13 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.audio_engine import clear_waveform_disk_cache, get_waveform_cache_limit_bounds_mb, get_waveform_cache_usage_bytes
+from pyssp.display_focus import (
+    DISPLAY_FOCUS_FOLLOW,
+    DISPLAY_FOCUS_LABELS,
+    DISPLAY_FOCUS_OVERRIDE_LABELS,
+    normalize_display_focus,
+    normalize_display_focus_override,
+)
 from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_GRID_COLS,
     WINDOW_LAYOUT_FADE_GRID_ROWS,

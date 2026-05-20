@@ -7,13 +7,26 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.automation_command import AUTOMATION_SOURCE_TYPE
 from pyssp.ffmpeg_support import FFMPEG_VIDEO_EXTENSIONS
 from pyssp.utility_audio import utility_source_payload
+from pyssp.utility_audio import UTILITY_SOURCE_TYPE
+from pyssp.utility_audio import UTILITY_MODE_METRONOME, UTILITY_MODE_PINK_NOISE, UTILITY_MODE_WAVEFORM
 from pyssp.ui.video_display import VideoDisplayWidget
 
 _VIDEO_FILE_EXTENSIONS = {str(token or "").strip().lower() for token in FFMPEG_VIDEO_EXTENSIONS}
 _VIDEO_FRAME_FALLBACK_INTERVAL_MS = 33
 _VIDEO_BACKDROP_MESSAGE = "No video is playing"
+
+
+def _freeze_snapshot_token(value):
+    if isinstance(value, dict):
+        return tuple((str(key), _freeze_snapshot_token(item)) for key, item in sorted(value.items(), key=lambda pair: str(pair[0])))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_snapshot_token(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze_snapshot_token(item) for item in value))
+    return value
 
 
 @dataclass(frozen=True)
@@ -335,19 +348,27 @@ class VideoDisplayMixin:
         form = QFormLayout()
 
         self.video_mode_playing_combo = QComboBox(panel)
-        for label, value in [
-            ("Video", "video"),
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
+        for value in [
+            DISPLAY_FOCUS_FOLLOW,
+            DISPLAY_FOCUS_NONE,
+            DISPLAY_FOCUS_VIDEO,
+            DISPLAY_FOCUS_IMAGE,
+            DISPLAY_FOCUS_LYRIC,
+            DISPLAY_FOCUS_STAGE,
+            DISPLAY_FOCUS_BACKDROP,
+            DISPLAY_FOCUS_WHITE,
+            DISPLAY_FOCUS_COLOUR_BARS,
+            DISPLAY_FOCUS_METRONOME,
         ]:
-            self.video_mode_playing_combo.addItem(label, value)
-        index = self.video_mode_playing_combo.findData(self.video_display_mode_playing)
+            self.video_mode_playing_combo.addItem(
+                DISPLAY_FOCUS_OVERRIDE_LABELS.get(value, DISPLAY_FOCUS_LABELS.get(value, value)),
+                value,
+            )
+        index = self.video_mode_playing_combo.findData(
+            normalize_display_focus_override(self.video_display_mode_playing, default=DISPLAY_FOCUS_FOLLOW)
+        )
         self.video_mode_playing_combo.setCurrentIndex(index if index >= 0 else 0)
-        form.addRow("When video is playing:", self.video_mode_playing_combo)
+        form.addRow("When sound button has display focus:", self.video_mode_playing_combo)
 
         self.video_mode_idle_combo = QComboBox(panel)
         for label, value in [
@@ -408,7 +429,11 @@ class VideoDisplayMixin:
         self.video_control_dock.show()
 
     def _on_video_display_route_changed(self, _index: int = 0) -> None:
-        self.video_display_mode_playing = str(self.video_mode_playing_combo.currentData() or "video")
+        self.video_display_mode_playing = normalize_display_focus_override(
+            str(self.video_mode_playing_combo.currentData() or DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
+        self.ndi_output_mode_playing = self.video_display_mode_playing
         self.video_display_mode_idle = str(self.video_mode_idle_combo.currentData() or "blank")
         self._refresh_video_display(force=True)
         if not self._suspend_settings_save:
@@ -467,30 +492,99 @@ class VideoDisplayMixin:
             return slot, MediaProbeInfo()
         return slot, self._media_probe_for_path(path)
 
+    def _default_display_focus_for_slot(self, slot: Optional[SoundButtonData]) -> str:
+        if slot is None or slot.marker or (not slot.assigned):
+            return DISPLAY_FOCUS_NONE
+        if slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return normalize_display_focus(
+                getattr(self, "display_focus_default_automation", DISPLAY_FOCUS_NONE),
+                default=DISPLAY_FOCUS_NONE,
+            )
+        if slot.source_type == UTILITY_SOURCE_TYPE:
+            utility_mode = ""
+            if slot.utility_spec is not None:
+                utility_mode = str(getattr(slot.utility_spec, "mode", "") or "").strip().lower()
+            if utility_mode == UTILITY_MODE_PINK_NOISE:
+                default_focus = getattr(self, "display_focus_default_utility_noise", DISPLAY_FOCUS_COLOUR_BARS)
+            elif utility_mode == UTILITY_MODE_WAVEFORM:
+                default_focus = getattr(self, "display_focus_default_utility_tone", DISPLAY_FOCUS_COLOUR_BARS)
+            elif utility_mode == UTILITY_MODE_METRONOME:
+                default_focus = getattr(self, "display_focus_default_utility_metronome", DISPLAY_FOCUS_METRONOME)
+            else:
+                default_focus = getattr(self, "display_focus_default_utility_blank", DISPLAY_FOCUS_NONE)
+            return normalize_display_focus(default_focus, default=DISPLAY_FOCUS_NONE)
+        lyric_path = str(getattr(slot, "lyric_file", "") or "").strip()
+        if lyric_path:
+            return normalize_display_focus(
+                getattr(self, "display_focus_default_audio_with_lyric", DISPLAY_FOCUS_LYRIC),
+                default=DISPLAY_FOCUS_LYRIC,
+            )
+        if self._slot_has_video_media(slot):
+            return normalize_display_focus(
+                getattr(self, "display_focus_default_video", getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_VIDEO)),
+                default=DISPLAY_FOCUS_VIDEO,
+            )
+        return normalize_display_focus(
+            getattr(self, "display_focus_default_audio", DISPLAY_FOCUS_NONE),
+            default=DISPLAY_FOCUS_NONE,
+        )
+
+    def _resolved_display_focus_for_slot(self, slot: Optional[SoundButtonData], *, persist: bool = False) -> str:
+        if slot is None:
+            return DISPLAY_FOCUS_NONE
+        raw_value = normalize_display_focus(
+            getattr(slot, "display_focus", ""),
+            allow_empty=True,
+            default=DISPLAY_FOCUS_NONE,
+        )
+        focus = raw_value or self._default_display_focus_for_slot(slot)
+        if persist and focus and getattr(slot, "display_focus", "") != focus:
+            slot.display_focus = focus
+        return normalize_display_focus(focus, default=DISPLAY_FOCUS_NONE)
+
+    @staticmethod
+    def _route_mode_for_display_focus(focus: str) -> str:
+        token = normalize_display_focus(focus, default=DISPLAY_FOCUS_NONE)
+        return token if token in DISPLAY_FOCUS_ROUTE_MODES else "blank"
+
     def _active_video_route_mode(self) -> str:
         slot, info = self._current_video_slot_and_probe()
+        if slot is not None and slot.source_type == AUTOMATION_SOURCE_TYPE:
+            return str(self.video_display_mode_idle or "blank")
+        override_focus = normalize_display_focus_override(
+            getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        )
+        slot_focus = self._resolved_display_focus_for_slot(slot, persist=slot is not None)
+        focus = slot_focus if override_focus == DISPLAY_FOCUS_FOLLOW else override_focus
         if bool(getattr(self, "_video_prestart_hold_until_frame", False)):
             expected_path = str(getattr(self, "_video_prestart_hold_expected_path", "") or "").strip()
-            if expected_path and self._path_may_have_video(expected_path):
+            if focus == DISPLAY_FOCUS_VIDEO and expected_path and self._path_may_have_video(expected_path):
                 expected_info = self._media_probe_for_path(expected_path)
                 if expected_info.has_video:
                     return "video"
-            if slot is not None and info.has_video:
+            if focus == DISPLAY_FOCUS_VIDEO and slot is not None and info.has_video:
                 return "video"
         if bool(getattr(self, "_video_force_blank_until_frame", False)):
             expected_path = str(getattr(self, "_video_force_blank_expected_path", "") or "").strip()
-            if expected_path and self._path_may_have_video(expected_path):
+            if focus == DISPLAY_FOCUS_VIDEO and expected_path and self._path_may_have_video(expected_path):
                 expected_info = self._media_probe_for_path(expected_path)
                 if expected_info.has_video:
                     return "blank"
-            if slot is not None and info.has_video:
+            if focus == DISPLAY_FOCUS_VIDEO and slot is not None and info.has_video:
                 return "blank"
-        if slot is None or not info.has_video:
+        if slot is None:
             return str(self.video_display_mode_idle or "blank")
         status = self._stage_playback_status()
         if status == "not_playing":
             return str(self.video_display_mode_idle or "blank")
-        return str(self.video_display_mode_playing or "video")
+        if focus == DISPLAY_FOCUS_NONE:
+            return str(self.video_display_mode_idle or "blank")
+        if focus == DISPLAY_FOCUS_VIDEO and not info.has_video:
+            return str(self.video_display_mode_idle or "blank")
+        if focus == DISPLAY_FOCUS_IMAGE and self._slot_display_image_pixmap(slot).isNull():
+            return str(self.video_display_mode_idle or "blank")
+        return self._route_mode_for_display_focus(focus)
 
     def _active_ndi_route_mode(self) -> str:
         return self._active_video_route_mode()
@@ -612,7 +706,16 @@ class VideoDisplayMixin:
                 candidates.append((width, height))
         if bool(getattr(self, "ndi_output_enabled", False)):
             ndi_mode = self._active_ndi_route_mode()
-            if ndi_mode in {"stage_display", "lyric_display", "backdrop", "blank", "white_screen", "colour_bars"}:
+            if ndi_mode in {
+                DISPLAY_FOCUS_STAGE,
+                DISPLAY_FOCUS_LYRIC,
+                DISPLAY_FOCUS_BACKDROP,
+                DISPLAY_FOCUS_IMAGE,
+                DISPLAY_FOCUS_METRONOME,
+                "blank",
+                DISPLAY_FOCUS_WHITE,
+                DISPLAY_FOCUS_COLOUR_BARS,
+            }:
                 width, height = self._ndi_output_dimensions()
                 if width > 0 and height > 0:
                     candidates.append((width, height))
@@ -639,12 +742,16 @@ class VideoDisplayMixin:
         return desired_output_width, desired_output_height
 
     def _on_video_surface_geometry_changed(self) -> None:
+        self._stage_snapshot_cache_key = None
+        self._stage_snapshot_cache_pixmap = QPixmap()
+        self._lyric_snapshot_cache_key = None
+        self._lyric_snapshot_cache_pixmap = QPixmap()
         mode = self._active_video_route_mode()
         if mode == "video":
             self._clear_video_frame_runtime(preserve_current_frame=True)
             self._refresh_video_display(force=True)
             return
-        if mode in {"stage_display", "lyric_display"}:
+        if mode in {DISPLAY_FOCUS_STAGE, DISPLAY_FOCUS_LYRIC, DISPLAY_FOCUS_METRONOME}:
             self._refresh_video_display(force=True)
 
     def _invalidate_video_playback_sync(self, *, refresh: bool = False) -> None:
@@ -720,6 +827,10 @@ class VideoDisplayMixin:
 
     def _render_widget_snapshot(self, widget: QWidget, width: int = 960, height: int = 540) -> QPixmap:
         widget.resize(width, height)
+        widget.ensurePolished()
+        layout = widget.layout()
+        if layout is not None:
+            layout.activate()
         pixmap = QPixmap(widget.size())
         pixmap.fill(Qt.black)
         widget.render(pixmap)
@@ -727,6 +838,10 @@ class VideoDisplayMixin:
 
     def _render_widget_image(self, widget: QWidget, width: int, height: int) -> QImage:
         widget.resize(max(1, int(width)), max(1, int(height)))
+        widget.ensurePolished()
+        layout = widget.layout()
+        if layout is not None:
+            layout.activate()
         image = QImage(widget.size(), QImage.Format_ARGB32_Premultiplied)
         image.fill(Qt.black)
         painter = QPainter(image)
@@ -740,23 +855,24 @@ class VideoDisplayMixin:
             return width, height
         return 960, 540
 
+    def _stage_snapshot_renderer(self) -> GadgetStageDisplayWindow:
+        window = getattr(self, "_video_stage_snapshot_window", None)
+        if window is None:
+            window = GadgetStageDisplayWindow(self)
+            self._video_stage_snapshot_window = window
+        return window
+
+    def _lyric_snapshot_renderer(self) -> LyricDisplayWindow:
+        window = getattr(self, "_video_lyric_snapshot_window", None)
+        if window is None:
+            window = LyricDisplayWindow(self)
+            window.set_transparent_mode_enabled(False)
+            self._video_lyric_snapshot_window = window
+        return window
+
     def _render_stage_display_snapshot(self, target_width: Optional[int] = None, target_height: Optional[int] = None) -> QPixmap:
         if target_width is None or target_height is None:
             target_width, target_height = self._video_snapshot_dimensions()
-        window = GadgetStageDisplayWindow(self)
-        window.configure_gadgets(self.stage_display_gadgets)
-        window.configure_font_settings(
-            default_font_family=self.stage_display_font_family,
-            default_font_size=self.stage_display_font_size,
-            lyric_font_family=self.stage_display_lyric_font_family,
-            lyric_font_size=self.stage_display_lyric_font_size,
-            lyric_role_colors=self.stage_display_lyric_role_colors,
-            lyric_role_sizes=self.stage_display_lyric_role_sizes,
-            lyric_auto_adjust_role_sizes=self.stage_display_lyric_auto_adjust_role_sizes,
-            lyric_role_scale_percents=self.stage_display_lyric_role_scale_percents,
-            lyric_role_bold=self.stage_display_lyric_role_bold,
-            lyric_role_italic=self.stage_display_lyric_role_italic,
-        )
         total_ms = max(0, self._transport_total_ms())
         display_pos = max(0, int(self.seek_slider.value()))
         progress = 0 if total_ms <= 0 else int((display_pos / float(total_ms)) * 100)
@@ -775,28 +891,122 @@ class VideoDisplayMixin:
                 self.current_playing,
                 player,
             )
+        total_text = self.total_time.text().strip() or "00:00:00"
+        elapsed_text = self.elapsed_time.text().strip() or "00:00:00"
+        remaining_text = self.remaining_time.text().strip() or "00:00:00"
+        lyric_text = self._stage_display_current_lyric()
+        next_song = self._next_stage_song_name()
+        progress_text = self.progress_label.text().strip()
+        progress_style = self._build_progress_bar_stylesheet(progress_ratio, cue_in_ms, cue_out_ms)
+        alert_active = self._stage_alert_active()
+        alert_text = self._stage_alert_message if alert_active else ""
+        playback_status = self._stage_playback_status()
+        cache_key = _freeze_snapshot_token(
+            (
+                int(target_width),
+                int(target_height),
+                self.stage_display_gadgets,
+                self.stage_display_font_family,
+                self.stage_display_font_size,
+                self.stage_display_lyric_font_family,
+                self.stage_display_lyric_font_size,
+                self.stage_display_lyric_role_colors,
+                self.stage_display_lyric_role_sizes,
+                self.stage_display_lyric_auto_adjust_role_sizes,
+                self.stage_display_lyric_role_scale_percents,
+                self.stage_display_lyric_role_bold,
+                self.stage_display_lyric_role_italic,
+                total_text,
+                elapsed_text,
+                remaining_text,
+                int(progress),
+                song_name,
+                lyric_text,
+                current_automation_comment,
+                next_automation_comment,
+                next_song,
+                progress_text,
+                progress_style,
+                alert_text,
+                playback_status,
+            )
+        )
+        if cache_key == getattr(self, "_stage_snapshot_cache_key", None):
+            cached = getattr(self, "_stage_snapshot_cache_pixmap", QPixmap())
+            if not cached.isNull():
+                return QPixmap(cached)
+        window = self._stage_snapshot_renderer()
+        window.configure_gadgets(self.stage_display_gadgets)
+        window.configure_font_settings(
+            default_font_family=self.stage_display_font_family,
+            default_font_size=self.stage_display_font_size,
+            lyric_font_family=self.stage_display_lyric_font_family,
+            lyric_font_size=self.stage_display_lyric_font_size,
+            lyric_role_colors=self.stage_display_lyric_role_colors,
+            lyric_role_sizes=self.stage_display_lyric_role_sizes,
+            lyric_auto_adjust_role_sizes=self.stage_display_lyric_auto_adjust_role_sizes,
+            lyric_role_scale_percents=self.stage_display_lyric_role_scale_percents,
+            lyric_role_bold=self.stage_display_lyric_role_bold,
+            lyric_role_italic=self.stage_display_lyric_role_italic,
+        )
         window.update_values(
-            total_time=self.total_time.text().strip() or "00:00:00",
-            elapsed=self.elapsed_time.text().strip() or "00:00:00",
-            remaining=self.remaining_time.text().strip() or "00:00:00",
+            total_time=total_text,
+            elapsed=elapsed_text,
+            remaining=remaining_text,
             progress_percent=progress,
             song_name=song_name,
-            lyric=self._stage_display_current_lyric(),
+            lyric=lyric_text,
             automation_comment_current=current_automation_comment,
             automation_comment_next=next_automation_comment,
-            next_song=self._next_stage_song_name(),
-            progress_text=self.progress_label.text().strip(),
-            progress_style=self._build_progress_bar_stylesheet(progress_ratio, cue_in_ms, cue_out_ms),
+            next_song=next_song,
+            progress_text=progress_text,
+            progress_style=progress_style,
         )
-        window.set_alert(self._stage_alert_message, self._stage_alert_active())
-        window.set_playback_status(self._stage_playback_status())
-        return self._render_widget_snapshot(window, target_width, target_height)
+        window.set_alert(self._stage_alert_message, alert_active)
+        window.set_playback_status(playback_status)
+        pixmap = self._render_widget_snapshot(window, target_width, target_height)
+        self._stage_snapshot_cache_key = cache_key
+        self._stage_snapshot_cache_pixmap = QPixmap(pixmap)
+        return pixmap
 
     def _render_lyric_display_snapshot(self, target_width: Optional[int] = None, target_height: Optional[int] = None) -> QPixmap:
         if target_width is None or target_height is None:
             target_width, target_height = self._video_snapshot_dimensions()
-        window = LyricDisplayWindow(self)
-        window.set_transparent_mode_enabled(False)
+        has_active_track = False
+        lyric_path = ""
+        position_ms = 0
+        if self.current_playing is not None:
+            slot = self._slot_for_key(self.current_playing)
+            if slot is not None:
+                has_active_track = True
+                lyric_path = str(slot.lyric_file or "").strip()
+                position_ms = self._lyric_position_ms_for_key(self.current_playing)
+        cache_key = _freeze_snapshot_token(
+            (
+                int(target_width),
+                int(target_height),
+                self.lyric_display_font_family,
+                self.lyric_display_font_size,
+                self.lyric_display_show_not_playing_message,
+                self.lyric_display_previous_line_count,
+                self.lyric_display_next_line_count,
+                self.lyric_display_role_colors,
+                self.lyric_display_role_sizes,
+                self.lyric_display_auto_adjust_role_sizes,
+                self.lyric_display_role_scale_percents,
+                self.lyric_display_role_bold,
+                self.lyric_display_role_italic,
+                has_active_track,
+                lyric_path,
+                int(position_ms),
+                bool(self._lyric_force_blank),
+            )
+        )
+        if cache_key == getattr(self, "_lyric_snapshot_cache_key", None):
+            cached = getattr(self, "_lyric_snapshot_cache_pixmap", QPixmap())
+            if not cached.isNull():
+                return QPixmap(cached)
+        window = self._lyric_snapshot_renderer()
         window.configure_display_settings(
             font_family=self.lyric_display_font_family,
             font_size=self.lyric_display_font_size,
@@ -810,15 +1020,6 @@ class VideoDisplayMixin:
             role_bold=self.lyric_display_role_bold,
             role_italic=self.lyric_display_role_italic,
         )
-        has_active_track = False
-        lyric_path = ""
-        position_ms = 0
-        if self.current_playing is not None:
-            slot = self._slot_for_key(self.current_playing)
-            if slot is not None:
-                has_active_track = True
-                lyric_path = str(slot.lyric_file or "").strip()
-                position_ms = self._lyric_position_ms_for_key(self.current_playing)
         window.update_playback_state(
             has_active_track=has_active_track,
             lyric_path=lyric_path,
@@ -826,7 +1027,10 @@ class VideoDisplayMixin:
             force_blank=bool(self._lyric_force_blank),
             force=True,
         )
-        return self._render_widget_snapshot(window, target_width, target_height)
+        pixmap = self._render_widget_snapshot(window, target_width, target_height)
+        self._lyric_snapshot_cache_key = cache_key
+        self._lyric_snapshot_cache_pixmap = QPixmap(pixmap)
+        return pixmap
 
     def _video_display_lyric_role_styles(self) -> dict[str, dict[str, object]]:
         if self.video_display_lyric_auto_adjust_role_sizes:
@@ -887,6 +1091,107 @@ class VideoDisplayMixin:
             role_styles=self._video_display_lyric_role_styles(),
         )
 
+    def _slot_display_image_path(self, slot: Optional[SoundButtonData]) -> str:
+        if slot is None:
+            return ""
+        return str(getattr(slot, "display_image_path", "") or "").strip()
+
+    def _slot_display_image_pixmap(self, slot: Optional[SoundButtonData]) -> QPixmap:
+        path = self._slot_display_image_path(slot)
+        if not path:
+            return QPixmap()
+        cache_key = os.path.normcase(os.path.normpath(path))
+        if cache_key == str(getattr(self, "_display_image_cache_path", "") or ""):
+            return QPixmap(getattr(self, "_display_image_cache_pixmap", QPixmap()))
+        pixmap = QPixmap(path)
+        self._display_image_cache_path = cache_key
+        self._display_image_cache_pixmap = QPixmap(pixmap)
+        return pixmap
+
+    def _render_metronome_display_snapshot(self, slot: Optional[SoundButtonData], width: int, height: int) -> QPixmap:
+        pixmap = QPixmap(max(1, int(width)), max(1, int(height)))
+        pixmap.fill(QColor("#12151B"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        title = str(getattr(slot, "title", "") or "").strip() or "Metronome"
+        tempo_bpm = 120.0
+        numerator = 4
+        denominator = 4
+        if slot is not None and slot.utility_spec is not None:
+            try:
+                tempo_bpm = max(1.0, float(getattr(slot.utility_spec, "tempo_bpm", 120.0) or 120.0))
+            except Exception:
+                tempo_bpm = 120.0
+            try:
+                numerator = max(1, int(getattr(slot.utility_spec, "time_signature_num", 4) or 4))
+            except Exception:
+                numerator = 4
+            try:
+                denominator = int(getattr(slot.utility_spec, "time_signature_den", 4) or 4)
+            except Exception:
+                denominator = 4
+        position_ms = max(0, int(self._current_video_display_position_ms()))
+        beat_ms = max(1.0, 60000.0 / tempo_bpm)
+        beat_index = int(position_ms / beat_ms) % max(1, numerator)
+        beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
+        accent = QColor("#F2C94C")
+        title_font = QFont(self.font())
+        title_font.setBold(True)
+        title_font.setPointSize(max(16, min(34, pixmap.height() // 14)))
+        painter.setFont(title_font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(QRect(0, 24, pixmap.width(), 56), Qt.AlignHCenter | Qt.AlignTop, title)
+        bpm_font = QFont(self.font())
+        bpm_font.setBold(True)
+        bpm_font.setPointSize(max(24, min(72, pixmap.height() // 6)))
+        painter.setFont(bpm_font)
+        painter.setPen(accent)
+        painter.drawText(
+            QRect(0, max(48, pixmap.height() // 5), pixmap.width(), max(80, pixmap.height() // 4)),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            f"{int(round(tempo_bpm))} BPM",
+        )
+        sub_font = QFont(self.font())
+        sub_font.setPointSize(max(12, min(24, pixmap.height() // 18)))
+        painter.setFont(sub_font)
+        painter.setPen(QColor("#D7DCE5"))
+        painter.drawText(
+            QRect(0, max(110, pixmap.height() // 2 - 10), pixmap.width(), 36),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            f"{numerator}/{denominator}",
+        )
+        beat_area = QRect(
+            40,
+            max(140, int(pixmap.height() * 0.62)),
+            max(120, pixmap.width() - 80),
+            max(60, int(pixmap.height() * 0.18)),
+        )
+        spacing = max(12, beat_area.width() // max(2, numerator * 2))
+        radius = max(12, min(40, (beat_area.width() - ((numerator - 1) * spacing)) // max(2, numerator * 2)))
+        total_width = (radius * 2 * numerator) + (spacing * max(0, numerator - 1))
+        start_x = beat_area.x() + max(0, (beat_area.width() - total_width) // 2)
+        center_y = beat_area.y() + (beat_area.height() // 2)
+        for idx in range(numerator):
+            rect = QRect(start_x + idx * ((radius * 2) + spacing), center_y - radius, radius * 2, radius * 2)
+            fill = QColor("#2D3748")
+            border = QColor("#667085")
+            if idx == 0:
+                fill = QColor("#4E5D78")
+            if idx == beat_index:
+                fill = QColor("#F2C94C")
+                border = QColor("#FFF4C2")
+            painter.setPen(QPen(border, 2))
+            painter.setBrush(fill)
+            painter.drawEllipse(rect)
+            if idx == beat_index:
+                inner = rect.adjusted(radius // 2, radius // 2, -(radius // 2), -(radius // 2))
+                pulse = max(0, int((1.0 - beat_progress) * (radius // 3)))
+                painter.setBrush(QColor(255, 255, 255, 180))
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(inner.adjusted(-pulse, -pulse, pulse, pulse))
+        painter.end()
+        return pixmap
+
     def _sync_output_surface_widget(self, widget: Optional[VideoDisplayWidget], mode: str, *, force: bool = False) -> None:
         if widget is None:
             return
@@ -900,7 +1205,8 @@ class VideoDisplayMixin:
         widget.set_backdrop_pixmap(self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap())
         backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
         widget.configure_backdrop(show_message=bool(backdrop_message), message_text=backdrop_message)
-        if mode == "video":
+        active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+        if mode == DISPLAY_FOCUS_VIDEO:
             runtime_image = self._runtime_video_destination_frame("local_program")
             if not runtime_image.isNull():
                 widget.set_video_pixmap(QPixmap.fromImage(runtime_image))
@@ -909,10 +1215,16 @@ class VideoDisplayMixin:
             widget.set_content_pixmap(QPixmap())
             widget.set_lyric_html(self._current_video_lyric_html())
             return
-        if mode == "stage_display":
+        if mode == DISPLAY_FOCUS_STAGE:
             widget.set_content_pixmap(self._render_stage_display_snapshot())
-        elif mode == "lyric_display":
+        elif mode == DISPLAY_FOCUS_LYRIC:
             widget.set_content_pixmap(self._render_lyric_display_snapshot())
+        elif mode == DISPLAY_FOCUS_IMAGE:
+            widget.set_content_pixmap(self._slot_display_image_pixmap(active_slot))
+        elif mode == DISPLAY_FOCUS_METRONOME:
+            widget.set_content_pixmap(
+                self._render_metronome_display_snapshot(active_slot, max(1, widget.width()), max(1, widget.height()))
+            )
         else:
             widget.set_content_pixmap(QPixmap())
         widget.set_video_pixmap(QPixmap())

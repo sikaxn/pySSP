@@ -369,6 +369,23 @@ class TimecodeMixin:
         self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
 
+    def _timecode_on_transport_seek(self) -> None:
+        now = time.perf_counter()
+        if now < self._timecode_event_guard_until:
+            return
+        follow_ms = float(self._timecode_current_follow_ms())
+        reference_player, _reference_key = self._timecode_reference_context()
+        self._timecode_follow_anchor_ms = follow_ms
+        self._timecode_follow_anchor_t = now
+        self._timecode_follow_playing = bool(
+            reference_player is not None and reference_player.state() == ExternalMediaPlayer.PlayingState
+        )
+        self._timecode_follow_intent_pending = False
+        self._timecode_last_media_ms = follow_ms
+        self._timecode_last_media_t = now
+        self._ltc_sender.request_resync()
+        self._mtc_sender.request_resync()
+
     def _refresh_timecode_panel(self) -> None:
         self._update_timecode_status_label()
         if self.timecode_panel is None:

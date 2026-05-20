@@ -28,6 +28,7 @@ from pyssp.utility_audio import (
     UtilitySoundSpec,
     is_utility_source_payload,
     normalize_utility_spec,
+    utility_is_infinite,
 )
 
 _DECODER_READY = False
@@ -1518,15 +1519,18 @@ class ExternalMediaPlayer(QObject):
                 if self._streaming_mode or self._utility_spec is not None:
                     return max(0, int((self._source_pos / float(self._sample_rate)) * 1000.0))
                 return 0
+            infinite_utility = self._utility_spec is not None and utility_is_infinite(self._utility_spec)
             pos_samples = self._source_pos
             if self._state == self.PlayingState and (self._source_frames is not None or self._utility_spec is not None):
                 elapsed = max(0.0, time.perf_counter() - self._source_pos_anchor_t)
                 pos_samples = self._source_pos_anchor + (elapsed * self._sample_rate * self._source_pos_anchor_tempo)
                 if self._source_frames is not None:
                     pos_samples = max(0.0, min(float(len(self._source_frames)), pos_samples))
-                elif self._utility_spec is not None:
+                elif self._utility_spec is not None and (not infinite_utility):
                     pos_samples = max(0.0, min(float(_utility_duration_frames(self._utility_spec, self._sample_rate)), pos_samples))
             pos_ms = int((pos_samples / float(self._sample_rate)) * 1000.0)
+            if infinite_utility:
+                return max(0, pos_ms)
             return max(0, min(pos_ms, self._duration_ms))
 
     def duration(self) -> int:
@@ -2126,6 +2130,12 @@ class ExternalMediaPlayer(QObject):
         spec = self._utility_spec
         if spec is None:
             return None
+        if utility_is_infinite(spec):
+            tempo_ratio = max(0.7, min(1.3, 1.0 + (self._dsp_config.tempo_pct / 100.0)))
+            idx = self._source_pos + (np.arange(frames, dtype=np.float64) * tempo_ratio)
+            block = _generate_utility_samples(spec, idx, self._sample_rate, self._channels)
+            self._source_pos += float(frames) * tempo_ratio
+            return block.astype(np.float32, copy=False)
         duration_frames = _utility_duration_frames(spec, self._sample_rate)
         if duration_frames <= 0:
             return None
@@ -2178,6 +2188,8 @@ class ExternalMediaPlayer(QObject):
         if self._duration_ms <= 0:
             return 0
         pos = int((self._source_pos / float(self._sample_rate)) * 1000.0)
+        if self._utility_spec is not None and utility_is_infinite(self._utility_spec):
+            return max(0, pos)
         return max(0, min(pos, self._duration_ms))
 
     def _poll(self) -> None:

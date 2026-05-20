@@ -22,6 +22,7 @@ from pyssp.midi_control import normalize_midi_binding
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
+    UTILITY_COMPAT_DURATION_MS,
     UTILITY_UNSUPPORTED_MARKER_TEXT,
     UtilitySoundSpec,
     normalize_utility_spec,
@@ -265,10 +266,14 @@ def _parse_utility_slot_from_section(
     if source_type != UTILITY_SOURCE_TYPE:
         return None
     duration_ms = parse_utility_duration_hhmmssmmm(section.get(f"pyssputilityduration{slot_index}", "").strip())
+    infinite = str(section.get(f"pyssputilityinfinite{slot_index}", "0")).strip() in {"1", "true", "True"}
     spec = normalize_utility_spec(
         {
             "mode": section.get(f"pyssputilitymode{slot_index}", "").strip(),
-            "duration_ms": 1000 if duration_ms is None else duration_ms,
+            "duration_ms": (
+                UTILITY_COMPAT_DURATION_MS if duration_ms is None and infinite else (1000 if duration_ms is None else duration_ms)
+            ),
+            "infinite": infinite,
             "waveform_type": section.get(f"pyssputilitywaveform{slot_index}", "").strip(),
             "frequency_hz": section.get(f"pyssputilityfreq{slot_index}", "").strip(),
             "tempo_bpm": section.get(f"pyssputilitytempo{slot_index}", "").strip(),
@@ -282,8 +287,14 @@ def _parse_utility_slot_from_section(
     )
     title = _normalize_set_path_string(section.get(f"pyssputilitytitle{slot_index}", "").strip())
     notes = _normalize_set_path_string(section.get(f"pyssputilitynotes{slot_index}", "").strip())
-    lyric_file = _normalize_set_path_string(section.get(f"pyssputilitylyric{slot_index}", "").strip())
-    automation_script_path = _normalize_set_path_string(section.get(f"pysspautoscript{slot_index}", "").strip())
+    lyric_file = _normalize_set_path_string(
+        section.get(f"pyssputilitylyric{slot_index}", "").strip()
+        or section.get(f"pyssplyric{slot_index}", "").strip()
+    )
+    automation_script_path = _normalize_set_path_string(
+        section.get(f"pysspautoscript{slot_index}", "").strip()
+        or section.get(f"pyssputilityautoscript{slot_index}", "").strip()
+    )
     activity_code = section.get(f"activity{slot_index}", "").strip()
     played = str(section.get(f"pyssputilityplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
     cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(

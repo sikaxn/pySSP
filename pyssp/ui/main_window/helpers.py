@@ -133,9 +133,9 @@ def wrap_text_lines(value: str, max_chars: int, max_lines: int) -> List[str]:
     return lines[:max_lines] or [""]
 
 
-def format_sound_button_label(title: str, duration_ms: int, suffix: str, max_chars: int) -> str:
+def format_sound_button_label(title: str, duration_ms: int, suffix: str, max_chars: int, *, infinite: bool = False) -> str:
     title_lines = wrap_text_lines(title, max_chars, 2)
-    footer = format_time(duration_ms)
+    footer = "inf" if infinite else format_time(duration_ms)
     if suffix:
         footer = f"{footer} {suffix.strip()}"
     return "\n".join([*title_lines, footer])

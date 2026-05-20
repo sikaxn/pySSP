@@ -360,6 +360,67 @@ def test_load_set_marker_fallback_without_utility_source_type_stays_marker(tmp_p
     assert slot.utility_spec is None
 
 
+def test_load_set_file_parses_infinite_utility_slot_with_24h_compat_duration(tmp_path):
+    set_path = tmp_path / "utility_infinite.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "pysspsourcetype1=utility",
+                "pyssputilitymode1=blank",
+                "pyssputilityduration1=24:00:00:000",
+                "pyssputilityinfinite1=1",
+                "pyssputilitytitle1=Infinite Blank",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_set_file(str(set_path))
+
+    slot = result.pages["A"][0][0]
+    assert slot.source_type == UTILITY_SOURCE_TYPE
+    assert slot.duration_ms == 24 * 60 * 60 * 1000
+    assert slot.utility_spec is not None
+    assert slot.utility_spec.infinite is True
+    assert slot.utility_spec.duration_ms == 24 * 60 * 60 * 1000
+
+
+def test_load_set_utility_slot_accepts_generic_lyric_and_autoscript_fields_for_compatibility(tmp_path):
+    set_path = tmp_path / "utility_compat_metadata.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "pysspsourcetype1=utility",
+                "pyssputilitymode1=blank",
+                "pyssputilityduration1=00:00:05:000",
+                "pyssputilitytitle1=Compat Utility",
+                "pyssplyric1=C:\\\\Lyrics\\\\compat_countin.lrc",
+                "pysspautoscript1=C:\\\\Scripts\\\\compat_countin.pysspautoscript",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_set_file(str(set_path))
+
+    slot = result.pages["A"][0][0]
+    assert slot.source_type == UTILITY_SOURCE_TYPE
+    assert slot.lyric_file == "C:\\Lyrics\\compat_countin.lrc"
+    assert slot.automation_script_path == "C:\\Scripts\\compat_countin.pysspautoscript"
+
+
 def test_load_set_automation_sound_button_reconstructs_source_from_pyssp_fields(tmp_path):
     set_path = tmp_path / "automation.set"
     set_path.write_text(

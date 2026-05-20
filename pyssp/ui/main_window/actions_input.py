@@ -18,6 +18,7 @@ from pyssp.utility_audio import (
     normalize_utility_spec,
     utility_display_name,
     utility_duration_hhmmssmmm,
+    utility_storage_duration_ms,
 )
 
 
@@ -1095,9 +1096,23 @@ class ActionsInputMixin:
             invalidate_video(refresh=False)
         self.player.setPosition(absolute)
         self._sync_shadow_transport_from_primary(self.player)
-        self.seek_slider.setValue(clamped_display)
         self._apply_main_jog_outside_cue_behavior(absolute)
-        self._mtc_sender.request_resync()
+        if self.current_playing is not None or self._is_playback_in_progress():
+            self._process_automation_script_player(self.player)
+            self._last_ui_position_ms = absolute
+            effective_display = self._transport_display_ms_for_absolute(absolute)
+            effective_total_ms = self._transport_total_ms()
+            self.seek_slider.setValue(effective_display)
+            self.elapsed_time.setText(format_clock_time(effective_display))
+            remaining = max(0, effective_total_ms - effective_display)
+            self.remaining_time.setText(self._transport_remaining_label_text(remaining))
+            self._refresh_main_jog_meta(effective_display, effective_total_ms)
+            self._timecode_on_transport_seek()
+        else:
+            self.seek_slider.setValue(0)
+        self._refresh_timecode_panel()
+        self._refresh_stage_display()
+        self._refresh_lyric_display()
         refresh_video = getattr(self, "_refresh_video_display", None)
         if callable(refresh_video):
             refresh_video(force=True)
@@ -1107,7 +1122,7 @@ class ActionsInputMixin:
         if self._is_scrubbing:
             self.elapsed_time.setText(format_clock_time(value))
             remaining = max(0, self._transport_total_ms() - value)
-            self.remaining_time.setText(format_clock_time(remaining))
+            self.remaining_time.setText(self._transport_remaining_label_text(remaining))
             total_ms = self._transport_total_ms()
             progress = 0 if total_ms == 0 else int((value / total_ms) * 100)
             self._refresh_main_jog_meta(value, total_ms)
@@ -1115,7 +1130,7 @@ class ActionsInputMixin:
     def _refresh_main_transport_display(self) -> None:
         total_ms = self._transport_total_ms()
         self.seek_slider.setRange(0, total_ms)
-        self.total_time.setText(format_clock_time(total_ms))
+        self.total_time.setText(self._transport_total_label_text(total_ms))
         current_abs = 0
         if self.player is not None:
             try:
@@ -1127,7 +1142,7 @@ class ActionsInputMixin:
             self.seek_slider.setValue(display)
         self.elapsed_time.setText(format_clock_time(display))
         remaining = max(0, total_ms - display)
-        self.remaining_time.setText(format_clock_time(remaining))
+        self.remaining_time.setText(self._transport_remaining_label_text(remaining))
         progress = 0 if total_ms == 0 else int((display / total_ms) * 100)
         self._refresh_main_jog_meta(display, total_ms)
         self._refresh_timecode_panel()
@@ -1488,17 +1503,22 @@ class ActionsInputMixin:
                             lines.append(f"pysspsourcetype{slot_index}={UTILITY_SOURCE_TYPE}")
                             lines.append(f"pyssputilitymode{slot_index}={slot.utility_spec.mode}")
                             lines.append(
-                                f"pyssputilityduration{slot_index}={utility_duration_hhmmssmmm(slot.utility_spec.duration_ms)}"
+                                f"pyssputilityduration{slot_index}="
+                                f"{utility_duration_hhmmssmmm(utility_storage_duration_ms(slot.utility_spec))}"
                             )
+                            if bool(slot.utility_spec.infinite):
+                                lines.append(f"pyssputilityinfinite{slot_index}=1")
                             lines.append(f"pyssputilitytitle{slot_index}={title}")
                             lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
                             if notes:
                                 lines.append(f"pyssputilitynotes{slot_index}={notes}")
                             if slot.lyric_file:
+                                lyric_path = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                                 lines.append(
                                     f"pyssputilitylyric{slot_index}="
-                                    f"{clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))}"
+                                    f"{lyric_path}"
                                 )
+                                lines.append(f"pyssplyric{slot_index}={lyric_path}")
                             automation_script_path = clean_set_value(
                                 automation_script_overrides.get(slot_key, slot.automation_script_path)
                             )
@@ -3125,7 +3145,7 @@ class ActionsInputMixin:
         v = int(value) & 0x7F
         if v == 64:
             return 0
-        mode_name = MainWindow._normalize_midi_relative_mode(mode)
+        mode_name = ActionsInputMixin._normalize_midi_relative_mode(mode)
         if mode_name == "binary_offset":
             return v - 64
         if mode_name == "sign_magnitude":
@@ -3145,7 +3165,7 @@ class ActionsInputMixin:
     def _midi_pitch_relative_delta(data1: int, data2: int) -> int:
         # Many controllers encode relative pitch as 7-bit value in data2.
         if int(data1) == 0:
-            return MainWindow._midi_cc_relative_delta(data2)
+            return ActionsInputMixin._midi_cc_relative_delta(data2)
         # Fallback to signed delta around center for full 14-bit pitch bend.
         value14 = (int(data1) & 0x7F) | ((int(data2) & 0x7F) << 7)
         if value14 == 8192:
@@ -3256,9 +3276,7 @@ class ActionsInputMixin:
                 current = int(self.seek_slider.value())
                 total_ms = self._transport_total_ms()
                 next_display = max(0, min(total_ms, current + (int(self.midi_rotary_jog_step_ms) * raw_delta)))
-                absolute = self._transport_absolute_ms_for_display(next_display)
-                self.player.setPosition(max(0, int(absolute)))
-                self.seek_slider.setValue(next_display)
+                self._seek_transport_display_ms(next_display)
                 return True
             return False
         return False

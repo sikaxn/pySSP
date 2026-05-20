@@ -112,3 +112,7 @@ def test_midi_output_prefers_coremidi_backend_for_prefixed_devices(monkeypatch) 
     assert core.short_messages == [(0xF1, 0x01, 0)]
     assert core.long_messages == [bytes([0xF0, 0x7E, 0xF7])]
     assert core._opened is False
+
+
+def test_ms_to_timecode_string_wraps_after_24_hours() -> None:
+    assert timecode.ms_to_timecode_string((24 * 60 * 60 * 1000) + 1000, 30.0) == "00:00:01:00"

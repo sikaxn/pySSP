@@ -12,6 +12,7 @@ from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
     UtilitySoundSpec,
+    utility_is_infinite,
 )
 
 __all__ = [
@@ -126,7 +127,13 @@ class SoundButtonData:
         if has_timecode:
             parts.append("T")
         suffix = " ".join(parts)
-        return format_sound_button_label(self.title, self.duration_ms, suffix, 26)
+        return format_sound_button_label(
+            self.title,
+            self.duration_ms,
+            suffix,
+            26,
+            infinite=(self.source_type == UTILITY_SOURCE_TYPE and utility_is_infinite(self.utility_spec)),
+        )
 
 
 class SoundButton(QPushButton):

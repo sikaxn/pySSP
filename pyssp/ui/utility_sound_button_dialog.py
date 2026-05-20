@@ -31,6 +31,7 @@ from pyssp.midi_control import (
 )
 from pyssp.ui.edit_sound_button_dialog import SoundHotkeyEdit
 from pyssp.utility_audio import (
+    UTILITY_COMPAT_DURATION_MS,
     UTILITY_MODE_BLANK,
     UTILITY_MODE_METRONOME,
     UTILITY_MODE_PINK_NOISE,
@@ -118,6 +119,13 @@ class UtilitySoundButtonDialog(QDialog):
         duration_layout.setContentsMargins(0, 0, 0, 0)
         duration_layout.setSpacing(6)
         self.duration_edit = UtilityDurationEdit(spec.duration_ms, self)
+        self._saved_finite_duration_ms = max(
+            1,
+            min(
+                UTILITY_COMPAT_DURATION_MS,
+                60000 if bool(spec.infinite) else int(spec.duration_ms),
+            ),
+        )
         self.duration_up_btn = QPushButton("▲")
         self.duration_down_btn = QPushButton("▼")
         self.duration_up_btn.setToolTip("+1s")
@@ -128,6 +136,10 @@ class UtilitySoundButtonDialog(QDialog):
         duration_layout.addWidget(self.duration_up_btn)
         duration_layout.addWidget(self.duration_down_btn)
         form.addRow(tr("Duration"), duration_row)
+
+        self.infinite_duration_checkbox = QCheckBox(tr("Infinite (older pySSP will play 24 hours)"))
+        self.infinite_duration_checkbox.setChecked(bool(spec.infinite))
+        form.addRow("", self.infinite_duration_checkbox)
 
         self.waveform_type_combo = QComboBox()
         self.waveform_type_combo.addItem(tr("Sine"), UTILITY_WAVEFORM_SINE)
@@ -233,12 +245,14 @@ class UtilitySoundButtonDialog(QDialog):
         _sync_slider_enabled(self.custom_volume_checkbox.isChecked())
 
         self.mode_combo.currentIndexChanged.connect(self._refresh_mode_visibility)
+        self.infinite_duration_checkbox.toggled.connect(self._sync_infinite_duration_state)
         root.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
         self._refresh_mode_visibility()
+        self._sync_infinite_duration_state(self.infinite_duration_checkbox.isChecked())
         localize_widget_tree(self, language)
 
     def values(self) -> tuple[str, str, str, str, UtilitySoundSpec, Optional[int], str, str]:
@@ -251,7 +265,8 @@ class UtilitySoundButtonDialog(QDialog):
         spec = normalize_utility_spec(
             {
                 "mode": self.mode_combo.currentData(),
-                "duration_ms": duration_ms,
+                "duration_ms": UTILITY_COMPAT_DURATION_MS if self.infinite_duration_checkbox.isChecked() else duration_ms,
+                "infinite": self.infinite_duration_checkbox.isChecked(),
                 "waveform_type": self.waveform_type_combo.currentData(),
                 "frequency_hz": self.frequency_spin.value(),
                 "tempo_bpm": self.tempo_spin.value(),
@@ -368,6 +383,20 @@ class UtilitySoundButtonDialog(QDialog):
         if current is None:
             current = 60000
         self.duration_edit.set_duration_ms(max(1, int(current) + int(delta_ms)))
+
+    def _sync_infinite_duration_state(self, checked: bool) -> None:
+        enabled = not bool(checked)
+        if checked:
+            current = self.duration_edit.duration_ms()
+            if current is not None and int(current) < UTILITY_COMPAT_DURATION_MS:
+                self._saved_finite_duration_ms = max(1, int(current))
+            self.duration_edit.set_duration_ms(UTILITY_COMPAT_DURATION_MS)
+        else:
+            restore_ms = max(1, min(UTILITY_COMPAT_DURATION_MS, int(self._saved_finite_duration_ms or 60000)))
+            self.duration_edit.set_duration_ms(restore_ms)
+        self.duration_edit.setEnabled(enabled)
+        self.duration_up_btn.setEnabled(enabled)
+        self.duration_down_btn.setEnabled(enabled)
 
     @staticmethod
     def _set_combo_data(combo: QComboBox, value: object, fallback: object) -> None:

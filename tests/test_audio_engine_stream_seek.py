@@ -671,3 +671,43 @@ def test_set_media_async_supports_utility_payload(monkeypatch):
         assert player.position() == 1500
     finally:
         player.deleteLater()
+
+
+def test_infinite_utility_keeps_playing_and_position_advances_past_24h(monkeypatch):
+    monkeypatch.setattr(audio_engine, "_ensure_decoder", lambda: None)
+    monkeypatch.setattr(audio_engine.pygame.mixer, "get_init", lambda: (44100, -16, 2))
+    monkeypatch.setattr(audio_engine.ExternalMediaPlayer, "_create_stream", lambda self: _DummyStream())
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    player = audio_engine.ExternalMediaPlayer()
+    compat_ms = 24 * 60 * 60 * 1000
+    try:
+        request_id = player.setMediaAsync(
+            {
+                "source_type": "utility",
+                "utility_spec": {
+                    "mode": "waveform",
+                    "duration_ms": compat_ms,
+                    "infinite": True,
+                    "waveform_type": "sine",
+                    "frequency_hz": 440,
+                },
+            }
+        )
+        assert _wait_for(lambda: player.duration() == compat_ms, app, timeout=2.0)
+        assert request_id >= 0
+
+        player.setPosition(compat_ms - 250)
+        assert player.position() == compat_ms - 250
+
+        player.play()
+        block = player.renderAudioBlock(int(player.sampleRate()))
+
+        assert block.shape == (int(player.sampleRate()), 2)
+        assert player.state() == player.PlayingState
+        assert player.position() > compat_ms
+        assert player.enginePositionMs() > compat_ms
+    finally:
+        player.deleteLater()

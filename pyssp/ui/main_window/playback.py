@@ -11,7 +11,7 @@ from pyssp.automation_command import (
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
-from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec
+from pyssp.utility_audio import FILE_SOURCE_TYPE, normalize_utility_spec, utility_is_infinite
 
 
 @dataclass
@@ -26,6 +26,25 @@ class _TrackEndTransitionState:
 
 
 class PlaybackMixin:
+    def _current_transport_is_infinite_utility(self) -> bool:
+        slot_key = self.current_playing
+        if slot_key is None:
+            return False
+        slot = self._slot_for_key(slot_key)
+        if slot is None or slot.source_type != "utility":
+            return False
+        return utility_is_infinite(slot.utility_spec)
+
+    def _transport_total_label_text(self, total_ms: int) -> str:
+        if self._current_transport_is_infinite_utility():
+            return "inf"
+        return format_clock_time(total_ms)
+
+    def _transport_remaining_label_text(self, remaining_ms: int) -> str:
+        if self._current_transport_is_infinite_utility():
+            return "inf"
+        return format_clock_time(remaining_ms)
+
     @staticmethod
     def _is_audio_player(player) -> bool:
         return isinstance(player, (ExternalMediaPlayer, AudioPlayerProxy))
@@ -599,8 +618,9 @@ class PlaybackMixin:
         display_pos = self._transport_display_ms_for_absolute(0)
         total_ms = self._transport_total_ms()
         self.seek_slider.setValue(display_pos)
+        self.total_time.setText(self._transport_total_label_text(total_ms))
         self.elapsed_time.setText(format_clock_time(display_pos))
-        self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))
+        self.remaining_time.setText(self._transport_remaining_label_text(max(0, total_ms - display_pos)))
         self._refresh_main_jog_meta(display_pos, total_ms)
         if self.main_progress_display_mode == "waveform":
             self._schedule_main_waveform_refresh(0)
@@ -1206,7 +1226,7 @@ class PlaybackMixin:
         self.elapsed_time.setText(format_clock_time(display_pos))
         total_ms = self._transport_total_ms()
         remaining = max(0, total_ms - display_pos)
-        self.remaining_time.setText(format_clock_time(remaining))
+        self.remaining_time.setText(self._transport_remaining_label_text(remaining))
         progress = 0 if total_ms == 0 else int((display_pos / total_ms) * 100)
         self._refresh_main_jog_meta(display_pos, total_ms)
         self._refresh_timecode_panel()
@@ -1233,7 +1253,7 @@ class PlaybackMixin:
         self._last_ui_position_ms = -1
         total_ms = self._transport_total_ms()
         self.seek_slider.setRange(0, total_ms)
-        self.total_time.setText(format_clock_time(total_ms))
+        self.total_time.setText(self._transport_total_label_text(total_ms))
         target_key = self.current_playing if self.current_playing is not None else self._track_end_transition_target_key()
         if target_key:
             group, page_index, slot_index = target_key

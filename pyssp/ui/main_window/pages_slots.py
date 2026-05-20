@@ -26,12 +26,15 @@ from pyssp.ui.utility_sound_button_dialog import UtilitySoundButtonDialog
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
+    UTILITY_COMPAT_DURATION_MS,
     UTILITY_UNSUPPORTED_MARKER_TEXT,
     UtilitySoundSpec,
     normalize_utility_spec,
     utility_display_name,
     utility_duration_hhmmssmmm,
+    utility_is_infinite,
     parse_utility_duration_hhmmssmmm,
+    utility_storage_duration_ms,
 )
 
 
@@ -436,7 +439,12 @@ class PagesSlotsMixin:
                 lines.append(f"co{slot_index}=clBtnFace")
                 lines.append(f"pysspsourcetype{slot_index}={UTILITY_SOURCE_TYPE}")
                 lines.append(f"pyssputilitymode{slot_index}={slot.utility_spec.mode}")
-                lines.append(f"pyssputilityduration{slot_index}={utility_duration_hhmmssmmm(slot.utility_spec.duration_ms)}")
+                lines.append(
+                    f"pyssputilityduration{slot_index}="
+                    f"{utility_duration_hhmmssmmm(utility_storage_duration_ms(slot.utility_spec))}"
+                )
+                if bool(slot.utility_spec.infinite):
+                    lines.append(f"pyssputilityinfinite{slot_index}=1")
                 lines.append(f"pyssputilitytitle{slot_index}={title}")
                 lines.append(f"pyssputilityplayed{slot_index}={'1' if slot.played else '0'}")
                 if notes:
@@ -444,6 +452,7 @@ class PagesSlotsMixin:
                 lyric_file = clean_set_value(slot.lyric_file)
                 if lyric_file:
                     lines.append(f"pyssputilitylyric{slot_index}={lyric_file}")
+                    lines.append(f"pyssplyric{slot_index}={lyric_file}")
                 self._append_automation_script_set_lines(lines, slot_index, slot)
                 if slot.utility_spec.mode == "waveform":
                     lines.append(f"pyssputilitywaveform{slot_index}={slot.utility_spec.waveform_type}")
@@ -679,7 +688,15 @@ class PagesSlotsMixin:
                 for badge in self._active_button_trigger_badges(i, slot, sound_bindings, blocked_sound_tokens):
                     parts.append(badge)
                 suffix = " ".join(parts)
-                button.setText(format_sound_button_label(slot.title, slot.duration_ms, suffix, self.title_char_limit))
+                button.setText(
+                    format_sound_button_label(
+                        slot.title,
+                        slot.duration_ms,
+                        suffix,
+                        self.title_char_limit,
+                        infinite=(slot.source_type == UTILITY_SOURCE_TYPE and utility_is_infinite(slot.utility_spec)),
+                    )
+                )
                 button.setToolTip(slot.notes.strip())
             color = self._slot_color(slot, i)
             text_color = self.sound_button_text_color
@@ -1585,6 +1602,7 @@ class PagesSlotsMixin:
                 "utility_spec": {
                     "mode": slot.utility_spec.mode,
                     "duration_ms": int(slot.utility_spec.duration_ms),
+                    "infinite": bool(slot.utility_spec.infinite),
                     "waveform_type": slot.utility_spec.waveform_type,
                     "frequency_hz": float(slot.utility_spec.frequency_hz),
                     "tempo_bpm": float(slot.utility_spec.tempo_bpm),
@@ -1674,6 +1692,7 @@ class PagesSlotsMixin:
         if source_type != UTILITY_SOURCE_TYPE:
             return None
         duration_ms = parse_utility_duration_hhmmssmmm(section.get(f"pyssputilityduration{index}", "").strip())
+        infinite = str(section.get(f"pyssputilityinfinite{index}", "0")).strip() in {"1", "true", "True"}
         timesig = str(section.get(f"pyssputilitytimesig{index}", "")).strip()
         numerator, denominator = 4, 4
         if "/" in timesig:
@@ -1689,7 +1708,10 @@ class PagesSlotsMixin:
         spec = normalize_utility_spec(
             {
                 "mode": section.get(f"pyssputilitymode{index}", "").strip(),
-                "duration_ms": 1000 if duration_ms is None else duration_ms,
+                "duration_ms": (
+                    UTILITY_COMPAT_DURATION_MS if duration_ms is None and infinite else (1000 if duration_ms is None else duration_ms)
+                ),
+                "infinite": infinite,
                 "waveform_type": section.get(f"pyssputilitywaveform{index}", "").strip(),
                 "frequency_hz": section.get(f"pyssputilityfreq{index}", "").strip(),
                 "tempo_bpm": section.get(f"pyssputilitytempo{index}", "").strip(),
@@ -1716,8 +1738,14 @@ class PagesSlotsMixin:
             vocal_removed_file="",
             title=section.get(f"pyssputilitytitle{index}", "").strip() or utility_display_name(spec),
             notes=section.get(f"pyssputilitynotes{index}", "").strip(),
-            lyric_file=section.get(f"pyssputilitylyric{index}", "").strip(),
-            automation_script_path=section.get(f"pysspautoscript{index}", "").strip(),
+            lyric_file=(
+                section.get(f"pyssputilitylyric{index}", "").strip()
+                or section.get(f"pyssplyric{index}", "").strip()
+            ),
+            automation_script_path=(
+                section.get(f"pysspautoscript{index}", "").strip()
+                or section.get(f"pyssputilityautoscript{index}", "").strip()
+            ),
             duration_ms=int(spec.duration_ms),
             sound_button_automation=self._parse_sound_button_automation_from_section(section, index),
             automation_script_bypassed=str(section.get(f"pysspautoscriptbypass{index}", "0")).strip() in {"1", "true", "True"},

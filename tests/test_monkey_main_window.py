@@ -19,6 +19,7 @@ from pyssp.automation_command import (
     SoundButtonAutomationConfig,
 )
 from pyssp.settings_store import AppSettings
+from pyssp.timecode import ms_to_timecode_string, nominal_fps
 from pyssp.ui import main_window as mw
 from pyssp.utility_audio import UtilitySoundSpec
 
@@ -978,6 +979,218 @@ def test_utility_sound_buttons_follow_playback_controls_by_default_for_next(qapp
 
         assert window.utility_sound_buttons_follow_playback_controls is True
         assert window._next_available_slot_on_current_page() == 0
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_infinite_utility_transport_displays_inf_for_total_and_remaining(qapp, monkeypatch):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    compat_ms = 24 * 60 * 60 * 1000
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.source_type = "utility"
+        slot.utility_spec = UtilitySoundSpec(mode="blank", duration_ms=compat_ms, infinite=True)
+        slot.duration_ms = compat_ms
+        slot.title = "Infinite Utility"
+        window.current_playing = ("A", 0, 0)
+        window.current_duration_ms = compat_ms
+
+        window._refresh_main_transport_display()
+        qapp.processEvents()
+
+        assert window.total_time.text() == "inf"
+        assert window.remaining_time.text() == "inf"
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_infinite_utility_playback_start_sets_total_time_to_inf(qapp, monkeypatch):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    compat_ms = 24 * 60 * 60 * 1000
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.source_type = "utility"
+        slot.utility_spec = UtilitySoundSpec(mode="blank", duration_ms=compat_ms, infinite=True)
+        slot.duration_ms = compat_ms
+        slot.title = "Infinite Utility"
+        window.current_playing = ("A", 0, 0)
+        window.current_duration_ms = compat_ms
+
+        window._prepare_transport_for_new_playback()
+        qapp.processEvents()
+
+        assert window.total_time.text() == "inf"
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_infinite_utility_button_label_displays_inf(qapp, monkeypatch):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    compat_ms = 24 * 60 * 60 * 1000
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.source_type = "utility"
+        slot.utility_spec = UtilitySoundSpec(mode="blank", duration_ms=compat_ms, infinite=True)
+        slot.duration_ms = compat_ms
+        slot.title = "Infinite Utility"
+
+        window._refresh_sound_grid()
+        qapp.processEvents()
+
+        assert window.sound_buttons[0].text().endswith("\ninf")
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_midi_rotary_jog_routes_through_shared_seek_helper(qapp, monkeypatch):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    captured: list[int] = []
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window.midi_rotary_enabled = True
+        window.midi_rotary_jog_binding = "B0:10"
+        window.midi_rotary_jog_relative_mode = "auto"
+        window.midi_rotary_jog_step_ms = 250
+        window.current_duration_ms = 5000
+        window.seek_slider.setRange(0, 5000)
+        window.seek_slider.setValue(1000)
+        window._seek_transport_display_ms = lambda display_ms: (captured.append(int(display_ms)) or (int(display_ms), int(display_ms)))  # type: ignore[method-assign]
+
+        handled = window._apply_midi_rotary("", 0xB0, 0x10, 0x01)
+
+        assert handled is True
+        assert captured == [1250]
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_seek_transport_updates_elapsed_and_timecode_immediately(qapp, monkeypatch):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.file_path = "demo.wav"
+        slot.title = "Demo"
+        slot.duration_ms = 5000
+        window.current_playing = ("A", 0, 0)
+        window.current_duration_ms = 5000
+        window.timecode_mode = mw.TIMECODE_MODE_FOLLOW
+        window.player._duration_ms = 5000
+        window._timecode_reference_context = lambda: (window.player, ("A", 0, 0))  # type: ignore[method-assign]
+        window.player.play()
+
+        window._seek_transport_display_ms(1500)
+        qapp.processEvents()
+
+        assert window.elapsed_time.text() == "00:01:15"
+        assert window.timecode_panel is not None
+        assert window.timecode_panel.timecode_label.text() == ms_to_timecode_string(1500, nominal_fps(window.timecode_fps))
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
+def test_utility_set_save_writes_compatible_lyric_and_autoscript_fields(qapp, monkeypatch, tmp_path):
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    compat_ms = 24 * 60 * 60 * 1000
+    script_path = tmp_path / "compat.pysspautoscript"
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.source_type = "utility"
+        slot.utility_spec = UtilitySoundSpec(mode="blank", duration_ms=compat_ms, infinite=True)
+        slot.duration_ms = compat_ms
+        slot.title = "Compat Utility"
+        slot.lyric_file = r"C:\Lyrics\compat_countin.lrc"
+        slot.automation_script_path = str(script_path)
+
+        lines = window._build_set_file_lines()
+        text = "\n".join(lines)
+
+        assert "pyssputilitylyric1=C:\\Lyrics\\compat_countin.lrc" in text
+        assert "pyssplyric1=C:\\Lyrics\\compat_countin.lrc" in text
+        assert f"pysspautoscript1={script_path}" in text
     finally:
         _cleanup_main_window(window, qapp)
 

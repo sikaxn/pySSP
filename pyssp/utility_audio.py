@@ -9,6 +9,7 @@ from pyssp.i18n import tr
 UTILITY_SOURCE_TYPE = "utility"
 FILE_SOURCE_TYPE = "file"
 UTILITY_UNSUPPORTED_MARKER_TEXT = "Unsupported utility sound button. A newer version of pySSP is required."
+UTILITY_COMPAT_DURATION_MS = 24 * 60 * 60 * 1000
 
 UTILITY_MODE_BLANK = "blank"
 UTILITY_MODE_PINK_NOISE = "pink_noise"
@@ -42,6 +43,7 @@ class UtilitySoundSpec:
     tempo_bpm: float = 120.0
     time_signature_num: int = 4
     time_signature_den: int = 4
+    infinite: bool = False
 
 
 def clamp_utility_duration_ms(value: object) -> int:
@@ -49,7 +51,13 @@ def clamp_utility_duration_ms(value: object) -> int:
         raw = int(value)
     except Exception:
         raw = 60000
-    return max(1, min(24 * 60 * 60 * 1000, raw))
+    return max(1, min(UTILITY_COMPAT_DURATION_MS, raw))
+
+
+def normalize_utility_infinite(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def normalize_utility_mode(value: object) -> str:
@@ -82,13 +90,40 @@ def normalize_utility_spec(raw: object) -> UtilitySoundSpec:
         return UtilitySoundSpec(
             mode=normalize_utility_mode(raw.mode),
             duration_ms=clamp_utility_duration_ms(raw.duration_ms),
+            infinite=normalize_utility_infinite(raw.infinite),
             waveform_type=normalize_utility_waveform(raw.waveform_type),
             frequency_hz=max(1.0, min(24000.0, float(raw.frequency_hz))),
             tempo_bpm=max(1.0, min(999.0, float(raw.tempo_bpm))),
             time_signature_num=normalize_time_signature(raw.time_signature_num, raw.time_signature_den)[0],
             time_signature_den=normalize_time_signature(raw.time_signature_num, raw.time_signature_den)[1],
         )
-    payload = raw if isinstance(raw, dict) else {}
+    if isinstance(raw, dict):
+        payload = raw
+    elif raw is not None and any(
+        hasattr(raw, name)
+        for name in (
+            "mode",
+            "duration_ms",
+            "waveform_type",
+            "frequency_hz",
+            "tempo_bpm",
+            "time_signature_num",
+            "time_signature_den",
+            "infinite",
+        )
+    ):
+        payload = {
+            "mode": getattr(raw, "mode", UTILITY_MODE_BLANK),
+            "duration_ms": getattr(raw, "duration_ms", 60000),
+            "waveform_type": getattr(raw, "waveform_type", UTILITY_WAVEFORM_SINE),
+            "frequency_hz": getattr(raw, "frequency_hz", 440.0),
+            "tempo_bpm": getattr(raw, "tempo_bpm", 120.0),
+            "time_signature_num": getattr(raw, "time_signature_num", 4),
+            "time_signature_den": getattr(raw, "time_signature_den", 4),
+            "infinite": getattr(raw, "infinite", False),
+        }
+    else:
+        payload = {}
     numerator, denominator = normalize_time_signature(
         payload.get("time_signature_num", 4),
         payload.get("time_signature_den", 4),
@@ -104,6 +139,7 @@ def normalize_utility_spec(raw: object) -> UtilitySoundSpec:
     return UtilitySoundSpec(
         mode=normalize_utility_mode(payload.get("mode", UTILITY_MODE_BLANK)),
         duration_ms=clamp_utility_duration_ms(payload.get("duration_ms", 60000)),
+        infinite=normalize_utility_infinite(payload.get("infinite", False)),
         waveform_type=normalize_utility_waveform(payload.get("waveform_type", UTILITY_WAVEFORM_SINE)),
         frequency_hz=max(1.0, min(24000.0, frequency_hz)),
         tempo_bpm=max(1.0, min(999.0, tempo_bpm)),
@@ -146,9 +182,22 @@ def parse_utility_duration_hhmmssmmm(value: object) -> Optional[int]:
     if minutes >= 60 or seconds >= 60 or millis >= 1000:
         return None
     total = (((hours * 60) + minutes) * 60 + seconds) * 1000 + millis
-    if total <= 0 or total > (24 * 60 * 60 * 1000):
+    if total <= 0 or total > UTILITY_COMPAT_DURATION_MS:
         return None
     return total
+
+
+def utility_is_infinite(spec: Optional[UtilitySoundSpec]) -> bool:
+    if spec is None:
+        return False
+    return bool(normalize_utility_spec(spec).infinite)
+
+
+def utility_storage_duration_ms(spec: Optional[UtilitySoundSpec]) -> int:
+    normalized = normalize_utility_spec(spec or UtilitySoundSpec())
+    if normalized.infinite:
+        return UTILITY_COMPAT_DURATION_MS
+    return clamp_utility_duration_ms(normalized.duration_ms)
 
 
 def utility_display_name(spec: Optional[UtilitySoundSpec]) -> str:

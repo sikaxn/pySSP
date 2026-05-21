@@ -13,6 +13,7 @@ from pyssp.automation_command import (
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
+from pyssp.ndi_debug import set_ndi_debug_options
 from pyssp.runtime_logging import update_runtime_logging_settings
 from pyssp.utility_audio import (
     UTILITY_SOURCE_TYPE,
@@ -2111,6 +2112,8 @@ class ActionsInputMixin:
             ndi_output_fps=self.ndi_output_fps,
             ndi_output_audio_enabled=self.ndi_output_audio_enabled,
             ndi_output_audio_tap_mode=self.ndi_output_audio_tap_mode,
+            ndi_debug_print_enabled=self.ndi_debug_print_enabled,
+            ndi_debug_idle_audio_pacing_enabled=self.ndi_debug_idle_audio_pacing_enabled,
             ndi_output_group=self.ndi_output_group,
             ndi_output_discovery_servers=self.ndi_output_discovery_servers,
             ndi_output_allowed_adapters=self.ndi_output_allowed_adapters,
@@ -2237,6 +2240,12 @@ class ActionsInputMixin:
         self.ndi_output_fps = dialog.selected_ndi_output_fps()
         self.ndi_output_audio_enabled = dialog.selected_ndi_output_audio_enabled()
         self.ndi_output_audio_tap_mode = dialog.selected_ndi_output_audio_tap_mode()
+        self.ndi_debug_print_enabled = dialog.selected_ndi_debug_print_enabled()
+        self.ndi_debug_idle_audio_pacing_enabled = dialog.selected_ndi_debug_idle_audio_pacing_enabled()
+        set_ndi_debug_options(
+            print_enabled=self.ndi_debug_print_enabled,
+            idle_audio_pacing_enabled=self.ndi_debug_idle_audio_pacing_enabled,
+        )
         self.ndi_output_group = dialog.selected_ndi_output_group()
         self.ndi_output_discovery_servers = dialog.selected_ndi_output_discovery_servers()
         self.ndi_output_allowed_adapters = dialog.selected_ndi_output_allowed_adapters()

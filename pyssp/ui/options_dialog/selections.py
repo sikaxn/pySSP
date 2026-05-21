@@ -291,6 +291,12 @@ class SelectionMixin:
         value = str(self.ndi_output_audio_tap_mode_combo.currentData() or "post_fader").strip().lower()
         return value if value in {"pre_fader", "post_fader"} else "post_fader"
 
+    def selected_ndi_debug_print_enabled(self) -> bool:
+        return bool(self.ndi_debug_print_enabled_checkbox.isChecked())
+
+    def selected_ndi_debug_idle_audio_pacing_enabled(self) -> bool:
+        return bool(self.ndi_debug_idle_audio_pacing_enabled_checkbox.isChecked())
+
     def selected_ndi_output_group(self) -> str:
         return str(self.ndi_output_group_edit.text() or "").strip() or "Public"
 

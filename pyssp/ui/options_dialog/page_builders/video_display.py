@@ -72,6 +72,8 @@ class VideoDisplayPageMixin:
         ndi_output_fps: int,
         ndi_output_audio_enabled: bool,
         ndi_output_audio_tap_mode: str,
+        ndi_debug_print_enabled: bool,
+        ndi_debug_idle_audio_pacing_enabled: bool,
         ndi_output_group: str,
         ndi_output_discovery_servers: str,
         ndi_output_allowed_adapters: str,
@@ -247,6 +249,12 @@ class VideoDisplayPageMixin:
         self.ndi_output_audio_tap_mode_combo.addItem("Pre volume fader", "pre_fader")
         self._set_combo_data_or_default(self.ndi_output_audio_tap_mode_combo, ndi_output_audio_tap_mode, "post_fader")
         ndi_form.addRow("Audio Tap:", self.ndi_output_audio_tap_mode_combo)
+        self.ndi_debug_print_enabled_checkbox = QCheckBox("Enable NDI debug print")
+        self.ndi_debug_print_enabled_checkbox.setChecked(bool(ndi_debug_print_enabled))
+        ndi_form.addRow(self.ndi_debug_print_enabled_checkbox)
+        self.ndi_debug_idle_audio_pacing_enabled_checkbox = QCheckBox("Pace idle NDI audio sends (debug)")
+        self.ndi_debug_idle_audio_pacing_enabled_checkbox.setChecked(bool(ndi_debug_idle_audio_pacing_enabled))
+        ndi_form.addRow(self.ndi_debug_idle_audio_pacing_enabled_checkbox)
         self.ndi_output_group_edit = QLineEdit(str(ndi_output_group or "Public"))
         self.ndi_output_group_edit.setPlaceholderText("Public")
         ndi_form.addRow("Group(s):", self.ndi_output_group_edit)
@@ -460,6 +468,8 @@ class VideoDisplayPageMixin:
             self.ndi_output_resolution_mode_combo,
             self.ndi_output_fps_combo,
             self.ndi_output_audio_enabled_checkbox,
+            self.ndi_debug_print_enabled_checkbox,
+            self.ndi_debug_idle_audio_pacing_enabled_checkbox,
             self.ndi_output_group_edit,
             self.ndi_output_discovery_servers_edit,
             self.ndi_output_allowed_adapters_edit,

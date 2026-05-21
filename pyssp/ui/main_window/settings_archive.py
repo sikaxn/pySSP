@@ -1752,6 +1752,10 @@ class SettingsArchiveMixin:
         self.settings.ndi_output_fps = max(1, int(getattr(self, "ndi_output_fps", 30)))
         self.settings.ndi_output_audio_enabled = bool(getattr(self, "ndi_output_audio_enabled", True))
         self.settings.ndi_output_audio_tap_mode = str(getattr(self, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
+        self.settings.ndi_debug_print_enabled = bool(getattr(self, "ndi_debug_print_enabled", False))
+        self.settings.ndi_debug_idle_audio_pacing_enabled = bool(
+            getattr(self, "ndi_debug_idle_audio_pacing_enabled", False)
+        )
         self.settings.ndi_output_group = str(getattr(self, "ndi_output_group", "Public") or "Public").strip() or "Public"
         self.settings.ndi_output_discovery_servers = str(getattr(self, "ndi_output_discovery_servers", "") or "").strip()
         self.settings.ndi_output_allowed_adapters = str(getattr(self, "ndi_output_allowed_adapters", "") or "").strip()

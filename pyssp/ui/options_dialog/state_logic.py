@@ -467,6 +467,10 @@ class StateLogicMixin:
             str(d.get("ndi_output_audio_tap_mode", "post_fader")),
             "post_fader",
         )
+        self.ndi_debug_print_enabled_checkbox.setChecked(bool(d.get("ndi_debug_print_enabled", False)))
+        self.ndi_debug_idle_audio_pacing_enabled_checkbox.setChecked(
+            bool(d.get("ndi_debug_idle_audio_pacing_enabled", False))
+        )
         self.ndi_output_group_edit.setText(str(d.get("ndi_output_group", "Public")))
         self.ndi_output_discovery_servers_edit.setText(str(d.get("ndi_output_discovery_servers", "")))
         self.ndi_output_allowed_adapters_edit.setText(str(d.get("ndi_output_allowed_adapters", "")))

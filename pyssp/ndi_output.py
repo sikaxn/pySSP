@@ -10,12 +10,27 @@ from typing import Callable, Optional
 import numpy as np
 from PyQt5.QtGui import QImage
 
+from pyssp.ndi_debug import apply_ndi_debug_idle_audio_pacing, ndi_debug_print_enabled
 from pyssp.ndi_config import NDIAccessManagerSettings, apply_ndi_access_manager_settings
 from pyssp.ndi_runtime import NDIRuntimeSenderConfig, NDIRuntimeSenderSession
 from pyssp.ndi_support import NDICapabilityStatus
 
 
 def _print_ndi_error(message: str) -> None:
+    if not ndi_debug_print_enabled():
+        return
+    text = str(message or "").strip()
+    if not text:
+        return
+    try:
+        print(f"[pySSP][NDI] {text}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _print_ndi_info(message: str) -> None:
+    if not ndi_debug_print_enabled():
+        return
     text = str(message or "").strip()
     if not text:
         return
@@ -81,6 +96,7 @@ class NDIOutputSender:
         self._last_reported_audio_error = ""
         self._last_network_config_error = ""
         self._last_network_config_path = ""
+        self._audio_send_count = 0
 
     @property
     def available(self) -> bool:
@@ -106,6 +122,15 @@ class NDIOutputSender:
         )
         if (not force_restart) and self._config == normalized and self._session is not None:
             return True
+        _print_ndi_info(
+            "configure sender "
+            f"name={normalized.source_name!r} "
+            f"size={normalized.width}x{normalized.height} "
+            f"fps={normalized.fps:.3f} "
+            f"audio_enabled={normalized.audio_enabled} "
+            f"groups={normalized.groups!r} "
+            f"force_restart={force_restart}"
+        )
         self.stop()
         self._last_network_config_error = ""
         self._last_network_config_path = ""
@@ -139,11 +164,20 @@ class NDIOutputSender:
             )
             self._config = normalized
             self._clear_audio_error()
+            self._audio_send_count = 0
+            runtime_version = str(getattr(self._session, "version_text", "") or "").strip() or "unknown"
+            _print_ndi_info(
+                "sender configured "
+                f"name={normalized.source_name!r} "
+                f"runtime={runtime_version} "
+                f"config_path={self._last_network_config_path or '(none)'}"
+            )
             return True
         except Exception as exc:
             self._set_audio_error(f"{type(exc).__name__}: {exc}")
             self._session = None
             self._config = None
+            _print_ndi_error(f"sender configure failed: {type(exc).__name__}: {exc}")
             return False
 
     def stop(self) -> None:
@@ -152,6 +186,7 @@ class NDIOutputSender:
         self._config = None
         if session is None:
             return
+        _print_ndi_info("sender stop requested")
         try:
             session.close()
         except Exception:
@@ -172,14 +207,61 @@ class NDIOutputSender:
         except Exception:
             return 0
 
-    def send_video_frame(self, image: QImage) -> bool:
+    def send_video_frame(
+        self,
+        image: QImage,
+        *,
+        route_mode: str = "",
+        source_path: str = "",
+        frame_submit_count: int = 0,
+        pts_ms: int = 0,
+        source_kind: str = "",
+    ) -> bool:
         session = self._session
         if session is None:
             return False
         try:
-            return bool(session.send_video_frame(image))
+            return bool(
+                self._call_send_video_frame(
+                    session,
+                    image,
+                    route_mode=route_mode,
+                    source_path=source_path,
+                    frame_submit_count=frame_submit_count,
+                    pts_ms=pts_ms,
+                    source_kind=source_kind,
+                )
+            )
         except Exception:
             return False
+
+    @staticmethod
+    def _call_send_video_frame(
+        target: object,
+        image: QImage,
+        *,
+        route_mode: str,
+        source_path: str,
+        frame_submit_count: int,
+        pts_ms: int,
+        source_kind: str,
+    ) -> bool:
+        send = getattr(target, "send_video_frame", None)
+        if not callable(send):
+            return False
+        try:
+            return bool(
+                send(
+                    image,
+                    route_mode=route_mode,
+                    source_path=source_path,
+                    frame_submit_count=frame_submit_count,
+                    pts_ms=pts_ms,
+                    source_kind=source_kind,
+                )
+            )
+        except TypeError:
+            return bool(send(image))
 
     def send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool:
         session = self._session
@@ -192,6 +274,7 @@ class NDIOutputSender:
             return False
         ok, error_text = self._try_send_audio(session, block, sample_rate)
         if ok:
+            self._audio_send_count += 1
             self._last_audio_mode = "runtime_interleaved_32f"
             self._clear_audio_error()
             return True
@@ -233,6 +316,7 @@ class NDIOutputSender:
         if config is None:
             return False
         self._audio_recovery_count += 1
+        _print_ndi_info(f"recovering audio sender attempt={self._audio_recovery_count}")
         self.stop()
         return self.configure(config, force_restart=True)
 
@@ -265,8 +349,8 @@ class NDIOutputDispatcher:
         self._disable_sender = False
         self._pending_config: Optional[NDIOutputConfig] = None
         self._config_dirty = False
-        self._pending_video_frame: Optional[QImage] = None
-        self._pending_audio_blocks: deque[tuple[np.ndarray, int]] = deque()
+        self._pending_video_frame: Optional[tuple[QImage, dict[str, object]]] = None
+        self._pending_audio_blocks: deque[tuple[np.ndarray, int, bool]] = deque()
         self._max_audio_queue_blocks = max(2, int(max_audio_queue_blocks))
         self._connection_poll_interval_sec = max(0.05, float(connection_poll_interval_sec))
         self._sender_configured = False
@@ -281,6 +365,9 @@ class NDIOutputDispatcher:
         self._last_reported_audio_error = ""
         self._last_network_config_error = ""
         self._last_network_config_path = ""
+        self._last_logged_drop_count = 0
+        self._last_logged_queue_depth = 0
+        self._audio_worker_send_count = 0
         self._thread = threading.Thread(target=self._worker_loop, name="pyssp-ndi-output", daemon=True)
         self._audio_thread = threading.Thread(target=self._audio_worker_loop, name="pyssp-ndi-audio", daemon=True)
         self._thread.start()
@@ -351,15 +438,31 @@ class NDIOutputDispatcher:
         _ = timeout
         return max(0, int(self._connection_count))
 
-    def send_video_frame(self, image: QImage) -> bool:
+    def send_video_frame(
+        self,
+        image: QImage,
+        *,
+        route_mode: str = "",
+        source_path: str = "",
+        frame_submit_count: int = 0,
+        pts_ms: int = 0,
+        source_kind: str = "",
+    ) -> bool:
         if not self.available or image.isNull():
             return False
+        metadata = {
+            "route_mode": str(route_mode or "").strip(),
+            "source_path": str(source_path or "").strip(),
+            "frame_submit_count": max(0, int(frame_submit_count)),
+            "pts_ms": max(0, int(pts_ms)),
+            "source_kind": str(source_kind or "").strip(),
+        }
         with self._condition:
-            self._pending_video_frame = image.copy()
+            self._pending_video_frame = (image.copy(), metadata)
             self._condition.notify_all()
         return True
 
-    def send_audio_frames(self, frames: np.ndarray, sample_rate: int) -> bool:
+    def send_audio_frames(self, frames: np.ndarray, sample_rate: int, *, idle: bool = False) -> bool:
         if not self.available:
             self._set_audio_error("sender unavailable")
             return False
@@ -372,7 +475,34 @@ class NDIOutputDispatcher:
             while len(self._pending_audio_blocks) >= self._max_audio_queue_blocks:
                 self._pending_audio_blocks.popleft()
                 self._audio_drop_count += 1
-            self._pending_audio_blocks.append((payload, max(1, int(sample_rate))))
+                if (
+                    self._audio_drop_count <= 5
+                    or self._audio_drop_count >= (self._last_logged_drop_count + 25)
+                ):
+                    self._last_logged_drop_count = self._audio_drop_count
+                    _print_ndi_error(
+                        "audio queue overflow "
+                        f"drops={self._audio_drop_count} "
+                        f"queued={len(self._pending_audio_blocks)} "
+                        f"sample_rate={max(1, int(sample_rate))} "
+                        f"shape={tuple(int(value) for value in payload.shape)}"
+                    )
+            self._pending_audio_blocks.append((payload, max(1, int(sample_rate)), bool(idle)))
+            queued = len(self._pending_audio_blocks)
+            if (
+                queued >= 8
+                and (
+                    queued > self._last_logged_queue_depth
+                    or queued >= (self._last_logged_queue_depth + 4)
+                )
+            ):
+                self._last_logged_queue_depth = queued
+                _print_ndi_error(
+                    "audio queue depth "
+                    f"queued={queued} "
+                    f"sample_rate={max(1, int(sample_rate))} "
+                    f"shape={tuple(int(value) for value in payload.shape)}"
+                )
             self._audio_condition.notify_all()
         return True
 
@@ -397,6 +527,29 @@ class NDIOutputDispatcher:
     def _clear_audio_error(self) -> None:
         self._last_audio_error = ""
 
+    @staticmethod
+    def _dispatch_video_frame(
+        target: object,
+        image: QImage,
+        metadata: dict[str, object],
+    ) -> bool:
+        send = getattr(target, "send_video_frame", None)
+        if not callable(send):
+            return False
+        try:
+            return bool(
+                send(
+                    image,
+                    route_mode=str(metadata.get("route_mode", "") or ""),
+                    source_path=str(metadata.get("source_path", "") or ""),
+                    frame_submit_count=max(0, int(metadata.get("frame_submit_count", 0) or 0)),
+                    pts_ms=max(0, int(metadata.get("pts_ms", 0) or 0)),
+                    source_kind=str(metadata.get("source_kind", "") or ""),
+                )
+            )
+        except TypeError:
+            return bool(send(image))
+
     def _worker_loop(self) -> None:
         last_connection_poll = 0.0
         while True:
@@ -412,7 +565,7 @@ class NDIOutputDispatcher:
                 self._disable_sender = False
                 config = self._pending_config if self._config_dirty else None
                 self._config_dirty = False
-                video_frame = self._pending_video_frame
+                video_frame_payload = self._pending_video_frame
                 self._pending_video_frame = None
             if disable_sender:
                 try:
@@ -439,11 +592,12 @@ class NDIOutputDispatcher:
                 with self._audio_condition:
                     self._audio_condition.notify_all()
                 self._sync_public_state()
-            if video_frame is not None:
+            if video_frame_payload is not None:
+                video_frame, video_metadata = video_frame_payload
                 try:
                     with self._sender_lock:
                         if self._sender_configured:
-                            self._sender.send_video_frame(video_frame)
+                            self._dispatch_video_frame(self._sender, video_frame, video_metadata)
                 except Exception:
                     pass
                 self._sync_public_state()
@@ -478,16 +632,48 @@ class NDIOutputDispatcher:
                     if self._disable_sender or self._config_dirty or (not self._sender_configured) or (not self._pending_audio_blocks):
                         self._audio_condition.wait(timeout=self._connection_poll_interval_sec)
                         continue
-                    frames, sample_rate = self._pending_audio_blocks.popleft()
+                    frames, sample_rate, idle = self._pending_audio_blocks.popleft()
+                    queue_remaining = len(self._pending_audio_blocks)
                     break
                 else:
                     return
+            self._audio_worker_send_count += 1
+            send_index = int(self._audio_worker_send_count)
+            if (
+                send_index <= 5
+                or queue_remaining >= 8
+                or (send_index % 100) == 0
+            ):
+                _print_ndi_info(
+                    "audio worker send start "
+                    f"count={send_index} "
+                    f"queued_remaining={queue_remaining} "
+                    f"sample_rate={int(sample_rate)} "
+                    f"shape={tuple(int(value) for value in frames.shape)}"
+                )
+            send_started = time.perf_counter()
             try:
+                if idle:
+                    apply_ndi_debug_idle_audio_pacing()
                 with self._sender_lock:
                     ok = bool(self._sender.send_audio_frames(frames, sample_rate)) if self._sender_configured else False
             except Exception as exc:
                 ok = False
                 self._set_audio_error(f"{type(exc).__name__}: {exc}")
+            elapsed_ms = max(0.0, (time.perf_counter() - send_started) * 1000.0)
+            if (
+                send_index <= 5
+                or queue_remaining >= 8
+                or elapsed_ms >= 10.0
+                or (send_index % 100) == 0
+            ):
+                _print_ndi_info(
+                    "audio worker send done "
+                    f"count={send_index} "
+                    f"ok={ok} "
+                    f"elapsed_ms={elapsed_ms:.3f} "
+                    f"queued_remaining={queue_remaining}"
+                )
             if ok:
                 self._audio_send_count += 1
             else:

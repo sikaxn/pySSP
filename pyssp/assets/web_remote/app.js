@@ -589,6 +589,15 @@ async function setVideoDisplaySourceFromCurrentControls(){
   await callApi(path);
 }
 
+async function setVideoDisplaySource(keepFollow){
+  const sourceSelect = document.getElementById('videoDisplayManualSource');
+  const source = String(sourceSelect?.value || 'blank').trim().toLowerCase();
+  const path = keepFollow
+    ? `/api/video-display/source/${encodeURIComponent(source)}/keepfollow`
+    : `/api/video-display/source/${encodeURIComponent(source)}`;
+  await callApi(path);
+}
+
 async function setVideoDisplayFollow(enabled){
   await callApi(`/api/video-display/follow/${enabled ? 'enable' : 'disable'}`);
 }
@@ -977,6 +986,14 @@ function bindEvents(){
   const videoDisplayManualSource = document.getElementById('videoDisplayManualSource');
   if(videoDisplayManualSource){
     videoDisplayManualSource.addEventListener('change', setVideoDisplaySourceFromCurrentControls);
+  }
+  const videoDisplaySetOverride = document.getElementById('videoDisplaySetOverride');
+  if(videoDisplaySetOverride){
+    videoDisplaySetOverride.addEventListener('click', () => setVideoDisplaySource(false));
+  }
+  const videoDisplaySetKeepFollow = document.getElementById('videoDisplaySetKeepFollow');
+  if(videoDisplaySetKeepFollow){
+    videoDisplaySetKeepFollow.addEventListener('click', () => setVideoDisplaySource(true));
   }
 }
 

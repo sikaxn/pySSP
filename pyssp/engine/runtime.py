@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -8,6 +10,7 @@ from typing import Callable, Optional
 import numpy as np
 from PyQt5.QtGui import QImage
 
+from pyssp.ndi_debug import ndi_debug_print_enabled
 from pyssp.audio_engine import ExternalMediaPlayer
 from pyssp.audio_engine import consume_output_monitor_chunk, list_output_monitor_players, mix_output_monitor_chunk
 from pyssp.engine.ffmpeg import FFmpegEngineServices
@@ -38,6 +41,7 @@ _DEFAULT_VIDEO_DESTINATION_IDS: tuple[VideoDestinationId, ...] = (
     "ndi_program",
     "monitor_program",
 )
+_NDI_LOGGER = logging.getLogger("pyssp.ndi")
 
 
 @dataclass
@@ -143,6 +147,8 @@ class MediaRuntime:
         self._audio_sample_rate = 48000
         self._audio_channels = 2
         self._ndi_idle_phase = 0.0
+        self._ndi_last_audio_source = ""
+        self._ndi_last_audio_log_at = 0.0
         self._start_counter = 0
         self._multi_play_enabled = False
         self._ndi_dispatcher: Optional[NDIOutputDispatcher] = None
@@ -502,10 +508,25 @@ class MediaRuntime:
                     and (now - float(record.last_video_sent_at)) >= frame_interval_sec
                 )
                 frame = QImage(record.frame_image) if should_send_video and record.frame_image is not None else QImage()
+                route_mode = str(record.route_mode or "blank")
+                last_video_source_path = str(record.last_video_source_path or "")
+                frame_submit_count = int(record.frame_submit_count)
                 last_video_pts_ms = int(record.last_video_pts_ms)
             if should_send_video and not frame.isNull():
                 try:
-                    sent = bool(dispatcher.send_video_frame(frame))
+                    sent = bool(
+                        dispatcher.send_video_frame(
+                            frame,
+                            route_mode=route_mode,
+                            source_path=last_video_source_path,
+                            frame_submit_count=frame_submit_count,
+                            pts_ms=last_video_pts_ms,
+                            source_kind=self._ndi_video_source_kind(
+                                route_mode=route_mode,
+                                source_path=last_video_source_path,
+                            ),
+                        )
+                    )
                 except Exception:
                     sent = False
                 if sent:
@@ -525,6 +546,32 @@ class MediaRuntime:
                     record = self._video_destinations.get("ndi_program")
                     if record is not None:
                             record.connection_count = connection_count
+
+    @staticmethod
+    def _ndi_video_source_kind(*, route_mode: str, source_path: str) -> str:
+        mode = str(route_mode or "").strip().lower() or "unknown"
+        path = str(source_path or "").strip()
+        if mode == "video":
+            return "media_video_frame" if path else "video_route_frame"
+        if mode == "image":
+            return "image_route_frame" if path else "image_route_frame"
+        if mode == "backdrop":
+            return "backdrop_frame"
+        if mode == "blank":
+            return "blank_frame"
+        if mode == "white_screen":
+            return "white_screen_frame"
+        if mode == "colour_bars":
+            return "colour_bars_frame"
+        if mode == "lyric_display":
+            return "lyric_display_frame"
+        if mode == "stage_display":
+            return "stage_display_frame"
+        if mode == "metronome_display":
+            return "metronome_display_frame"
+        if path:
+            return f"{mode}_frame:{os.path.basename(path)}"
+        return f"{mode}_frame"
 
     def _ordered_output_monitor_players_locked(self, mode: str) -> list[str]:
         ordered: list[str] = []
@@ -558,6 +605,9 @@ class MediaRuntime:
                 1,
                 int(getattr(self, "_audio_channels", record.last_audio_channel_count or 2) or 2),
             )
+        source = "idle"
+        ordered_player_count = 0
+        silent_replaced = False
         chunk = None
         consume_map: dict[str, int] = {}
         if mode == "post_fader" and mixed_post_fader is not None:
@@ -565,8 +615,10 @@ class MediaRuntime:
             if direct.ndim == 2 and len(direct) > 0 and direct.shape[1] > 0:
                 chunk = np.ascontiguousarray(direct[:frame_count, :], dtype=np.float32)
                 channel_count = int(chunk.shape[1])
+                source = "render_post_fader"
         else:
             ordered_player_ids = self._ordered_output_monitor_players_locked(mode)
+            ordered_player_count = len(ordered_player_ids)
             if ordered_player_ids:
                 mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
                 if mixed is not None:
@@ -575,19 +627,45 @@ class MediaRuntime:
                         chunk = np.ascontiguousarray(mixed_chunk, dtype=np.float32)
                         channel_count = int(chunk.shape[1])
                         consume_map = dict(mixed_consume_map)
+                        source = f"monitor_{mode}"
         if chunk is None:
             chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
+            source = "idle_tone"
         elif not np.any(np.abs(chunk) > 1.0e-7):
             chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
+            source = "idle_tone_after_silence"
+            silent_replaced = True
+        now = self._clock()
+        if (
+            ndi_debug_print_enabled()
+            and (source != self._ndi_last_audio_source or (now - self._ndi_last_audio_log_at) >= 5.0)
+        ):
+            self._ndi_last_audio_source = source
+            self._ndi_last_audio_log_at = now
+            _NDI_LOGGER.warning(
+                "NDI audio source=%s mode=%s frames=%d sample_rate=%d channels=%d ordered_players=%d silent_replaced=%s",
+                source,
+                mode,
+                frame_count,
+                sample_rate,
+                channel_count,
+                ordered_player_count,
+                silent_replaced,
+            )
         sent = False
         if chunk.ndim == 2 and len(chunk) > 0 and chunk.shape[1] > 0:
             try:
-                sent = bool(dispatcher.send_audio_frames(chunk, sample_rate))
+                sent = bool(
+                    dispatcher.send_audio_frames(
+                        chunk,
+                        sample_rate,
+                        idle=source.startswith("idle_tone"),
+                    )
+                )
             except Exception:
                 sent = False
         if sent and consume_map:
             consume_output_monitor_chunk(consume_map, mode=mode)
-        now = self._clock()
         with self._lock:
             record = self._video_destinations.get("ndi_program")
             if record is None:

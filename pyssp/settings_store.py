@@ -1056,6 +1056,8 @@ class AppSettings:
     ndi_output_fps: int = 30
     ndi_output_audio_enabled: bool = True
     ndi_output_audio_tap_mode: str = "post_fader"
+    ndi_debug_print_enabled: bool = False
+    ndi_debug_idle_audio_pacing_enabled: bool = True
     ndi_output_group: str = "Public"
     ndi_output_discovery_servers: str = ""
     ndi_output_allowed_adapters: str = ""
@@ -1583,6 +1585,8 @@ def save_settings(settings: AppSettings) -> None:
         "ndi_output_fps": str(max(1, int(settings.ndi_output_fps))),
         "ndi_output_audio_enabled": "1" if settings.ndi_output_audio_enabled else "0",
         "ndi_output_audio_tap_mode": str(settings.ndi_output_audio_tap_mode or "post_fader").strip().lower(),
+        "ndi_debug_print_enabled": "1" if settings.ndi_debug_print_enabled else "0",
+        "ndi_debug_idle_audio_pacing_enabled": "1" if settings.ndi_debug_idle_audio_pacing_enabled else "0",
         "ndi_output_group": _encode_ascii_setting(str(settings.ndi_output_group or "Public").strip() or "Public"),
         "ndi_output_discovery_servers": _encode_ascii_setting(str(settings.ndi_output_discovery_servers or "").strip()),
         "ndi_output_allowed_adapters": _encode_ascii_setting(str(settings.ndi_output_allowed_adapters or "").strip()),
@@ -1789,6 +1793,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     ndi_output_audio_tap_mode = str(section.get("ndi_output_audio_tap_mode", "post_fader")).strip().lower()
     if ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
         ndi_output_audio_tap_mode = "post_fader"
+    ndi_debug_print_enabled = _get_bool(section, "ndi_debug_print_enabled", False)
+    ndi_debug_idle_audio_pacing_enabled = _get_bool(section, "ndi_debug_idle_audio_pacing_enabled", True)
     ndi_output_group = _decode_ascii_setting(str(section.get("ndi_output_group", "Public"))).strip() or "Public"
     ndi_output_discovery_servers = _decode_ascii_setting(str(section.get("ndi_output_discovery_servers", ""))).strip()
     ndi_output_allowed_adapters = _decode_ascii_setting(str(section.get("ndi_output_allowed_adapters", ""))).strip()
@@ -2623,6 +2629,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         ndi_output_fps=ndi_output_fps,
         ndi_output_audio_enabled=ndi_output_audio_enabled,
         ndi_output_audio_tap_mode=ndi_output_audio_tap_mode,
+        ndi_debug_print_enabled=ndi_debug_print_enabled,
+        ndi_debug_idle_audio_pacing_enabled=ndi_debug_idle_audio_pacing_enabled,
         ndi_output_group=ndi_output_group,
         ndi_output_discovery_servers=ndi_output_discovery_servers,
         ndi_output_allowed_adapters=ndi_output_allowed_adapters,

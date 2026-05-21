@@ -17,6 +17,7 @@ from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
 from .video_display import VideoDisplayMixin, _VideoFrameDecodeDispatcher
 from pyssp.companion_satellite import CompanionSatelliteClient
+from pyssp.ndi_debug import set_ndi_debug_options
 from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
 
 
@@ -605,6 +606,14 @@ class MainWindow(
         self.ndi_output_audio_tap_mode = str(getattr(self.settings, "ndi_output_audio_tap_mode", "post_fader") or "post_fader").strip().lower()
         if self.ndi_output_audio_tap_mode not in {"pre_fader", "post_fader"}:
             self.ndi_output_audio_tap_mode = "post_fader"
+        self.ndi_debug_print_enabled = bool(getattr(self.settings, "ndi_debug_print_enabled", False))
+        self.ndi_debug_idle_audio_pacing_enabled = bool(
+            getattr(self.settings, "ndi_debug_idle_audio_pacing_enabled", True)
+        )
+        set_ndi_debug_options(
+            print_enabled=self.ndi_debug_print_enabled,
+            idle_audio_pacing_enabled=self.ndi_debug_idle_audio_pacing_enabled,
+        )
         self.ndi_output_group = str(getattr(self.settings, "ndi_output_group", "Public") or "Public").strip() or "Public"
         self.ndi_output_discovery_servers = str(getattr(self.settings, "ndi_output_discovery_servers", "") or "").strip()
         self.ndi_output_allowed_adapters = str(getattr(self.settings, "ndi_output_allowed_adapters", "") or "").strip()

@@ -21,6 +21,7 @@ from pyssp.audio_beat_map import analyze_audio_beat_map_cli
 from pyssp.audio_engine import prepare_waveform_disk_cache
 from pyssp.audio_format_support import ensure_supported_audio_formats_ready
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
+from pyssp.ndi_debug import set_ndi_debug_options
 from pyssp.runtime_logging import append_playback_log_entry, start_runtime_logging, stop_runtime_logging
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
 from pyssp.system_info_probe import main as system_info_probe_main
@@ -520,6 +521,12 @@ def main() -> int:
     set_current_language(startup_language)
     apply_application_font(app, startup_language)
     startup_settings = load_settings()
+    set_ndi_debug_options(
+        print_enabled=bool(getattr(startup_settings, "ndi_debug_print_enabled", False)),
+        idle_audio_pacing_enabled=bool(
+            getattr(startup_settings, "ndi_debug_idle_audio_pacing_enabled", True)
+        ),
+    )
     runtime_log_manager = start_runtime_logging(
         enabled=bool(getattr(startup_settings, "runtime_log_enabled", True)),
         limit_mb=int(getattr(startup_settings, "runtime_log_limit_mb", 256)),

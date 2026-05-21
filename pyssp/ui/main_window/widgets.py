@@ -8,6 +8,7 @@ from pyssp.automation_command import (
     AutomationCommandSpec,
     SoundButtonAutomationConfig,
 )
+from pyssp.audio_beat_map import AudioBeatMap
 from pyssp.display_focus import DISPLAY_FOCUS_NONE
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
@@ -92,6 +93,7 @@ class SoundButtonData:
     cue_end_ms: Optional[int] = None
     display_focus: str = ""
     display_image_path: str = ""
+    audio_beat_map: Optional[AudioBeatMap] = None
     timecode_offset_ms: Optional[int] = None
     timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""

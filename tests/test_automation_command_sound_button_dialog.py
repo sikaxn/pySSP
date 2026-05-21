@@ -37,6 +37,15 @@ def _cleanup(dialog: AutomationCommandSoundButtonDialog, qapp: QApplication) -> 
     qapp.processEvents()
 
 
+def _select_internal_command(dialog: AutomationCommandSoundButtonDialog, command_id: str) -> None:
+    dialog.source_tabs.setCurrentIndex(1)
+    for row in range(dialog.internal_command_list.count()):
+        item = dialog.internal_command_list.item(row)
+        if item is not None and item.data(256) == command_id:
+            dialog.internal_command_list.setCurrentRow(row)
+            return
+
+
 def test_caption_follows_selected_command_until_user_edits(qapp):
     dialog = AutomationCommandSoundButtonDialog(
         caption="",
@@ -100,13 +109,8 @@ def test_internal_command_tab_returns_internal_spec(qapp):
     dialog.show()
     qapp.processEvents()
     try:
-        dialog.source_tabs.setCurrentIndex(1)
+        _select_internal_command(dialog, "volume_set")
         qapp.processEvents()
-        for row in range(dialog.internal_command_list.count()):
-            item = dialog.internal_command_list.item(row)
-            if item is not None and item.data(256) == "volume_set":
-                dialog.internal_command_list.setCurrentRow(row)
-                break
         dialog.internal_volume_spin.setValue(75)
         qapp.processEvents()
 
@@ -133,13 +137,8 @@ def test_internal_play_command_supports_list_target_picker(qapp):
     dialog.show()
     qapp.processEvents()
     try:
-        dialog.source_tabs.setCurrentIndex(1)
+        _select_internal_command(dialog, "play")
         qapp.processEvents()
-        for row in range(dialog.internal_command_list.count()):
-            item = dialog.internal_command_list.item(row)
-            if item is not None and item.data(256) == "play":
-                dialog.internal_command_list.setCurrentRow(row)
-                break
         dialog.internal_target_input_mode_combo.setCurrentIndex(
             max(0, dialog.internal_target_input_mode_combo.findData("list"))
         )
@@ -178,13 +177,8 @@ def test_internal_goto_command_supports_list_page_picker(qapp):
     dialog.show()
     qapp.processEvents()
     try:
-        dialog.source_tabs.setCurrentIndex(1)
+        _select_internal_command(dialog, "goto")
         qapp.processEvents()
-        for row in range(dialog.internal_command_list.count()):
-            item = dialog.internal_command_list.item(row)
-            if item is not None and item.data(256) == "goto":
-                dialog.internal_command_list.setCurrentRow(row)
-                break
         dialog.internal_target_input_mode_combo.setCurrentIndex(
             max(0, dialog.internal_target_input_mode_combo.findData("list"))
         )
@@ -223,5 +217,53 @@ def test_internal_target_commands_appear_first(qapp):
         qapp.processEvents()
         assert dialog.internal_command_list.item(0).data(256) == "play"
         assert dialog.internal_command_list.item(1).data(256) == "goto"
+    finally:
+        _cleanup(dialog, qapp)
+
+
+def test_internal_video_display_command_supports_action_specific_fields(qapp):
+    dialog = AutomationCommandSoundButtonDialog(
+        caption="",
+        notes="",
+        companion_payload=_payload(),
+    )
+    dialog.show()
+    qapp.processEvents()
+    try:
+        _select_internal_command(dialog, "video_display")
+        qapp.processEvents()
+
+        assert dialog.internal_video_display_action_combo.isVisible() is True
+        assert dialog.internal_video_display_follow_mode_combo.isVisible() is True
+        assert dialog.internal_video_display_source_combo.isVisible() is False
+
+        dialog.internal_video_display_action_combo.setCurrentIndex(
+            max(0, dialog.internal_video_display_action_combo.findData("set_source_override"))
+        )
+        dialog.internal_video_display_source_combo.setCurrentIndex(
+            max(0, dialog.internal_video_display_source_combo.findData("stage_display"))
+        )
+        qapp.processEvents()
+
+        assert dialog.internal_video_display_source_combo.isVisible() is True
+        assert dialog.internal_video_display_follow_mode_combo.isVisible() is False
+
+        caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
+
+        assert spec.source == "internal"
+        assert spec.internal_command == "video_display"
+        assert spec.internal_params == {"action": "set_source_override", "source": "stage_display"}
+        assert caption == "Video Display Routing: Set Source Stage Display and Disable Follow"
+
+        dialog.internal_video_display_action_combo.setCurrentIndex(
+            max(0, dialog.internal_video_display_action_combo.findData("follow"))
+        )
+        dialog.internal_video_display_follow_mode_combo.setCurrentIndex(
+            max(0, dialog.internal_video_display_follow_mode_combo.findData("toggle"))
+        )
+        qapp.processEvents()
+
+        _caption, _notes, spec, _custom_color, _sound_hotkey, _sound_midi_hotkey = dialog.values()
+        assert spec.internal_params == {"action": "follow", "mode": "toggle"}
     finally:
         _cleanup(dialog, qapp)

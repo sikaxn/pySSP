@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .shared import *
 from .widgets import *
+from .page_builders.video_display import _merged_manual_route_value
 
 
 class StateLogicMixin:
@@ -367,9 +368,19 @@ class StateLogicMixin:
             str(d.get("display_focus_default_automation", "none")),
             "none",
         )
+        self.video_display_follow_sound_button_focus_checkbox.setChecked(
+            normalize_display_focus_override(
+                str(d.get("video_display_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+                default=DISPLAY_FOCUS_FOLLOW,
+            )
+            == DISPLAY_FOCUS_FOLLOW
+        )
         self._set_combo_data_or_default(
-            self.video_display_mode_idle_combo,
-            str(d.get("video_display_mode_idle", "blank")),
+            self.video_display_route_combo,
+            _merged_manual_route_value(
+                str(d.get("video_display_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+                str(d.get("video_display_mode_idle", "blank")),
+            ),
             "blank",
         )
         self.video_display_use_default_backdrop_checkbox.setChecked(
@@ -418,14 +429,20 @@ class StateLogicMixin:
         self._refresh_color_button(self.video_display_lyric_next_color_btn, self._video_display_lyric_role_colors["next"])
         self.ndi_output_enabled_checkbox.setChecked(bool(d.get("ndi_output_enabled", False)))
         self.ndi_output_name_edit.setText(str(d.get("ndi_output_name", "pyssp-video")))
-        self._set_combo_data_or_default(
-            self.ndi_output_mode_playing_combo,
-            str(d.get("ndi_output_mode_playing", "video")),
-            "video",
+        self.ndi_output_follow_sound_button_focus_checkbox.setChecked(
+            normalize_display_focus_override(
+                str(d.get("ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+                default=DISPLAY_FOCUS_FOLLOW,
+            )
+            == DISPLAY_FOCUS_FOLLOW
         )
         self._set_combo_data_or_default(
-            self.ndi_output_mode_idle_combo,
-            str(d.get("ndi_output_mode_idle", "backdrop")),
+            self.ndi_output_route_combo,
+            _merged_manual_route_value(
+                str(d.get("ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW)),
+                str(d.get("ndi_output_mode_idle", "backdrop")),
+                default="backdrop",
+            ),
             "backdrop",
         )
         self._set_combo_data_or_default(

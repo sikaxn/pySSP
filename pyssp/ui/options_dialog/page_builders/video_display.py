@@ -3,6 +3,31 @@ from __future__ import annotations
 from ..shared import *
 from ..widgets import *
 
+_MERGED_VIDEO_ROUTE_OPTIONS = [
+    (DISPLAY_ROUTE_SOURCE_LABELS["video"], "video"),
+    (DISPLAY_ROUTE_SOURCE_LABELS["image"], "image"),
+    ("Lyric Display", "lyric_display"),
+    ("Stage Display", "stage_display"),
+    (DISPLAY_ROUTE_SOURCE_LABELS["metronome_display"], "metronome_display"),
+    ("Backdrop", "backdrop"),
+    (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_ROUTE_SOURCE_BLANK], DISPLAY_ROUTE_SOURCE_BLANK),
+    ("White Screen", "white_screen"),
+    ("Colour Bars", "colour_bars"),
+]
+
+
+def _merged_manual_route_value(mode_playing: str, mode_idle: str, *, default: str = "blank") -> str:
+    playing = normalize_display_focus_override(str(mode_playing or ""), default=DISPLAY_FOCUS_FOLLOW)
+    idle = normalize_display_route_source(str(mode_idle or default), default=default)
+    valid = {value for _label, value in _MERGED_VIDEO_ROUTE_OPTIONS}
+    if playing in valid:
+        return playing
+    if playing == "none":
+        return DISPLAY_ROUTE_SOURCE_BLANK
+    if idle in valid:
+        return idle
+    return default
+
 
 class VideoDisplayPageMixin:
     def _build_video_display_page(
@@ -108,18 +133,20 @@ class VideoDisplayPageMixin:
         self._add_display_focus_items(self.display_focus_default_automation_combo)
         self._set_combo_data_or_default(self.display_focus_default_automation_combo, display_focus_default_automation, "none")
         routing_form.addRow("Automation Buttons:", self.display_focus_default_automation_combo)
-        self.video_display_mode_idle_combo = QComboBox()
-        for label, value in [
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
-        ]:
-            self.video_display_mode_idle_combo.addItem(label, value)
-        self._set_combo_data_or_default(self.video_display_mode_idle_combo, mode_idle, "blank")
-        routing_form.addRow("When not playing:", self.video_display_mode_idle_combo)
+        self.video_display_follow_sound_button_focus_checkbox = QCheckBox("Follow sound button display focus")
+        self.video_display_follow_sound_button_focus_checkbox.setChecked(
+            normalize_display_focus_override(mode_playing, default=DISPLAY_FOCUS_FOLLOW) == DISPLAY_FOCUS_FOLLOW
+        )
+        routing_form.addRow(self.video_display_follow_sound_button_focus_checkbox)
+        self.video_display_route_combo = QComboBox()
+        for label, value in _MERGED_VIDEO_ROUTE_OPTIONS:
+            self.video_display_route_combo.addItem(label, value)
+        self._set_combo_data_or_default(
+            self.video_display_route_combo,
+            _merged_manual_route_value(mode_playing, mode_idle),
+            "blank",
+        )
+        routing_form.addRow("Otherwise:", self.video_display_route_combo)
         layout.addWidget(routing_group)
 
         backdrop_group = QGroupBox("Backdrop")
@@ -161,34 +188,24 @@ class VideoDisplayPageMixin:
         ndi_form.addRow(self.ndi_output_enabled_checkbox)
         self.ndi_output_name_edit = QLineEdit(str(ndi_output_name or ""))
         ndi_form.addRow("Source Name:", self.ndi_output_name_edit)
-        self.ndi_output_route_note_label = QLabel("Source routing follows sound button display focus.")
+        self.ndi_output_route_note_label = QLabel("Source routing mirrors the Video Display route controls.")
         self.ndi_output_route_note_label.setWordWrap(True)
         ndi_form.addRow("Source:", self.ndi_output_route_note_label)
-        self.ndi_output_mode_playing_combo = QComboBox()
-        for label, value in [
-            ("Video", "video"),
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
-        ]:
-            self.ndi_output_mode_playing_combo.addItem(label, value)
-        self._set_combo_data_or_default(self.ndi_output_mode_playing_combo, ndi_output_mode_playing, "video")
-        ndi_form.addRow("Video sound buttons:", self.ndi_output_mode_playing_combo)
-        self.ndi_output_mode_idle_combo = QComboBox()
-        for label, value in [
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
-        ]:
-            self.ndi_output_mode_idle_combo.addItem(label, value)
-        self._set_combo_data_or_default(self.ndi_output_mode_idle_combo, ndi_output_mode_idle, "backdrop")
-        ndi_form.addRow("When not playing:", self.ndi_output_mode_idle_combo)
+        self.ndi_output_follow_sound_button_focus_checkbox = QCheckBox("Follow sound button display focus")
+        self.ndi_output_follow_sound_button_focus_checkbox.setEnabled(False)
+        self.ndi_output_follow_sound_button_focus_checkbox.setChecked(
+            normalize_display_focus_override(ndi_output_mode_playing, default=DISPLAY_FOCUS_FOLLOW) == DISPLAY_FOCUS_FOLLOW
+        )
+        ndi_form.addRow(self.ndi_output_follow_sound_button_focus_checkbox)
+        self.ndi_output_route_combo = QComboBox()
+        for label, value in _MERGED_VIDEO_ROUTE_OPTIONS:
+            self.ndi_output_route_combo.addItem(label, value)
+        self._set_combo_data_or_default(
+            self.ndi_output_route_combo,
+            _merged_manual_route_value(ndi_output_mode_playing, ndi_output_mode_idle, default="backdrop"),
+            "backdrop",
+        )
+        ndi_form.addRow("Otherwise:", self.ndi_output_route_combo)
         self.ndi_output_resolution_mode_combo = QComboBox()
         for label, value in [
             ("Source / Native", "source"),
@@ -255,8 +272,8 @@ class VideoDisplayPageMixin:
         self.ndi_output_audio_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_multicast_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_resolution_mode_combo.currentIndexChanged.connect(self._sync_ndi_controls)
-        self.video_display_mode_playing_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
-        self.video_display_mode_idle_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
+        self.video_display_follow_sound_button_focus_checkbox.toggled.connect(self._sync_ndi_route_controls)
+        self.video_display_route_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
         self._sync_ndi_route_controls()
         layout.addWidget(ndi_group)
 
@@ -449,8 +466,8 @@ class VideoDisplayPageMixin:
             self.ndi_output_multicast_enabled_checkbox,
         ]:
             widget.setEnabled(ready)
-        self.ndi_output_mode_playing_combo.setEnabled(False)
-        self.ndi_output_mode_idle_combo.setEnabled(False)
+        self.ndi_output_follow_sound_button_focus_checkbox.setEnabled(False)
+        self.ndi_output_route_combo.setEnabled(False)
         custom_enabled = (
             ready
             and enabled
@@ -467,17 +484,13 @@ class VideoDisplayPageMixin:
         self.ndi_output_multicast_netprefix_edit.setEnabled(multicast_enabled)
 
     def _sync_ndi_route_controls(self) -> None:
-        self._set_combo_data_or_default(
-            self.ndi_output_mode_playing_combo,
-            str(self.video_display_mode_playing_combo.currentData() or "video"),
-            "video",
+        self.ndi_output_follow_sound_button_focus_checkbox.setChecked(
+            bool(self.video_display_follow_sound_button_focus_checkbox.isChecked())
         )
-        idle_mode = str(self.video_display_mode_idle_combo.currentData() or "blank")
-        default_idle = idle_mode if idle_mode in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"} else "backdrop"
         self._set_combo_data_or_default(
-            self.ndi_output_mode_idle_combo,
-            idle_mode,
-            default_idle,
+            self.ndi_output_route_combo,
+            str(self.video_display_route_combo.currentData() or "blank"),
+            "backdrop",
         )
 
     def _browse_video_display_backdrop_path(self) -> None:

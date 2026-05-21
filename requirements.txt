@@ -1,6 +1,7 @@
 PyQt5>=5.15
 pygame-ce>=2.5
 numpy>=1.26
+librosa>=0.11
 sounddevice>=0.4.7
 pedalboard==0.9.6
 Flask>=3.0

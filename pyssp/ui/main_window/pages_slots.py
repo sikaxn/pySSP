@@ -19,6 +19,7 @@ from pyssp.automation_command import (
     SOUND_BUTTON_AUTOMATION_EVENTS,
 )
 from pyssp.automation_script import AUTOMATION_SCRIPT_EXTENSION
+from pyssp.audio_beat_map import AudioBeatMap, analyze_audio_beat_map, audio_beat_map_to_dict, normalize_audio_beat_map
 from pyssp.ui.automation_command_sound_button_dialog import AutomationCommandSoundButtonDialog
 from pyssp.ui.sound_button_automation_dialog import SoundButtonAutomationDialog
 from pyssp.ui.automation_script_editor_dialog import AutomationScriptEditorDialog
@@ -424,6 +425,9 @@ class PagesSlotsMixin:
                 display_image_path = clean_set_value(slot.display_image_path)
                 if display_image_path:
                     lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+                beat_map_payload = clean_set_value(json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":")))
+                if beat_map_payload and beat_map_payload != "{}":
+                    lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
                 if slot.custom_color:
                     lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
                 hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
@@ -463,6 +467,9 @@ class PagesSlotsMixin:
                 display_image_path = clean_set_value(slot.display_image_path)
                 if display_image_path:
                     lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+                beat_map_payload = clean_set_value(json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":")))
+                if beat_map_payload and beat_map_payload != "{}":
+                    lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
                 lyric_file = clean_set_value(slot.lyric_file)
                 if lyric_file:
                     lines.append(f"pyssputilitylyric{slot_index}={lyric_file}")
@@ -513,6 +520,9 @@ class PagesSlotsMixin:
             display_image_path = clean_set_value(slot.display_image_path)
             if display_image_path:
                 lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+            beat_map_payload = clean_set_value(json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":")))
+            if beat_map_payload and beat_map_payload != "{}":
+                lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
             vocal_removed_file = clean_set_value(slot.vocal_removed_file)
             if vocal_removed_file:
                 lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -665,6 +675,7 @@ class PagesSlotsMixin:
                     default=DISPLAY_FOCUS_NONE,
                 ),
                 display_image_path=section.get(f"pysspdisplayimage{i}", "").strip(),
+                audio_beat_map=self._parse_audio_beat_map_from_section(section, i),
             )
             self._apply_display_focus_to_slot(
                 slots[i - 1],
@@ -1619,6 +1630,7 @@ class PagesSlotsMixin:
             sound_midi_hotkey=slot.sound_midi_hotkey,
             display_focus=normalize_display_focus(slot.display_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE),
             display_image_path=str(slot.display_image_path or "").strip(),
+            audio_beat_map=normalize_audio_beat_map(slot.audio_beat_map),
         )
         self._apply_display_focus_to_slot(
             clone,
@@ -1749,6 +1761,7 @@ class PagesSlotsMixin:
                 default=DISPLAY_FOCUS_NONE,
             ),
             display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
+            audio_beat_map=self._parse_audio_beat_map_from_section(section, index),
         )
         self._apply_display_focus_to_slot(
             slot,
@@ -1840,6 +1853,7 @@ class PagesSlotsMixin:
                 default=DISPLAY_FOCUS_NONE,
             ),
             display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
+            audio_beat_map=self._parse_audio_beat_map_from_section(section, index),
         )
         self._apply_display_focus_to_slot(
             slot,
@@ -1847,6 +1861,19 @@ class PagesSlotsMixin:
             display_image_path=section.get(f"pysspdisplayimage{index}", "").strip(),
         )
         return slot
+
+    def _parse_audio_beat_map_from_section(
+        self,
+        section: configparser.SectionProxy,
+        slot_index: int,
+    ) -> Optional[AudioBeatMap]:
+        raw_json = str(section.get(f"pysspbeatmap{slot_index}", "") or "").strip()
+        if not raw_json:
+            return None
+        try:
+            return normalize_audio_beat_map(json.loads(raw_json))
+        except Exception:
+            return None
 
     def _parse_sound_button_automation_from_section(
         self,
@@ -1947,6 +1974,7 @@ class PagesSlotsMixin:
         sound_midi_hotkey = slot.sound_midi_hotkey
         display_focus = slot.display_focus
         display_image_path = slot.display_image_path
+        audio_beat_map = normalize_audio_beat_map(slot.audio_beat_map)
         while True:
             dialog = EditSoundButtonDialog(
                 file_path=file_path,
@@ -1961,6 +1989,7 @@ class PagesSlotsMixin:
                 sound_midi_hotkey=sound_midi_hotkey,
                 display_focus=display_focus,
                 display_image_path=display_image_path,
+                audio_beat_map=audio_beat_map,
                 available_midi_input_devices=list_midi_input_devices(),
                 selected_midi_input_device_ids=self.midi_input_device_ids,
                 start_dir=start_dir,
@@ -1985,11 +2014,24 @@ class PagesSlotsMixin:
                 sound_midi_hotkey,
                 display_focus,
                 display_image_path,
+                audio_beat_map,
             ) = dialog.values()
             if result_code == EditSoundButtonDialog.REGENERATE_RESULT:
                 generated_path = self._generate_vocal_removed_file_for_slot(file_path, vocal_removed_file)
                 if generated_path:
                     vocal_removed_file = generated_path
+                continue
+            if result_code == EditSoundButtonDialog.ANALYZE_BPM_RESULT:
+                if not file_path:
+                    self._show_info_notice_banner("File is required before BPM analysis.")
+                    continue
+                try:
+                    audio_beat_map = analyze_audio_beat_map(file_path)
+                    self._show_save_notice_banner(
+                        f"Analyzed BPM: {int(round(audio_beat_map.bpm))} BPM {audio_beat_map.time_signature_num}/{audio_beat_map.time_signature_den}"
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "Analyze BPM", f"Could not analyze BPM.\n\n{exc}")
                 continue
             if result_code != QDialog.Accepted:
                 return
@@ -2057,6 +2099,7 @@ class PagesSlotsMixin:
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        slot.audio_beat_map = normalize_audio_beat_map(audio_beat_map)
         self._apply_display_focus_to_slot(
             slot,
             explicit_focus=display_focus,
@@ -2067,6 +2110,8 @@ class PagesSlotsMixin:
             slot.cue_end_ms = None
             slot.timecode_offset_ms = None
             slot.timecode_timeline_mode = "global"
+            if slot.audio_beat_map is not None and str(getattr(slot.audio_beat_map, "source", "") or "").strip().lower() != "manual":
+                slot.audio_beat_map = None
         self._set_dirty(True)
         self._warn_dual_automation_sources_if_needed(slot)
         self._refresh_page_list()
@@ -2163,6 +2208,7 @@ class PagesSlotsMixin:
         slot.volume_override_pct = volume_override_pct
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)
         slot.sound_midi_hotkey = self._parse_sound_midi_hotkey(sound_midi_hotkey)
+        slot.audio_beat_map = None
         self._apply_display_focus_to_slot(
             slot,
             explicit_focus=display_focus,
@@ -2255,6 +2301,7 @@ class PagesSlotsMixin:
         slot.volume_override_pct = None
         slot.cue_start_ms = None
         slot.cue_end_ms = None
+        slot.audio_beat_map = None
         slot.timecode_offset_ms = None
         slot.timecode_timeline_mode = "global"
         slot.sound_hotkey = self._parse_sound_hotkey(sound_hotkey)

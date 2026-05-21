@@ -4,6 +4,7 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.audio_beat_map import audio_beat_map_to_dict, normalize_audio_beat_map
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
@@ -148,13 +149,27 @@ class ActionsInputMixin:
             return
         for player in playing:
             self._trigger_sound_button_pause_requested_event(self._player_slot_key_map.get(id(player)))
-        if self.fade_on_pause and self._is_fade_out_enabled() and self.fade_out_sec > 0:
+        if self.fade_on_pause and self._is_fade_out_enabled():
             for player in playing:
+                slot = self._player_current_slot(player)
+                duration_ms = max(0, int(player.duration()))
                 resume_target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
+                fade_seconds = self._fade_out_seconds_for_slot(
+                    slot,
+                    duration_ms=duration_ms,
+                    start_ms=self._player_transport_sync_ms(player),
+                    end_limit_ms=self._cue_end_for_playback(slot, duration_ms) if slot is not None else None,
+                    prefer_downbeat=False,
+                )
+                if fade_seconds <= 0:
+                    player.pause()
+                    self._sync_shadow_transport_from_primary(player)
+                    self._trigger_sound_button_paused_event(self._player_slot_key_map.get(id(player)))
+                    continue
                 self._start_fade(
                     player,
                     0,
-                    self.fade_out_sec,
+                    fade_seconds,
                     stop_on_complete=False,
                     pause_on_complete=True,
                     pause_resume_volume=resume_target,
@@ -174,16 +189,29 @@ class ActionsInputMixin:
             return
         for player in paused:
             self._trigger_sound_button_resume_requested_event(self._player_slot_key_map.get(id(player)))
-        if self.fade_on_resume and self._is_fade_in_enabled() and self.fade_in_sec > 0:
+        if self.fade_on_resume and self._is_fade_in_enabled():
             for player in paused:
+                slot = self._player_current_slot(player)
+                duration_ms = max(0, int(player.duration()))
                 target = self._effective_slot_target_volume(self._slot_pct_for_player(player))
+                fade_seconds = self._fade_in_seconds_for_slot(
+                    slot,
+                    duration_ms=duration_ms,
+                    start_ms=self._player_transport_sync_ms(player),
+                )
+                if fade_seconds <= 0:
+                    self._set_player_volume(player, target)
+                    player.play()
+                    self._sync_shadow_transport_from_primary(player)
+                    self._trigger_sound_button_resumed_event(self._player_slot_key_map.get(id(player)))
+                    continue
                 self._set_player_volume(player, 0)
                 player.play()
                 self._sync_shadow_transport_from_primary(player)
                 self._start_fade(
                     player,
                     target,
-                    self.fade_in_sec,
+                    fade_seconds,
                     stop_on_complete=False,
                     automation_slot_key=self._player_slot_key_map.get(id(player)),
                     automation_start_events=("on_resume_fade_in_start",),
@@ -463,10 +491,25 @@ class ActionsInputMixin:
             ExternalMediaPlayer.PlayingState,
             ExternalMediaPlayer.PausedState,
         }:
+            slot = self._player_current_slot(player)
+            duration_ms = max(0, int(player.duration()))
+            fade_seconds = self._fade_out_seconds_for_slot(
+                slot,
+                duration_ms=duration_ms,
+                start_ms=self._player_transport_sync_ms(player),
+                end_limit_ms=self._cue_end_for_playback(slot, duration_ms) if slot is not None else None,
+                prefer_downbeat=False,
+            )
+            if fade_seconds <= 0:
+                self._stop_single_player(player)
+                if self.current_playing == slot_key:
+                    self._refresh_current_playing_from_active_players()
+                self._refresh_sound_grid()
+                return True
             self._start_fade(
                 player,
                 0,
-                self.fade_out_sec,
+                fade_seconds,
                 stop_on_complete=True,
                 automation_slot_key=self._player_slot_key_map.get(id(player)),
                 automation_start_events=("on_stop_fade_out_start",),
@@ -496,6 +539,21 @@ class ActionsInputMixin:
             x_btn = self.control_buttons.get("X")
             if x_btn:
                 x_btn.setChecked(False)
+
+    def _toggle_smart_fade_in_mode(self, checked: bool) -> None:
+        smart_btn = self.control_buttons.get("Smart In")
+        if smart_btn:
+            smart_btn.setChecked(bool(checked))
+
+    def _toggle_smart_cross_mode(self, checked: bool) -> None:
+        smart_btn = self.control_buttons.get("Smart X")
+        if smart_btn:
+            smart_btn.setChecked(bool(checked))
+
+    def _toggle_smart_fade_out_mode(self, checked: bool) -> None:
+        smart_btn = self.control_buttons.get("Smart Out")
+        if smart_btn:
+            smart_btn.setChecked(bool(checked))
 
     def _apply_talk_state_volume(self, fade: bool) -> None:
         fade_seconds = self.talk_fade_sec if fade else 0.0
@@ -1494,6 +1552,11 @@ class ActionsInputMixin:
                             display_image_path = clean_set_value(slot.display_image_path)
                             if display_image_path:
                                 lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+                            beat_map_payload = clean_set_value(
+                                json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":"))
+                            )
+                            if beat_map_payload and beat_map_payload != "{}":
+                                lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
                             if slot.custom_color:
                                 lines.append(f"pysspautomationcolor{slot_index}={to_set_color_value(slot.custom_color)}")
                             hotkey_code = self._encode_sound_hotkey(slot.sound_hotkey)
@@ -1532,6 +1595,11 @@ class ActionsInputMixin:
                             display_image_path = clean_set_value(slot.display_image_path)
                             if display_image_path:
                                 lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+                            beat_map_payload = clean_set_value(
+                                json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":"))
+                            )
+                            if beat_map_payload and beat_map_payload != "{}":
+                                lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
                             if slot.lyric_file:
                                 lyric_path = clean_set_value(lyric_overrides.get(slot_key, slot.lyric_file))
                                 lines.append(
@@ -1595,6 +1663,11 @@ class ActionsInputMixin:
                         display_image_path = clean_set_value(slot.display_image_path)
                         if display_image_path:
                             lines.append(f"pysspdisplayimage{slot_index}={display_image_path}")
+                        beat_map_payload = clean_set_value(
+                            json.dumps(audio_beat_map_to_dict(slot.audio_beat_map), separators=(",", ":"))
+                        )
+                        if beat_map_payload and beat_map_payload != "{}":
+                            lines.append(f"pysspbeatmap{slot_index}={beat_map_payload}")
                         vocal_removed_file = clean_set_value(vocal_removed_overrides.get(slot_key, slot.vocal_removed_file))
                         if vocal_removed_file:
                             lines.append(f"pysspvocalremoval{slot_index}={vocal_removed_file}")
@@ -1711,6 +1784,7 @@ class ActionsInputMixin:
                         sound_midi_hotkey=src.sound_midi_hotkey,
                         display_focus=normalize_display_focus(src.display_focus, allow_empty=True, default=DISPLAY_FOCUS_NONE),
                         display_image_path=str(src.display_image_path or "").strip(),
+                        audio_beat_map=normalize_audio_beat_map(src.audio_beat_map),
                     )
                     apply_display_focus = getattr(self, "_apply_display_focus_to_slot", None)
                     if callable(apply_display_focus):

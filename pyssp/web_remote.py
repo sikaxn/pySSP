@@ -560,6 +560,15 @@ class WebRemoteServer:
         m = re.fullmatch(r"/api/lyric/([^/]+)", endpoint)
         if m:
             return send("lyric_display", mode=m.group(1))
+        m = re.fullmatch(r"/api/video-display/source/([^/]+)/keepfollow", endpoint)
+        if m:
+            return send("video_display", action="set_source_only", source=m.group(1))
+        m = re.fullmatch(r"/api/video-display/source/([^/]+)", endpoint)
+        if m:
+            return send("video_display", action="set_source_override", source=m.group(1))
+        m = re.fullmatch(r"/api/video-display/follow/([^/]+)", endpoint)
+        if m:
+            return send("video_display", action="follow", mode=m.group(1))
 
         m = re.fullmatch(r"/api/talk/([^/]+)", endpoint)
         if m:

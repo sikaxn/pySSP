@@ -199,6 +199,22 @@
     });
   }
 
+  function videoRouteLabel(value){
+    const token = String(value || 'blank').trim().toLowerCase();
+    switch(token){
+      case 'video': return 'Video';
+      case 'image': return 'Image';
+      case 'lyric_display': return 'Lyric Display';
+      case 'stage_display': return 'Stage Display';
+      case 'metronome_display': return 'Metronome Display';
+      case 'backdrop': return 'Backdrop';
+      case 'blank': return 'Blank';
+      case 'white_screen': return 'White Screen';
+      case 'colour_bars': return 'Colour Bars';
+      default: return token || 'Blank';
+    }
+  }
+
   function idealTextColor(hex){
     if(!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)){ return '#111'; }
     const r = parseInt(hex.slice(1,3), 16);
@@ -289,6 +305,45 @@
     ).join('');
   }
 
+  function syncVideoDisplayControls(state){
+    const payload = state || {};
+    const followCheckbox = document.getElementById('videoFollowSoundButtonFocus');
+    const sourceSelect = document.getElementById('videoDisplayManualSource');
+    const statusNode = document.getElementById('videoDisplayStatus');
+    if(followCheckbox){
+      followCheckbox.checked = !!payload.video_display_follow_sound_button_focus;
+    }
+    if(sourceSelect){
+      const manualSource = String(payload.video_display_manual_source || 'blank').trim().toLowerCase();
+      if(Array.from(sourceSelect.options).some((option) => option.value === manualSource)){
+        sourceSelect.value = manualSource;
+      }
+    }
+    if(statusNode){
+      const active = videoRouteLabel(payload.video_display_active_source || 'blank');
+      const manual = videoRouteLabel(payload.video_display_manual_source || 'blank');
+      const follow = payload.video_display_follow_sound_button_focus ? 'ON' : 'OFF';
+      statusNode.textContent = `Follow: ${follow} | Manual: ${manual} | Active: ${active}`;
+    }
+  }
+
+  async function setVideoDisplaySource(keepFollow){
+    const sourceSelect = document.getElementById('videoDisplayManualSource');
+    const source = String(sourceSelect?.value || 'blank').trim().toLowerCase();
+    const path = keepFollow
+      ? `/api/video-display/source/${encodeURIComponent(source)}/keepfollow`
+      : `/api/video-display/source/${encodeURIComponent(source)}`;
+    await callApi(path);
+  }
+
+  async function setVideoDisplayFollow(enabled){
+    await callApi(`/api/video-display/follow/${enabled ? 'enable' : 'disable'}`);
+  }
+
+  async function toggleVideoDisplayFollow(){
+    await callApi('/api/video-display/follow/toggle');
+  }
+
   async function refreshState(updateSelection){
     const payload = await apiRequest('/api/query', 'GET');
     if(!payload.ok){ setStatus('Error: ' + (payload.error?.message || 'query failed')); return null; }
@@ -309,6 +364,9 @@
       playlist_enabled: s.playlist_enabled,
       shuffle_enabled: s.shuffle_enabled,
       multi_play_enabled: s.multi_play_enabled,
+      video_display_follow_sound_button_focus: s.video_display_follow_sound_button_focus,
+      video_display_manual_source: s.video_display_manual_source,
+      video_display_active_source: s.video_display_active_source,
       web_remote_url: s.web_remote_url
     }, null, 2);
     const automationWarning = document.getElementById('automationWarning');
@@ -323,6 +381,7 @@
       }
     }
     renderTracks(s.playing_tracks || []);
+    syncVideoDisplayControls(s);
     renderGroups();
     renderPages();
     return s;
@@ -389,5 +448,25 @@
     });
   }
 
+  const videoFollowSoundButtonFocus = document.getElementById('videoFollowSoundButtonFocus');
+  if(videoFollowSoundButtonFocus){
+    videoFollowSoundButtonFocus.addEventListener('change', async () => {
+      await setVideoDisplayFollow(videoFollowSoundButtonFocus.checked);
+    });
+  }
+  const videoDisplaySetOverride = document.getElementById('videoDisplaySetOverride');
+  if(videoDisplaySetOverride){
+    videoDisplaySetOverride.addEventListener('click', () => setVideoDisplaySource(false));
+  }
+  const videoDisplaySetKeepFollow = document.getElementById('videoDisplaySetKeepFollow');
+  if(videoDisplaySetKeepFollow){
+    videoDisplaySetKeepFollow.addEventListener('click', () => setVideoDisplaySource(true));
+  }
+  const videoDisplayToggleFollow = document.getElementById('videoDisplayToggleFollow');
+  if(videoDisplayToggleFollow){
+    videoDisplayToggleFollow.addEventListener('click', toggleVideoDisplayFollow);
+  }
+
+  syncVideoDisplayControls(null);
   refreshAll(true);
   setInterval(() => refreshAll(false), 1800);

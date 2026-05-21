@@ -88,7 +88,7 @@ class WindowLayoutPageMixin:
         main_layout.addWidget(self.window_layout_main_editor)
         layout.addWidget(main_group, 1)
 
-        fade_group = QGroupBox("Fade Buttons (3 x 1)")
+        fade_group = QGroupBox("Fade Buttons (6 x 1)")
         fade_layout = QVBoxLayout(fade_group)
         self.window_layout_fade_editor = _GridLayoutCanvas(
             "fade",

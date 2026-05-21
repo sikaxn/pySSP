@@ -1,3 +1,5 @@
+import pytest
+
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
     AUTOMATION_UNSUPPORTED_MARKER_TEXT,
@@ -131,6 +133,35 @@ def test_load_set_display_focus_and_image_fields(tmp_path):
     slot = result.pages["A"][0][0]
     assert slot.display_focus == "image"
     assert slot.display_image_path == "C:\\Media\\theme.png"
+
+
+def test_load_set_audio_beat_map_field(tmp_path):
+    set_path = tmp_path / "beat_map.set"
+    set_path.write_text(
+        "\n".join(
+            [
+                "[Main]",
+                "CreatedBy=SportsSounds",
+                "",
+                "[Page1]",
+                "PageName=Page 1",
+                "PagePlay=F",
+                "PageShuffle=F",
+                "c1=Theme Song",
+                "s1=C:\\\\Music\\\\theme.mp3",
+                'pysspbeatmap1={"bpm":128.5,"time_signature_num":3,"time_signature_den":4,"first_downbeat_ms":250,"beat_times_ms":[250,719],"beat_numbers":[1,2],"source":"librosa","confidence":0.75}',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = load_set_file(str(set_path))
+    slot = result.pages["A"][0][0]
+    assert slot.audio_beat_map is not None
+    assert slot.audio_beat_map.bpm == pytest.approx(128.5)
+    assert slot.audio_beat_map.time_signature_num == 3
+    assert slot.audio_beat_map.first_downbeat_ms == 250
+    assert slot.audio_beat_map.beat_times_ms == [250, 719]
 
 
 def test_load_set_missing_display_focus_keeps_slot_unset_for_runtime_defaults(tmp_path):

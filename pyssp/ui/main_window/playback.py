@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .shared import *
 from .constants import *
 from .helpers import *
+from pyssp.audio_beat_map import has_usable_smart_fade_beat_map, next_beat_boundary_ms, normalize_audio_beat_map
 from .widgets import *
 from pyssp.automation_command import (
     AUTOMATION_SOURCE_TYPE,
@@ -26,6 +27,9 @@ class _TrackEndTransitionState:
 
 
 class PlaybackMixin:
+    _SMART_FADE_MIN_SECONDS = 0.12
+    _SMART_FADE_MAX_SECONDS = 12.0
+
     def _current_transport_is_infinite_utility(self) -> bool:
         slot_key = self.current_playing
         if slot_key is None:
@@ -501,7 +505,7 @@ class PlaybackMixin:
             and not cross_mode
         ):
             print(f"[TCDBG] {time.perf_counter():.6f} delayed_start_due_to_fadeout key={playing_key}")
-            self._schedule_start_after_fadeout(group_key, self.current_page, slot_index)
+            self._schedule_start_after_fadeout(group_key, self.current_page, slot_index, next_slot=slot)
             return True
 
         playlist_enabled = (not self.cue_mode) and self.page_playlist_enabled[self.current_group][self.current_page]
@@ -843,6 +847,11 @@ class PlaybackMixin:
         fade_in_on: bool,
     ) -> None:
         if fade_in_on:
+            fade_seconds = self._fade_in_seconds_for_slot(
+                slot,
+                duration_ms=max(0, int(player.duration())),
+                start_ms=self._cue_start_for_playback(slot, max(0, int(player.duration()))),
+            )
             self._set_player_volume(player, 0)
             player.play()
             self._sync_shadow_transport_from_primary(player)
@@ -851,7 +860,7 @@ class PlaybackMixin:
             self._start_fade(
                 player,
                 target_volume,
-                self.fade_in_sec,
+                fade_seconds,
                 stop_on_complete=False,
                 automation_slot_key=playing_key,
                 automation_start_events=("on_fade_in_start",),
@@ -884,7 +893,22 @@ class PlaybackMixin:
         self._sync_shadow_transport_from_primary(new_player)
         self._set_player_slot_key(new_player, playing_key)
         self._mark_player_started(new_player)
-        fade_seconds = self.cross_fade_sec
+        old_slot = self._player_current_slot(old_player)
+        outgoing_position_ms = 0 if old_player is None else self._player_transport_sync_ms(old_player)
+        incoming_duration_ms = max(0, int(new_player.duration()))
+        outgoing_duration_ms = incoming_duration_ms if old_player is None else max(0, int(old_player.duration()))
+        outgoing_end_ms = None
+        if old_slot is not None and old_player is not None:
+            outgoing_end_ms = self._cue_end_for_playback(old_slot, outgoing_duration_ms)
+        fade_seconds = self._cross_fade_seconds_for_slots(
+            old_slot,
+            slot,
+            outgoing_duration_ms=outgoing_duration_ms,
+            incoming_duration_ms=incoming_duration_ms,
+            outgoing_start_ms=outgoing_position_ms,
+            incoming_start_ms=self._cue_start_for_playback(slot, incoming_duration_ms),
+            outgoing_end_limit_ms=outgoing_end_ms,
+        )
         self._start_fade(
             new_player,
             target_volume,
@@ -914,17 +938,22 @@ class PlaybackMixin:
         target_volume: int,
         fade_in_on: bool,
     ) -> None:
-        if fade_in_on and self.fade_in_sec > 0:
+        fade_seconds = self._fade_in_seconds_for_slot(
+            slot,
+            duration_ms=max(0, int(player.duration())),
+            start_ms=self._cue_start_for_playback(slot, max(0, int(player.duration()))),
+        )
+        if fade_in_on and fade_seconds > 0:
             self._set_player_volume(player, 0)
         else:
             self._set_player_volume(player, target_volume)
         player.play()
         self._sync_shadow_transport_from_primary(player)
-        if fade_in_on and self.fade_in_sec > 0:
+        if fade_in_on and fade_seconds > 0:
             self._start_fade(
                 player,
                 target_volume,
-                self.fade_in_sec,
+                fade_seconds,
                 stop_on_complete=False,
                 automation_slot_key=playing_key,
                 automation_start_events=("on_fade_in_start",),
@@ -1104,14 +1133,44 @@ class PlaybackMixin:
             return self.player_b, self.player
         return None, self.player
 
-    def _schedule_start_after_fadeout(self, group_key: str, page_index: int, slot_index: int) -> None:
+    def _schedule_start_after_fadeout(
+        self,
+        group_key: str,
+        page_index: int,
+        slot_index: int,
+        *,
+        next_slot: Optional[SoundButtonData] = None,
+    ) -> None:
         self._pending_start_request = (group_key, page_index, slot_index)
         self._pending_start_token += 1
         token = self._pending_start_token
-        fade_ms = max(1, int(self.fade_out_sec * 1000))
-        self._start_fade(self.player, 0, self.fade_out_sec, stop_on_complete=True)
+        current_slot = self._player_current_slot(self.player)
+        current_duration_ms = max(0, int(self.player.duration()))
+        fade_seconds = self._fade_out_seconds_for_slot(
+            current_slot,
+            duration_ms=current_duration_ms,
+            start_ms=self._player_transport_sync_ms(self.player),
+            end_limit_ms=self._cue_end_for_playback(current_slot, current_duration_ms) if current_slot is not None else None,
+            prefer_downbeat=False,
+        )
+        fade_ms = max(1, int(fade_seconds * 1000))
+        self._start_fade(self.player, 0, fade_seconds, stop_on_complete=True)
         if self.player_b.state() in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
-            self._start_fade(self.player_b, 0, self.fade_out_sec, stop_on_complete=True)
+            secondary_slot = self._player_current_slot(self.player_b)
+            secondary_duration_ms = max(0, int(self.player_b.duration()))
+            secondary_fade_seconds = self._fade_out_seconds_for_slot(
+                secondary_slot,
+                duration_ms=secondary_duration_ms,
+                start_ms=self._player_transport_sync_ms(self.player_b),
+                end_limit_ms=(
+                    self._cue_end_for_playback(secondary_slot, secondary_duration_ms)
+                    if secondary_slot is not None
+                    else None
+                ),
+                prefer_downbeat=False,
+            )
+            fade_ms = max(fade_ms, int(secondary_fade_seconds * 1000))
+            self._start_fade(self.player_b, 0, secondary_fade_seconds, stop_on_complete=True)
         QTimer.singleShot(fade_ms + 30, lambda t=token: self._run_pending_start(t))
 
     def _run_pending_start(self, token: int) -> None:
@@ -1619,7 +1678,7 @@ class PlaybackMixin:
             "duration": max(0.01, float(seconds)),
         }
 
-    def _vocal_removed_toggle_fade_seconds(self) -> float:
+    def _vocal_removed_toggle_fade_seconds(self, player: Optional[ExternalMediaPlayer] = None) -> float:
         mode = str(self.vocal_removed_toggle_fade_mode or "follow_cross_fade").strip().lower()
         if mode == "never":
             return 0.0
@@ -1627,6 +1686,23 @@ class PlaybackMixin:
             return max(0.0, float(self.vocal_removed_toggle_always_sec))
         if not self._is_cross_fade_enabled():
             return 0.0
+        if self._is_smart_cross_enabled():
+            current_player = self.player if player is None else player
+            current_slot = self._player_current_slot(current_player)
+            current_duration_ms = max(0, int(current_player.duration())) if current_player is not None else 0
+            smart_seconds = self._smart_fade_out_seconds_for_slot(
+                current_slot,
+                duration_ms=current_duration_ms,
+                start_ms=0 if current_player is None else self._player_transport_sync_ms(current_player),
+                end_limit_ms=(
+                    self._cue_end_for_playback(current_slot, current_duration_ms)
+                    if current_slot is not None
+                    else None
+                ),
+                prefer_downbeat=True,
+            )
+            if smart_seconds is not None:
+                return smart_seconds
         if mode == "follow_cross_fade_custom":
             return max(0.0, float(self.vocal_removed_toggle_custom_sec))
         return max(0.0, float(self.cross_fade_sec))
@@ -1652,7 +1728,7 @@ class PlaybackMixin:
             force_seek=True,
         )
         logical_volume = self._logical_player_volume(player)
-        fade_seconds = self._vocal_removed_toggle_fade_seconds()
+        fade_seconds = self._vocal_removed_toggle_fade_seconds(player)
         if player.state() != ExternalMediaPlayer.PlayingState or fade_seconds <= 0:
             self._cancel_fade_for_player(player)
             self._cancel_fade_for_player(shadow)
@@ -2026,6 +2102,7 @@ class PlaybackMixin:
                     sound_midi_hotkey=slot.sound_midi_hotkey,
                     display_focus=normalize_display_focus(slot.display_focus, default=DISPLAY_FOCUS_NONE),
                     display_image_path=str(slot.display_image_path or "").strip(),
+                    audio_beat_map=normalize_audio_beat_map(slot.audio_beat_map),
                 )
                 slot.copied_to_cue = True
                 self._set_dirty(True)
@@ -2047,6 +2124,161 @@ class PlaybackMixin:
 
     def _is_cross_mode_enabled(self) -> bool:
         return self._is_cross_fade_enabled()
+
+    def _is_smart_fade_in_enabled(self) -> bool:
+        btn = self.control_buttons.get("Smart In")
+        return bool(btn and btn.isChecked())
+
+    def _is_smart_cross_enabled(self) -> bool:
+        btn = self.control_buttons.get("Smart X")
+        return bool(btn and btn.isChecked())
+
+    def _is_smart_fade_out_enabled(self) -> bool:
+        btn = self.control_buttons.get("Smart Out")
+        return bool(btn and btn.isChecked())
+
+    def _slot_smart_fade_beat_map(self, slot: Optional[SoundButtonData]):
+        if slot is None:
+            return None
+        beat_map = normalize_audio_beat_map(getattr(slot, "audio_beat_map", None))
+        if not has_usable_smart_fade_beat_map(beat_map):
+            return None
+        return beat_map
+
+    def _player_current_slot(self, player: Optional[ExternalMediaPlayer]) -> Optional[SoundButtonData]:
+        if player is None:
+            return None
+        slot_key = self._player_slot_key_map.get(id(player))
+        return self._slot_for_key(slot_key) if slot_key is not None else None
+
+    def _smart_fade_duration_seconds(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        start_ms: int,
+        duration_ms: int,
+        end_limit_ms: Optional[int] = None,
+        prefer_downbeat: bool = False,
+    ) -> Optional[float]:
+        beat_map = self._slot_smart_fade_beat_map(slot)
+        if beat_map is None:
+            return None
+        cue_start_ms = 0 if slot is None else self._cue_start_for_playback(slot, duration_ms)
+        cue_end_ms = None if slot is None else self._cue_end_for_playback(slot, duration_ms)
+        low = max(0, int(cue_start_ms))
+        high = max(low, int(duration_ms if cue_end_ms is None else cue_end_ms))
+        target_start_ms = max(low, min(high, int(start_ms)))
+        target_end_limit_ms = high if end_limit_ms is None else max(target_start_ms, min(high, int(end_limit_ms)))
+        boundary_ms = next_beat_boundary_ms(
+            beat_map,
+            target_start_ms,
+            prefer_downbeat=prefer_downbeat,
+            end_limit_ms=target_end_limit_ms,
+            max_lookahead_beats=max(4, int(getattr(beat_map, "time_signature_num", 4) or 4) * 2),
+        )
+        if boundary_ms is None and target_end_limit_ms > target_start_ms:
+            boundary_ms = target_end_limit_ms
+        if boundary_ms is None:
+            return None
+        fade_seconds = max(0.0, float(boundary_ms - target_start_ms) / 1000.0)
+        if fade_seconds < self._SMART_FADE_MIN_SECONDS or fade_seconds > self._SMART_FADE_MAX_SECONDS:
+            return None
+        return fade_seconds
+
+    def _smart_fade_in_seconds_for_slot(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        duration_ms: int,
+        start_ms: int,
+    ) -> Optional[float]:
+        return self._smart_fade_duration_seconds(
+            slot,
+            start_ms=start_ms,
+            duration_ms=duration_ms,
+            end_limit_ms=None,
+            prefer_downbeat=False,
+        )
+
+    def _smart_fade_out_seconds_for_slot(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        duration_ms: int,
+        start_ms: int,
+        end_limit_ms: Optional[int] = None,
+        prefer_downbeat: bool = False,
+    ) -> Optional[float]:
+        return self._smart_fade_duration_seconds(
+            slot,
+            start_ms=start_ms,
+            duration_ms=duration_ms,
+            end_limit_ms=end_limit_ms,
+            prefer_downbeat=prefer_downbeat,
+        )
+
+    def _fade_in_seconds_for_slot(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        duration_ms: int,
+        start_ms: int,
+    ) -> float:
+        if self._is_smart_fade_in_enabled():
+            smart_seconds = self._smart_fade_in_seconds_for_slot(slot, duration_ms=duration_ms, start_ms=start_ms)
+            if smart_seconds is not None:
+                return smart_seconds
+        return max(0.0, float(self.fade_in_sec))
+
+    def _fade_out_seconds_for_slot(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        duration_ms: int,
+        start_ms: int,
+        end_limit_ms: Optional[int] = None,
+        prefer_downbeat: bool = False,
+    ) -> float:
+        if self._is_smart_fade_out_enabled():
+            smart_seconds = self._smart_fade_out_seconds_for_slot(
+                slot,
+                duration_ms=duration_ms,
+                start_ms=start_ms,
+                end_limit_ms=end_limit_ms,
+                prefer_downbeat=prefer_downbeat,
+            )
+            if smart_seconds is not None:
+                return smart_seconds
+        return max(0.0, float(self.fade_out_sec))
+
+    def _cross_fade_seconds_for_slots(
+        self,
+        outgoing_slot: Optional[SoundButtonData],
+        incoming_slot: Optional[SoundButtonData],
+        *,
+        outgoing_duration_ms: int,
+        incoming_duration_ms: int,
+        outgoing_start_ms: int,
+        incoming_start_ms: int,
+        outgoing_end_limit_ms: Optional[int] = None,
+    ) -> float:
+        if self._is_smart_cross_enabled():
+            outgoing_seconds = self._smart_fade_out_seconds_for_slot(
+                outgoing_slot,
+                duration_ms=outgoing_duration_ms,
+                start_ms=outgoing_start_ms,
+                end_limit_ms=outgoing_end_limit_ms,
+                prefer_downbeat=True,
+            )
+            incoming_seconds = self._smart_fade_in_seconds_for_slot(
+                incoming_slot,
+                duration_ms=incoming_duration_ms,
+                start_ms=incoming_start_ms,
+            )
+            smart_candidates = [value for value in [outgoing_seconds, incoming_seconds] if value is not None]
+            if smart_candidates:
+                return max(smart_candidates)
+        return max(0.0, float(self.cross_fade_sec))
 
     def _current_fade_mode(self) -> str:
         # Mode priority:
@@ -2416,6 +2648,9 @@ class PlaybackMixin:
         self._set_button_flash_style("Fade In", flash_on)
         self._set_button_flash_style("Fade Out", flash_on)
         self._set_button_flash_style("X", flash_on)
+        self._set_button_flash_style("Smart In", flash_on and self._is_smart_fade_in_enabled())
+        self._set_button_flash_style("Smart Out", flash_on and self._is_smart_fade_out_enabled())
+        self._set_button_flash_style("Smart X", flash_on and self._is_smart_cross_enabled())
 
     def _set_button_flash_style(self, key: str, flash_on: bool) -> None:
         btn = self.control_buttons.get(key)
@@ -2433,23 +2668,42 @@ class PlaybackMixin:
             and self.current_playing is not None
             and self.player.state() == ExternalMediaPlayer.PlayingState
             and self.current_duration_ms > 0
-            and self.fade_out_sec > 0
             and self._is_fade_out_enabled()
             and (not self._is_cross_fade_enabled())
         ):
             track_key = self.current_playing
+            track_slot = self._slot_for_key(track_key)
             if self._auto_end_fade_track != track_key:
                 self._auto_end_fade_track = track_key
                 self._auto_end_fade_done = False
             if not self._auto_end_fade_done:
                 remaining_ms = max(0, self.current_duration_ms - self.player.position())
-                lead_ms = max(0, int(self.fade_out_end_lead_sec * 1000))
+                fade_seconds = self._fade_out_seconds_for_slot(
+                    track_slot,
+                    duration_ms=self.current_duration_ms,
+                    start_ms=self._player_transport_sync_ms(self.player),
+                    end_limit_ms=self._cue_end_for_playback(track_slot, self.current_duration_ms) if track_slot is not None else None,
+                    prefer_downbeat=False,
+                )
+                if fade_seconds <= 0:
+                    fade_seconds = max(0.0, float(self.fade_out_sec))
+                lead_ms = max(
+                    0,
+                    int(
+                        (
+                            fade_seconds
+                            if self._is_smart_fade_out_enabled()
+                            else float(self.fade_out_end_lead_sec)
+                        )
+                        * 1000
+                    ),
+                )
                 if remaining_ms <= lead_ms:
                     self._auto_end_fade_done = True
                     self._start_fade(
                         self.player,
                         0,
-                        self.fade_out_sec,
+                        fade_seconds,
                         stop_on_complete=True,
                         automation_slot_key=track_key,
                         automation_start_events=("on_end_fade_out_start",),
@@ -2485,37 +2739,53 @@ class PlaybackMixin:
             return
 
         remaining_ms = max(0, self.current_duration_ms - self.player.position())
-        if self._is_cross_fade_enabled() and self.cross_fade_sec > 0:
-            if remaining_ms <= int(self.cross_fade_sec * 1000):
-                blocked: set[int] = set()
-                while True:
-                    next_slot = self._next_playlist_slot(
-                        for_auto_advance=True,
-                        blocked=blocked,
-                        group_key=track_group,
-                        page_index=int(track_page),
-                        current_track=track_key,
-                    )
-                    if next_slot is None:
-                        break
-                    next_key = (track_group, int(track_page), int(next_slot))
-                    next_slot_data = self._slot_for_key(next_key)
-                    if next_slot_data is not None and next_slot_data.source_type == AUTOMATION_SOURCE_TYPE:
-                        blocked.add(next_slot)
-                        continue
-                    self.current_group = track_group
-                    self.current_page = int(track_page)
-                    self.cue_mode = False
-                    self._refresh_group_buttons()
-                    self._sync_playlist_shuffle_buttons()
-                    self._refresh_page_list()
-                    if self._play_slot_via_control_flow(next_slot):
-                        self._auto_transition_done = True
-                        break
+        if self._is_cross_fade_enabled():
+            blocked: set[int] = set()
+            while True:
+                next_slot = self._next_playlist_slot(
+                    for_auto_advance=True,
+                    blocked=blocked,
+                    group_key=track_group,
+                    page_index=int(track_page),
+                    current_track=track_key,
+                )
+                if next_slot is None:
+                    break
+                next_key = (track_group, int(track_page), int(next_slot))
+                next_slot_data = self._slot_for_key(next_key)
+                if next_slot_data is not None and next_slot_data.source_type == AUTOMATION_SOURCE_TYPE:
                     blocked.add(next_slot)
-                    if self.candidate_error_action == "stop_playback":
-                        self._stop_playback()
-                        break
+                    continue
+                next_transition_seconds = self._cross_fade_seconds_for_slots(
+                    track_slot,
+                    next_slot_data,
+                    outgoing_duration_ms=self.current_duration_ms,
+                    incoming_duration_ms=max(0, int(getattr(next_slot_data, "duration_ms", 0) or 0)),
+                    outgoing_start_ms=self._player_transport_sync_ms(self.player),
+                    incoming_start_ms=(
+                        0
+                        if next_slot_data is None
+                        else self._cue_start_for_playback(next_slot_data, max(0, int(getattr(next_slot_data, "duration_ms", 0) or 0)))
+                    ),
+                    outgoing_end_limit_ms=(
+                        self._cue_end_for_playback(track_slot, self.current_duration_ms) if track_slot is not None else None
+                    ),
+                )
+                if next_transition_seconds <= 0 or remaining_ms > int(next_transition_seconds * 1000):
+                    break
+                self.current_group = track_group
+                self.current_page = int(track_page)
+                self.cue_mode = False
+                self._refresh_group_buttons()
+                self._sync_playlist_shuffle_buttons()
+                self._refresh_page_list()
+                if self._play_slot_via_control_flow(next_slot):
+                    self._auto_transition_done = True
+                    break
+                blocked.add(next_slot)
+                if self.candidate_error_action == "stop_playback":
+                    self._stop_playback()
+                    break
             return
 
     def _swap_primary_secondary_players(self) -> None:

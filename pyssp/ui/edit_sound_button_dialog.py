@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -16,11 +17,13 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QSlider,
     QVBoxLayout,
     QWidget,
 )
 from pyssp.audio_format_support import build_audio_file_dialog_filter
+from pyssp.audio_beat_map import AudioBeatMap, normalize_audio_beat_map
 from pyssp.display_focus import DISPLAY_FOCUS_LABELS, DISPLAY_FOCUS_VALUES, normalize_display_focus
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.midi_control import (
@@ -73,6 +76,7 @@ class SoundHotkeyEdit(QLineEdit):
 
 class EditSoundButtonDialog(QDialog):
     REGENERATE_RESULT = 1001
+    ANALYZE_BPM_RESULT = 1002
 
     def __init__(
         self,
@@ -88,6 +92,7 @@ class EditSoundButtonDialog(QDialog):
         sound_midi_hotkey: str = "",
         display_focus: str = "",
         display_image_path: str = "",
+        audio_beat_map: Optional[AudioBeatMap] = None,
         available_midi_input_devices: Optional[list[tuple[str, str]]] = None,
         selected_midi_input_device_ids: Optional[list[str]] = None,
         start_dir: str = "",
@@ -152,6 +157,59 @@ class EditSoundButtonDialog(QDialog):
         display_image_layout.addWidget(self.display_image_browse_btn)
         display_image_layout.addWidget(self.display_image_clear_btn)
         form.addRow(tr("Display Image"), display_image_row)
+
+        normalized_audio_beat_map = normalize_audio_beat_map(audio_beat_map)
+        self._audio_beat_times_ms = [] if normalized_audio_beat_map is None else list(normalized_audio_beat_map.beat_times_ms)
+        self._audio_beat_numbers = [] if normalized_audio_beat_map is None else list(normalized_audio_beat_map.beat_numbers)
+        self._audio_beat_source = "" if normalized_audio_beat_map is None else str(normalized_audio_beat_map.source or "")
+        self._audio_beat_confidence = 0.0 if normalized_audio_beat_map is None else float(normalized_audio_beat_map.confidence or 0.0)
+        self._audio_analysis_method = "" if normalized_audio_beat_map is None else str(normalized_audio_beat_map.analysis_method or "")
+        self._audio_analysis_confidence = (
+            0.0 if normalized_audio_beat_map is None else float(normalized_audio_beat_map.analysis_confidence or 0.0)
+        )
+        self._audio_analysis_version = "" if normalized_audio_beat_map is None else str(normalized_audio_beat_map.analysis_version or "")
+        self.audio_metronome_enabled_checkbox = QCheckBox(tr("Enable metronome timing for this audio"))
+        self.audio_metronome_enabled_checkbox.setChecked(normalized_audio_beat_map is not None)
+        form.addRow("", self.audio_metronome_enabled_checkbox)
+
+        self.audio_bpm_spin = QDoubleSpinBox()
+        self.audio_bpm_spin.setRange(1.0, 999.0)
+        self.audio_bpm_spin.setDecimals(2)
+        self.audio_bpm_spin.setSingleStep(0.25)
+        self.audio_bpm_spin.setValue(120.0 if normalized_audio_beat_map is None else float(normalized_audio_beat_map.bpm))
+        form.addRow(tr("Metronome BPM"), self.audio_bpm_spin)
+
+        self.audio_timesig_num_spin = QSpinBox()
+        self.audio_timesig_num_spin.setRange(1, 12)
+        self.audio_timesig_num_spin.setValue(4 if normalized_audio_beat_map is None else int(normalized_audio_beat_map.time_signature_num))
+        form.addRow(tr("Beats Per Bar"), self.audio_timesig_num_spin)
+
+        self.audio_timesig_den_combo = QComboBox()
+        for value in (2, 4, 8, 16):
+            self.audio_timesig_den_combo.addItem(str(value), value)
+        target_denominator = 4 if normalized_audio_beat_map is None else int(normalized_audio_beat_map.time_signature_den)
+        denominator_index = self.audio_timesig_den_combo.findData(target_denominator)
+        self.audio_timesig_den_combo.setCurrentIndex(denominator_index if denominator_index >= 0 else 1)
+        form.addRow(tr("Beat Unit"), self.audio_timesig_den_combo)
+
+        self.audio_downbeat_offset_spin = QSpinBox()
+        self.audio_downbeat_offset_spin.setRange(0, 24 * 60 * 60 * 1000)
+        self.audio_downbeat_offset_spin.setSingleStep(10)
+        self.audio_downbeat_offset_spin.setValue(0 if normalized_audio_beat_map is None else int(normalized_audio_beat_map.first_downbeat_ms))
+        form.addRow(tr("First Downbeat ms"), self.audio_downbeat_offset_spin)
+
+        analysis_row = QWidget()
+        analysis_layout = QHBoxLayout(analysis_row)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        self.audio_analysis_status_label = QLabel("")
+        self.audio_analyze_btn = QPushButton(tr("Analyze BPM"))
+        self.audio_analyze_btn.clicked.connect(self._request_analyze_bpm)
+        self.audio_clear_analysis_btn = QPushButton(tr("Clear"))
+        self.audio_clear_analysis_btn.clicked.connect(self._clear_audio_analysis)
+        analysis_layout.addWidget(self.audio_analysis_status_label, 1)
+        analysis_layout.addWidget(self.audio_analyze_btn)
+        analysis_layout.addWidget(self.audio_clear_analysis_btn)
+        form.addRow(tr("Analysis"), analysis_row)
 
         vocal_row = QWidget()
         vocal_layout = QHBoxLayout(vocal_row)
@@ -259,9 +317,13 @@ class EditSoundButtonDialog(QDialog):
         self.volume_slider.valueChanged.connect(_sync_volume_label)
         self.custom_volume_checkbox.toggled.connect(_sync_slider_enabled)
         self.display_focus_combo.currentIndexChanged.connect(self._sync_display_focus_controls)
+        self.audio_metronome_enabled_checkbox.toggled.connect(self._sync_audio_beat_controls)
+        self.audio_metronome_enabled_checkbox.toggled.connect(lambda _checked=False: self._refresh_audio_analysis_status())
         _sync_volume_label(self.volume_slider.value())
         _sync_slider_enabled(self.custom_volume_checkbox.isChecked())
         self._sync_display_focus_controls()
+        self._sync_audio_beat_controls()
+        self._refresh_audio_analysis_status()
 
         root.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -285,7 +347,7 @@ class EditSoundButtonDialog(QDialog):
             self.file_edit.setText(file_path)
             self._start_dir = os.path.dirname(file_path)
 
-    def values(self) -> tuple[str, str, str, bool, str, str, str, Optional[int], str, str, str, str]:
+    def values(self) -> tuple[str, str, str, bool, str, str, str, Optional[int], str, str, str, str, Optional[AudioBeatMap]]:
         volume_override_pct: Optional[int] = None
         if self.custom_volume_checkbox.isChecked():
             volume_override_pct = max(0, min(100, int(self.volume_slider.value())))
@@ -302,6 +364,7 @@ class EditSoundButtonDialog(QDialog):
             self._midi_binding,
             normalize_display_focus(str(self.display_focus_combo.currentData() or ""), default="none"),
             self.display_image_edit.text().strip(),
+            self._audio_beat_map_from_inputs(),
         )
 
     def _browse_lyric_file(self) -> None:
@@ -373,8 +436,82 @@ class EditSoundButtonDialog(QDialog):
         if not enabled:
             self.display_image_edit.setText(self.display_image_edit.text().strip())
 
+    def _sync_audio_beat_controls(self) -> None:
+        enabled = bool(self.audio_metronome_enabled_checkbox.isChecked())
+        for widget in (
+            self.audio_bpm_spin,
+            self.audio_timesig_num_spin,
+            self.audio_timesig_den_combo,
+            self.audio_downbeat_offset_spin,
+            self.audio_clear_analysis_btn,
+        ):
+            widget.setEnabled(enabled)
+
+    def _refresh_audio_analysis_status(self) -> None:
+        if not self._audio_beat_times_ms:
+            if self.audio_metronome_enabled_checkbox.isChecked():
+                self.audio_analysis_status_label.setText(tr("Manual timing"))
+            else:
+                self.audio_analysis_status_label.setText(tr("No analysis"))
+            return
+        source = str(self._audio_analysis_method or self._audio_beat_source or "analysis").replace("_", " ").strip().title()
+        confidence = int(
+            round(
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(self._audio_analysis_confidence or self._audio_beat_confidence or 0.0),
+                    ),
+                )
+                * 100.0
+            )
+        )
+        self.audio_analysis_status_label.setText(
+            f"{source}: {len(self._audio_beat_times_ms)} beats, {confidence}%"
+        )
+
+    def _audio_beat_map_from_inputs(self) -> Optional[AudioBeatMap]:
+        if not self.audio_metronome_enabled_checkbox.isChecked():
+            return None
+        denominator = int(self.audio_timesig_den_combo.currentData() or 4)
+        return normalize_audio_beat_map(
+            AudioBeatMap(
+                bpm=float(self.audio_bpm_spin.value()),
+                time_signature_num=int(self.audio_timesig_num_spin.value()),
+                time_signature_den=denominator,
+                first_downbeat_ms=int(self.audio_downbeat_offset_spin.value()),
+                beat_times_ms=list(self._audio_beat_times_ms),
+                beat_numbers=list(self._audio_beat_numbers),
+                source=str(self._audio_beat_source or "manual"),
+                confidence=float(self._audio_beat_confidence or 0.0),
+                analysis_method=str(self._audio_analysis_method or self._audio_beat_source or "manual"),
+                analysis_confidence=float(self._audio_analysis_confidence or self._audio_beat_confidence or 0.0),
+                analysis_version=str(self._audio_analysis_version or "1"),
+            )
+        )
+
     def _request_regenerate_vocal_removed(self) -> None:
         self.done(self.REGENERATE_RESULT)
+
+    def _request_analyze_bpm(self) -> None:
+        self.done(self.ANALYZE_BPM_RESULT)
+
+    def _clear_audio_analysis(self) -> None:
+        self.audio_metronome_enabled_checkbox.setChecked(False)
+        self.audio_bpm_spin.setValue(120.0)
+        self.audio_timesig_num_spin.setValue(4)
+        denominator_index = self.audio_timesig_den_combo.findData(4)
+        self.audio_timesig_den_combo.setCurrentIndex(denominator_index if denominator_index >= 0 else 0)
+        self.audio_downbeat_offset_spin.setValue(0)
+        self._audio_beat_times_ms = []
+        self._audio_beat_numbers = []
+        self._audio_beat_source = ""
+        self._audio_beat_confidence = 0.0
+        self._audio_analysis_method = ""
+        self._audio_analysis_confidence = 0.0
+        self._audio_analysis_version = ""
+        self._refresh_audio_analysis_status()
 
     def _set_midi_binding(self, token: str) -> None:
         normalized = normalize_midi_binding(token)

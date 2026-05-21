@@ -8,6 +8,7 @@ from .constants import *
 from .helpers import *
 from .widgets import *
 from pyssp.automation_command import AUTOMATION_SOURCE_TYPE
+from pyssp.audio_beat_map import beat_phase_at_position, normalize_audio_beat_map
 from pyssp.ffmpeg_support import FFMPEG_VIDEO_EXTENSIONS
 from pyssp.utility_audio import utility_source_payload
 from pyssp.utility_audio import UTILITY_SOURCE_TYPE
@@ -17,6 +18,17 @@ from pyssp.ui.video_display import VideoDisplayWidget
 _VIDEO_FILE_EXTENSIONS = {str(token or "").strip().lower() for token in FFMPEG_VIDEO_EXTENSIONS}
 _VIDEO_FRAME_FALLBACK_INTERVAL_MS = 33
 _VIDEO_BACKDROP_MESSAGE = "No video is playing"
+_MERGED_VIDEO_ROUTE_OPTIONS = [
+    (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_FOCUS_VIDEO], DISPLAY_FOCUS_VIDEO),
+    (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_FOCUS_IMAGE], DISPLAY_FOCUS_IMAGE),
+    ("Lyric Display", DISPLAY_FOCUS_LYRIC),
+    ("Stage Display", DISPLAY_FOCUS_STAGE),
+    (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_FOCUS_METRONOME], DISPLAY_FOCUS_METRONOME),
+    ("Backdrop", DISPLAY_FOCUS_BACKDROP),
+    (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_ROUTE_SOURCE_BLANK], DISPLAY_ROUTE_SOURCE_BLANK),
+    ("White Screen", DISPLAY_FOCUS_WHITE),
+    ("Colour Bars", DISPLAY_FOCUS_COLOUR_BARS),
+]
 
 
 def _freeze_snapshot_token(value):
@@ -326,6 +338,19 @@ def _video_subprocess_platform_kwargs() -> dict:
 
 class VideoDisplayMixin:
     @staticmethod
+    def _manual_video_route_value_from_modes(mode_playing: str, mode_idle: str, *, default: str = "blank") -> str:
+        playing = normalize_display_focus_override(str(mode_playing or ""), default=DISPLAY_FOCUS_FOLLOW)
+        idle = normalize_display_route_source(str(mode_idle or default), default=default)
+        valid = {value for _label, value in _MERGED_VIDEO_ROUTE_OPTIONS}
+        if playing in valid:
+            return playing
+        if playing == DISPLAY_FOCUS_NONE:
+            return DISPLAY_ROUTE_SOURCE_BLANK
+        if idle in valid:
+            return idle
+        return default
+
+    @staticmethod
     def _slot_allows_video_loading(slot: Optional[SoundButtonData]) -> bool:
         return not bool(getattr(slot, "disable_video_loading", False)) if slot is not None else True
 
@@ -347,42 +372,20 @@ class VideoDisplayMixin:
         layout.setSpacing(6)
         form = QFormLayout()
 
-        self.video_mode_playing_combo = QComboBox(panel)
-        for value in [
-            DISPLAY_FOCUS_FOLLOW,
-            DISPLAY_FOCUS_NONE,
-            DISPLAY_FOCUS_VIDEO,
-            DISPLAY_FOCUS_IMAGE,
-            DISPLAY_FOCUS_LYRIC,
-            DISPLAY_FOCUS_STAGE,
-            DISPLAY_FOCUS_BACKDROP,
-            DISPLAY_FOCUS_WHITE,
-            DISPLAY_FOCUS_COLOUR_BARS,
-            DISPLAY_FOCUS_METRONOME,
-        ]:
-            self.video_mode_playing_combo.addItem(
-                DISPLAY_FOCUS_OVERRIDE_LABELS.get(value, DISPLAY_FOCUS_LABELS.get(value, value)),
-                value,
-            )
-        index = self.video_mode_playing_combo.findData(
+        self.video_follow_sound_button_focus_checkbox = QCheckBox("Follow Sound Button Display Focus", panel)
+        self.video_follow_sound_button_focus_checkbox.setChecked(
             normalize_display_focus_override(self.video_display_mode_playing, default=DISPLAY_FOCUS_FOLLOW)
+            == DISPLAY_FOCUS_FOLLOW
         )
-        self.video_mode_playing_combo.setCurrentIndex(index if index >= 0 else 0)
-        form.addRow("When sound button has display focus:", self.video_mode_playing_combo)
+        form.addRow(self.video_follow_sound_button_focus_checkbox)
 
-        self.video_mode_idle_combo = QComboBox(panel)
-        for label, value in [
-            ("Lyric Display", "lyric_display"),
-            ("Stage Display", "stage_display"),
-            ("Backdrop", "backdrop"),
-            ("Blank", "blank"),
-            ("White Screen", "white_screen"),
-            ("Colour Bars", "colour_bars"),
-        ]:
-            self.video_mode_idle_combo.addItem(label, value)
-        index = self.video_mode_idle_combo.findData(self.video_display_mode_idle)
-        self.video_mode_idle_combo.setCurrentIndex(index if index >= 0 else 0)
-        form.addRow("When video is not playing:", self.video_mode_idle_combo)
+        self.video_route_combo = QComboBox(panel)
+        for label, value in _MERGED_VIDEO_ROUTE_OPTIONS:
+            self.video_route_combo.addItem(label, value)
+        manual_route = self._manual_video_route_value_from_modes(self.video_display_mode_playing, self.video_display_mode_idle)
+        index = self.video_route_combo.findData(manual_route)
+        self.video_route_combo.setCurrentIndex(index if index >= 0 else 0)
+        form.addRow("Otherwise:", self.video_route_combo)
         layout.addLayout(form)
 
         self.video_preview_widget = VideoDisplayWidget(panel, allow_fullscreen_toggle=False)
@@ -405,8 +408,8 @@ class VideoDisplayMixin:
         dock.visibilityChanged.connect(self._on_video_control_dock_visibility_changed)
         dock.dockLocationChanged.connect(lambda _area: self._schedule_dock_layout_save())
         dock.topLevelChanged.connect(lambda _floating: self._schedule_dock_layout_save())
-        self.video_mode_playing_combo.currentIndexChanged.connect(self._on_video_display_route_changed)
-        self.video_mode_idle_combo.currentIndexChanged.connect(self._on_video_display_route_changed)
+        self.video_follow_sound_button_focus_checkbox.toggled.connect(self._on_video_display_route_changed)
+        self.video_route_combo.currentIndexChanged.connect(self._on_video_display_route_changed)
         self.video_control_dock = dock
         self.video_control_panel = panel
         self._refresh_video_display(force=True)
@@ -429,15 +432,105 @@ class VideoDisplayMixin:
         self.video_control_dock.show()
 
     def _on_video_display_route_changed(self, _index: int = 0) -> None:
-        self.video_display_mode_playing = normalize_display_focus_override(
-            str(self.video_mode_playing_combo.currentData() or DISPLAY_FOCUS_FOLLOW),
-            default=DISPLAY_FOCUS_FOLLOW,
-        )
-        self.ndi_output_mode_playing = self.video_display_mode_playing
-        self.video_display_mode_idle = str(self.video_mode_idle_combo.currentData() or "blank")
-        self._refresh_video_display(force=True)
+        manual_route = str(self.video_route_combo.currentData() or "blank")
+        if bool(self.video_follow_sound_button_focus_checkbox.isChecked()):
+            self._apply_video_display_route_action("set_source_only", source=manual_route, refresh=False)
+            self._apply_video_display_route_action("follow", mode="enable", refresh=True)
+        else:
+            self._apply_video_display_route_action("set_source_override", source=manual_route, refresh=True)
         if not self._suspend_settings_save:
             self._save_settings()
+
+    def _video_display_follow_sound_button_focus_enabled(self) -> bool:
+        return normalize_display_focus_override(
+            getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            default=DISPLAY_FOCUS_FOLLOW,
+        ) == DISPLAY_FOCUS_FOLLOW
+
+    def _video_display_route_state_payload(self) -> dict:
+        return {
+            "video_display_follow_sound_button_focus": self._video_display_follow_sound_button_focus_enabled(),
+            "video_display_manual_source": self._manual_video_route_value_from_modes(
+                getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+                getattr(self, "video_display_mode_idle", DISPLAY_ROUTE_SOURCE_BLANK),
+            ),
+            "video_display_active_source": str(self._active_video_route_mode() or DISPLAY_ROUTE_SOURCE_BLANK),
+        }
+
+    def _sync_video_display_route_controls_from_state(self) -> None:
+        checkbox = getattr(self, "video_follow_sound_button_focus_checkbox", None)
+        combo = getattr(self, "video_route_combo", None)
+        if checkbox is None and combo is None:
+            return
+        checked = self._video_display_follow_sound_button_focus_enabled()
+        manual_route = self._manual_video_route_value_from_modes(
+            getattr(self, "video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
+            getattr(self, "video_display_mode_idle", DISPLAY_ROUTE_SOURCE_BLANK),
+        )
+        if checkbox is not None:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(checked)
+            checkbox.blockSignals(False)
+        if combo is not None:
+            combo.blockSignals(True)
+            index = combo.findData(manual_route)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+
+    def _apply_video_display_route_action(
+        self,
+        action: str,
+        *,
+        source: str = "",
+        mode: str = "",
+        refresh: bool = True,
+    ) -> dict:
+        action_token = str(action or "").strip().lower()
+        if action_token not in {"set_source_override", "set_source_only", "follow"}:
+            return self._api_error("invalid_action", "Action must be set_source_override, set_source_only, or follow.")
+
+        source_token = ""
+        if action_token in {"set_source_override", "set_source_only"}:
+            source_token = normalize_display_route_source(source, allow_empty=True)
+            if source_token not in DISPLAY_ROUTE_SOURCE_VALUES:
+                return self._api_error("invalid_source", "Source is not supported for video display routing.")
+
+        mode_token = ""
+        if action_token == "follow":
+            parser = getattr(self, "_parse_api_mode", None)
+            mode_token = parser(mode) if callable(parser) else str(mode or "").strip().lower()
+            if mode_token not in {"enable", "disable", "toggle"}:
+                return self._api_error("invalid_mode", "Mode must be enable, disable, or toggle.")
+
+        if action_token == "set_source_override":
+            self.video_display_mode_idle = source_token
+            self.ndi_output_mode_idle = source_token
+            self.video_display_mode_playing = source_token
+            self.ndi_output_mode_playing = source_token
+        elif action_token == "set_source_only":
+            self.video_display_mode_idle = source_token
+            self.ndi_output_mode_idle = source_token
+        else:
+            if mode_token == "toggle":
+                mode_token = "disable" if self._video_display_follow_sound_button_focus_enabled() else "enable"
+            if mode_token == "enable":
+                self.video_display_mode_playing = DISPLAY_FOCUS_FOLLOW
+                self.ndi_output_mode_playing = DISPLAY_FOCUS_FOLLOW
+            else:
+                self.video_display_mode_playing = normalize_display_route_source(
+                    getattr(self, "video_display_mode_idle", DISPLAY_ROUTE_SOURCE_BLANK),
+                    default=DISPLAY_ROUTE_SOURCE_BLANK,
+                )
+                self.ndi_output_mode_playing = normalize_display_route_source(
+                    getattr(self, "ndi_output_mode_idle", "backdrop"),
+                    default="backdrop",
+                )
+
+        self._sync_video_display_route_controls_from_state()
+        if refresh:
+            self._refresh_video_display(force=True)
+        return self._api_success(self._video_display_route_state_payload())
 
     def _open_video_display(self) -> None:
         if self._video_display_window is None:
@@ -451,6 +544,19 @@ class VideoDisplayMixin:
 
     def _on_video_display_destroyed(self, _obj=None) -> None:
         self._video_display_window = None
+
+    def _open_metronome_display(self) -> None:
+        if self._metronome_display_window is None:
+            self._metronome_display_window = MetronomeDisplayWindow(self)
+            self._metronome_display_window.destroyed.connect(self._on_metronome_display_destroyed)
+            self._metronome_display_window.display_widget.surfaceChanged.connect(self._on_video_surface_geometry_changed)
+        self._metronome_display_window.show()
+        self._metronome_display_window.raise_()
+        self._metronome_display_window.activateWindow()
+        self._refresh_video_display(force=True)
+
+    def _on_metronome_display_destroyed(self, _obj=None) -> None:
+        self._metronome_display_window = None
 
     def _normalized_media_probe_key(self, path: str) -> str:
         return os.path.normcase(os.path.normpath(str(path or "").strip()))
@@ -1117,6 +1223,8 @@ class VideoDisplayMixin:
         tempo_bpm = 120.0
         numerator = 4
         denominator = 4
+        beat_index = 0
+        beat_progress = 0.0
         if slot is not None and slot.utility_spec is not None:
             try:
                 tempo_bpm = max(1.0, float(getattr(slot.utility_spec, "tempo_bpm", 120.0) or 120.0))
@@ -1130,10 +1238,24 @@ class VideoDisplayMixin:
                 denominator = int(getattr(slot.utility_spec, "time_signature_den", 4) or 4)
             except Exception:
                 denominator = 4
-        position_ms = max(0, int(self._current_video_display_position_ms()))
-        beat_ms = max(1.0, 60000.0 / tempo_bpm)
-        beat_index = int(position_ms / beat_ms) % max(1, numerator)
-        beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
+            position_ms = max(0, int(self._current_video_display_position_ms()))
+            beat_ms = max(1.0, 60000.0 / tempo_bpm)
+            beat_index = int(position_ms / beat_ms) % max(1, numerator)
+            beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
+        else:
+            beat_map = normalize_audio_beat_map(getattr(slot, "audio_beat_map", None))
+            if beat_map is not None:
+                tempo_bpm = max(1.0, float(beat_map.bpm or 120.0))
+                numerator = max(1, int(beat_map.time_signature_num or 4))
+                denominator = max(1, int(beat_map.time_signature_den or 4))
+                position_ms = max(0, int(self._current_video_display_position_ms()))
+                _beat_cursor, beat_number, denominator, beat_progress = beat_phase_at_position(beat_map, position_ms)
+                beat_index = max(0, beat_number - 1)
+            else:
+                position_ms = max(0, int(self._current_video_display_position_ms()))
+                beat_ms = max(1.0, 60000.0 / tempo_bpm)
+                beat_index = int(position_ms / beat_ms) % max(1, numerator)
+                beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
         accent = QColor("#F2C94C")
         title_font = QFont(self.font())
         title_font.setBold(True)
@@ -1232,6 +1354,9 @@ class VideoDisplayMixin:
 
     def _sync_video_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
         self._sync_output_surface_widget(widget, self._active_video_route_mode(), force=force)
+
+    def _sync_metronome_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
+        self._sync_output_surface_widget(widget, DISPLAY_FOCUS_METRONOME, force=force)
 
     def _ndi_output_dimensions(self) -> tuple[int, int]:
         mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
@@ -1926,6 +2051,14 @@ class VideoDisplayMixin:
                 show_stage_alert=self.video_display_show_stage_alert and self._active_video_route_mode() == "video",
             )
             self._sync_video_surface_widget(self._video_display_window.display_widget, force=force)
+        metronome_window = getattr(self, "_metronome_display_window", None)
+        if metronome_window is not None and (metronome_window.isVisible() or force):
+            metronome_window.configure_overlay(
+                overlay_rect=self.video_display_lyric_overlay_rect,
+                show_lyric_overlay=False,
+                show_stage_alert=False,
+            )
+            self._sync_metronome_surface_widget(metronome_window.display_widget, force=force)
         if self._active_video_route_mode() == "video":
             self._queue_video_frame_refresh(force=force)
         self._refresh_ndi_output(force=force)

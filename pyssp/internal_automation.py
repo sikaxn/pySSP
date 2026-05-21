@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyssp.display_focus import DISPLAY_ROUTE_SOURCE_LABELS, normalize_display_route_source
 from pyssp.i18n import tr
 
 
@@ -28,6 +29,7 @@ INTERNAL_AUTOMATION_COMMANDS: tuple[dict[str, Any], ...] = (
     {"id": "automation_lock", "label": "Automation Lock", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "unlock", "label": "Unlock Screen", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "lyric_display", "label": "Lyric Display", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
+    {"id": "video_display", "label": "Video Display Routing", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "vocal_removed", "label": "Vocal Removed", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "talk", "label": "Talk Mode", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
     {"id": "playlist", "label": "Playlist", "category": INTERNAL_AUTOMATION_CATEGORY_MODE},
@@ -68,6 +70,18 @@ def normalize_internal_automation_params(command_id: object, raw: object) -> dic
     if cmd == "lyric_display":
         mode = str(data.get("mode", "") or "").strip().lower()
         return {"mode": mode if mode in {"show", "blank", "toggle"} else "show"}
+    if cmd == "video_display":
+        action = str(data.get("action", "") or "").strip().lower()
+        if action not in {"set_source_override", "set_source_only", "follow"}:
+            action = "follow"
+        if action == "follow":
+            mode = str(data.get("mode", "") or "").strip().lower()
+            return {"action": "follow", "mode": mode if mode in {"enable", "disable", "toggle"} else "toggle"}
+        source = normalize_display_route_source(
+            str(data.get("source", "") or "").strip().lower(),
+            default="backdrop",
+        )
+        return {"action": action, "source": source}
     if cmd in {"vocal_removed", "talk", "playlist", "playlist_shuffle", "multiplay"}:
         mode = str(data.get("mode", "") or "").strip().lower()
         return {"mode": mode if mode in {"enable", "disable", "toggle"} else "toggle"}
@@ -133,6 +147,15 @@ def internal_automation_command_summary(command_id: object, params: object) -> s
     if cmd == "lyric_display":
         mode = tr(str(data.get("mode", "")).capitalize())
         return f"{mode} {tr('Lyrics')}"
+    if cmd == "video_display":
+        action = str(data.get("action", "") or "").strip().lower()
+        if action == "follow":
+            mode = tr(str(data.get("mode", "toggle") or "toggle").capitalize())
+            return f"{base}: {mode} {tr('Follow Sound Button Display Focus')}"
+        source = DISPLAY_ROUTE_SOURCE_LABELS.get(str(data.get("source", "") or "").strip().lower(), tr("Backdrop"))
+        if action == "set_source_override":
+            return f"{base}: {tr('Set Source')} {tr(source)} {tr('and Disable Follow')}"
+        return f"{base}: {tr('Set Source')} {tr(source)}"
     if cmd in {"vocal_removed", "talk", "playlist", "playlist_shuffle", "multiplay"}:
         mode = tr(str(data.get("mode", "")).capitalize())
         return f"{mode} {base}"
@@ -186,4 +209,6 @@ def internal_automation_dispatch(command_id: object, params: object) -> tuple[st
             "keep": bool(data.get("keep", True)),
             "seconds": int(data.get("seconds", 10)),
         }
+    if cmd == "video_display":
+        return "video_display", dict(data)
     return cmd, dict(data)

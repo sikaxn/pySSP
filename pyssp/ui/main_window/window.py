@@ -1038,8 +1038,8 @@ class MainWindow(
         self.video_control_panel: Optional[QWidget] = None
         self.video_preview_widget: Optional[VideoDisplayWidget] = None
         self.ndi_preview_widget: Optional[VideoDisplayWidget] = None
-        self.video_mode_playing_combo: Optional[QComboBox] = None
-        self.video_mode_idle_combo: Optional[QComboBox] = None
+        self.video_follow_sound_button_focus_checkbox: Optional[QCheckBox] = None
+        self.video_route_combo: Optional[QComboBox] = None
         self._video_refresh_timer: Optional[QTimer] = None
         self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
         self._ndi_last_config: Optional[NDIOutputConfig] = None
@@ -1095,6 +1095,7 @@ class MainWindow(
         self._stage_lyric_cache_lines: List[LyricLine] = []
         self._stage_lyric_cache_error: str = ""
         self._video_display_window: Optional[VideoDisplayWindow] = None
+        self._metronome_display_window: Optional[MetronomeDisplayWindow] = None
         self._video_frame_cache: Dict[Tuple[str, int], QPixmap] = {}
         self._media_probe_cache: Dict[str, MediaProbeInfo] = {}
         self._lyric_display_window: Optional[LyricDisplayWindow] = None

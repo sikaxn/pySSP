@@ -6,6 +6,7 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.audio_beat_map import analyze_audio_beat_map, normalize_audio_beat_map
 from pyssp.ui.vocal_removed_batch_dialog import VocalRemovedBatchDialog
 from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.launchpad import (
@@ -577,6 +578,80 @@ class ToolsLibraryMixin:
             refresh_video_display(force=True)
         self._show_save_notice_banner(f"Cleared display focus on {changed} sound button(s).")
 
+    def _analyze_bpm_in_set(self) -> None:
+        refs = [
+            ref
+            for ref in self._iter_all_sound_button_slot_refs(include_cue=True)
+            if getattr(ref.get("slot_ref"), "source_type", "") == FILE_SOURCE_TYPE
+            and bool(getattr(ref.get("slot_ref"), "assigned", False))
+            and (not bool(getattr(ref.get("slot_ref"), "marker", False)))
+            and bool(str(getattr(ref.get("slot_ref"), "file_path", "") or "").strip())
+        ]
+        if not refs:
+            self._show_info_notice_banner("No file-backed sound buttons were found.")
+            return
+        progress = QProgressDialog("Analyzing BPM...", "Cancel", 0, len(refs), self)
+        progress.setWindowTitle("Analyze BPM In Set")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        changed = 0
+        failures: list[str] = []
+        for index, ref in enumerate(refs, start=1):
+            progress.setValue(index - 1)
+            progress.setLabelText(f"Analyzing {ref['location']} button {int(ref['slot']) + 1}...")
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            slot = ref["slot_ref"]
+            try:
+                slot.audio_beat_map = analyze_audio_beat_map(slot.file_path)
+                changed += 1
+            except Exception as exc:
+                failures.append(f"{ref['location']} - Button {int(ref['slot']) + 1}: {exc}")
+        progress.setValue(len(refs))
+        if changed > 0:
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            refresh_video_display = getattr(self, "_refresh_video_display", None)
+            if callable(refresh_video_display):
+                refresh_video_display(force=True)
+        if failures:
+            self._show_text_report_dialog("Analyze BPM", "\n".join(failures))
+        if changed > 0:
+            self._show_save_notice_banner(f"Analyzed BPM for {changed} sound button(s).")
+        elif not failures:
+            self._show_info_notice_banner("No BPM analysis was applied.")
+
+    def _clear_all_bpm_analysis(self) -> None:
+        refs = [
+            ref
+            for ref in self._iter_all_sound_button_slot_refs(include_cue=True)
+            if normalize_audio_beat_map(getattr(ref.get("slot_ref"), "audio_beat_map", None)) is not None
+        ]
+        if not refs:
+            self._show_info_notice_banner("No BPM analysis is stored in this set.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Clear All BPM",
+            "Clear BPM analysis from all sound buttons in this set and cue page?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        changed = 0
+        for ref in refs:
+            ref["slot_ref"].audio_beat_map = None
+            changed += 1
+        if changed > 0:
+            self._set_dirty(True)
+            self._refresh_sound_grid()
+            refresh_video_display = getattr(self, "_refresh_video_display", None)
+            if callable(refresh_video_display):
+                refresh_video_display(force=True)
+            self._show_save_notice_banner(f"Cleared BPM analysis on {changed} sound button(s).")
+
     def _print_lines(self, title: str, lines: List[str]) -> None:
         text = "\n".join(lines).strip() or "(no items)"
         printer = QPrinter(QPrinter.HighResolution)
@@ -588,6 +663,24 @@ class ToolsLibraryMixin:
         doc = QTextDocument()
         doc.setPlainText(text)
         doc.print_(printer)
+
+    def _show_text_report_dialog(self, title: str, text: str) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(820, 420)
+        root = QVBoxLayout(dialog)
+        editor = QPlainTextEdit(dialog)
+        editor.setReadOnly(True)
+        editor.setPlainText(str(text or "").strip())
+        root.addWidget(editor, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.clicked.connect(dialog.accept)
+        root.addWidget(buttons)
+        dialog.exec_()
 
     def _open_tool_window(
         self,

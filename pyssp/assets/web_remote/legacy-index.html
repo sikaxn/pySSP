@@ -53,6 +53,33 @@
       <button onclick="callApi('/api/fadeout/toggle')">Fade Out</button>
       <button onclick="callApi('/api/crossfade/toggle')">Crossfade</button>
     </div>
+    <div class="section">
+      <div class="row"><strong>Video Display</strong></div>
+      <div class="row">
+        <label><input type="checkbox" id="videoFollowSoundButtonFocus"> Follow Sound Button Display Focus</label>
+      </div>
+      <div class="row">
+        <label>Manual Source
+          <select id="videoDisplayManualSource" style="height:30px;border:1px solid var(--line);border-radius:6px;padding:0 6px;">
+            <option value="video">Video</option>
+            <option value="image">Image</option>
+            <option value="lyric_display">Lyric Display</option>
+            <option value="stage_display">Stage Display</option>
+            <option value="metronome_display">Metronome Display</option>
+            <option value="backdrop">Backdrop</option>
+            <option value="blank">Blank</option>
+            <option value="white_screen">White Screen</option>
+            <option value="colour_bars">Colour Bars</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="videoDisplaySetOverride">Set Source + Disable Follow</button>
+        <button id="videoDisplaySetKeepFollow">Set Source Keep Follow</button>
+        <button id="videoDisplayToggleFollow">Toggle Follow</button>
+      </div>
+      <div id="videoDisplayStatus" class="status"></div>
+    </div>
     <div class="row">
       <button onclick="callApi('/api/lyric/show')">Lyric Show</button>
       <button onclick="callApi('/api/lyric/blank')">Lyric Blank</button>

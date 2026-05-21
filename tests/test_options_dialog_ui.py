@@ -804,7 +804,8 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.display_focus_default_utility_tone_combo.currentData() == "colour_bars"
         assert dialog.display_focus_default_utility_metronome_combo.currentData() == "metronome_display"
         assert dialog.display_focus_default_automation_combo.currentData() == "none"
-        assert dialog.video_display_mode_idle_combo.currentData() == "backdrop"
+        assert dialog.video_display_follow_sound_button_focus_checkbox.isChecked() is False
+        assert dialog.video_display_route_combo.currentData() == "backdrop"
         assert dialog.video_display_use_default_backdrop_checkbox.isChecked() is False
         assert dialog.video_display_backdrop_path_edit.text() == r"C:\Media\fallback.png"
         assert dialog.video_display_show_backdrop_message_checkbox.isChecked() is False
@@ -826,11 +827,11 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_video_display_show_lyric_overlay() is True
         assert dialog.selected_video_display_show_stage_alert() is True
         assert dialog.ndi_output_name_edit.text() == "Sanctuary Feed"
-        assert dialog.ndi_output_route_note_label.text() == "Source routing follows sound button display focus."
-        assert dialog.ndi_output_mode_playing_combo.currentData() == "backdrop"
-        assert dialog.ndi_output_mode_idle_combo.currentData() == "backdrop"
-        assert dialog.ndi_output_mode_playing_combo.isEnabled() is False
-        assert dialog.ndi_output_mode_idle_combo.isEnabled() is False
+        assert dialog.ndi_output_route_note_label.text() == "Source routing mirrors the Video Display route controls."
+        assert dialog.ndi_output_follow_sound_button_focus_checkbox.isChecked() is False
+        assert dialog.ndi_output_route_combo.currentData() == "backdrop"
+        assert dialog.ndi_output_follow_sound_button_focus_checkbox.isEnabled() is False
+        assert dialog.ndi_output_route_combo.isEnabled() is False
         assert dialog.ndi_output_resolution_mode_combo.currentData() == "custom"
         assert dialog.ndi_output_width_spin.value() == 1600
         assert dialog.ndi_output_height_spin.value() == 900
@@ -1155,8 +1156,10 @@ def test_restore_defaults_window_layout_page(qapp):
     selected = dialog.selected_window_layout()
     stop = [item for item in selected["main"] if item.get("button") == "STOP"][0]
     x_item = [item for item in selected["fade"] if item.get("button") == "X"][0]
+    smart_x_item = [item for item in selected["fade"] if item.get("button") == "Smart X"][0]
     assert stop == {"button": "STOP", "x": 3, "y": 2, "w": 1, "h": 2}
     assert x_item == {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1}
+    assert smart_x_item == {"button": "Smart X", "x": 4, "y": 0, "w": 1, "h": 1}
     assert "Companion Bypass" in selected["available"]
 
 

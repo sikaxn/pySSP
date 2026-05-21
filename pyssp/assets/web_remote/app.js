@@ -45,6 +45,14 @@ const strings = {
     playSelected: 'Play Selected',
     playSelectedPause: 'Play Sel/Pause',
     resetPage: 'Reset Page',
+    videoDisplayTitle: 'Video Display',
+    videoDisplayFollow: 'Follow Sound Button Display Focus',
+    videoDisplayManualSource: 'Manual Source',
+    videoDisplaySetOverride: 'Set Source And Disable Follow',
+    videoDisplaySetKeepFollow: 'Set Source Keep Follow',
+    videoDisplayToggleFollow: 'Toggle Follow',
+    videoDisplayActiveSource: 'Active Source',
+    videoDisplayStatusLabel: 'Video Route',
     lyricAndStage: 'Lyric And Stage',
     lyricCaption: 'Caption View',
     lyricOverhead: 'Overhead View',
@@ -149,6 +157,14 @@ const strings = {
     playSelected: '播放选中',
     playSelectedPause: '选中播放/暂停',
     resetPage: '重置页面',
+    videoDisplayTitle: '视频显示',
+    videoDisplayFollow: '跟随音效按钮显示焦点',
+    videoDisplayManualSource: '手动来源',
+    videoDisplaySetOverride: '设置来源并关闭跟随',
+    videoDisplaySetKeepFollow: '设置来源并保留跟随',
+    videoDisplayToggleFollow: '切换跟随',
+    videoDisplayActiveSource: '当前输出',
+    videoDisplayStatusLabel: '视频路由',
     lyricAndStage: '歌词与舞台',
     lyricCaption: '字幕视图',
     lyricOverhead: '投影视图',
@@ -410,6 +426,22 @@ function escapeHtml(value){
   });
 }
 
+function videoRouteLabel(value){
+  const token = String(value || 'blank').trim().toLowerCase();
+  switch(token){
+    case 'video': return 'Video';
+    case 'image': return 'Image';
+    case 'lyric_display': return 'Lyric Display';
+    case 'stage_display': return 'Stage Display';
+    case 'metronome_display': return 'Metronome Display';
+    case 'backdrop': return 'Backdrop';
+    case 'blank': return 'Blank';
+    case 'white_screen': return 'White Screen';
+    case 'colour_bars': return 'Colour Bars';
+    default: return token || 'Blank';
+  }
+}
+
 function idealTextColor(hex){
   if(!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)){ return '#111'; }
   const r = parseInt(hex.slice(1,3), 16);
@@ -485,6 +517,8 @@ function renderSummaryBox(state){
     [t('selectedGroup'), state?.current_group || selectedGroup],
     [t('selectedPage'), state?.current_page || selectedPage],
     [t('playingState'), state?.is_playing ? t('playing') : t('idle')],
+    [t('videoDisplayStatusLabel'), state?.video_display_follow_sound_button_focus ? `${t('videoDisplayFollow')} ON` : `${t('videoDisplayFollow')} OFF`],
+    [t('videoDisplayActiveSource'), videoRouteLabel(state?.video_display_active_source || 'blank')],
     [t('normalLockOn'), state?.screen_locked ? t('active') : t('inactive')],
     [t('automationOn'), state?.automation_locked ? t('active') : t('inactive')],
     [t('status'), document.getElementById('lastStatus')?.textContent || t('ready')],
@@ -521,6 +555,45 @@ function applyToggleStates(state){
     }
     button.classList.toggle('is-on', isOn);
   }
+}
+
+function syncVideoDisplayControls(state){
+  const payload = state || {};
+  const followCheckbox = document.getElementById('videoFollowSoundButtonFocus');
+  const sourceSelect = document.getElementById('videoDisplayManualSource');
+  const statusNode = document.getElementById('videoDisplayStatus');
+  if(followCheckbox){
+    followCheckbox.checked = !!payload.video_display_follow_sound_button_focus;
+  }
+  if(sourceSelect){
+    const manualSource = String(payload.video_display_manual_source || 'blank').trim().toLowerCase();
+    if(Array.from(sourceSelect.options).some((option) => option.value === manualSource)){
+      sourceSelect.value = manualSource;
+    }
+  }
+  if(statusNode){
+    const active = videoRouteLabel(payload.video_display_active_source || 'blank');
+    const manual = videoRouteLabel(payload.video_display_manual_source || 'blank');
+    const follow = payload.video_display_follow_sound_button_focus ? 'ON' : 'OFF';
+    statusNode.textContent = `${t('videoDisplayFollow')}: ${follow} | ${t('videoDisplayManualSource')}: ${manual} | ${t('videoDisplayActiveSource')}: ${active}`;
+  }
+}
+
+async function setVideoDisplaySource(keepFollow){
+  const sourceSelect = document.getElementById('videoDisplayManualSource');
+  const source = String(sourceSelect?.value || 'blank').trim().toLowerCase();
+  const path = keepFollow
+    ? `/api/video-display/source/${encodeURIComponent(source)}/keepfollow`
+    : `/api/video-display/source/${encodeURIComponent(source)}`;
+  await callApi(path);
+}
+
+async function setVideoDisplayFollow(enabled){
+  await callApi(`/api/video-display/follow/${enabled ? 'enable' : 'disable'}`);
+}
+
+async function toggleVideoDisplayFollow(){
+  await callApi('/api/video-display/follow/toggle');
 }
 
 async function callApi(path){
@@ -728,6 +801,9 @@ async function refreshState(updateSelection){
       playlist_enabled: state.playlist_enabled,
       shuffle_enabled: state.shuffle_enabled,
       multi_play_enabled: state.multi_play_enabled,
+      video_display_follow_sound_button_focus: state.video_display_follow_sound_button_focus,
+      video_display_manual_source: state.video_display_manual_source,
+      video_display_active_source: state.video_display_active_source,
       web_remote_url: state.web_remote_url
     }, null, 2);
   }
@@ -743,6 +819,7 @@ async function refreshState(updateSelection){
   }
   renderTracks(state.playing_tracks || []);
   applyToggleStates(state);
+  syncVideoDisplayControls(state);
   renderSummaryBox(state);
   renderAboutMeta(state);
   syncJogSliderFromState();
@@ -894,11 +971,30 @@ function bindEvents(){
   if(automationLockButton){
     automationLockButton.addEventListener('click', () => callApi('/api/automation-lock'));
   }
+  const videoFollowSoundButtonFocus = document.getElementById('videoFollowSoundButtonFocus');
+  if(videoFollowSoundButtonFocus){
+    videoFollowSoundButtonFocus.addEventListener('change', async () => {
+      await setVideoDisplayFollow(videoFollowSoundButtonFocus.checked);
+    });
+  }
+  const videoDisplaySetOverride = document.getElementById('videoDisplaySetOverride');
+  if(videoDisplaySetOverride){
+    videoDisplaySetOverride.addEventListener('click', () => setVideoDisplaySource(false));
+  }
+  const videoDisplaySetKeepFollow = document.getElementById('videoDisplaySetKeepFollow');
+  if(videoDisplaySetKeepFollow){
+    videoDisplaySetKeepFollow.addEventListener('click', () => setVideoDisplaySource(true));
+  }
+  const videoDisplayToggleFollow = document.getElementById('videoDisplayToggleFollow');
+  if(videoDisplayToggleFollow){
+    videoDisplayToggleFollow.addEventListener('click', toggleVideoDisplayFollow);
+  }
 }
 
 applyStaticText();
 setStatus(t('ready'));
 applyToggleStates(null);
+syncVideoDisplayControls(null);
 renderSummaryBox(null);
 renderAboutMeta(null);
 syncJogSliderFromState();

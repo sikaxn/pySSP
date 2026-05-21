@@ -281,6 +281,12 @@ class RemoteApiMixin:
         current_group = self._view_group_key()
         current_page = self.current_page
         playing_tracks = self._api_playing_tracks()
+        route_state_getter = getattr(self, "_video_display_route_state_payload", None)
+        route_state = route_state_getter() if callable(route_state_getter) else {
+            "video_display_follow_sound_button_focus": False,
+            "video_display_manual_source": DISPLAY_ROUTE_SOURCE_BLANK,
+            "video_display_active_source": DISPLAY_ROUTE_SOURCE_BLANK,
+        }
         return {
             "current_group": current_group,
             "current_page": current_page + 1,
@@ -308,6 +314,7 @@ class RemoteApiMixin:
             "web_remote_requires_authentication": bool(self.web_remote_require_authentication),
             "web_remote_guest_view_enabled": bool(self.web_remote_guest_view_enabled),
             "lyric_display": "blank" if self._lyric_force_blank else "show",
+            **dict(route_state),
         }
 
     def _api_primary_playing_key(self) -> Optional[Tuple[str, int, int]]:
@@ -861,6 +868,18 @@ class RemoteApiMixin:
                     "state": self._api_state(),
                 }
             )
+        if cmd == "video_display":
+            result = self._apply_video_display_route_action(
+                str(params.get("action", "") or ""),
+                source=str(params.get("source", "") or ""),
+                mode=str(params.get("mode", "") or ""),
+                refresh=True,
+            )
+            if not bool(result.get("ok", False)):
+                return result
+            payload = dict(result.get("result", {}) or {})
+            payload["state"] = self._api_state()
+            return self._api_success(payload, status=int(result.get("status", 200)))
         if cmd == "vocal_removed":
             mode = self._parse_api_mode(params.get("mode", ""))
             if mode is None:

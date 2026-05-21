@@ -67,11 +67,17 @@ def test_index_and_legacy_index_routes_serve_expected_assets():
     assert b'id="languageMode"' in response.data
     assert b'id="tracksView"' in response.data
     assert b"/legacy-index" in response.data
+    assert b'id="videoFollowSoundButtonFocus"' in response.data
+    assert b'id="videoDisplayManualSource"' in response.data
+    assert b'id="videoDisplaySetOverride"' in response.data
 
     response = client.get("/legacy-index")
     assert response.status_code == 200
     assert b"Web Remote" in response.data
     assert b"Open Legacy Layout" not in response.data
+    assert b'id="videoFollowSoundButtonFocus"' in response.data
+    assert b'id="videoDisplayManualSource"' in response.data
+    assert b'id="videoDisplaySetOverride"' in response.data
 
 
 def test_alert_clear_route_dispatches_clear_flag():
@@ -156,6 +162,26 @@ def test_navigation_and_selected_play_routes_dispatch():
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
     assert calls[-1][0] == "mute"
+
+
+def test_video_display_routes_dispatch():
+    calls = []
+    client = _make_client(calls)
+
+    response = client.post("/api/video-display/source/stage_display")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1] == ("video_display", {"action": "set_source_override", "source": "stage_display"})
+
+    response = client.post("/api/video-display/source/backdrop/keepfollow")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1] == ("video_display", {"action": "set_source_only", "source": "backdrop"})
+
+    response = client.post("/api/video-display/follow/toggle")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert calls[-1] == ("video_display", {"action": "follow", "mode": "toggle"})
 
 
 def test_vocal_removed_routes_dispatch():
@@ -272,6 +298,9 @@ def test_dispatch_api_path_matches_http_routes():
         ("/api/lyric/show", "lyric_display"),
         ("/api/lyric/blank", "lyric_display"),
         ("/api/lyric/toggle", "lyric_display"),
+        ("/api/video-display/source/stage_display", "video_display"),
+        ("/api/video-display/source/backdrop/keepfollow", "video_display"),
+        ("/api/video-display/follow/toggle", "video_display"),
         ("/api/vocal-removed/toggle", "vocal_removed"),
         ("/api/vocalremoved/enable", "vocal_removed"),
         ("/api/volume/73", "volume_set"),
@@ -337,6 +366,9 @@ def test_ws_api_request_dispatches_same_commands_as_http():
         ("/api/seek/percent/22.5", "seek"),
         ("/api/seek/time/01:23", "seek"),
         ("/api/lyric/toggle", "lyric_display"),
+        ("/api/video-display/source/stage_display", "video_display"),
+        ("/api/video-display/source/backdrop/keepfollow", "video_display"),
+        ("/api/video-display/follow/toggle", "video_display"),
         ("/api/vocal-removed/toggle", "vocal_removed"),
         ("/api/alert/clear", "alert"),
         ("/api/query/page/a-1", "query_page"),

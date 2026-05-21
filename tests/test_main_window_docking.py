@@ -9,6 +9,7 @@ from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QContextMenuEvent, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QDockWidget
 
+from pyssp.audio_beat_map import AudioBeatMap
 from pyssp.settings_store import AppSettings
 from pyssp.ui import main_window as mw
 
@@ -331,6 +332,37 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         _cleanup_main_window(window, qapp)
 
 
+def test_video_control_uses_follow_checkbox_and_shared_route_combo(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        assert window.video_follow_sound_button_focus_checkbox is not None
+        assert window.video_route_combo is not None
+        assert window.video_follow_sound_button_focus_checkbox.isChecked() is True
+        assert window.video_route_combo.currentData() == "blank"
+
+        window.video_follow_sound_button_focus_checkbox.setChecked(False)
+        route_index = window.video_route_combo.findData("stage_display")
+        window.video_route_combo.setCurrentIndex(route_index)
+        qapp.processEvents()
+
+        assert window.video_display_mode_playing == "stage_display"
+        assert window.video_display_mode_idle == "stage_display"
+
+        window.video_follow_sound_button_focus_checkbox.setChecked(True)
+        route_index = window.video_route_combo.findData("backdrop")
+        window.video_route_combo.setCurrentIndex(route_index)
+        qapp.processEvents()
+
+        assert window.video_display_mode_playing == "follow_sound_button"
+        assert window.video_display_mode_idle == "backdrop"
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
 def test_navigation_menu_controls_groups_and_pages(qapp, monkeypatch):
     _patch_main_window_startup(monkeypatch)
     window = mw.MainWindow()
@@ -642,6 +674,37 @@ def test_build_set_file_lines_persists_display_focus_fields(qapp, monkeypatch):
         _cleanup_main_window(window, qapp)
 
 
+def test_build_set_file_lines_persists_audio_beat_map(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        slot = window.data["A"][0][0]
+        slot.file_path = r"C:\Media\theme.mp3"
+        slot.title = "Theme"
+        slot.notes = "Theme"
+        slot.duration_ms = 1000
+        slot.activity_code = "8"
+        slot.audio_beat_map = AudioBeatMap(
+            bpm=128.5,
+            time_signature_num=3,
+            time_signature_den=4,
+            first_downbeat_ms=250,
+            beat_times_ms=[250, 719],
+            beat_numbers=[1, 2],
+            source="librosa",
+            confidence=0.75,
+        )
+
+        lines = window._build_set_file_lines()
+
+        assert any(line.startswith("pysspbeatmap1=") for line in lines)
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
 def test_tools_clear_display_focus_clears_assigned_button_overrides(qapp, monkeypatch):
     _patch_main_window_startup(monkeypatch)
     window = mw.MainWindow()
@@ -683,6 +746,53 @@ def test_tools_clear_display_focus_clears_assigned_button_overrides(qapp, monkey
         assert main_slot.display_focus == ""
         assert cue_slot.display_focus == ""
         assert untouched_slot.display_focus == ""
+        assert window._dirty is True
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_tools_menu_includes_bpm_actions_and_window_menu_includes_metronome_display(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        tools_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Tools"
+        )
+        tool_items = {action.text().replace("&", "") for action in tools_menu.actions()}
+        assert "Analyze BPM In Set" in tool_items
+        assert "Clear All BPM" in tool_items
+
+        window_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Window"
+        )
+        window_items = {action.text().replace("&", "") for action in window_menu.actions()}
+        assert "Metronome Display" in window_items
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+def test_tools_clear_all_bpm_removes_audio_beat_maps(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        slot = window.data["A"][0][0]
+        slot.file_path = r"C:\Media\theme.mp3"
+        slot.title = "Theme"
+        slot.duration_ms = 1000
+        slot.activity_code = "8"
+        slot.audio_beat_map = AudioBeatMap(bpm=128.0)
+
+        monkeypatch.setattr(mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.Yes)
+
+        window._clear_all_bpm_analysis()
+
+        assert slot.audio_beat_map is None
         assert window._dirty is True
     finally:
         _cleanup_main_window(window, qapp)

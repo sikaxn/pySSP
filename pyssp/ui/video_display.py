@@ -266,3 +266,9 @@ class VideoDisplayWindow(QWidget):
             show_lyric_overlay=show_lyric_overlay,
             show_stage_alert=show_stage_alert,
         )
+
+
+class MetronomeDisplayWindow(VideoDisplayWindow):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("Metronome Display"))

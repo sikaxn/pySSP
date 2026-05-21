@@ -5,6 +5,7 @@ import pytest
 from pyssp.ffmpeg_support import MediaProbeInfo
 from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
 from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, AutomationCommandSpec
+from pyssp.audio_beat_map import AudioBeatMap
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QPaintEvent, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel
@@ -12,6 +13,7 @@ from PyQt5.QtWidgets import QApplication, QLabel
 from pyssp.ui import main_window as mw
 from pyssp.ui.main_window import MainWindow, SLOTS_PER_PAGE, _equal_power_crossfade_volume
 from pyssp.ui.main_window import video_display as video_display_module
+from pyssp.ui.main_window.playback import PlaybackMixin
 from pyssp.ui.main_window.video_display import VideoDisplayMixin
 from pyssp.ui.video_display import VideoDisplayWidget
 from pyssp.utility_audio import UTILITY_SOURCE_TYPE, UtilitySoundSpec
@@ -153,6 +155,70 @@ class _VideoRefreshHost(VideoDisplayMixin):
         self._video_frame_dispatcher.clear()
 
 
+class _CheckedButton:
+    def __init__(self, checked: bool) -> None:
+        self._checked = bool(checked)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+
+class _PlaybackSmartFadeHost(PlaybackMixin):
+    def __init__(self, *, smart_in: bool = False, smart_out: bool = False, smart_cross: bool = False) -> None:
+        self.control_buttons = {
+            "Smart In": _CheckedButton(smart_in),
+            "Smart Out": _CheckedButton(smart_out),
+            "Smart X": _CheckedButton(smart_cross),
+            "X": _CheckedButton(True),
+        }
+        self.fade_in_sec = 1.0
+        self.fade_out_sec = 1.0
+        self.cross_fade_sec = 1.0
+        self.vocal_removed_toggle_fade_mode = "follow_cross_fade"
+        self.vocal_removed_toggle_custom_sec = 1.0
+        self.vocal_removed_toggle_always_sec = 1.0
+        self.play_vocal_removed_tracks = False
+        self._slot = mw.SoundButtonData(
+            file_path="theme.mp3",
+            duration_ms=4000,
+            audio_beat_map=AudioBeatMap(
+                bpm=120.0,
+                time_signature_num=4,
+                time_signature_den=4,
+                first_downbeat_ms=0,
+                beat_times_ms=[0, 500, 1000, 1500, 2000, 2500, 3000, 3500],
+                beat_numbers=[1, 2, 3, 4, 1, 2, 3, 4],
+                source="librosa",
+                confidence=0.85,
+                analysis_method="librosa",
+                analysis_confidence=0.85,
+            ),
+        )
+        self.player = type(
+            "_Player",
+            (),
+            {
+                "duration": lambda _self: 4000,
+                "position": lambda _self: 1200,
+                "enginePositionMs": lambda _self: 1200,
+                "state": lambda _self: mw.ExternalMediaPlayer.PlayingState,
+            },
+        )()
+        self._player_slot_key_map = {id(self.player): ("A", 0, 0)}
+
+    def _slot_for_key(self, _key):
+        return self._slot
+
+    def _cue_start_for_playback(self, slot, duration_ms: int) -> int:
+        _ = duration_ms
+        return 0 if slot.cue_start_ms is None else int(slot.cue_start_ms)
+
+    def _cue_end_for_playback(self, slot, duration_ms: int):
+        if slot.cue_end_ms is None:
+            return int(duration_ms)
+        return int(slot.cue_end_ms)
+
+
 def test_video_display_skips_media_probe_for_audio_only_paths(monkeypatch):
     def _unexpected_probe(_path: str):
         raise AssertionError("audio-only paths should not be probed for video metadata")
@@ -225,6 +291,49 @@ def test_video_route_override_can_replace_sound_button_focus():
     host._slot = mw.SoundButtonData(file_path="theme_song.mp3")
 
     assert host._active_video_route_mode() == "stage_display"
+
+
+def test_smart_fade_helpers_follow_beat_map_when_enabled():
+    host = _PlaybackSmartFadeHost(smart_in=True, smart_out=True, smart_cross=True)
+
+    fade_in = host._fade_in_seconds_for_slot(host._slot, duration_ms=4000, start_ms=0)
+    fade_out = host._fade_out_seconds_for_slot(host._slot, duration_ms=4000, start_ms=1200, end_limit_ms=4000)
+    cross = host._cross_fade_seconds_for_slots(
+        host._slot,
+        host._slot,
+        outgoing_duration_ms=4000,
+        incoming_duration_ms=4000,
+        outgoing_start_ms=1200,
+        incoming_start_ms=0,
+        outgoing_end_limit_ms=4000,
+    )
+
+    assert fade_in == pytest.approx(0.5)
+    assert fade_out == pytest.approx(0.3)
+    assert cross == pytest.approx(0.8)
+
+
+def test_smart_fade_helpers_fall_back_without_beat_analysis():
+    host = _PlaybackSmartFadeHost(smart_in=True, smart_out=True, smart_cross=True)
+    host._slot.audio_beat_map = None
+
+    assert host._fade_in_seconds_for_slot(host._slot, duration_ms=4000, start_ms=0) == pytest.approx(1.0)
+    assert host._fade_out_seconds_for_slot(host._slot, duration_ms=4000, start_ms=1200, end_limit_ms=4000) == pytest.approx(1.0)
+    assert host._cross_fade_seconds_for_slots(
+        host._slot,
+        host._slot,
+        outgoing_duration_ms=4000,
+        incoming_duration_ms=4000,
+        outgoing_start_ms=1200,
+        incoming_start_ms=0,
+        outgoing_end_limit_ms=4000,
+    ) == pytest.approx(1.0)
+
+
+def test_vocal_removed_toggle_uses_smart_crossfade_timing():
+    host = _PlaybackSmartFadeHost(smart_cross=True)
+
+    assert host._vocal_removed_toggle_fade_seconds(host.player) == pytest.approx(0.8)
 
 
 @pytest.mark.parametrize(
@@ -380,6 +489,47 @@ def test_video_widget_paints_lyric_overlay_without_type_error():
     widget.paintEvent(QPaintEvent(widget.rect()))
 
     assert widget._lyric_html
+
+
+def test_metronome_display_snapshot_supports_audio_beat_map():
+    app = QApplication.instance() or QApplication([])
+
+    class _MetronomeHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self._slot = mw.SoundButtonData(
+                file_path="theme_song.mp3",
+                title="Theme",
+                audio_beat_map=AudioBeatMap(
+                    bpm=128.0,
+                    time_signature_num=3,
+                    time_signature_den=4,
+                    first_downbeat_ms=100,
+                    beat_times_ms=[100, 568, 1036],
+                    beat_numbers=[1, 2, 3],
+                    source="librosa",
+                    confidence=0.75,
+                ),
+            )
+
+        def _player_for_slot_key(self, _key):
+            return None
+
+        def font(self):
+            return QApplication.font()
+
+        class _SeekSlider:
+            @staticmethod
+            def value() -> int:
+                return 700
+
+        seek_slider = _SeekSlider()
+
+    host = _MetronomeHost()
+    pixmap = host._render_metronome_display_snapshot(host._slot, 320, 180)
+
+    assert pixmap.isNull() is False
+    assert app is not None
 
 
 def test_stage_display_snapshot_reuses_hidden_renderer_and_cached_pixmap(monkeypatch):

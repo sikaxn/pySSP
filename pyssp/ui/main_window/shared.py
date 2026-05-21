@@ -124,9 +124,13 @@ from pyssp.display_focus import (
     DISPLAY_FOCUS_STAGE,
     DISPLAY_FOCUS_VIDEO,
     DISPLAY_FOCUS_WHITE,
+    DISPLAY_ROUTE_SOURCE_BLANK,
+    DISPLAY_ROUTE_SOURCE_LABELS,
+    DISPLAY_ROUTE_SOURCE_VALUES,
     display_focus_label,
     normalize_display_focus,
     normalize_display_focus_override,
+    normalize_display_route_source,
     normalize_display_output_mode,
 )
 from pyssp.set_loader import (
@@ -240,7 +244,7 @@ from pyssp.ui.stage_display import (
     gadgets_to_legacy_layout_visibility,
     normalize_stage_display_gadgets,
 )
-from pyssp.ui.video_display import VideoDisplayWindow
+from pyssp.ui.video_display import MetronomeDisplayWindow, VideoDisplayWindow
 from pyssp.ui.search_window import SearchWindow
 from pyssp.ui.audio_engine_insight_dialog import AudioEngineInsightDialog
 from pyssp.ui.companion_available_commands_dialog import CompanionAvailableCommandsDialog

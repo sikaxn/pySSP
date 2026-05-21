@@ -47,8 +47,11 @@ from pyssp.display_focus import (
     DISPLAY_FOCUS_FOLLOW,
     DISPLAY_FOCUS_LABELS,
     DISPLAY_FOCUS_OVERRIDE_LABELS,
+    DISPLAY_ROUTE_SOURCE_BLANK,
+    DISPLAY_ROUTE_SOURCE_LABELS,
     normalize_display_focus,
     normalize_display_focus_override,
+    normalize_display_route_source,
 )
 from pyssp.settings_store import (
     WINDOW_LAYOUT_FADE_GRID_COLS,

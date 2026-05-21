@@ -39,6 +39,19 @@ DISPLAY_FOCUS_OVERRIDE_LABELS = {
     DISPLAY_FOCUS_FOLLOW: "Follow Sound Button Display Focus",
     **DISPLAY_FOCUS_LABELS,
 }
+DISPLAY_ROUTE_SOURCE_BLANK = "blank"
+DISPLAY_ROUTE_SOURCE_VALUES = DISPLAY_FOCUS_ROUTE_MODES | {DISPLAY_ROUTE_SOURCE_BLANK}
+DISPLAY_ROUTE_SOURCE_LABELS = {
+    DISPLAY_FOCUS_VIDEO: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_VIDEO],
+    DISPLAY_FOCUS_IMAGE: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_IMAGE],
+    DISPLAY_FOCUS_LYRIC: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_LYRIC],
+    DISPLAY_FOCUS_STAGE: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_STAGE],
+    DISPLAY_FOCUS_METRONOME: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_METRONOME],
+    DISPLAY_FOCUS_BACKDROP: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_BACKDROP],
+    DISPLAY_ROUTE_SOURCE_BLANK: "Blank",
+    DISPLAY_FOCUS_WHITE: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_WHITE],
+    DISPLAY_FOCUS_COLOUR_BARS: DISPLAY_FOCUS_LABELS[DISPLAY_FOCUS_COLOUR_BARS],
+}
 
 
 def normalize_display_focus(value: str, *, allow_empty: bool = False, default: str = DISPLAY_FOCUS_NONE) -> str:
@@ -80,6 +93,24 @@ def normalize_display_focus_override(
     if token == "blank":
         token = DISPLAY_FOCUS_NONE
     return normalize_display_focus(token, allow_empty=allow_empty, default=default)
+
+
+def normalize_display_route_source(
+    value: str,
+    *,
+    allow_empty: bool = False,
+    default: str = DISPLAY_ROUTE_SOURCE_BLANK,
+) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return "" if allow_empty else default
+    if token in {DISPLAY_FOCUS_NONE, DISPLAY_ROUTE_SOURCE_BLANK}:
+        token = DISPLAY_ROUTE_SOURCE_BLANK
+    else:
+        token = normalize_display_focus(token, allow_empty=True, default=DISPLAY_FOCUS_NONE) or token
+    if token in DISPLAY_ROUTE_SOURCE_VALUES:
+        return token
+    return "" if allow_empty else default
 
 
 def display_focus_label(value: str) -> str:

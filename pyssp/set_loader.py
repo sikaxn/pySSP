@@ -18,6 +18,7 @@ from pyssp.automation_command import (
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
+from pyssp.audio_beat_map import AudioBeatMap, normalize_audio_beat_map
 from pyssp.display_focus import DISPLAY_FOCUS_NONE, normalize_display_focus
 from pyssp.midi_control import normalize_midi_binding
 from pyssp.utility_audio import (
@@ -63,6 +64,7 @@ class SetSlotData:
     cue_end_ms: Optional[int] = None
     display_focus: str = ""
     display_image_path: str = ""
+    audio_beat_map: Optional[AudioBeatMap] = None
     timecode_offset_ms: Optional[int] = None
     timecode_timeline_mode: str = "global"
     sound_hotkey: str = ""
@@ -159,6 +161,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 default=DISPLAY_FOCUS_NONE,
             )
             display_image_path = _normalize_set_path_string(section.get(f"pysspdisplayimage{i}", "").strip())
+            audio_beat_map = _parse_audio_beat_map_from_section(section, i)
             timecode_offset_ms = _parse_timecode_offset_ms(
                 section.get(f"pyssptimecodeoffset{i}", "").strip()
             )
@@ -205,6 +208,7 @@ def load_set_file(file_path: str) -> SetLoadResult:
                 cue_end_ms=cue_end_ms,
                 display_focus=display_focus,
                 display_image_path=display_image_path,
+                audio_beat_map=audio_beat_map,
                 timecode_offset_ms=timecode_offset_ms,
                 timecode_timeline_mode=timecode_timeline_mode,
                 sound_hotkey=sound_hotkey,
@@ -312,6 +316,7 @@ def _parse_utility_slot_from_section(
         default=DISPLAY_FOCUS_NONE,
     )
     display_image_path = _normalize_set_path_string(section.get(f"pysspdisplayimage{slot_index}", "").strip())
+    audio_beat_map = _parse_audio_beat_map_from_section(section, slot_index)
     activity_code = section.get(f"activity{slot_index}", "").strip()
     played = str(section.get(f"pyssputilityplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
     cue_start_ms, cue_end_ms, migrated_slot_cue = _parse_cue_points_from_section(
@@ -343,6 +348,7 @@ def _parse_utility_slot_from_section(
         cue_end_ms=cue_end_ms,
         display_focus=display_focus,
         display_image_path=display_image_path,
+        audio_beat_map=audio_beat_map,
         timecode_offset_ms=_parse_timecode_offset_ms(section.get(f"pyssptimecodeoffset{slot_index}", "").strip()),
         timecode_timeline_mode=_parse_slot_timecode_timeline_mode(
             section.get(f"pyssptimecodedisplaytimeline{slot_index}", "").strip()
@@ -376,6 +382,7 @@ def _parse_automation_slot_from_section(
         default=DISPLAY_FOCUS_NONE,
     )
     display_image_path = _normalize_set_path_string(section.get(f"pysspdisplayimage{slot_index}", "").strip())
+    audio_beat_map = _parse_audio_beat_map_from_section(section, slot_index)
     activity_code = section.get(f"activity{slot_index}", "").strip()
     played = str(section.get(f"pysspautomationplayed{slot_index}", "0")).strip() in {"1", "true", "True"}
     return SetSlotData(
@@ -401,6 +408,7 @@ def _parse_automation_slot_from_section(
         cue_end_ms=None,
         display_focus=display_focus,
         display_image_path=display_image_path,
+        audio_beat_map=audio_beat_map,
         timecode_offset_ms=None,
         timecode_timeline_mode="global",
         sound_hotkey=_parse_sound_hotkey(section.get(f"pysspautomationhotkey{slot_index}", "").strip()),
@@ -416,6 +424,21 @@ def _parse_time_signature_part(value: str, index: int) -> int:
         return int(parts[index])
     except Exception:
         return 0
+
+
+def _parse_audio_beat_map_from_section(
+    section: configparser.SectionProxy,
+    slot_index: int,
+) -> Optional[AudioBeatMap]:
+    raw_json = str(section.get(f"pysspbeatmap{slot_index}", "") or "").strip()
+    if not raw_json:
+        return None
+    try:
+        import json
+
+        return normalize_audio_beat_map(json.loads(raw_json))
+    except Exception:
+        return None
 
 
 def _parse_sound_button_automation_from_section(

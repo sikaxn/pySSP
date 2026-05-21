@@ -138,10 +138,9 @@ class SelectionMixin:
         return bool(self.disable_path_safety_checkbox.isChecked())
 
     def selected_video_display_mode_playing(self) -> str:
-        return normalize_display_focus_override(
-            str(getattr(self, "_video_display_mode_playing_value", DISPLAY_FOCUS_FOLLOW) or DISPLAY_FOCUS_FOLLOW),
-            default=DISPLAY_FOCUS_FOLLOW,
-        )
+        if bool(self.video_display_follow_sound_button_focus_checkbox.isChecked()):
+            return DISPLAY_FOCUS_FOLLOW
+        return str(self.video_display_route_combo.currentData() or "blank")
 
     def selected_display_focus_default_video(self) -> str:
         return normalize_display_focus(str(self.video_display_mode_playing_combo.currentData() or "video"), default="video")
@@ -180,7 +179,7 @@ class SelectionMixin:
         return normalize_display_focus(str(self.display_focus_default_automation_combo.currentData() or "none"), default="none")
 
     def selected_video_display_mode_idle(self) -> str:
-        return str(self.video_display_mode_idle_combo.currentData() or "blank")
+        return str(self.video_display_route_combo.currentData() or "blank")
 
     def selected_video_display_use_default_backdrop(self) -> bool:
         return bool(self.video_display_use_default_backdrop_checkbox.isChecked())
@@ -262,13 +261,12 @@ class SelectionMixin:
         return str(self.ndi_output_name_edit.text() or "").strip() or "pyssp-video"
 
     def selected_ndi_output_mode_playing(self) -> str:
-        return normalize_display_focus_override(
-            str(getattr(self, "_video_display_mode_playing_value", DISPLAY_FOCUS_FOLLOW) or DISPLAY_FOCUS_FOLLOW),
-            default=DISPLAY_FOCUS_FOLLOW,
-        )
+        if bool(self.video_display_follow_sound_button_focus_checkbox.isChecked()):
+            return DISPLAY_FOCUS_FOLLOW
+        return str(self.video_display_route_combo.currentData() or "blank")
 
     def selected_ndi_output_mode_idle(self) -> str:
-        return str(self.video_display_mode_idle_combo.currentData() or "blank")
+        return str(self.video_display_route_combo.currentData() or "blank")
 
     def selected_ndi_output_resolution_mode(self) -> str:
         value = str(self.ndi_output_resolution_mode_combo.currentData() or "source").strip().lower()

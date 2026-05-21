@@ -45,6 +45,7 @@ from pyssp.companion_available_commands import (
     is_navigation_command,
     list_companion_available_commands,
 )
+from pyssp.display_focus import DISPLAY_ROUTE_SOURCE_LABELS
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.internal_automation import (
     internal_automation_command_summary,
@@ -322,6 +323,30 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_alert_seconds_spin = QSpinBox(self)
         self.internal_alert_seconds_spin.setRange(1, 600)
         self.internal_alert_seconds_spin.setValue(10)
+        self.internal_video_display_action_combo = QComboBox(self)
+        self.internal_video_display_action_combo.addItem(tr("Set Source + Disable Follow"), "set_source_override")
+        self.internal_video_display_action_combo.addItem(tr("Set Source Only"), "set_source_only")
+        self.internal_video_display_action_combo.addItem(tr("Follow Sound Button Display Focus"), "follow")
+        self.internal_video_display_source_combo = QComboBox(self)
+        for value in [
+            "video",
+            "image",
+            "lyric_display",
+            "stage_display",
+            "metronome_display",
+            "backdrop",
+            "blank",
+            "white_screen",
+            "colour_bars",
+        ]:
+            self.internal_video_display_source_combo.addItem(tr(DISPLAY_ROUTE_SOURCE_LABELS.get(value, value)), value)
+        self.internal_video_display_follow_mode_combo = QComboBox(self)
+        self.internal_video_display_follow_mode_combo.addItem(tr("Enable"), "enable")
+        self.internal_video_display_follow_mode_combo.addItem(tr("Disable"), "disable")
+        self.internal_video_display_follow_mode_combo.addItem(tr("Toggle"), "toggle")
+        self.internal_video_display_action_combo.setCurrentIndex(
+            max(0, self.internal_video_display_action_combo.findData("follow"))
+        )
 
         self.internal_form.addRow(tr("Mode"), self.internal_mode_combo)
         self.internal_form.addRow(tr("Toggle Mode"), self.internal_toggle_mode_combo)
@@ -343,6 +368,9 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_form.addRow(tr("Alert Text"), self.internal_alert_text_edit)
         self.internal_form.addRow("", self.internal_alert_keep_checkbox)
         self.internal_form.addRow(tr("Seconds"), self.internal_alert_seconds_spin)
+        self.internal_form.addRow(tr("Video Display Action"), self.internal_video_display_action_combo)
+        self.internal_form.addRow(tr("Video Display Source"), self.internal_video_display_source_combo)
+        self.internal_form.addRow(tr("Follow Action"), self.internal_video_display_follow_mode_combo)
         internal_form_layout.addStretch(1)
         internal_root.addWidget(internal_form_panel, 1)
         self.source_tabs.addTab(internal_page, tr("Internal"))
@@ -384,6 +412,9 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_alert_text_edit.textChanged.connect(self._sync_selected_command)
         self.internal_alert_keep_checkbox.toggled.connect(self._sync_selected_command)
         self.internal_alert_seconds_spin.valueChanged.connect(lambda _value: self._sync_selected_command())
+        self.internal_video_display_action_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_video_display_source_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
+        self.internal_video_display_follow_mode_combo.currentIndexChanged.connect(lambda _row: self._sync_selected_command())
 
         self._midi_binding = normalize_midi_binding(sound_midi_hotkey)
         self._midi_learning = False
@@ -686,6 +717,12 @@ class AutomationCommandSoundButtonDialog(QDialog):
             params["text"] = self.internal_alert_text_edit.toPlainText().strip()
             params["keep"] = bool(self.internal_alert_keep_checkbox.isChecked())
             params["seconds"] = int(self.internal_alert_seconds_spin.value())
+        elif command_id == "video_display":
+            params["action"] = self.internal_video_display_action_combo.currentData()
+            if params["action"] == "follow":
+                params["mode"] = self.internal_video_display_follow_mode_combo.currentData()
+            else:
+                params["source"] = self.internal_video_display_source_combo.currentData()
         return normalize_internal_automation_params(command_id, params)
 
     def _refresh_internal_form_visibility(self) -> None:
@@ -712,6 +749,9 @@ class AutomationCommandSoundButtonDialog(QDialog):
             self.internal_alert_text_edit,
             self.internal_alert_keep_checkbox,
             self.internal_alert_seconds_spin,
+            self.internal_video_display_action_combo,
+            self.internal_video_display_source_combo,
+            self.internal_video_display_follow_mode_combo,
         ]
         for widget in widgets:
             label = self.internal_form.labelForField(widget)
@@ -763,6 +803,12 @@ class AutomationCommandSoundButtonDialog(QDialog):
                 _show(self.internal_alert_keep_checkbox)
                 if not self.internal_alert_keep_checkbox.isChecked():
                     _show(self.internal_alert_seconds_spin)
+        elif command_id == "video_display":
+            _show(self.internal_video_display_action_combo)
+            if self.internal_video_display_action_combo.currentData() == "follow":
+                _show(self.internal_video_display_follow_mode_combo)
+            else:
+                _show(self.internal_video_display_source_combo)
 
     def _apply_internal_spec(self, spec: AutomationCommandSpec) -> None:
         normalized = normalize_automation_spec(spec)
@@ -792,6 +838,15 @@ class AutomationCommandSoundButtonDialog(QDialog):
         self.internal_alert_text_edit.setPlainText(str(params.get("text", "") or ""))
         self.internal_alert_keep_checkbox.setChecked(bool(params.get("keep", True)))
         self.internal_alert_seconds_spin.setValue(int(params.get("seconds", 10) or 10))
+        self.internal_video_display_action_combo.setCurrentIndex(
+            max(0, self.internal_video_display_action_combo.findData(params.get("action", "follow")))
+        )
+        self.internal_video_display_source_combo.setCurrentIndex(
+            max(0, self.internal_video_display_source_combo.findData(params.get("source", "backdrop")))
+        )
+        self.internal_video_display_follow_mode_combo.setCurrentIndex(
+            max(0, self.internal_video_display_follow_mode_combo.findData(params.get("mode", "toggle")))
+        )
 
     def _selected_internal_target_value(self, command_id: str) -> str:
         if self.internal_target_input_mode_combo.currentData() == "text":

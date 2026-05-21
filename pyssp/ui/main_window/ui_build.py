@@ -218,6 +218,10 @@ class UiBuildMixin:
             lambda checked=False: self._set_sound_button_view_mode("list") if checked else None
         )
         self._window_menu.addAction(self._sound_button_view_list_action)
+
+        self._open_metronome_display_action = QAction("Metronome Display", self)
+        self._open_metronome_display_action.triggered.connect(self._open_metronome_display)
+        self._window_menu.addAction(self._open_metronome_display_action)
         self._window_menu.addSeparator()
 
         self._remove_blank_space_action = QAction("Remove Blank Space", self)
@@ -1099,6 +1103,14 @@ class UiBuildMixin:
         clear_display_focus_action = QAction("Clear Display Focus", self)
         clear_display_focus_action.triggered.connect(self._clear_all_display_focus)
         tools_menu.addAction(clear_display_focus_action)
+
+        analyze_bpm_action = QAction("Analyze BPM In Set", self)
+        analyze_bpm_action.triggered.connect(self._analyze_bpm_in_set)
+        tools_menu.addAction(analyze_bpm_action)
+
+        clear_bpm_action = QAction("Clear All BPM", self)
+        clear_bpm_action.triggered.connect(self._clear_all_bpm_analysis)
+        tools_menu.addAction(clear_bpm_action)
 
         bulk_generate_vocal_removed_action = QAction("Bulk Generate Vocal Removed Track", self)
         bulk_generate_vocal_removed_action.triggered.connect(self._bulk_generate_vocal_removed_tracks)
@@ -2596,6 +2608,9 @@ class UiBuildMixin:
             ("Fade In", self._toggle_fade_in_mode, "Fade in on start"),
             ("X", self._toggle_cross_auto_mode, "Cross fade (fade out + fade in)"),
             ("Fade Out", self._toggle_fade_out_mode, "Fade out on stop/switch"),
+            ("Smart In", self._toggle_smart_fade_in_mode, "Beat-aware fade in when beat analysis is available"),
+            ("Smart X", self._toggle_smart_cross_mode, "Beat-aware cross fade when beat analysis is available"),
+            ("Smart Out", self._toggle_smart_fade_out_mode, "Beat-aware fade out when beat analysis is available"),
         ]
         for label, handler, tooltip in fade_specs:
             b = QPushButton(label)

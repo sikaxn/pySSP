@@ -117,6 +117,36 @@
           </div>
         </details>
 
+        <details class="mini-card" open>
+          <summary class="summary-row">
+            <span data-i18n="videoDisplayTitle">Video Display</span>
+          </summary>
+          <label class="toggle-field">
+            <input type="checkbox" id="videoFollowSoundButtonFocus">
+            <span data-i18n="videoDisplayFollow">Follow Sound Button Display Focus</span>
+          </label>
+          <label class="field wide">
+            <span data-i18n="videoDisplayManualSource">Manual Source</span>
+            <select id="videoDisplayManualSource">
+              <option value="video">Video</option>
+              <option value="image">Image</option>
+              <option value="lyric_display">Lyric Display</option>
+              <option value="stage_display">Stage Display</option>
+              <option value="metronome_display">Metronome Display</option>
+              <option value="backdrop">Backdrop</option>
+              <option value="blank">Blank</option>
+              <option value="white_screen">White Screen</option>
+              <option value="colour_bars">Colour Bars</option>
+            </select>
+          </label>
+          <div class="touch-grid two-up">
+            <button class="touch" type="button" id="videoDisplaySetOverride" data-i18n="videoDisplaySetOverride">Set Source And Disable Follow</button>
+            <button class="touch" type="button" id="videoDisplaySetKeepFollow" data-i18n="videoDisplaySetKeepFollow">Set Source Keep Follow</button>
+            <button class="touch" type="button" id="videoDisplayToggleFollow" data-i18n="videoDisplayToggleFollow">Toggle Follow</button>
+          </div>
+          <div id="videoDisplayStatus" class="support-text"></div>
+        </details>
+
         <details class="mini-card">
           <summary class="summary-row">
             <span data-i18n="lyricAndStage">Lyric And Stage</span>

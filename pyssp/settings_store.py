@@ -14,8 +14,10 @@ from pyssp.display_focus import (
     DISPLAY_FOCUS_METRONOME,
     DISPLAY_FOCUS_NONE,
     DISPLAY_FOCUS_VIDEO,
+    DISPLAY_ROUTE_SOURCE_BLANK,
     normalize_display_focus,
     normalize_display_focus_override,
+    normalize_display_route_source,
     normalize_display_output_mode,
 )
 from pyssp.set_loader import parse_delphi_color
@@ -172,7 +174,7 @@ def default_launchpad_control_bindings() -> list[str]:
 
 WINDOW_LAYOUT_MAIN_GRID_COLS = 4
 WINDOW_LAYOUT_MAIN_GRID_ROWS = 4
-WINDOW_LAYOUT_FADE_GRID_COLS = 3
+WINDOW_LAYOUT_FADE_GRID_COLS = 6
 WINDOW_LAYOUT_FADE_GRID_ROWS = 1
 
 WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
@@ -195,7 +197,14 @@ WINDOW_LAYOUT_MAIN_ORDER: list[str] = [
     "Internal Bypass",
     "Vocal Removed",
 ]
-WINDOW_LAYOUT_FADE_ORDER: list[str] = ["Fade In", "X", "Fade Out"]
+WINDOW_LAYOUT_FADE_ORDER: list[str] = [
+    "Fade In",
+    "X",
+    "Fade Out",
+    "Smart In",
+    "Smart X",
+    "Smart Out",
+]
 WINDOW_LAYOUT_ALL_BUTTONS: list[str] = [*WINDOW_LAYOUT_MAIN_ORDER, *WINDOW_LAYOUT_FADE_ORDER]
 
 SOUND_BUTTON_VIEW_GRID = "grid"
@@ -289,6 +298,9 @@ def default_window_layout() -> dict[str, object]:
             {"button": "Fade In", "x": 0, "y": 0, "w": 1, "h": 1},
             {"button": "X", "x": 1, "y": 0, "w": 1, "h": 1},
             {"button": "Fade Out", "x": 2, "y": 0, "w": 1, "h": 1},
+            {"button": "Smart In", "x": 3, "y": 0, "w": 1, "h": 1},
+            {"button": "Smart X", "x": 4, "y": 0, "w": 1, "h": 1},
+            {"button": "Smart Out", "x": 5, "y": 0, "w": 1, "h": 1},
         ],
         "available": [],
         "show_all_available": False,
@@ -1653,9 +1665,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         section.get("video_display_mode_playing", DISPLAY_FOCUS_FOLLOW),
         default=DISPLAY_FOCUS_FOLLOW,
     )
-    video_display_mode_idle = str(section.get("video_display_mode_idle", "blank")).strip().lower()
-    if video_display_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-        video_display_mode_idle = "blank"
+    video_display_mode_idle = normalize_display_route_source(
+        str(section.get("video_display_mode_idle", DISPLAY_ROUTE_SOURCE_BLANK)).strip().lower(),
+        default=DISPLAY_ROUTE_SOURCE_BLANK,
+    )
     display_focus_default_video = normalize_display_focus(
         section.get("display_focus_default_video", DISPLAY_FOCUS_VIDEO),
         default=DISPLAY_FOCUS_VIDEO,
@@ -1745,9 +1758,10 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         section.get("ndi_output_mode_playing", DISPLAY_FOCUS_FOLLOW),
         default=DISPLAY_FOCUS_FOLLOW,
     )
-    ndi_output_mode_idle = str(section.get("ndi_output_mode_idle", "backdrop")).strip().lower()
-    if ndi_output_mode_idle not in {"lyric_display", "stage_display", "blank", "white_screen", "colour_bars", "backdrop"}:
-        ndi_output_mode_idle = "backdrop"
+    ndi_output_mode_idle = normalize_display_route_source(
+        str(section.get("ndi_output_mode_idle", "backdrop")).strip().lower(),
+        default="backdrop",
+    )
     ndi_output_resolution_mode = str(section.get("ndi_output_resolution_mode", "source")).strip().lower()
     if ndi_output_resolution_mode not in {"source", "720p", "1080p", "custom"}:
         ndi_output_resolution_mode = "source"

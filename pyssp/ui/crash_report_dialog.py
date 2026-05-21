@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import platform
 import traceback
 from datetime import datetime
@@ -22,6 +23,8 @@ from PyQt5.QtWidgets import (
 from pyssp.i18n import tr
 from pyssp.version import get_display_version
 
+_CRASH_LOGGER = logging.getLogger("pyssp.crash")
+
 
 class CrashReportDialog(QDialog):
     def __init__(self, exc_type: Type[BaseException], exc_value: BaseException, exc_tb, parent=None) -> None:
@@ -30,11 +33,14 @@ class CrashReportDialog(QDialog):
         self._exc_value = exc_value
         self._exc_tb = exc_tb
         self._traceback_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        self._open_logged = False
+        self.finished.connect(self._log_finished)
         self._build_ui()
 
     def _build_ui(self) -> None:
         self.setWindowTitle(tr("pySSP Error Occurred"))
         self.resize(860, 640)
+        self.setModal(False)
 
         root = QVBoxLayout(self)
 
@@ -76,6 +82,17 @@ class CrashReportDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(self.close_button)
         root.addLayout(buttons)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._open_logged:
+            return
+        self._open_logged = True
+        _CRASH_LOGGER.error(
+            "Crash report dialog opened for %s: %s",
+            getattr(self._exc_type, "__name__", str(self._exc_type)),
+            self._exc_value,
+        )
 
     def _build_report_text(self) -> str:
         description = self.description_edit.toPlainText().strip()
@@ -120,6 +137,7 @@ class CrashReportDialog(QDialog):
             QMessageBox.warning(self, tr("Save Failed"), f"{tr('Failed to save crash report.')}\n\n{exc}")
 
     def _shutdown_pyssp(self) -> None:
+        _CRASH_LOGGER.info("Crash report dialog requested pySSP shutdown")
         app = QApplication.instance()
         self.accept()
         if app is None:
@@ -129,3 +147,6 @@ class CrashReportDialog(QDialog):
         except Exception:
             pass
         app.quit()
+
+    def _log_finished(self, result: int) -> None:
+        _CRASH_LOGGER.info("Crash report dialog closed with result=%s", int(result))

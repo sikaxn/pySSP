@@ -151,6 +151,19 @@ def _normalize_supported_audio_format_extensions(values: list[str]) -> list[str]
     return output
 
 
+RUNTIME_LOG_MIN_MB = 16
+RUNTIME_LOG_MAX_MB = 1024
+DEFAULT_RUNTIME_LOG_LIMIT_MB = 256
+
+
+def clamp_runtime_log_limit_mb(value: object) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = DEFAULT_RUNTIME_LOG_LIMIT_MB
+    return max(RUNTIME_LOG_MIN_MB, min(RUNTIME_LOG_MAX_MB, parsed))
+
+
 def default_launchpad_control_bindings() -> list[str]:
     return [
         "prev_group",
@@ -681,7 +694,9 @@ class AppSettings:
     talk_shift_accelerator: bool = True
     hotkeys_ignore_talk_level: bool = False
     enter_key_mirrors_space: bool = False
-    log_file_enabled: bool = False
+    log_file_enabled: bool = True
+    runtime_log_enabled: bool = True
+    runtime_log_limit_mb: int = DEFAULT_RUNTIME_LOG_LIMIT_MB
     reset_all_on_startup: bool = False
     click_playing_action: str = "play_it_again"
     search_double_click_action: str = "find_highlight"
@@ -1159,6 +1174,8 @@ def save_settings(settings: AppSettings) -> None:
         "hotkeys_ignore_talk_level": "1" if settings.hotkeys_ignore_talk_level else "0",
         "enter_key_mirrors_space": "1" if settings.enter_key_mirrors_space else "0",
         "log_file_enabled": "1" if settings.log_file_enabled else "0",
+        "runtime_log_enabled": "1" if settings.runtime_log_enabled else "0",
+        "runtime_log_limit_mb": str(clamp_runtime_log_limit_mb(settings.runtime_log_limit_mb)),
         "reset_all_on_startup": "1" if settings.reset_all_on_startup else "0",
         "click_playing_action": settings.click_playing_action,
         "search_double_click_action": settings.search_double_click_action,
@@ -2236,7 +2253,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         talk_shift_accelerator=_get_bool(section, "talk_shift_accelerator", True),
         hotkeys_ignore_talk_level=_get_bool(section, "hotkeys_ignore_talk_level", False),
         enter_key_mirrors_space=_get_bool(section, "enter_key_mirrors_space", False),
-        log_file_enabled=_get_bool(section, "log_file_enabled", False),
+        log_file_enabled=_get_bool(section, "log_file_enabled", True),
+        runtime_log_enabled=_get_bool(section, "runtime_log_enabled", True),
+        runtime_log_limit_mb=clamp_runtime_log_limit_mb(_get_int(section, "runtime_log_limit_mb", DEFAULT_RUNTIME_LOG_LIMIT_MB)),
         reset_all_on_startup=_get_bool(section, "reset_all_on_startup", False),
         click_playing_action=click_playing_action,
         search_double_click_action=search_double_click_action,

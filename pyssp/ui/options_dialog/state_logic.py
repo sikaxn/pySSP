@@ -146,6 +146,10 @@ class StateLogicMixin:
         d = self._DEFAULTS
         self.title_limit_spin.setValue(int(d["title_char_limit"]))
         self.log_file_checkbox.setChecked(bool(d["log_file_enabled"]))
+        self.runtime_log_checkbox.setChecked(bool(d.get("runtime_log_enabled", True)))
+        self.runtime_log_limit_spin.setValue(
+            clamp_runtime_log_limit_mb(d.get("runtime_log_limit_mb", DEFAULT_RUNTIME_LOG_LIMIT_MB))
+        )
         self.reset_on_startup_checkbox.setChecked(bool(d["reset_all_on_startup"]))
         token = str(d.get("now_playing_display_mode", "caption")).strip().lower()
         if token == "filename":

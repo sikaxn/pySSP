@@ -165,6 +165,8 @@ class MainWindow(
         )
         self.talk_blink_button = self.settings.talk_blink_button
         self.log_file_enabled = self.settings.log_file_enabled
+        self.runtime_log_enabled = bool(getattr(self.settings, "runtime_log_enabled", True))
+        self.runtime_log_limit_mb = clamp_runtime_log_limit_mb(getattr(self.settings, "runtime_log_limit_mb", DEFAULT_RUNTIME_LOG_LIMIT_MB))
         self.reset_all_on_startup = self.settings.reset_all_on_startup
         self.click_playing_action = self.settings.click_playing_action
         self.search_double_click_action = self.settings.search_double_click_action

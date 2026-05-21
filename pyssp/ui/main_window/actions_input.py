@@ -13,6 +13,7 @@ from pyssp.automation_command import (
     normalize_automation_spec,
     normalize_sound_button_automation_config,
 )
+from pyssp.runtime_logging import update_runtime_logging_settings
 from pyssp.utility_audio import (
     UTILITY_SOURCE_TYPE,
     UTILITY_UNSUPPORTED_MARKER_TEXT,
@@ -1908,6 +1909,8 @@ class ActionsInputMixin:
             talk_volume_mode=self.talk_volume_mode,
             talk_blink_button=self.talk_blink_button,
             log_file_enabled=self.log_file_enabled,
+            runtime_log_enabled=self.runtime_log_enabled,
+            runtime_log_limit_mb=self.runtime_log_limit_mb,
             reset_all_on_startup=self.reset_all_on_startup,
             click_playing_action=self.click_playing_action,
             search_double_click_action=self.search_double_click_action,
@@ -2174,6 +2177,12 @@ class ActionsInputMixin:
         self.talk_volume_mode = dialog.selected_talk_volume_mode()
         self.talk_blink_button = dialog.talk_blink_checkbox.isChecked()
         self.log_file_enabled = dialog.log_file_checkbox.isChecked()
+        self.runtime_log_enabled = dialog.runtime_log_checkbox.isChecked()
+        self.runtime_log_limit_mb = dialog.selected_runtime_log_limit_mb()
+        update_runtime_logging_settings(
+            enabled=self.runtime_log_enabled,
+            limit_mb=self.runtime_log_limit_mb,
+        )
         self.reset_all_on_startup = dialog.reset_on_startup_checkbox.isChecked()
         self.click_playing_action = dialog.selected_click_playing_action()
         self.search_double_click_action = dialog.selected_search_double_click_action()

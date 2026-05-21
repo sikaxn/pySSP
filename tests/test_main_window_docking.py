@@ -213,6 +213,10 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
             action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Display"
         )
         display_items = {action.text().replace("&", "") for action in display_menu.actions()}
+        logs_menu = next(
+            action.menu() for action in window.menuBar().actions() if action.text().replace("&", "") == "Logs"
+        )
+        logs_items = {action.text().replace("&", "") for action in logs_menu.actions()}
         navigation_menu = _navigation_menu(window)
         navigation_items = {action.text().replace("&", "") for action in navigation_menu.actions()}
         top_level_menus = [action.text().replace("&", "") for action in window.menuBar().actions()]
@@ -237,6 +241,8 @@ def test_main_window_exposes_dockable_ui_panels(qapp, monkeypatch):
         assert "Clear All Standalone Mode" in menu_items
         assert "Open Video Display" in display_items
         assert "Video Display Setting" in display_items
+        assert "View Log" in logs_items
+        assert "Open Runtime Log Folder" in logs_items
         assert "Previous Group" in navigation_items
         assert "Next Group" in navigation_items
         assert "Previous Page" in navigation_items

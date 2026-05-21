@@ -25,6 +25,7 @@ from pyssp.ui.sound_button_automation_dialog import SoundButtonAutomationDialog
 from pyssp.ui.automation_script_editor_dialog import AutomationScriptEditorDialog
 from pyssp.ui.sound_button_editor_window import SoundButtonEditorState, SoundButtonEditorWindow
 from pyssp.ui.utility_sound_button_dialog import UtilitySoundButtonDialog
+from pyssp.runtime_logging import append_playback_log_entry, get_playback_log_path, get_runtime_log_dir
 from pyssp.utility_audio import (
     FILE_SOURCE_TYPE,
     UTILITY_SOURCE_TYPE,
@@ -886,22 +887,12 @@ class PagesSlotsMixin:
         self.status_now_playing_label.setText(f"{tr('Now Playing: ')}{values}")
 
     def _log_file_path(self) -> str:
-        appdata = os.getenv("APPDATA")
-        base = appdata if appdata else os.path.expanduser("~")
-        log_dir = os.path.join(base, "pySSP")
-        os.makedirs(log_dir, exist_ok=True)
-        return os.path.join(log_dir, "SportsSoundsProLog.txt")
+        return str(get_playback_log_path())
 
     def _append_play_log(self, file_path: str) -> None:
         if not self.log_file_enabled or not file_path:
             return
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"{stamp}\t{file_path}\n"
-        try:
-            with open(self._log_file_path(), "a", encoding="utf-8") as fh:
-                fh.write(line)
-        except OSError:
-            pass
+        append_playback_log_entry(True, file_path)
 
     def _view_log_file(self) -> None:
         path = self._log_file_path()
@@ -909,6 +900,9 @@ class PagesSlotsMixin:
             QMessageBox.information(self, "View Log", f"No log file yet.\n{path}")
             return
         self._open_local_path(path, "View Log", "Could not open log file:")
+
+    def _open_runtime_log_dir(self) -> None:
+        self._open_directory(str(get_runtime_log_dir()))
 
     def _reset_all_played_state(self) -> None:
         for group in GROUPS:

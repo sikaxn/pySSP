@@ -142,11 +142,13 @@ from pyssp.set_loader import (
     parse_timecode_offset_ms,
 )
 from pyssp.settings_store import (
+    DEFAULT_RUNTIME_LOG_LIMIT_MB,
     DEFAULT_SOUND_BUTTON_LIST_COLUMN_WIDTHS,
     DEFAULT_SOUND_BUTTON_LIST_HIDDEN_COLUMNS,
     WINDOW_LAYOUT_FADE_ORDER,
     WINDOW_LAYOUT_MAIN_ORDER,
     AppSettings,
+    clamp_runtime_log_limit_mb,
     default_companion_satellite_serial_suffix,
     get_settings_path,
     load_settings,

@@ -1210,6 +1210,9 @@ class UiBuildMixin:
         view_log_action = QAction("View Log", self)
         view_log_action.triggered.connect(self._view_log_file)
         log_menu.addAction(view_log_action)
+        open_runtime_log_dir_action = QAction("Open Runtime Log Folder", self)
+        open_runtime_log_dir_action.triggered.connect(self._open_runtime_log_dir)
+        log_menu.addAction(open_runtime_log_dir_action)
 
         self._build_window_menu()
         help_menu = self.menuBar().addMenu("Help")

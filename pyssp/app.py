@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import signal
 import shutil
@@ -20,6 +21,7 @@ from pyssp.audio_beat_map import analyze_audio_beat_map_cli
 from pyssp.audio_engine import prepare_waveform_disk_cache
 from pyssp.audio_format_support import ensure_supported_audio_formats_ready
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
+from pyssp.runtime_logging import append_playback_log_entry, start_runtime_logging, stop_runtime_logging
 from pyssp.settings_store import get_settings_path, load_settings, save_settings
 from pyssp.system_info_probe import main as system_info_probe_main
 from pyssp.ui.crash_report_dialog import CrashReportDialog
@@ -32,6 +34,7 @@ _STDOUT_FALLBACK = None
 _STDERR_FALLBACK = None
 _STDIN_FALLBACK = None
 _CRASH_DIALOG_VISIBLE = False
+_ACTIVE_CRASH_DIALOG: Optional[CrashReportDialog] = None
 _KEYBOARD_INTERRUPT_COUNT = 0
 
 
@@ -141,18 +144,36 @@ def _ensure_standard_streams(debug_enabled: bool) -> None:
 def _install_crash_handler(app: QApplication) -> None:
     original_excepthook = sys.excepthook
     original_threading_excepthook = getattr(threading, "excepthook", None)
+    crash_logger = logging.getLogger("pyssp.crash")
 
     def _show_crash_dialog(exc_type, exc_value, exc_tb) -> None:
-        global _CRASH_DIALOG_VISIBLE
+        global _ACTIVE_CRASH_DIALOG, _CRASH_DIALOG_VISIBLE
         if _CRASH_DIALOG_VISIBLE:
+            crash_logger.error(
+                "Crash report dialog already visible; suppressing duplicate dialog for %s: %s",
+                getattr(exc_type, "__name__", str(exc_type)),
+                exc_value,
+            )
             return
         _CRASH_DIALOG_VISIBLE = True
-        try:
-            dialog_parent = app.activeWindow()
-            dialog = CrashReportDialog(exc_type, exc_value, exc_tb, parent=dialog_parent)
-            dialog.exec_()
-        finally:
+        dialog_parent = app.activeWindow()
+        dialog = CrashReportDialog(exc_type, exc_value, exc_tb, parent=dialog_parent)
+        _ACTIVE_CRASH_DIALOG = dialog
+
+        def _release_dialog(_result: int) -> None:
+            global _ACTIVE_CRASH_DIALOG, _CRASH_DIALOG_VISIBLE
             _CRASH_DIALOG_VISIBLE = False
+            if _ACTIVE_CRASH_DIALOG is dialog:
+                _ACTIVE_CRASH_DIALOG = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(_release_dialog)
+        dialog.open()
+        try:
+            dialog.raise_()
+            dialog.activateWindow()
+        except Exception:
+            pass
 
     def _handle_keyboard_interrupt(exc_type=KeyboardInterrupt, exc_value=None, exc_tb=None) -> None:
         global _KEYBOARD_INTERRUPT_COUNT
@@ -437,6 +458,8 @@ class _StartupSplash(QSplashScreen):
 
 
 def main() -> int:
+    runtime_log_manager = None
+    playback_session_logged = False
     qt_argv, cleanstart_requested, debug_requested, system_info_probe_requested, audio_beat_map_path = _parse_startup_args(
         list(sys.argv)
     )
@@ -497,84 +520,100 @@ def main() -> int:
     set_current_language(startup_language)
     apply_application_font(app, startup_language)
     startup_settings = load_settings()
-    current_version = str(get_display_version() or "").strip()
-    current_build_id = str(get_display_build_id() or "").strip()
-    stored_version = str(getattr(startup_settings, "app_version", "") or "").strip()
-    stored_build_id = str(getattr(startup_settings, "app_build_id", "") or "").strip()
-    update_done = False
-    if (not settings_existed_at_launch) or cleanstart_applied:
+    runtime_log_manager = start_runtime_logging(
+        enabled=bool(getattr(startup_settings, "runtime_log_enabled", True)),
+        limit_mb=int(getattr(startup_settings, "runtime_log_limit_mb", 256)),
+    )
+    app_logger = logging.getLogger("pyssp.app")
+    if runtime_log_manager is not None:
+        app_logger.info("pySSP startup sequence initialized")
+    try:
+        current_version = str(get_display_version() or "").strip()
+        current_build_id = str(get_display_build_id() or "").strip()
+        stored_version = str(getattr(startup_settings, "app_version", "") or "").strip()
+        stored_build_id = str(getattr(startup_settings, "app_build_id", "") or "").strip()
         update_done = False
-    else:
-        build_changed = bool(current_build_id) and ((not stored_build_id) or (stored_build_id != current_build_id))
-        update_done = (
-            (not stored_version)
-            or (stored_version != current_version)
-            or build_changed
-        )
-    try:
-        cache_limit_mb = max(128, min(16384, int(getattr(startup_settings, "waveform_cache_limit_mb", 1024))))
-        cache_clear_on_launch = bool(getattr(startup_settings, "waveform_cache_clear_on_launch", True))
-        cache_dir = settings_path.parent / "temp" / "waveform_cache"
-        prepare_waveform_disk_cache(
-            str(cache_dir),
-            clear_existing=bool(update_done or cache_clear_on_launch),
-            limit_mb=cache_limit_mb,
-        )
-    except Exception:
-        pass
-    splash_status_cb = None
-    splash_hide_cb = None
-    splash_show_cb = None
-    if splash is not None:
-        def _set_splash_status(text: str) -> None:
-            splash.set_status(text)
-            app.processEvents()
+        if (not settings_existed_at_launch) or cleanstart_applied:
+            update_done = False
+        else:
+            build_changed = bool(current_build_id) and ((not stored_build_id) or (stored_build_id != current_build_id))
+            update_done = (
+                (not stored_version)
+                or (stored_version != current_version)
+                or build_changed
+            )
+        try:
+            cache_limit_mb = max(128, min(16384, int(getattr(startup_settings, "waveform_cache_limit_mb", 1024))))
+            cache_clear_on_launch = bool(getattr(startup_settings, "waveform_cache_clear_on_launch", True))
+            cache_dir = settings_path.parent / "temp" / "waveform_cache"
+            prepare_waveform_disk_cache(
+                str(cache_dir),
+                clear_existing=bool(update_done or cache_clear_on_launch),
+                limit_mb=cache_limit_mb,
+            )
+        except Exception:
+            pass
+        splash_status_cb = None
+        splash_hide_cb = None
+        splash_show_cb = None
+        if splash is not None:
+            def _set_splash_status(text: str) -> None:
+                splash.set_status(text)
+                app.processEvents()
 
-        def _hide_splash() -> None:
-            splash.hide()
-            app.processEvents()
+            def _hide_splash() -> None:
+                splash.hide()
+                app.processEvents()
 
-        def _show_splash() -> None:
-            splash.show()
-            app.processEvents()
+            def _show_splash() -> None:
+                splash.show()
+                app.processEvents()
 
-        splash_status_cb = _set_splash_status
-        splash_hide_cb = _hide_splash
-        splash_show_cb = _show_splash
-    if not ensure_supported_audio_formats_ready(
-        timeout_sec=10.0,
-        force_rescan=bool(update_done),
-        set_status=splash_status_cb,
-        before_prompt=splash_hide_cb,
-        after_prompt=splash_show_cb,
-    ):
-        return 1
-    try:
-        startup_settings = load_settings()
-        if (
-            str(getattr(startup_settings, "app_version", "") or "").strip() != current_version
-            or str(getattr(startup_settings, "app_build_id", "") or "").strip() != current_build_id
+            splash_status_cb = _set_splash_status
+            splash_hide_cb = _hide_splash
+            splash_show_cb = _show_splash
+        if not ensure_supported_audio_formats_ready(
+            timeout_sec=10.0,
+            force_rescan=bool(update_done),
+            set_status=splash_status_cb,
+            before_prompt=splash_hide_cb,
+            after_prompt=splash_show_cb,
         ):
-            startup_settings.app_version = current_version
-            startup_settings.app_build_id = current_build_id
-            save_settings(startup_settings)
-    except Exception:
-        pass
-    if splash is not None:
-        splash.set_status(tr("Loading main window..."))
-        app.processEvents()
-    if not _acquire_single_instance_lock():
-        return 1
-    if not _confirm_sports_sounds_pro_warning():
-        return 0
-    icon_path = Path(__file__).resolve().parent / "assets" / "app_icon.ico"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
-    show_getting_started_on_startup = bool((not settings_existed_at_launch) or update_done)
-    win = MainWindow(show_getting_started_on_startup=show_getting_started_on_startup)
-    if icon_path.exists():
-        win.setWindowIcon(QIcon(str(icon_path)))
-    win.show()
-    if splash is not None:
-        splash.finish(win)
-    return app.exec_()
+            return 1
+        try:
+            startup_settings = load_settings()
+            if (
+                str(getattr(startup_settings, "app_version", "") or "").strip() != current_version
+                or str(getattr(startup_settings, "app_build_id", "") or "").strip() != current_build_id
+            ):
+                startup_settings.app_version = current_version
+                startup_settings.app_build_id = current_build_id
+                save_settings(startup_settings)
+        except Exception:
+            pass
+        if splash is not None:
+            splash.set_status(tr("Loading main window..."))
+            app.processEvents()
+        if not _acquire_single_instance_lock():
+            return 1
+        if not _confirm_sports_sounds_pro_warning():
+            return 0
+        icon_path = Path(__file__).resolve().parent / "assets" / "app_icon.ico"
+        if icon_path.exists():
+            app.setWindowIcon(QIcon(str(icon_path)))
+        show_getting_started_on_startup = bool((not settings_existed_at_launch) or update_done)
+        win = MainWindow(show_getting_started_on_startup=show_getting_started_on_startup)
+        append_playback_log_entry(bool(getattr(win, "log_file_enabled", False)), "pySSP started")
+        playback_session_logged = True
+        app_logger.info("Main window initialized")
+        if icon_path.exists():
+            win.setWindowIcon(QIcon(str(icon_path)))
+        win.show()
+        if splash is not None:
+            splash.finish(win)
+        return app.exec_()
+    finally:
+        if playback_session_logged:
+            append_playback_log_entry(bool(getattr(win, "log_file_enabled", False)), "pySSP shutdown")
+        app_logger.info("pySSP shutdown complete")
+        stop_runtime_logging()

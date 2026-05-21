@@ -138,3 +138,20 @@ def test_ascii_password_encoding_preserves_space_only_password():
     encoded = _encode_ascii_setting("    ")
     assert encoded.startswith('"')
     assert _decode_ascii_setting(encoded) == "    "
+
+
+def test_runtime_log_settings_default_on_and_clamped():
+    parser = configparser.ConfigParser()
+    parser["main"] = {}
+    settings = _from_parser(parser)
+    assert settings.log_file_enabled is True
+    assert settings.runtime_log_enabled is True
+    assert settings.runtime_log_limit_mb == 256
+
+    parser["main"]["runtime_log_limit_mb"] = "4096"
+    settings = _from_parser(parser)
+    assert settings.runtime_log_limit_mb == 1024
+
+    parser["main"]["runtime_log_limit_mb"] = "4"
+    settings = _from_parser(parser)
+    assert settings.runtime_log_limit_mb == 16

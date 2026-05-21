@@ -35,3 +35,23 @@ def test_crash_report_dialog_shutdown_button_quits_application(qapp, monkeypatch
 
     assert dialog.result() == QDialog.Accepted
     assert called == ["close", "quit"]
+
+
+def test_crash_report_dialog_is_non_blocking_and_logs_open_close(qapp, caplog):
+    _ = qapp
+    caplog.set_level("INFO", logger="pyssp.crash")
+
+    try:
+        raise ValueError("bad data")
+    except ValueError as exc:
+        dialog = CrashReportDialog(type(exc), exc, exc.__traceback__)
+
+    assert dialog.isModal() is False
+    dialog.show()
+    qapp.processEvents()
+    dialog.close()
+    qapp.processEvents()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Crash report dialog opened" in message for message in messages)
+    assert any("Crash report dialog closed" in message for message in messages)

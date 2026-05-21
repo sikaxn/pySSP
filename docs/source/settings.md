@@ -8,8 +8,14 @@ The Settings dialog applies changes when you press `OK` in Options.
 
 - `Button Title Max Chars`
   - Controls UI truncation length for sound button titles in the main grid.
-- `Enable playback log file (SportsSoundsProLog.txt)`
-  - Enables writing playback log events to the SSP-style log file.
+- `Enable playback log file (pySSPLogFile.txt)`
+  - Enables writing playback log events to the pySSP playback log file.
+  - Startup and shutdown events are also recorded in this file.
+- `Enable runtime log`
+  - Writes runtime output to a per-launch log file in the `runtimelog` folder under the pySSP app-data directory.
+- `Runtime Log Limit`
+  - Caps the total size of the runtime log folder.
+  - Oldest runtime log files are removed first when the folder reaches the configured limit.
 - `Reset ALL on Start-up`
   - Resets runtime state at startup (play-state style reset workflow).
 - `Now Playing Display`

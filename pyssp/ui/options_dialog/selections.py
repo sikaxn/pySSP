@@ -32,6 +32,9 @@ class SelectionMixin:
         value = str(self.meter_output_tap_mode_combo.currentData() or "post_fader").strip().lower()
         return value if value in {"pre_fader", "post_fader"} else "post_fader"
 
+    def selected_runtime_log_limit_mb(self) -> int:
+        return clamp_runtime_log_limit_mb(self.runtime_log_limit_spin.value())
+
     def selected_now_playing_display_mode(self) -> str:
         if self.now_playing_filename_radio.isChecked():
             return "filename"

@@ -11,6 +11,8 @@ class GeneralPageMixin:
         show_file_notifications: bool,
         now_playing_display_mode: str,
         log_file_enabled: bool,
+        runtime_log_enabled: bool,
+        runtime_log_limit_mb: int,
         reset_all_on_startup: bool,
         click_playing_action: str,
         search_double_click_action: str,
@@ -28,9 +30,19 @@ class GeneralPageMixin:
         self.title_limit_spin.setValue(title_char_limit)
         form.addRow("Button Title Max Chars:", self.title_limit_spin)
 
-        self.log_file_checkbox = QCheckBox("Enable playback log file (SportsSoundsProLog.txt)")
+        self.log_file_checkbox = QCheckBox("Enable playback log file (pySSPLogFile.txt)")
         self.log_file_checkbox.setChecked(log_file_enabled)
         form.addRow("Log File:", self.log_file_checkbox)
+
+        self.runtime_log_checkbox = QCheckBox("Enable runtime log")
+        self.runtime_log_checkbox.setChecked(bool(runtime_log_enabled))
+        form.addRow("Runtime Log:", self.runtime_log_checkbox)
+
+        self.runtime_log_limit_spin = QSpinBox()
+        self.runtime_log_limit_spin.setRange(RUNTIME_LOG_MIN_MB, RUNTIME_LOG_MAX_MB)
+        self.runtime_log_limit_spin.setSuffix(" MB")
+        self.runtime_log_limit_spin.setValue(clamp_runtime_log_limit_mb(runtime_log_limit_mb))
+        form.addRow("Runtime Log Limit:", self.runtime_log_limit_spin)
 
         self.reset_on_startup_checkbox = QCheckBox("Reset ALL on Start-up")
         self.reset_on_startup_checkbox.setChecked(reset_all_on_startup)
@@ -139,5 +151,11 @@ class GeneralPageMixin:
         meter_row.addStretch(1)
         transport_layout.addLayout(meter_row)
         layout.addWidget(transport_group)
+        runtime_note = QLabel(
+            "Runtime logs are saved in the runtimelog folder under the pySSP app data directory. "
+            "A new log file is created each launch, and old files are removed first when the folder reaches the limit."
+        )
+        runtime_note.setWordWrap(True)
+        layout.addWidget(runtime_note)
         layout.addStretch(1)
         return page

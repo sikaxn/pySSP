@@ -144,6 +144,8 @@ def _build_dialog(**overrides):
         talk_volume_mode=defaults["talk_volume_mode"],
         talk_blink_button=defaults["talk_blink_button"],
         log_file_enabled=defaults["log_file_enabled"],
+        runtime_log_enabled=defaults["runtime_log_enabled"],
+        runtime_log_limit_mb=defaults["runtime_log_limit_mb"],
         reset_all_on_startup=defaults["reset_all_on_startup"],
         click_playing_action=defaults["click_playing_action"],
         search_double_click_action=defaults["search_double_click_action"],
@@ -943,6 +945,8 @@ def test_selected_value_methods_follow_toggles(qapp):
     dialog.main_progress_display_waveform_radio.setChecked(True)
     dialog.main_progress_show_text_checkbox.setChecked(False)
     dialog.meter_output_tap_mode_combo.setCurrentIndex(dialog.meter_output_tap_mode_combo.findData("pre_fader"))
+    dialog.runtime_log_checkbox.setChecked(False)
+    dialog.runtime_log_limit_spin.setValue(1024)
 
     assert dialog.selected_search_double_click_action() == "play_highlight"
     assert dialog.selected_click_playing_action() == "stop_it"
@@ -960,6 +964,27 @@ def test_selected_value_methods_follow_toggles(qapp):
     assert dialog.selected_main_progress_display_mode() == "waveform"
     assert dialog.selected_main_progress_show_text() is False
     assert dialog.selected_meter_output_tap_mode() == "pre_fader"
+    assert dialog.runtime_log_checkbox.isChecked() is False
+    assert dialog.selected_runtime_log_limit_mb() == 1024
+
+
+def test_general_runtime_log_defaults_and_restore(qapp):
+    dialog = _build_dialog(
+        log_file_enabled=False,
+        runtime_log_enabled=False,
+        runtime_log_limit_mb=64,
+        initial_page="General",
+    )
+    assert dialog.log_file_checkbox.isChecked() is False
+    assert dialog.runtime_log_checkbox.isChecked() is False
+    assert dialog.selected_runtime_log_limit_mb() == 64
+
+    dialog.select_page("General")
+    dialog._restore_defaults_current_page()
+
+    assert dialog.log_file_checkbox.isChecked() is True
+    assert dialog.runtime_log_checkbox.isChecked() is True
+    assert dialog.selected_runtime_log_limit_mb() == OptionsDialog._DEFAULTS["runtime_log_limit_mb"]
 
 
 def test_lock_screen_settings_round_trip_and_restore_defaults(qapp):

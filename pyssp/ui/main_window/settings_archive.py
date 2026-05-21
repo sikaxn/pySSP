@@ -1314,6 +1314,10 @@ class SettingsArchiveMixin:
         self.settings.talk_volume_mode = self.talk_volume_mode
         self.settings.talk_blink_button = self.talk_blink_button
         self.settings.log_file_enabled = self.log_file_enabled
+        self.settings.runtime_log_enabled = bool(getattr(self, "runtime_log_enabled", True))
+        self.settings.runtime_log_limit_mb = clamp_runtime_log_limit_mb(
+            getattr(self, "runtime_log_limit_mb", DEFAULT_RUNTIME_LOG_LIMIT_MB)
+        )
         self.settings.reset_all_on_startup = self.reset_all_on_startup
         self.settings.click_playing_action = self.click_playing_action
         self.settings.search_double_click_action = self.search_double_click_action

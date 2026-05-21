@@ -50,7 +50,6 @@ const strings = {
     videoDisplayManualSource: 'Manual Source',
     videoDisplaySetOverride: 'Set Source And Disable Follow',
     videoDisplaySetKeepFollow: 'Set Source Keep Follow',
-    videoDisplayToggleFollow: 'Toggle Follow',
     videoDisplayActiveSource: 'Active Source',
     videoDisplayStatusLabel: 'Video Route',
     lyricAndStage: 'Lyric And Stage',
@@ -162,7 +161,6 @@ const strings = {
     videoDisplayManualSource: '手动来源',
     videoDisplaySetOverride: '设置来源并关闭跟随',
     videoDisplaySetKeepFollow: '设置来源并保留跟随',
-    videoDisplayToggleFollow: '切换跟随',
     videoDisplayActiveSource: '当前输出',
     videoDisplayStatusLabel: '视频路由',
     lyricAndStage: '歌词与舞台',
@@ -562,8 +560,9 @@ function syncVideoDisplayControls(state){
   const followCheckbox = document.getElementById('videoFollowSoundButtonFocus');
   const sourceSelect = document.getElementById('videoDisplayManualSource');
   const statusNode = document.getElementById('videoDisplayStatus');
+  const followEnabled = !!payload.video_display_follow_sound_button_focus;
   if(followCheckbox){
-    followCheckbox.checked = !!payload.video_display_follow_sound_button_focus;
+    followCheckbox.checked = followEnabled;
   }
   if(sourceSelect){
     const manualSource = String(payload.video_display_manual_source || 'blank').trim().toLowerCase();
@@ -574,14 +573,16 @@ function syncVideoDisplayControls(state){
   if(statusNode){
     const active = videoRouteLabel(payload.video_display_active_source || 'blank');
     const manual = videoRouteLabel(payload.video_display_manual_source || 'blank');
-    const follow = payload.video_display_follow_sound_button_focus ? 'ON' : 'OFF';
+    const follow = followEnabled ? t('active') : t('inactive');
     statusNode.textContent = `${t('videoDisplayFollow')}: ${follow} | ${t('videoDisplayManualSource')}: ${manual} | ${t('videoDisplayActiveSource')}: ${active}`;
   }
 }
 
-async function setVideoDisplaySource(keepFollow){
+async function setVideoDisplaySourceFromCurrentControls(){
   const sourceSelect = document.getElementById('videoDisplayManualSource');
+  const followCheckbox = document.getElementById('videoFollowSoundButtonFocus');
   const source = String(sourceSelect?.value || 'blank').trim().toLowerCase();
+  const keepFollow = !!followCheckbox?.checked;
   const path = keepFollow
     ? `/api/video-display/source/${encodeURIComponent(source)}/keepfollow`
     : `/api/video-display/source/${encodeURIComponent(source)}`;
@@ -590,10 +591,6 @@ async function setVideoDisplaySource(keepFollow){
 
 async function setVideoDisplayFollow(enabled){
   await callApi(`/api/video-display/follow/${enabled ? 'enable' : 'disable'}`);
-}
-
-async function toggleVideoDisplayFollow(){
-  await callApi('/api/video-display/follow/toggle');
 }
 
 async function callApi(path){
@@ -977,17 +974,9 @@ function bindEvents(){
       await setVideoDisplayFollow(videoFollowSoundButtonFocus.checked);
     });
   }
-  const videoDisplaySetOverride = document.getElementById('videoDisplaySetOverride');
-  if(videoDisplaySetOverride){
-    videoDisplaySetOverride.addEventListener('click', () => setVideoDisplaySource(false));
-  }
-  const videoDisplaySetKeepFollow = document.getElementById('videoDisplaySetKeepFollow');
-  if(videoDisplaySetKeepFollow){
-    videoDisplaySetKeepFollow.addEventListener('click', () => setVideoDisplaySource(true));
-  }
-  const videoDisplayToggleFollow = document.getElementById('videoDisplayToggleFollow');
-  if(videoDisplayToggleFollow){
-    videoDisplayToggleFollow.addEventListener('click', toggleVideoDisplayFollow);
+  const videoDisplayManualSource = document.getElementById('videoDisplayManualSource');
+  if(videoDisplayManualSource){
+    videoDisplayManualSource.addEventListener('change', setVideoDisplaySourceFromCurrentControls);
   }
 }
 

@@ -848,17 +848,23 @@ class VideoDisplayMixin:
         return desired_output_width, desired_output_height
 
     def _on_video_surface_geometry_changed(self) -> None:
-        self._stage_snapshot_cache_key = None
-        self._stage_snapshot_cache_pixmap = QPixmap()
-        self._lyric_snapshot_cache_key = None
-        self._lyric_snapshot_cache_pixmap = QPixmap()
-        mode = self._active_video_route_mode()
-        if mode == "video":
-            self._clear_video_frame_runtime(preserve_current_frame=True)
-            self._refresh_video_display(force=True)
+        if bool(getattr(self, "_video_surface_geometry_refresh_inflight", False)):
             return
-        if mode in {DISPLAY_FOCUS_STAGE, DISPLAY_FOCUS_LYRIC, DISPLAY_FOCUS_METRONOME}:
-            self._refresh_video_display(force=True)
+        self._video_surface_geometry_refresh_inflight = True
+        try:
+            self._stage_snapshot_cache_key = None
+            self._stage_snapshot_cache_pixmap = QPixmap()
+            self._lyric_snapshot_cache_key = None
+            self._lyric_snapshot_cache_pixmap = QPixmap()
+            mode = self._active_video_route_mode()
+            if mode == "video":
+                self._clear_video_frame_runtime(preserve_current_frame=True)
+                self._refresh_video_display(force=True)
+                return
+            if mode in {DISPLAY_FOCUS_STAGE, DISPLAY_FOCUS_LYRIC, DISPLAY_FOCUS_METRONOME}:
+                self._refresh_video_display(force=True)
+        finally:
+            self._video_surface_geometry_refresh_inflight = False
 
     def _invalidate_video_playback_sync(self, *, refresh: bool = False) -> None:
         self._video_transport_revision = max(0, int(getattr(self, "_video_transport_revision", 0))) + 1
@@ -1225,6 +1231,9 @@ class VideoDisplayMixin:
         denominator = 4
         beat_index = 0
         beat_progress = 0.0
+        has_metronome_data = False
+        empty_state_title = ""
+        empty_state_detail = ""
         if slot is not None and slot.utility_spec is not None:
             try:
                 tempo_bpm = max(1.0, float(getattr(slot.utility_spec, "tempo_bpm", 120.0) or 120.0))
@@ -1242,6 +1251,7 @@ class VideoDisplayMixin:
             beat_ms = max(1.0, 60000.0 / tempo_bpm)
             beat_index = int(position_ms / beat_ms) % max(1, numerator)
             beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
+            has_metronome_data = True
         else:
             beat_map = normalize_audio_beat_map(getattr(slot, "audio_beat_map", None))
             if beat_map is not None:
@@ -1251,11 +1261,14 @@ class VideoDisplayMixin:
                 position_ms = max(0, int(self._current_video_display_position_ms()))
                 _beat_cursor, beat_number, denominator, beat_progress = beat_phase_at_position(beat_map, position_ms)
                 beat_index = max(0, beat_number - 1)
+                has_metronome_data = True
             else:
-                position_ms = max(0, int(self._current_video_display_position_ms()))
-                beat_ms = max(1.0, 60000.0 / tempo_bpm)
-                beat_index = int(position_ms / beat_ms) % max(1, numerator)
-                beat_progress = max(0.0, min(1.0, (position_ms % beat_ms) / beat_ms))
+                empty_state_title = "No metronome data" if slot is not None else "No sound button selected"
+                empty_state_detail = (
+                    "Analyze BPM or enable metronome timing for this song."
+                    if slot is not None
+                    else "Start a metronome utility or select a song with timing data."
+                )
         accent = QColor("#F2C94C")
         title_font = QFont(self.font())
         title_font.setBold(True)
@@ -1263,6 +1276,28 @@ class VideoDisplayMixin:
         painter.setFont(title_font)
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(QRect(0, 24, pixmap.width(), 56), Qt.AlignHCenter | Qt.AlignTop, title)
+        if not has_metronome_data:
+            message_font = QFont(self.font())
+            message_font.setBold(True)
+            message_font.setPointSize(max(18, min(40, pixmap.height() // 10)))
+            painter.setFont(message_font)
+            painter.setPen(accent)
+            painter.drawText(
+                QRect(24, max(64, pixmap.height() // 4), max(120, pixmap.width() - 48), max(60, pixmap.height() // 5)),
+                Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap,
+                empty_state_title,
+            )
+            detail_font = QFont(self.font())
+            detail_font.setPointSize(max(11, min(20, pixmap.height() // 18)))
+            painter.setFont(detail_font)
+            painter.setPen(QColor("#D7DCE5"))
+            painter.drawText(
+                QRect(36, max(120, pixmap.height() // 2 - 10), max(120, pixmap.width() - 72), max(56, pixmap.height() // 5)),
+                Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap,
+                empty_state_detail,
+            )
+            painter.end()
+            return pixmap
         bpm_font = QFont(self.font())
         bpm_font.setBold(True)
         bpm_font.setPointSize(max(24, min(72, pixmap.height() // 6)))

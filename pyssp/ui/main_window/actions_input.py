@@ -671,6 +671,7 @@ class ActionsInputMixin:
         self._pending_start_request = None
         self._pending_start_token += 1
         self._vocal_toggle_fade_jobs.clear()
+        self._pending_vocal_removed_toggles.clear()
         self._clear_pending_deferred_audio_start()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
@@ -760,6 +761,7 @@ class ActionsInputMixin:
     def _hard_stop_all(self, emit_app_interrupt_events: bool = True) -> None:
         self._fade_jobs.clear()
         self._vocal_toggle_fade_jobs.clear()
+        self._pending_vocal_removed_toggles.clear()
         self._update_fade_button_flash(False)
         self._clear_track_end_transition_state()
         self._pending_start_request = None

@@ -798,6 +798,72 @@ def test_tools_clear_all_bpm_removes_audio_beat_maps(qapp, monkeypatch):
         _cleanup_main_window(window, qapp)
 
 
+def test_tools_analyze_bpm_in_set_analyzes_selected_files_with_progress(qapp, monkeypatch):
+    _patch_main_window_startup(monkeypatch)
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+
+    try:
+        primary_path = r"C:\Media\theme.mp3"
+        secondary_path = r"C:\Media\walkin.mp3"
+
+        slot_a = window.data["A"][0][0]
+        slot_a.file_path = primary_path
+        slot_a.title = "Theme A"
+        slot_a.duration_ms = 1000
+        slot_a.activity_code = "8"
+
+        slot_b = window.data["A"][0][1]
+        slot_b.file_path = primary_path
+        slot_b.title = "Theme B"
+        slot_b.duration_ms = 1000
+        slot_b.activity_code = "8"
+
+        slot_c = window.data["A"][0][2]
+        slot_c.file_path = secondary_path
+        slot_c.title = "Walk-In"
+        slot_c.duration_ms = 1000
+        slot_c.activity_code = "8"
+
+        def _select_only_primary(candidates):
+            return [candidate for candidate in candidates if candidate.get("file_path") == primary_path]
+
+        batch_calls: list[list[str]] = []
+
+        def _fake_run_bpm_analysis_batch(candidates):
+            batch_calls.append([candidate.get("file_path") for candidate in candidates])
+            analyzed = AudioBeatMap(bpm=111.0)
+            updated_buttons = 0
+            for candidate in candidates:
+                for ref in list(candidate.get("refs", []) or []):
+                    slot = ref.get("slot_ref")
+                    if slot is None:
+                        continue
+                    slot.audio_beat_map = analyzed
+                    updated_buttons += 1
+            return {
+                "analyzed_files": len(candidates),
+                "updated_buttons": updated_buttons,
+                "skipped_files": 0,
+                "failures": [],
+                "canceled": False,
+            }
+
+        monkeypatch.setattr(window, "_select_bpm_analysis_file_candidates", _select_only_primary)
+        monkeypatch.setattr(window, "_run_bpm_analysis_batch", _fake_run_bpm_analysis_batch)
+
+        window._analyze_bpm_in_set()
+
+        assert batch_calls == [[primary_path]]
+        assert slot_a.audio_beat_map is not None and slot_a.audio_beat_map.bpm == 111.0
+        assert slot_b.audio_beat_map is not None and slot_b.audio_beat_map.bpm == 111.0
+        assert slot_c.audio_beat_map is None
+        assert window._dirty is True
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
 def test_tools_set_changes_reports_dirty_set_lines(qapp, monkeypatch):
     _patch_main_window_startup(monkeypatch)
     window = mw.MainWindow()

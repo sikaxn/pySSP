@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass, field
+import json
+import sys
 from typing import Any, Optional
 
 import numpy as np
@@ -387,3 +389,25 @@ def _infer_meter_from_beats(
             best_score = score
             best_meter = candidate
     return best_meter
+
+
+def analyze_audio_beat_map_cli(argv: Optional[list[str]] = None) -> int:
+    args = list(argv if argv is not None else sys.argv)
+    if len(args) < 2:
+        print("Usage: analyze-audio-beat-map <file_path>", file=sys.stderr)
+        return 2
+    file_path = str(args[1] or "").strip()
+    if not file_path:
+        print("Missing file path.", file=sys.stderr)
+        return 2
+    try:
+        result = analyze_audio_beat_map(file_path)
+        print(json.dumps(audio_beat_map_to_dict(result), separators=(",", ":")))
+        return 0
+    except Exception as exc:
+        print(str(exc or "Audio BPM analysis failed."), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(analyze_audio_beat_map_cli())

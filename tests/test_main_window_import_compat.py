@@ -219,6 +219,97 @@ class _PlaybackSmartFadeHost(PlaybackMixin):
         return int(slot.cue_end_ms)
 
 
+class _VolumePlayer:
+    def __init__(self, volume: int = 0, *, position_ms: int = 0, state: int = mw.ExternalMediaPlayer.PlayingState) -> None:
+        self._volume = int(volume)
+        self._position_ms = int(position_ms)
+        self._state = int(state)
+
+    def setVolume(self, value: int) -> None:
+        self._volume = int(value)
+
+    def volume(self) -> int:
+        return int(self._volume)
+
+    def position(self) -> int:
+        return int(self._position_ms)
+
+    def enginePositionMs(self) -> int:
+        return int(self._position_ms)
+
+    def setPosition(self, value: int) -> None:
+        self._position_ms = int(value)
+
+    def duration(self) -> int:
+        return 4000
+
+    def play(self) -> None:
+        self._state = mw.ExternalMediaPlayer.PlayingState
+
+    def pause(self) -> None:
+        self._state = mw.ExternalMediaPlayer.PausedState
+
+    def stop(self) -> None:
+        self._state = mw.ExternalMediaPlayer.StoppedState
+
+    def state(self) -> int:
+        return int(self._state)
+
+
+class _VocalToggleFadeHost(PlaybackMixin):
+    def __init__(self) -> None:
+        self._fade_jobs = []
+        self._vocal_toggle_fade_jobs = {}
+        self._pending_vocal_removed_toggles = {}
+        self._stop_fade_armed = False
+        self.play_vocal_removed_tracks = False
+        self.player = _VolumePlayer(100, position_ms=1200)
+        self.player_b = _VolumePlayer(0, position_ms=1200)
+        self._multi_players = []
+        self._slot = mw.SoundButtonData(file_path="theme.mp3", duration_ms=4000)
+        self._player_slot_key_map = {id(self.player): ("A", 0, 0)}
+        self._vocal_shadow_players = {id(self.player): self.player_b}
+        self._player_mix_volume_map = {id(self.player): 100}
+        self._vocal_shadow_pending_loads = {}
+        self.control_buttons = {"X": _CheckedButton(True), "Smart X": _CheckedButton(True)}
+        self.cross_fade_sec = 1.0
+        self.vocal_removed_toggle_fade_mode = "follow_cross_fade"
+        self.vocal_removed_toggle_custom_sec = 1.0
+        self.vocal_removed_toggle_always_sec = 1.0
+
+    def _is_audio_player(self, player) -> bool:
+        return isinstance(player, _VolumePlayer)
+
+    def _update_fade_button_flash(self, any_fade: bool) -> None:
+        self._flash_state = bool(any_fade)
+
+    def _shadow_player_for(self, player):
+        return self._vocal_shadow_players.get(id(player))
+
+    def _slot_for_key(self, _key):
+        return self._slot
+
+    def _cue_end_for_playback(self, slot, duration_ms: int):
+        _ = slot
+        return int(duration_ms)
+
+    def _cue_start_for_playback(self, slot, duration_ms: int) -> int:
+        _ = (slot, duration_ms)
+        return 0
+
+    def _logical_player_volume(self, player) -> int:
+        return int(self._player_mix_volume_map.get(id(player), player.volume()))
+
+    def _cancel_fade_for_player(self, player) -> None:
+        _ = player
+        return None
+
+    def _apply_player_mix_volumes(self, player, logical_volume=None) -> None:
+        _ = player
+        _ = logical_volume
+        return None
+
+
 def test_video_display_skips_media_probe_for_audio_only_paths(monkeypatch):
     def _unexpected_probe(_path: str):
         raise AssertionError("audio-only paths should not be probed for video metadata")
@@ -330,10 +421,135 @@ def test_smart_fade_helpers_fall_back_without_beat_analysis():
     ) == pytest.approx(1.0)
 
 
+def test_smart_fade_out_waits_for_lyric_boundary_before_stopping(tmp_path):
+    host = _PlaybackSmartFadeHost(smart_out=True)
+    lyric_path = tmp_path / "theme.lrc"
+    lyric_path.write_text("[00:00.00]First line\n[00:01.90]Second line\n", encoding="utf-8")
+    host._slot.lyric_file = str(lyric_path)
+
+    fade_out = host._fade_out_seconds_for_slot(host._slot, duration_ms=4000, start_ms=1200, end_limit_ms=4000)
+
+    assert fade_out == pytest.approx(0.8)
+
+
+def test_smart_cross_uses_lyric_boundary_when_downbeat_would_cut_line(tmp_path):
+    host = _PlaybackSmartFadeHost(smart_cross=True)
+    lyric_path = tmp_path / "theme.lrc"
+    lyric_path.write_text("[00:00.00]First line\n[00:02.40]Second line\n", encoding="utf-8")
+    host._slot.lyric_file = str(lyric_path)
+
+    cross = host._cross_fade_seconds_for_slots(
+        host._slot,
+        host._slot,
+        outgoing_duration_ms=2600,
+        incoming_duration_ms=4000,
+        outgoing_start_ms=1200,
+        incoming_start_ms=0,
+        outgoing_end_limit_ms=2600,
+    )
+
+    assert cross == pytest.approx(1.2)
+
+
 def test_vocal_removed_toggle_uses_smart_crossfade_timing():
     host = _PlaybackSmartFadeHost(smart_cross=True)
 
-    assert host._vocal_removed_toggle_fade_seconds(host.player) == pytest.approx(0.8)
+    assert host._vocal_removed_toggle_fade_seconds(host.player) == pytest.approx(0.35)
+
+
+def test_vocal_removed_toggle_explicit_always_mode_keeps_user_duration():
+    host = _PlaybackSmartFadeHost(smart_cross=True)
+    host.vocal_removed_toggle_fade_mode = "always"
+    host.vocal_removed_toggle_always_sec = 0.9
+
+    assert host._vocal_removed_toggle_fade_seconds(host.player) == pytest.approx(0.9)
+
+
+def test_vocal_removed_toggle_waits_for_lyric_boundary_when_available(tmp_path, monkeypatch):
+    host = _VocalToggleFadeHost()
+    lyric_path = tmp_path / "theme.lrc"
+    lyric_path.write_text("[00:00.00]First line\n[00:01.90]Second line\n", encoding="utf-8")
+    host._slot.lyric_file = str(lyric_path)
+    host.play_vocal_removed_tracks = True
+    sync_calls = []
+    fade_calls = []
+
+    monkeypatch.setattr(
+        host,
+        "_sync_vocal_pair_transport",
+        lambda player, **kwargs: sync_calls.append((player, dict(kwargs))),
+    )
+    monkeypatch.setattr(
+        host,
+        "_start_vocal_toggle_fade",
+        lambda *args, **kwargs: fade_calls.append((args, dict(kwargs))),
+    )
+
+    host._apply_vocal_removed_toggle_for_player(host.player, current_vocal_removed_active=False)
+
+    pending = host._pending_vocal_removed_toggles.get(id(host.player))
+    assert pending is not None
+    assert pending["switch_at_ms"] == 1900
+    assert fade_calls == []
+    assert len(sync_calls) == 1
+
+
+def test_process_pending_vocal_removed_toggles_runs_switch_at_boundary(monkeypatch):
+    host = _VocalToggleFadeHost()
+    host.play_vocal_removed_tracks = True
+    host._pending_vocal_removed_toggles[id(host.player)] = {
+        "player": host.player,
+        "current_vocal_removed_active": False,
+        "target_vocal_removed_active": True,
+        "switch_at_ms": 1900,
+    }
+    host.player.setPosition(1900)
+    calls = []
+
+    monkeypatch.setattr(
+        host,
+        "_apply_vocal_removed_toggle_for_player",
+        lambda player, **kwargs: calls.append((player, dict(kwargs))),
+    )
+
+    host._process_pending_vocal_removed_toggles()
+
+    assert len(calls) == 1
+    assert calls[0][0] is host.player
+    assert calls[0][1]["current_vocal_removed_active"] is False
+    assert calls[0][1]["allow_lyric_wait"] is False
+    assert host._pending_vocal_removed_toggles == {}
+
+
+def test_tick_fades_resyncs_vocal_toggle_tracks_during_overlap(monkeypatch):
+    host = _VocalToggleFadeHost()
+    sync_calls = []
+
+    monkeypatch.setattr(
+        host,
+        "_maintain_vocal_toggle_fade_sync",
+        lambda player, shadow, **kwargs: sync_calls.append((player, shadow, dict(kwargs))),
+    )
+
+    host._vocal_toggle_fade_jobs = {
+        id(host.player): {
+            "player": host.player,
+            "shadow": host.player_b,
+            "start_primary": 100,
+            "start_shadow": 0,
+            "end_primary": 0,
+            "end_shadow": 100,
+            "started": 0.0,
+            "duration": 1.0,
+        }
+    }
+    monkeypatch.setattr("pyssp.ui.main_window.playback.time.monotonic", lambda: 0.5)
+
+    host._tick_fades()
+
+    assert len(sync_calls) == 1
+    assert host.player.volume() > 0
+    assert host.player_b.volume() > 0
 
 
 @pytest.mark.parametrize(

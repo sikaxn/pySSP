@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from pyssp.audio_beat_map import (
     AudioBeatMap,
+    analyze_audio_beat_map_cli,
     beat_phase_at_position,
     has_usable_smart_fade_beat_map,
     next_beat_boundary_ms,
@@ -85,3 +88,17 @@ def test_next_beat_boundary_falls_back_to_bpm_grid_when_explicit_beats_missing()
 
     assert has_usable_smart_fade_beat_map(spec) is True
     assert next_beat_boundary_ms(spec, 750) == 1000
+
+
+def test_analyze_audio_beat_map_cli_prints_json(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "pyssp.audio_beat_map.analyze_audio_beat_map",
+        lambda _path: AudioBeatMap(bpm=123.0, time_signature_num=3, beat_times_ms=[0, 500, 1000], beat_numbers=[1, 2, 3]),
+    )
+
+    rc = analyze_audio_beat_map_cli(["prog", "C:\\Media\\theme.mp3"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["bpm"] == 123.0
+    assert payload["time_signature_num"] == 3

@@ -27,6 +27,9 @@ class _TrackEndTransitionState:
 
 
 class PlaybackMixin:
+    _VOCAL_REMOVED_AUTO_TOGGLE_MAX_SEC = 0.35
+    _VOCAL_REMOVED_TOGGLE_SYNC_DRIFT_MS = 4
+
     _SMART_FADE_MIN_SECONDS = 0.12
     _SMART_FADE_MAX_SECONDS = 12.0
 
@@ -1493,6 +1496,7 @@ class PlaybackMixin:
         self._tick_deferred_audio_start()
         self._prune_multi_players()
         self._maintain_vocal_shadow_sync()
+        self._process_pending_vocal_removed_toggles()
         self._enforce_cue_end_limits()
         if self.player_b.state() == ExternalMediaPlayer.StoppedState:
             had_player_b_key = id(self.player_b) in self._player_slot_key_map
@@ -1686,6 +1690,7 @@ class PlaybackMixin:
             return max(0.0, float(self.vocal_removed_toggle_always_sec))
         if not self._is_cross_fade_enabled():
             return 0.0
+        auto_cap = max(0.0, float(getattr(self, "_VOCAL_REMOVED_AUTO_TOGGLE_MAX_SEC", 0.35)))
         if self._is_smart_cross_enabled():
             current_player = self.player if player is None else player
             current_slot = self._player_current_slot(current_player)
@@ -1702,26 +1707,53 @@ class PlaybackMixin:
                 prefer_downbeat=True,
             )
             if smart_seconds is not None:
-                return smart_seconds
+                return min(auto_cap, max(0.0, float(smart_seconds)))
         if mode == "follow_cross_fade_custom":
             return max(0.0, float(self.vocal_removed_toggle_custom_sec))
-        return max(0.0, float(self.cross_fade_sec))
+        return min(auto_cap, max(0.0, float(self.cross_fade_sec)))
 
     def _apply_vocal_removed_toggle_for_player(
         self,
         player: Optional[ExternalMediaPlayer],
         *,
         current_vocal_removed_active: Optional[bool] = None,
+        allow_lyric_wait: bool = True,
     ) -> None:
         if player is None:
             return
         shadow = self._shadow_player_for(player)
         if shadow is None:
+            self._clear_pending_vocal_removed_toggle_for_player(player)
             self._cancel_vocal_toggle_fade_for_player(player)
             self._apply_player_mix_volumes(player)
             return
         if current_vocal_removed_active is None:
-            current_vocal_removed_active = bool(self.play_vocal_removed_tracks)
+            current_vocal_removed_active = self._effective_vocal_removed_active_for_player(player)
+        target_vocal_removed_active = bool(self.play_vocal_removed_tracks)
+        if bool(current_vocal_removed_active) == target_vocal_removed_active:
+            self._clear_pending_vocal_removed_toggle_for_player(player)
+            self._cancel_vocal_toggle_fade_for_player(player)
+            self._apply_player_mix_volumes(player)
+            return
+        if allow_lyric_wait:
+            lyric_boundary_ms = self._vocal_removed_toggle_wait_until_lyric_boundary_ms(
+                player,
+                current_vocal_removed_active=bool(current_vocal_removed_active),
+            )
+            if lyric_boundary_ms is not None:
+                self._queue_pending_vocal_removed_toggle(
+                    player,
+                    current_vocal_removed_active=bool(current_vocal_removed_active),
+                    switch_at_ms=lyric_boundary_ms,
+                )
+                self._sync_vocal_pair_transport(
+                    player,
+                    audible_is_shadow=bool(current_vocal_removed_active),
+                    force_seek=True,
+                    max_drift_ms=max(1, int(getattr(self, "_VOCAL_REMOVED_TOGGLE_SYNC_DRIFT_MS", 4))),
+                )
+                return
+        self._clear_pending_vocal_removed_toggle_for_player(player)
         self._sync_vocal_pair_transport(
             player,
             audible_is_shadow=bool(current_vocal_removed_active),
@@ -1737,7 +1769,7 @@ class PlaybackMixin:
             return
         self._cancel_fade_for_player(player)
         self._cancel_fade_for_player(shadow)
-        if self.play_vocal_removed_tracks:
+        if target_vocal_removed_active:
             self._start_vocal_toggle_fade(
                 player,
                 shadow,
@@ -1821,10 +1853,27 @@ class PlaybackMixin:
                 continue
             self._sync_vocal_pair_transport(
                 player,
-                audible_is_shadow=bool(self.play_vocal_removed_tracks),
+                audible_is_shadow=self._effective_vocal_removed_active_for_player(player),
                 force_seek=False,
                 max_drift_ms=12,
             )
+
+    def _maintain_vocal_toggle_fade_sync(
+        self,
+        player: ExternalMediaPlayer,
+        shadow: ExternalMediaPlayer,
+        *,
+        primary_volume: int,
+        shadow_volume: int,
+    ) -> None:
+        _ = shadow
+        source_is_shadow = int(shadow_volume) >= int(primary_volume)
+        self._sync_vocal_pair_transport(
+            player,
+            audible_is_shadow=source_is_shadow,
+            force_seek=False,
+            max_drift_ms=max(1, int(getattr(self, "_VOCAL_REMOVED_TOGGLE_SYNC_DRIFT_MS", 4))),
+        )
 
     def _sync_shadow_transport_from_primary(
         self,
@@ -2145,6 +2194,123 @@ class PlaybackMixin:
             return None
         return beat_map
 
+    def _slot_smart_fade_lyric_lines(self, slot: Optional[SoundButtonData]) -> List[LyricLine]:
+        if slot is None:
+            return []
+        lyric_path = str(getattr(slot, "lyric_file", "") or "").strip()
+        if not lyric_path:
+            return []
+        try:
+            mtime = os.path.getmtime(lyric_path)
+        except OSError:
+            return []
+        cache = getattr(self, "_smart_fade_lyric_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._smart_fade_lyric_cache = cache
+        entry = cache.get(lyric_path)
+        if isinstance(entry, dict) and abs(float(entry.get("mtime", -1.0)) - float(mtime)) < 0.0001:
+            return list(entry.get("lines", []) or [])
+        try:
+            lines = list(parse_lyric_file(lyric_path) or [])
+        except Exception:
+            lines = []
+        cache[lyric_path] = {"mtime": float(mtime), "lines": list(lines)}
+        return lines
+
+    def _next_smart_fade_lyric_boundary_ms(
+        self,
+        slot: Optional[SoundButtonData],
+        *,
+        position_ms: int,
+        end_limit_ms: Optional[int] = None,
+    ) -> Optional[int]:
+        lines = self._slot_smart_fade_lyric_lines(slot)
+        if not lines:
+            return None
+        low = max(0, int(position_ms))
+        high = None if end_limit_ms is None else max(low, int(end_limit_ms))
+        for line in lines:
+            boundary_ms = max(0, int(getattr(line, "end_ms", 0)) + 1)
+            if boundary_ms <= low:
+                continue
+            if high is not None and boundary_ms > high:
+                continue
+            return boundary_ms
+        return None
+
+    def _vocal_removed_toggle_wait_until_lyric_boundary_ms(
+        self,
+        player: Optional[ExternalMediaPlayer],
+        *,
+        current_vocal_removed_active: bool,
+    ) -> Optional[int]:
+        if player is None or player.state() != ExternalMediaPlayer.PlayingState:
+            return None
+        slot = self._player_current_slot(player)
+        if slot is None:
+            return None
+        transport_player = self._shadow_player_for(player) if current_vocal_removed_active else player
+        position_ms = self._player_transport_sync_ms(transport_player or player)
+        end_limit_ms = self._cue_end_for_playback(slot, max(0, int(player.duration())))
+        boundary_ms = self._next_smart_fade_lyric_boundary_ms(
+            slot,
+            position_ms=position_ms,
+            end_limit_ms=end_limit_ms,
+        )
+        if boundary_ms is None or int(boundary_ms) <= int(position_ms) + 40:
+            return None
+        return int(boundary_ms)
+
+    def _queue_pending_vocal_removed_toggle(
+        self,
+        player: ExternalMediaPlayer,
+        *,
+        current_vocal_removed_active: bool,
+        switch_at_ms: int,
+    ) -> None:
+        self._pending_vocal_removed_toggles[id(player)] = {
+            "player": player,
+            "current_vocal_removed_active": bool(current_vocal_removed_active),
+            "target_vocal_removed_active": bool(self.play_vocal_removed_tracks),
+            "switch_at_ms": max(0, int(switch_at_ms)),
+        }
+
+    def _clear_pending_vocal_removed_toggle_for_player(self, player: Optional[ExternalMediaPlayer]) -> None:
+        if player is None:
+            return
+        self._pending_vocal_removed_toggles.pop(id(player), None)
+
+    def _effective_vocal_removed_active_for_player(self, player: Optional[ExternalMediaPlayer]) -> bool:
+        if player is None:
+            return bool(self.play_vocal_removed_tracks)
+        pending = self._pending_vocal_removed_toggles.get(id(player))
+        if isinstance(pending, dict):
+            return bool(pending.get("current_vocal_removed_active", False))
+        return bool(self.play_vocal_removed_tracks)
+
+    def _process_pending_vocal_removed_toggles(self) -> None:
+        pending_jobs = getattr(self, "_pending_vocal_removed_toggles", None)
+        if not pending_jobs:
+            return
+        for player_id, pending in list(pending_jobs.items()):
+            player = pending.get("player")
+            if not self._is_audio_player(player):
+                pending_jobs.pop(player_id, None)
+                continue
+            if player.state() != ExternalMediaPlayer.PlayingState:
+                pending_jobs.pop(player_id, None)
+                continue
+            if self._player_transport_sync_ms(player) < max(0, int(pending.get("switch_at_ms", 0))):
+                continue
+            current_active = bool(pending.get("current_vocal_removed_active", False))
+            pending_jobs.pop(player_id, None)
+            self._apply_vocal_removed_toggle_for_player(
+                player,
+                current_vocal_removed_active=current_active,
+                allow_lyric_wait=False,
+            )
+
     def _player_current_slot(self, player: Optional[ExternalMediaPlayer]) -> Optional[SoundButtonData]:
         if player is None:
             return None
@@ -2159,6 +2325,7 @@ class PlaybackMixin:
         duration_ms: int,
         end_limit_ms: Optional[int] = None,
         prefer_downbeat: bool = False,
+        consider_lyric_stop: bool = False,
     ) -> Optional[float]:
         beat_map = self._slot_smart_fade_beat_map(slot)
         if beat_map is None:
@@ -2169,6 +2336,15 @@ class PlaybackMixin:
         high = max(low, int(duration_ms if cue_end_ms is None else cue_end_ms))
         target_start_ms = max(low, min(high, int(start_ms)))
         target_end_limit_ms = high if end_limit_ms is None else max(target_start_ms, min(high, int(end_limit_ms)))
+        lyric_boundary_ms = (
+            self._next_smart_fade_lyric_boundary_ms(
+                slot,
+                position_ms=target_start_ms,
+                end_limit_ms=target_end_limit_ms,
+            )
+            if consider_lyric_stop
+            else None
+        )
         boundary_ms = next_beat_boundary_ms(
             beat_map,
             target_start_ms,
@@ -2176,6 +2352,16 @@ class PlaybackMixin:
             end_limit_ms=target_end_limit_ms,
             max_lookahead_beats=max(4, int(getattr(beat_map, "time_signature_num", 4) or 4) * 2),
         )
+        if lyric_boundary_ms is not None and boundary_ms is not None and boundary_ms < lyric_boundary_ms:
+            boundary_ms = next_beat_boundary_ms(
+                beat_map,
+                max(target_start_ms, int(lyric_boundary_ms) - 1),
+                prefer_downbeat=prefer_downbeat,
+                end_limit_ms=target_end_limit_ms,
+                max_lookahead_beats=max(4, int(getattr(beat_map, "time_signature_num", 4) or 4) * 2),
+            )
+        if boundary_ms is None and lyric_boundary_ms is not None:
+            boundary_ms = int(lyric_boundary_ms)
         if boundary_ms is None and target_end_limit_ms > target_start_ms:
             boundary_ms = target_end_limit_ms
         if boundary_ms is None:
@@ -2198,6 +2384,7 @@ class PlaybackMixin:
             duration_ms=duration_ms,
             end_limit_ms=None,
             prefer_downbeat=False,
+            consider_lyric_stop=False,
         )
 
     def _smart_fade_out_seconds_for_slot(
@@ -2215,6 +2402,7 @@ class PlaybackMixin:
             duration_ms=duration_ms,
             end_limit_ms=end_limit_ms,
             prefer_downbeat=prefer_downbeat,
+            consider_lyric_stop=True,
         )
 
     def _fade_in_seconds_for_slot(
@@ -2483,6 +2671,7 @@ class PlaybackMixin:
         if emit_stop_events and stopped_key is not None:
             self._trigger_sound_button_stopped_event(stopped_key, natural=False)
             self._sound_button_automation_handled_stop_player_ids.add(id(player))
+        self._clear_pending_vocal_removed_toggle_for_player(player)
         self._cancel_fade_for_player(player)
         self._stop_player_internal(player)
         self._clear_vocal_shadow_player(player)
@@ -2604,6 +2793,12 @@ class PlaybackMixin:
             )
             player.setVolume(max(0, min(100, primary_volume)))
             shadow.setVolume(max(0, min(100, shadow_volume)))
+            self._maintain_vocal_toggle_fade_sync(
+                player,
+                shadow,
+                primary_volume=primary_volume,
+                shadow_volume=shadow_volume,
+            )
             if ratio < 1.0:
                 remaining_vocal_jobs[player_id] = job
         self._vocal_toggle_fade_jobs = remaining_vocal_jobs

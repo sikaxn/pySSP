@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import difflib
+import os
+
+from PyQt5.QtWidgets import QProgressBar
 
 from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
-from pyssp.audio_beat_map import analyze_audio_beat_map, normalize_audio_beat_map
+from pyssp.audio_beat_map import normalize_audio_beat_map
+from pyssp.python_runtime import preferred_python_executable
 from pyssp.ui.vocal_removed_batch_dialog import VocalRemovedBatchDialog
+from pyssp.utility_audio import FILE_SOURCE_TYPE
 from pyssp.vocal_removal_cli import find_bundled_spleeter_cli_executable, suggested_vocal_removed_output_path
 from pyssp.launchpad import (
     LAUNCHPAD_ACTION_SHIFT_LAYER,
@@ -18,6 +23,243 @@ from pyssp.launchpad import (
     launchpad_profile_label,
     normalize_launchpad_layout,
 )
+
+
+class _BpmAnalysisProgressDialog(QDialog):
+    def __init__(self, total_files: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Analyze BPM In Set")
+        self.setWindowModality(Qt.WindowModal)
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.resize(520, 170)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+
+        self.status_label = QLabel("Preparing BPM analysis...", self)
+        self.status_label.setWordWrap(True)
+        root.addWidget(self.status_label)
+
+        self.file_label = QLabel("", self)
+        self.file_label.setWordWrap(True)
+        root.addWidget(self.file_label)
+
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setRange(0, max(0, int(total_files)))
+        self.progress_bar.setValue(0)
+        root.addWidget(self.progress_bar)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.skip_button = QPushButton("Skip Current", self)
+        self.cancel_button = QPushButton("Cancel", self)
+        button_row.addWidget(self.skip_button)
+        button_row.addWidget(self.cancel_button)
+        root.addLayout(button_row)
+
+    def update_progress(self, completed_files: int, total_files: int, file_path: str) -> None:
+        basename = os.path.basename(file_path) or file_path
+        self.status_label.setText(f"Analyzing file {completed_files + 1} of {max(1, total_files)}...")
+        self.file_label.setText(basename)
+        self.progress_bar.setMaximum(max(0, int(total_files)))
+        self.progress_bar.setValue(max(0, int(completed_files)))
+
+    def set_waiting_to_finish(self, message: str) -> None:
+        self.status_label.setText(str(message or "").strip() or "Waiting for analysis process to stop...")
+        self.skip_button.setEnabled(False)
+
+    def finish_progress(self, total_files: int) -> None:
+        self.progress_bar.setMaximum(max(0, int(total_files)))
+        self.progress_bar.setValue(max(0, int(total_files)))
+
+
+class _BpmAnalysisBatchRunner(QObject):
+    _POLL_INTERVAL_MS = 75
+    _TERMINATE_GRACE_SECONDS = 1.5
+
+    def __init__(self, owner, candidates: List[dict]) -> None:
+        super().__init__(owner)
+        self._owner = owner
+        self._candidates = list(candidates or [])
+        self._dialog = _BpmAnalysisProgressDialog(len(self._candidates), owner)
+        self._dialog.skip_button.clicked.connect(self._request_skip_current)
+        self._dialog.cancel_button.clicked.connect(self._request_cancel_all)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
+        self._poll_timer.timeout.connect(self._poll_active_process)
+        self._current_process: Optional[subprocess.Popen[str]] = None
+        self._current_candidate: Optional[dict] = None
+        self._current_stop_deadline: Optional[float] = None
+        self._current_skip_requested = False
+        self._cancel_requested = False
+        self._completed_files = 0
+        self._analyzed_files = 0
+        self._updated_buttons = 0
+        self._skipped_files = 0
+        self._failures: list[str] = []
+
+    def exec_(self) -> dict:
+        QTimer.singleShot(0, self._start_next_candidate)
+        self._dialog.exec_()
+        self._shutdown_active_process(force=True)
+        return {
+            "analyzed_files": int(self._analyzed_files),
+            "updated_buttons": int(self._updated_buttons),
+            "skipped_files": int(self._skipped_files),
+            "failures": list(self._failures),
+            "canceled": bool(self._cancel_requested),
+        }
+
+    def _start_next_candidate(self) -> None:
+        if self._cancel_requested:
+            self._finish()
+            return
+        if self._completed_files >= len(self._candidates):
+            self._finish()
+            return
+        candidate = self._candidates[self._completed_files]
+        file_path = str(candidate.get("file_path", "") or "").strip()
+        self._current_candidate = candidate
+        self._current_skip_requested = False
+        self._current_stop_deadline = None
+        self._dialog.update_progress(self._completed_files, len(self._candidates), file_path)
+        try:
+            self._current_process = self._owner._spawn_bpm_analysis_process(file_path)
+        except Exception as exc:
+            self._failures.append(f"{file_path}: {exc}")
+            self._completed_files += 1
+            QTimer.singleShot(0, self._start_next_candidate)
+            return
+        self._dialog.skip_button.setEnabled(True)
+        self._dialog.cancel_button.setEnabled(True)
+        self._poll_timer.start()
+
+    def _poll_active_process(self) -> None:
+        process = self._current_process
+        if process is None:
+            self._poll_timer.stop()
+            return
+        if process.poll() is None:
+            if self._current_stop_deadline is not None and time.monotonic() >= self._current_stop_deadline:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                self._current_stop_deadline = None
+            return
+        self._poll_timer.stop()
+        stdout_text = ""
+        stderr_text = ""
+        try:
+            stdout_text, stderr_text = process.communicate()
+        except Exception:
+            try:
+                stdout_text = process.stdout.read() if process.stdout is not None else ""
+            except Exception:
+                stdout_text = ""
+            try:
+                stderr_text = process.stderr.read() if process.stderr is not None else ""
+            except Exception:
+                stderr_text = ""
+
+        candidate = dict(self._current_candidate or {})
+        file_path = str(candidate.get("file_path", "") or "").strip()
+        if self._current_skip_requested:
+            self._skipped_files += 1
+        elif process.returncode == 0:
+            self._apply_completed_candidate(candidate, stdout_text)
+        else:
+            detail = str(stderr_text or stdout_text or f"Analyzer exited with code {process.returncode}").strip()
+            if (not self._cancel_requested) and (not self._current_skip_requested):
+                self._failures.append(f"{file_path}: {detail}")
+
+        self._current_process = None
+        self._current_candidate = None
+        self._current_stop_deadline = None
+        self._current_skip_requested = False
+        self._completed_files += 1
+
+        if self._cancel_requested:
+            self._finish()
+        else:
+            QTimer.singleShot(0, self._start_next_candidate)
+
+    def _apply_completed_candidate(self, candidate: dict, stdout_text: str) -> None:
+        file_path = str(candidate.get("file_path", "") or "").strip()
+        try:
+            payload = json.loads(str(stdout_text or "").strip() or "{}")
+            analyzed = normalize_audio_beat_map(payload)
+            if analyzed is None:
+                raise ValueError("Analyzer returned no BPM data.")
+        except Exception as exc:
+            self._failures.append(f"{file_path}: {exc}")
+            return
+        self._analyzed_files += 1
+        for ref in list(candidate.get("refs", []) or []):
+            slot = ref.get("slot_ref")
+            if slot is None:
+                continue
+            slot.audio_beat_map = normalize_audio_beat_map(analyzed)
+            self._updated_buttons += 1
+
+    def _request_skip_current(self) -> None:
+        if self._current_process is None:
+            return
+        self._current_skip_requested = True
+        self._dialog.set_waiting_to_finish("Stopping current analysis and skipping this file...")
+        self._request_active_process_stop()
+
+    def _request_cancel_all(self) -> None:
+        if self._cancel_requested:
+            return
+        self._cancel_requested = True
+        self._dialog.cancel_button.setEnabled(False)
+        if self._current_process is None:
+            self._finish()
+            return
+        self._dialog.set_waiting_to_finish("Stopping current analysis...")
+        self._request_active_process_stop()
+
+    def _request_active_process_stop(self) -> None:
+        process = self._current_process
+        if process is None:
+            return
+        try:
+            process.terminate()
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            self._current_stop_deadline = None
+            return
+        self._current_stop_deadline = time.monotonic() + self._TERMINATE_GRACE_SECONDS
+
+    def _shutdown_active_process(self, *, force: bool = False) -> None:
+        self._poll_timer.stop()
+        process = self._current_process
+        if process is None:
+            return
+        if process.poll() is None:
+            try:
+                if force:
+                    process.kill()
+                else:
+                    process.terminate()
+            except Exception:
+                pass
+        try:
+            process.communicate(timeout=0.2)
+        except Exception:
+            pass
+        self._current_process = None
+
+    def _finish(self) -> None:
+        self._poll_timer.stop()
+        self._dialog.finish_progress(len(self._candidates))
+        if self._dialog.isVisible():
+            self._dialog.accept()
 
 
 class ToolsLibraryMixin:
@@ -590,26 +832,20 @@ class ToolsLibraryMixin:
         if not refs:
             self._show_info_notice_banner("No file-backed sound buttons were found.")
             return
-        progress = QProgressDialog("Analyzing BPM...", "Cancel", 0, len(refs), self)
-        progress.setWindowTitle("Analyze BPM In Set")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.show()
-        changed = 0
-        failures: list[str] = []
-        for index, ref in enumerate(refs, start=1):
-            progress.setValue(index - 1)
-            progress.setLabelText(f"Analyzing {ref['location']} button {int(ref['slot']) + 1}...")
-            QApplication.processEvents()
-            if progress.wasCanceled():
-                break
-            slot = ref["slot_ref"]
-            try:
-                slot.audio_beat_map = analyze_audio_beat_map(slot.file_path)
-                changed += 1
-            except Exception as exc:
-                failures.append(f"{ref['location']} - Button {int(ref['slot']) + 1}: {exc}")
-        progress.setValue(len(refs))
-        if changed > 0:
+        file_candidates = self._build_bpm_analysis_file_candidates(refs)
+        selected_candidates = self._select_bpm_analysis_file_candidates(file_candidates)
+        if selected_candidates is None:
+            return
+        if not selected_candidates:
+            self._show_info_notice_banner("No files were selected for BPM analysis.")
+            return
+        result = self._run_bpm_analysis_batch(selected_candidates)
+        analyzed_file_count = int(result.get("analyzed_files", 0) or 0)
+        updated_button_count = int(result.get("updated_buttons", 0) or 0)
+        skipped_file_count = int(result.get("skipped_files", 0) or 0)
+        failures = list(result.get("failures", []) or [])
+        canceled = bool(result.get("canceled", False))
+        if updated_button_count > 0:
             self._set_dirty(True)
             self._refresh_sound_grid()
             refresh_video_display = getattr(self, "_refresh_video_display", None)
@@ -617,10 +853,147 @@ class ToolsLibraryMixin:
                 refresh_video_display(force=True)
         if failures:
             self._show_text_report_dialog("Analyze BPM", "\n".join(failures))
-        if changed > 0:
-            self._show_save_notice_banner(f"Analyzed BPM for {changed} sound button(s).")
+        if updated_button_count > 0:
+            summary = f"Analyzed BPM for {analyzed_file_count} file(s) across {updated_button_count} sound button(s)."
+            if skipped_file_count > 0:
+                summary = f"{summary} Skipped {skipped_file_count} file(s)."
+            if canceled:
+                summary = f"{summary} Cancelled before finishing the remaining queue."
+            self._show_save_notice_banner(summary)
+        elif canceled:
+            self._show_info_notice_banner("BPM analysis cancelled.")
+        elif skipped_file_count > 0:
+            self._show_info_notice_banner(f"Skipped {skipped_file_count} file(s).")
         elif not failures:
             self._show_info_notice_banner("No BPM analysis was applied.")
+
+    def _run_bpm_analysis_batch(self, candidates: List[dict]) -> dict:
+        return _BpmAnalysisBatchRunner(self, candidates).exec_()
+
+    def _bpm_analysis_process_command(self, file_path: str) -> tuple[str, List[str]]:
+        file_path = str(file_path or "").strip()
+        if getattr(sys, "frozen", False):
+            return os.path.abspath(sys.executable), ["--analyze-audio-beat-map", file_path]
+        return preferred_python_executable(), ["-m", "pyssp.app", "--analyze-audio-beat-map", file_path]
+
+    def _spawn_bpm_analysis_process(self, file_path: str) -> subprocess.Popen[str]:
+        program, args = self._bpm_analysis_process_command(file_path)
+        popen_kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "stdin": subprocess.DEVNULL,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+                startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+                startup.wShowWindow = 0
+                popen_kwargs["startupinfo"] = startup
+            except Exception:
+                pass
+        return subprocess.Popen([program, *list(args or [])], **popen_kwargs)
+
+    def _build_bpm_analysis_file_candidates(self, refs: List[dict]) -> List[dict]:
+        grouped: dict[str, dict] = {}
+        for ref in list(refs or []):
+            slot = ref.get("slot_ref")
+            file_path = str(getattr(slot, "file_path", "") or "").strip()
+            if not file_path:
+                continue
+            key = os.path.normcase(os.path.normpath(file_path))
+            entry = grouped.get(key)
+            if entry is None:
+                title = str(getattr(slot, "title", "") or "").strip() or os.path.splitext(os.path.basename(file_path))[0]
+                entry = {
+                    "file_path": file_path,
+                    "title": title,
+                    "refs": [],
+                }
+                grouped[key] = entry
+            entry["refs"].append(ref)
+        candidates = list(grouped.values())
+        candidates.sort(key=lambda item: str(item.get("file_path", "") or "").lower())
+        return candidates
+
+    def _bpm_analysis_candidate_label(self, candidate: dict) -> str:
+        refs = list(candidate.get("refs", []) or [])
+        title = str(candidate.get("title", "") or "").strip()
+        file_path = str(candidate.get("file_path", "") or "").strip()
+        locations = ", ".join(
+            f"{str(ref.get('location', '') or '').strip()} B{int(ref.get('slot', 0)) + 1}" for ref in refs[:3]
+        ).strip(", ")
+        if len(refs) > 3:
+            locations = f"{locations}, +{len(refs) - 3} more"
+        usage_text = f"{len(refs)} button{'s' if len(refs) != 1 else ''}"
+        if locations:
+            usage_text = f"{usage_text} [{locations}]"
+        return f"{title or os.path.basename(file_path)}\n{file_path}\n{usage_text}"
+
+    def _select_bpm_analysis_file_candidates(self, candidates: List[dict]) -> Optional[List[dict]]:
+        if not candidates:
+            return []
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Analyze BPM In Set")
+        dialog.resize(760, 520)
+        root = QVBoxLayout(dialog)
+        note = QLabel(
+            "Select the files to analyze. BPM analysis will be applied to every sound button in this set that uses each selected file.",
+            dialog,
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        list_widget = QListWidget(dialog)
+        list_widget.setSelectionMode(QListWidget.NoSelection)
+        root.addWidget(list_widget, 1)
+
+        for index, candidate in enumerate(list(candidates or [])):
+            item = QListWidgetItem(self._bpm_analysis_candidate_label(candidate))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, index)
+            list_widget.addItem(item)
+
+        utility_row = QHBoxLayout()
+        select_all_btn = QPushButton("Select All", dialog)
+        select_none_btn = QPushButton("Select None", dialog)
+        utility_row.addWidget(select_all_btn)
+        utility_row.addWidget(select_none_btn)
+        utility_row.addStretch(1)
+        root.addLayout(utility_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        root.addWidget(buttons)
+
+        def _set_all(state: Qt.CheckState) -> None:
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                if item is not None:
+                    item.setCheckState(state)
+
+        select_all_btn.clicked.connect(lambda: _set_all(Qt.Checked))
+        select_none_btn.clicked.connect(lambda: _set_all(Qt.Unchecked))
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+
+        selected: List[dict] = []
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            if item is None or item.checkState() != Qt.Checked:
+                continue
+            index = item.data(Qt.UserRole)
+            try:
+                selected.append(candidates[int(index)])
+            except Exception:
+                continue
+        return selected
 
     def _clear_all_bpm_analysis(self) -> None:
         refs = [

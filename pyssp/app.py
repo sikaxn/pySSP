@@ -16,6 +16,7 @@ from PyQt5.QtCore import QLockFile, QRect, Qt, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
+from pyssp.audio_beat_map import analyze_audio_beat_map_cli
 from pyssp.audio_engine import prepare_waveform_disk_cache
 from pyssp.audio_format_support import ensure_supported_audio_formats_ready
 from pyssp.i18n import apply_application_font, install_auto_localization, normalize_language, set_current_language, tr
@@ -54,27 +55,42 @@ def _force_light_qt_theme(app: QApplication) -> None:
     app.setPalette(palette)
 
 
-def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool, bool]:
+def _parse_startup_args(argv: list[str]) -> tuple[list[str], bool, bool, bool, Optional[str]]:
     clean_tokens = {"--cleanstart", "/cleanstart"}
     debug_tokens = {"-debug", "--debug", "/debug"}
     system_info_probe_tokens = {"--system-info-probe", "/system-info-probe"}
+    audio_beat_map_tokens = {"--analyze-audio-beat-map", "/analyze-audio-beat-map"}
     cleanstart = False
     debug = False
     system_info_probe = False
+    audio_beat_map_path: Optional[str] = None
     filtered = [argv[0]] if argv else [""]
-    for arg in argv[1:]:
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
         token = str(arg or "").strip().lower()
         if token in clean_tokens:
             cleanstart = True
+            index += 1
             continue
         if token in debug_tokens:
             debug = True
+            index += 1
             continue
         if token in system_info_probe_tokens:
             system_info_probe = True
+            index += 1
+            continue
+        if token in audio_beat_map_tokens:
+            if index + 1 < len(argv):
+                audio_beat_map_path = argv[index + 1]
+            else:
+                audio_beat_map_path = ""
+            index += 2
             continue
         filtered.append(arg)
-    return filtered, cleanstart, debug, system_info_probe
+        index += 1
+    return filtered, cleanstart, debug, system_info_probe, audio_beat_map_path
 
 
 def _enable_debug_console(enabled: bool) -> None:
@@ -421,7 +437,11 @@ class _StartupSplash(QSplashScreen):
 
 
 def main() -> int:
-    qt_argv, cleanstart_requested, debug_requested, system_info_probe_requested = _parse_startup_args(list(sys.argv))
+    qt_argv, cleanstart_requested, debug_requested, system_info_probe_requested, audio_beat_map_path = _parse_startup_args(
+        list(sys.argv)
+    )
+    if audio_beat_map_path is not None:
+        return analyze_audio_beat_map_cli([qt_argv[0] if qt_argv else "", audio_beat_map_path])
     if system_info_probe_requested:
         return system_info_probe_main(qt_argv)
     _enable_debug_console(debug_requested)

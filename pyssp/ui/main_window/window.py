@@ -100,6 +100,7 @@ class MainWindow(
         self.talk_active = False
         self._fade_jobs: List[dict] = []
         self._vocal_toggle_fade_jobs: Dict[int, dict] = {}
+        self._pending_vocal_removed_toggles: Dict[int, dict] = {}
         self._player_mix_volume_map: Dict[int, int] = {}
         self._vocal_shadow_players: Dict[int, ExternalMediaPlayer] = {}
         self._vocal_shadow_pending_loads: Dict[int, dict] = {}

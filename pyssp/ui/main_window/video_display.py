@@ -435,16 +435,35 @@ class VideoDisplayMixin:
     def _active_ndi_route_mode(self) -> str:
         return self._active_video_route_mode()
 
-    def _video_frame_interval_ms(self, info: Optional[MediaProbeInfo] = None) -> int:
-        fps = 0.0
+    def _configured_video_output_fps(self) -> int:
+        try:
+            fps = max(1, int(getattr(self, "ndi_output_fps", 30) or 30))
+        except Exception:
+            fps = 30
+        return max(1, min(120, int(fps)))
+
+    def _video_target_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
+        fps = float(self._configured_video_output_fps())
+        if info is None:
+            _slot, info = self._current_video_slot_and_probe()
         if info is not None:
             try:
-                fps = float(getattr(info, "fps", 0.0) or 0.0)
+                source_fps = float(getattr(info, "fps", 0.0) or 0.0)
             except Exception:
-                fps = 0.0
-        if fps <= 0.0:
-            return _VIDEO_FRAME_FALLBACK_INTERVAL_MS
-        fps = max(15.0, min(60.0, fps))
+                source_fps = 0.0
+            if source_fps > 0.0:
+                fps = max(fps, min(120.0, source_fps))
+        return max(1.0, float(fps))
+
+    def _video_presentation_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
+        return max(60.0, float(self._video_target_fps(info)))
+
+    def _video_presentation_interval_ms(self, info: Optional[MediaProbeInfo] = None) -> int:
+        fps = max(1.0, float(self._video_presentation_fps(info)))
+        return max(8, int(round(1000.0 / fps)))
+
+    def _video_frame_interval_ms(self, info: Optional[MediaProbeInfo] = None) -> int:
+        fps = float(self._video_target_fps(info))
         return max(16, int(round(1000.0 / fps)))
 
     def _default_video_backdrop_path(self) -> str:
@@ -505,6 +524,29 @@ class VideoDisplayMixin:
         if width <= 0 or height <= 0:
             return 640, 360
         return width, height
+
+    def _configured_video_output_dimensions(self, info: Optional[MediaProbeInfo] = None) -> tuple[int, int]:
+        mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
+        if mode == "720p":
+            return 1280, 720
+        if mode == "1080p":
+            return 1920, 1080
+        if mode == "custom":
+            return (
+                max(2, int(getattr(self, "ndi_output_width", 1920) or 1920)),
+                max(2, int(getattr(self, "ndi_output_height", 1080) or 1080)),
+            )
+        if info is not None:
+            width, height = self._video_output_dimensions(info)
+            if width > 0 and height > 0:
+                return width, height
+        slot, current_info = self._current_video_slot_and_probe()
+        if slot is not None and bool(getattr(current_info, "has_video", False)):
+            return self._video_output_dimensions(current_info)
+        return (
+            max(2, int(getattr(self, "ndi_output_width", 1920) or 1920)),
+            max(2, int(getattr(self, "ndi_output_height", 1080) or 1080)),
+        )
 
     def _video_target_surface_pixel_size(self) -> tuple[int, int]:
         candidates: list[tuple[int, int]] = []
@@ -567,9 +609,7 @@ class VideoDisplayMixin:
 
     def _video_target_decode_dimensions(self, info: Optional[MediaProbeInfo]) -> tuple[int, int]:
         source_width, source_height = self._video_decode_dimensions(info)
-        target_width, target_height = self._video_target_surface_pixel_size()
-        if target_width <= 0 or target_height <= 0:
-            return source_width, source_height
+        target_width, target_height = self._configured_video_output_dimensions(info)
         output_width, output_height = self._video_output_dimensions(info)
         if output_width <= 0 or output_height <= 0:
             return source_width, source_height
@@ -594,8 +634,7 @@ class VideoDisplayMixin:
             self._lyric_snapshot_cache_pixmap = QPixmap()
             mode = self._active_video_route_mode()
             if mode == "video":
-                self._clear_video_frame_runtime(preserve_current_frame=True)
-                self._refresh_video_display(force=True)
+                self._refresh_video_display(force=False)
                 return
             if mode in {DISPLAY_FOCUS_STAGE, DISPLAY_FOCUS_LYRIC, DISPLAY_FOCUS_METRONOME}:
                 self._refresh_video_display(force=True)
@@ -761,10 +800,10 @@ class VideoDisplayMixin:
         return image
 
     def _video_snapshot_dimensions(self) -> tuple[int, int]:
-        width, height = self._video_snapshot_target_pixel_size()
+        width, height = self._configured_video_output_dimensions()
         if width > 0 and height > 0:
             return width, height
-        return 960, 540
+        return 1920, 1080
 
     def _stage_snapshot_renderer(self) -> GadgetStageDisplayWindow:
         window = getattr(self, "_video_stage_snapshot_window", None)
@@ -1189,20 +1228,38 @@ class VideoDisplayMixin:
     def _sync_metronome_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
         self._sync_output_surface_widget(widget, DISPLAY_FOCUS_METRONOME, force=force)
 
+    def _video_surface_transition_active(self) -> bool:
+        widgets = [
+            getattr(self, "video_preview_widget", None),
+            None if self._video_display_window is None else self._video_display_window.display_widget,
+            getattr(self, "ndi_preview_widget", None),
+            None if getattr(self, "_metronome_display_window", None) is None else self._metronome_display_window.display_widget,
+        ]
+        for widget in widgets:
+            checker = getattr(widget, "is_transition_active", None)
+            if not callable(checker):
+                continue
+            try:
+                if checker():
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _ndi_output_dimensions(self) -> tuple[int, int]:
-        mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
-        if mode == "720p":
-            return 1280, 720
-        if mode == "1080p":
-            return 1920, 1080
-        if mode == "custom":
-            return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
-        slot, info = self._current_video_slot_and_probe()
-        if slot is not None and info.has_video:
-            return self._video_output_dimensions(info)
-        return max(2, int(getattr(self, "ndi_output_width", 1920))), max(2, int(getattr(self, "ndi_output_height", 1080)))
+        return self._configured_video_output_dimensions()
 
     def _sync_ndi_timer_intervals(self) -> None:
+        timer = getattr(self, "_video_refresh_timer", None)
+        if timer is not None:
+            interval_ms = self._video_presentation_interval_ms()
+            try:
+                timer.setInterval(interval_ms)
+            except Exception:
+                try:
+                    timer.start(interval_ms)
+                except Exception:
+                    pass
         try:
             for player in list(self._ndi_audio_players() or []):
                 getter = getattr(player, "sampleRate", None)
@@ -1249,13 +1306,7 @@ class VideoDisplayMixin:
         source_width, source_height = self._video_output_dimensions(info)
         width = max(2, int(target_width or source_width or 640))
         height = max(2, int(target_height or source_height or 360))
-        fps = 30.0
-        try:
-            fps = max(1.0, float(getattr(info, "fps", 0.0) or 0.0))
-        except Exception:
-            fps = 30.0
-        if fps <= 0.0:
-            fps = 30.0
+        fps = max(1.0, float(self._video_presentation_fps(info)))
         source_name = "local-program"
         if slot is not None:
             source_name = str(slot.file_path or "").strip() or source_name
@@ -1440,7 +1491,7 @@ class VideoDisplayMixin:
             source_name=str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video",
             width=width,
             height=height,
-            fps=max(1.0, float(getattr(self, "ndi_output_fps", 30) or 30)),
+            fps=max(1.0, float(self._video_presentation_fps())),
             audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
             groups=str(getattr(self, "ndi_output_group", "Public") or "Public").strip() or "Public",
             discovery_servers=str(getattr(self, "ndi_output_discovery_servers", "") or "").strip(),
@@ -1769,9 +1820,11 @@ class VideoDisplayMixin:
                     pass
 
     def _tick_video_refresh(self) -> None:
-        if self._active_video_route_mode() != "video" and not self._video_decode_allowed_during_switch_blank():
-            return
-        self._queue_video_frame_refresh()
+        should_refresh_video = self._active_video_route_mode() == "video" or self._video_decode_allowed_during_switch_blank()
+        if should_refresh_video:
+            self._queue_video_frame_refresh()
+        if bool(getattr(self, "ndi_output_enabled", False)) and self._video_surface_transition_active():
+            self._refresh_ndi_output(force=False)
 
     def _refresh_video_display(self, force: bool = False) -> None:
         self._configure_local_video_destination()

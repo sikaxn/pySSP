@@ -175,7 +175,7 @@ class VideoDisplayPageMixin:
         self.video_display_use_default_backdrop_checkbox.toggled.connect(self._sync_video_display_backdrop_controls)
         layout.addWidget(backdrop_group)
 
-        ndi_group = QGroupBox("NDI Output")
+        ndi_group = QGroupBox("Video Output / NDI")
         ndi_form = QFormLayout(ndi_group)
         self.ndi_output_status_label = QLabel(str(ndi_status_text or ""))
         self.ndi_output_status_label.setWordWrap(True)
@@ -208,6 +208,12 @@ class VideoDisplayPageMixin:
             "backdrop",
         )
         ndi_form.addRow("Otherwise:", self.ndi_output_route_combo)
+        self.video_output_profile_note_label = QLabel(
+            "Base resolution and frame rate apply to the main video display and NDI output. "
+            "Resizing the video window only changes on-screen scaling."
+        )
+        self.video_output_profile_note_label.setWordWrap(True)
+        ndi_form.addRow("Profile:", self.video_output_profile_note_label)
         self.ndi_output_resolution_mode_combo = QComboBox()
         for label, value in [
             ("Source / Native", "source"),
@@ -217,7 +223,7 @@ class VideoDisplayPageMixin:
         ]:
             self.ndi_output_resolution_mode_combo.addItem(label, value)
         self._set_combo_data_or_default(self.ndi_output_resolution_mode_combo, ndi_output_resolution_mode, "source")
-        ndi_form.addRow("Resolution:", self.ndi_output_resolution_mode_combo)
+        ndi_form.addRow("Base Resolution:", self.ndi_output_resolution_mode_combo)
         ndi_size_row = QWidget()
         ndi_size_layout = QHBoxLayout(ndi_size_row)
         ndi_size_layout.setContentsMargins(0, 0, 0, 0)
@@ -231,7 +237,7 @@ class VideoDisplayPageMixin:
         ndi_size_layout.addWidget(self.ndi_output_width_spin, 1)
         ndi_size_layout.addWidget(QLabel("x"))
         ndi_size_layout.addWidget(self.ndi_output_height_spin, 1)
-        ndi_form.addRow("Custom Size:", ndi_size_row)
+        ndi_form.addRow("Custom Base Size:", ndi_size_row)
         self.ndi_output_fps_combo = QComboBox()
         fps_value = max(1, int(ndi_output_fps))
         fps_presets = [24, 25, 30, 50, 60]
@@ -240,7 +246,7 @@ class VideoDisplayPageMixin:
         if fps_value not in fps_presets:
             self.ndi_output_fps_combo.addItem(f"{fps_value} fps", fps_value)
         self._set_combo_data_or_default(self.ndi_output_fps_combo, fps_value, 30)
-        ndi_form.addRow("Frame Rate:", self.ndi_output_fps_combo)
+        ndi_form.addRow("Base Frame Rate:", self.ndi_output_fps_combo)
         self.ndi_output_audio_enabled_checkbox = QCheckBox("Send audio")
         self.ndi_output_audio_enabled_checkbox.setChecked(bool(ndi_output_audio_enabled))
         ndi_form.addRow(self.ndi_output_audio_enabled_checkbox)

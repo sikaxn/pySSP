@@ -1194,7 +1194,7 @@ class MainWindow(
         self._video_refresh_timer = QTimer(self)
         self._video_refresh_timer.setTimerType(Qt.PreciseTimer)
         self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
-        self._video_refresh_timer.start(33)
+        self._video_refresh_timer.start(self._video_presentation_interval_ms())
         self._sync_ndi_timer_intervals()
         self._configure_ndi_sender()
 

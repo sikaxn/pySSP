@@ -596,6 +596,15 @@ def _build_dialog(**overrides):
         ndi_output_width=int(overrides.get("ndi_output_width", defaults["ndi_output_width"])),
         ndi_output_height=int(overrides.get("ndi_output_height", defaults["ndi_output_height"])),
         ndi_output_fps=int(overrides.get("ndi_output_fps", defaults["ndi_output_fps"])),
+        ndi_debug_print_enabled=bool(
+            overrides.get("ndi_debug_print_enabled", defaults["ndi_debug_print_enabled"])
+        ),
+        ndi_debug_idle_audio_pacing_enabled=bool(
+            overrides.get(
+                "ndi_debug_idle_audio_pacing_enabled",
+                defaults["ndi_debug_idle_audio_pacing_enabled"],
+            )
+        ),
         ndi_output_audio_enabled=bool(
             overrides.get("ndi_output_audio_enabled", defaults["ndi_output_audio_enabled"])
         ),

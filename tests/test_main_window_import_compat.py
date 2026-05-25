@@ -45,6 +45,10 @@ class _AudioOnlyVideoRouteHost(VideoDisplayMixin):
         self.current_playing = ("A", 0, 0)
         self.video_display_mode_idle = "blank"
         self.video_display_mode_playing = "follow_sound_button"
+        self.ndi_output_resolution_mode = "source"
+        self.ndi_output_width = 1920
+        self.ndi_output_height = 1080
+        self.ndi_output_fps = 30
         self.video_display_show_backdrop_message = True
         self.video_display_use_default_backdrop = True
         self.video_display_backdrop_path = ""
@@ -122,8 +126,14 @@ class _VideoRefreshHost(VideoDisplayMixin):
         self._slot = mw.SoundButtonData(file_path="clip.mp4")
         self._probe = MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
         self._audio_service = _VideoService()
+        self.ndi_output_enabled = False
+        self.ndi_output_resolution_mode = "source"
+        self.ndi_output_width = 1920
+        self.ndi_output_height = 1080
+        self.ndi_output_fps = 30
         self._video_active_session_id = ""
         self._video_active_session_source_path = ""
+        self._video_active_session_config_key = None
         self._video_last_frame_pts_ms = 0
         self._video_current_frame_key = None
         self._video_current_frame_pixmap = _NullPixmap()
@@ -920,11 +930,65 @@ def test_lyric_display_snapshot_reuses_hidden_renderer_and_cached_pixmap(monkeyp
 
 def test_video_frame_bucket_uses_media_fps():
     host = _AudioOnlyVideoRouteHost()
+    host.ndi_output_fps = 25
     info = MediaProbeInfo(has_video=True, fps=25.0)
 
     assert host._video_frame_interval_ms(info) == 40
     assert host._video_frame_bucket_ms(83, info) == 80
-    assert host._video_frame_interval_ms(MediaProbeInfo()) == 33
+    assert host._video_frame_interval_ms(MediaProbeInfo()) == 40
+
+
+def test_video_frame_interval_uses_higher_source_fps():
+    host = _AudioOnlyVideoRouteHost()
+    host.ndi_output_fps = 30
+
+    assert host._video_frame_interval_ms(MediaProbeInfo(has_video=True, fps=60.0)) == 17
+
+
+def test_sync_ndi_timer_intervals_updates_video_refresh_timer():
+    class _Timer:
+        def __init__(self) -> None:
+            self.interval = None
+
+        def setInterval(self, value: int) -> None:
+            self.interval = int(value)
+
+    host = _VideoRefreshHost()
+    host.ndi_output_fps = 30
+    host._video_refresh_timer = _Timer()
+    host._ndi_audio_players = lambda: []
+
+    host._sync_ndi_timer_intervals()
+
+    assert host._video_refresh_timer.interval == 17
+
+
+def test_tick_video_refresh_updates_ndi_during_transition():
+    class _TransitionWidget:
+        def is_transition_active(self) -> bool:
+            return True
+
+    class _TransitionHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ndi_output_enabled = True
+            self.video_display_mode_playing = "backdrop"
+            self.video_display_mode_idle = "backdrop"
+            self.ndi_calls = 0
+            self.ndi_preview_widget = _TransitionWidget()
+
+        def _active_video_route_mode(self) -> str:
+            return "backdrop"
+
+        def _refresh_ndi_output(self, force: bool = False) -> None:
+            _ = force
+            self.ndi_calls += 1
+
+    host = _TransitionHost()
+
+    host._tick_video_refresh()
+
+    assert host.ndi_calls == 1
 
 
 def test_video_output_dimensions_follow_rotation_metadata():
@@ -935,41 +999,40 @@ def test_video_output_dimensions_follow_rotation_metadata():
     assert host._video_decode_dimensions(MediaProbeInfo(width=3840, height=2160)) == (3840, 2160)
 
 
-def test_video_target_decode_dimensions_follow_surface_size():
+def test_video_target_decode_dimensions_follow_global_profile():
     host = _VideoRefreshHost()
     info = MediaProbeInfo(width=3840, height=2160, rotation_deg=0)
 
-    host._target_size = (1280, 720)
+    host.ndi_output_resolution_mode = "720p"
     assert host._video_target_decode_dimensions(info) == (1280, 720)
 
-    host._target_size = (4096, 2160)
+    host.ndi_output_resolution_mode = "source"
     assert host._video_target_decode_dimensions(info) == (3840, 2160)
 
     rotated = MediaProbeInfo(width=1920, height=1080, rotation_deg=90)
-    host._target_size = (540, 960)
-    assert host._video_target_decode_dimensions(rotated) == (960, 540)
+    host.ndi_output_resolution_mode = "720p"
+    assert host._video_target_decode_dimensions(rotated) == (720, 405)
 
 
-def test_video_snapshot_dimensions_follow_surface_size():
+def test_video_snapshot_dimensions_follow_global_profile():
     host = _VideoRefreshHost()
 
-    host._target_size = (1920, 1080)
+    host.ndi_output_resolution_mode = "custom"
+    host.ndi_output_width = 1920
+    host.ndi_output_height = 1080
     assert host._video_snapshot_dimensions() == (1920, 1080)
 
-    host._target_size = (0, 0)
-    assert host._video_snapshot_dimensions() == (960, 540)
+    host.ndi_output_resolution_mode = "source"
+    assert host._video_snapshot_dimensions() == (640, 360)
 
 
-def test_video_snapshot_dimensions_include_ndi_target_when_enabled():
+def test_video_snapshot_dimensions_follow_global_profile_without_ndi():
     host = _VideoRefreshHost()
-    host.ndi_output_enabled = True
     host.ndi_output_resolution_mode = "custom"
     host.ndi_output_width = 1600
     host.ndi_output_height = 900
     host.video_display_mode_playing = "stage_display"
     host.video_display_mode_idle = "blank"
-
-    host._target_size = (0, 0)
 
     assert host._video_snapshot_dimensions() == (1600, 900)
 
@@ -1038,13 +1101,15 @@ def test_video_surface_geometry_change_preserves_current_frame():
     current_pixmap.fill(Qt.blue)
     host._video_current_frame_pixmap = current_pixmap
     host._video_active_session_id = "player-a"
+    host._video_active_session_source_path = "clip.mp4"
+    host._video_active_session_config_key = ("player-a", host._normalized_media_probe_key("clip.mp4"), 640, 360)
 
     host._on_video_surface_geometry_changed()
 
     assert host._video_current_frame_key == ("clip.mp4", 80)
     assert host._video_current_frame_pixmap is current_pixmap
-    assert host._audio_service.clear_session_calls == ["player-a"]
-    assert host._audio_service.configure_calls[-1] == ("player-a", "clip.mp4", 80, 640, 360, True)
+    assert host._audio_service.clear_session_calls == []
+    assert host._audio_service.configure_calls == []
     assert app is not None
 
 

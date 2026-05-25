@@ -49,7 +49,7 @@ class VideoDisplayWidget(QWidget):
         self._transition_started_at = 0.0
         self._transition_progress = 1.0
         self._transition_timer = QTimer(self)
-        self._transition_timer.setInterval(16)
+        self._transition_timer.setInterval(8)
         self._transition_timer.setTimerType(Qt.PreciseTimer)
         self._transition_timer.timeout.connect(self._tick_transition)
         self._lyric_doc = QTextDocument(self)

@@ -11,8 +11,10 @@ from .types import (
     RuntimeEvent,
     RuntimeSessionSnapshot,
     TransportSnapshot,
+    VideoFrameSnapshot,
     VideoDestinationId,
     VideoDestinationSnapshot,
+    VideoSessionSnapshot,
 )
 
 __all__ = [
@@ -28,6 +30,8 @@ __all__ = [
     "RuntimeEvent",
     "RuntimeSessionSnapshot",
     "TransportSnapshot",
+    "VideoFrameSnapshot",
     "VideoDestinationId",
     "VideoDestinationSnapshot",
+    "VideoSessionSnapshot",
 ]

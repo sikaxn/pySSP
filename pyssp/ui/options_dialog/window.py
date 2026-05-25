@@ -1017,15 +1017,7 @@ class OptionsDialog(
                 lyric_display_previous_line_count=self._lyric_display_previous_line_count,
                 lyric_display_next_line_count=self._lyric_display_next_line_count,
             )
-        self._add_page(
-            "Stage and Lyric Display",
-            self._mono_icon("projector"),
-            self._build_stage_lyric_display_page(stage_display_page, lyric_display_page),
-        )
-        self._add_page(
-            "Video Display",
-            self._mono_icon("projector"),
-            self._build_video_display_page(
+        video_display_page = self._build_video_display_page(
                 mode_playing=video_display_mode_playing,
                 mode_idle=video_display_mode_idle,
                 display_focus_default_video=display_focus_default_video,
@@ -1094,6 +1086,14 @@ class OptionsDialog(
                 ndi_output_multicast_ttl=ndi_output_multicast_ttl,
                 ndi_output_multicast_netmask=ndi_output_multicast_netmask,
                 ndi_output_multicast_netprefix=ndi_output_multicast_netprefix,
+            )
+        self._add_page(
+            "Display",
+            self._mono_icon("projector"),
+            self._build_display_options_page(
+                video_page=video_display_page,
+                stage_page=stage_display_page,
+                lyric_page=lyric_display_page,
             ),
         )
         self._add_page(

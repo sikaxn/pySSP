@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import threading
-import weakref
-
 from .shared import *
 from .constants import *
 from .helpers import *
@@ -41,301 +38,6 @@ def _freeze_snapshot_token(value):
     return value
 
 
-@dataclass(frozen=True)
-class _VideoDecodeRequest:
-    tag: int
-    path: str
-    start_ms: int
-    width: int
-    height: int
-    interval_ms: int
-    stream: bool
-
-
-class _VideoFrameDecodeDispatcher(QObject):
-    frameDecoded = pyqtSignal()
-
-    def __init__(self, parent: Optional[QObject] = None) -> None:
-        super().__init__(parent)
-        self._condition = threading.Condition()
-        self._request: Optional[_VideoDecodeRequest] = None
-        self._generation = 0
-        self._shutdown = False
-        self._process: Optional[subprocess.Popen] = None
-        self._latest_frame: Optional[tuple[int, str, int, int, int, bytes]] = None
-        self._frame_signal_pending = False
-        self._thread = threading.Thread(target=self._run, name="pyssp-video-frame-decode", daemon=True)
-        self._thread.start()
-        if parent is not None:
-            self_ref = weakref.ref(self)
-            parent.destroyed.connect(lambda _obj=None, ref=self_ref: (ref() and ref().stop()))
-
-    def request_stream(self, tag: int, path: str, start_ms: int, width: int, height: int, interval_ms: int) -> None:
-        candidate = str(path or "").strip()
-        if not candidate:
-            return
-        self._set_request(
-            _VideoDecodeRequest(
-                tag=max(0, int(tag)),
-                path=candidate,
-                start_ms=max(0, int(start_ms)),
-                width=max(1, int(width)),
-                height=max(1, int(height)),
-                interval_ms=max(16, int(interval_ms)),
-                stream=True,
-            )
-        )
-
-    def request_frame(self, tag: int, path: str, position_ms: int, width: int, height: int) -> None:
-        candidate = str(path or "").strip()
-        if not candidate:
-            return
-        self._set_request(
-            _VideoDecodeRequest(
-                tag=max(0, int(tag)),
-                path=candidate,
-                start_ms=max(0, int(position_ms)),
-                width=max(1, int(width)),
-                height=max(1, int(height)),
-                interval_ms=_VIDEO_FRAME_FALLBACK_INTERVAL_MS,
-                stream=False,
-            )
-        )
-
-    def clear(self) -> None:
-        self._set_request(None)
-
-    def take_latest_frame(self) -> Optional[tuple[int, str, int, int, int, bytes]]:
-        with self._condition:
-            frame = self._latest_frame
-            self._latest_frame = None
-            self._frame_signal_pending = False
-            return frame
-
-    def _set_request(self, request: Optional[_VideoDecodeRequest]) -> None:
-        with self._condition:
-            self._request = request
-            self._generation += 1
-            self._latest_frame = None
-            self._frame_signal_pending = False
-            self._terminate_process_locked()
-            self._condition.notify_all()
-
-    def stop(self, timeout_sec: float = 1.5) -> None:
-        with self._condition:
-            self._shutdown = True
-            self._request = None
-            self._generation += 1
-            self._terminate_process_locked()
-            self._condition.notify_all()
-        try:
-            self._thread.join(max(0.1, float(timeout_sec)))
-        except Exception:
-            pass
-
-    def _run(self) -> None:
-        last_generation = -1
-        while True:
-            with self._condition:
-                while (not self._shutdown) and self._generation == last_generation:
-                    self._condition.wait()
-                if self._shutdown:
-                    return
-                last_generation = self._generation
-                request = self._request
-            if request is None:
-                continue
-            if request.stream:
-                self._run_stream(request, last_generation)
-            else:
-                self._run_single_frame(request, last_generation)
-
-    def _run_single_frame(self, request: _VideoDecodeRequest, generation: int) -> None:
-        payload = self._decode_frame_bytes(request)
-        if not payload or self._is_stale(generation):
-            return
-        self._publish_frame(request.tag, request.path, request.start_ms, request.width, request.height, payload)
-
-    def _run_stream(self, request: _VideoDecodeRequest, generation: int) -> None:
-        proc = self._start_stream_process(request)
-        if proc is None:
-            return
-        frame_size = max(1, int(request.width) * int(request.height) * 3)
-        frame_index = 0
-        with self._condition:
-            self._process = proc
-        try:
-            while not self._is_stale(generation):
-                payload = self._read_exact(proc.stdout, frame_size)
-                if len(payload) != frame_size:
-                    break
-                pts_ms = request.start_ms + (frame_index * request.interval_ms)
-                frame_index += 1
-                if self._is_stale(generation):
-                    break
-                self._publish_frame(request.tag, request.path, pts_ms, request.width, request.height, payload)
-        finally:
-            with self._condition:
-                if self._process is proc:
-                    self._terminate_process_locked()
-
-    def _is_stale(self, generation: int) -> bool:
-        with self._condition:
-            return self._shutdown or generation != self._generation
-
-    def _start_stream_process(self, request: _VideoDecodeRequest) -> Optional[subprocess.Popen]:
-        ffmpeg = get_ffmpeg_executable()
-        if not ffmpeg:
-            return None
-        seconds = max(0.0, float(request.start_ms) / 1000.0)
-        try:
-            return subprocess.Popen(
-                [
-                    ffmpeg,
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-hwaccel",
-                    "auto",
-                    "-re",
-                    "-fflags",
-                    "nobuffer",
-                    "-flags",
-                    "low_delay",
-                    "-noautorotate",
-                    "-ss",
-                    f"{seconds:.3f}",
-                    "-i",
-                    request.path,
-                    "-an",
-                    "-sn",
-                    "-dn",
-                    "-vf",
-                    f"scale={int(request.width)}:{int(request.height)}:flags=bilinear",
-                    "-pix_fmt",
-                    "rgb24",
-                    "-f",
-                    "rawvideo",
-                    "-",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                bufsize=max(1, request.width * request.height * 3 * 2),
-                **_video_subprocess_platform_kwargs(),
-            )
-        except Exception:
-            return None
-
-    @staticmethod
-    def _decode_frame_bytes(request: _VideoDecodeRequest) -> bytes:
-        ffmpeg = get_ffmpeg_executable()
-        if not ffmpeg:
-            return b""
-        seconds = max(0.0, float(request.start_ms) / 1000.0)
-        try:
-            proc = subprocess.run(
-                [
-                    ffmpeg,
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-hwaccel",
-                    "auto",
-                    "-noautorotate",
-                    "-ss",
-                    f"{seconds:.3f}",
-                    "-i",
-                    request.path,
-                    "-an",
-                    "-sn",
-                    "-dn",
-                    "-vf",
-                    f"scale={int(request.width)}:{int(request.height)}:flags=bilinear",
-                    "-frames:v",
-                    "1",
-                    "-pix_fmt",
-                    "rgb24",
-                    "-f",
-                    "rawvideo",
-                    "-",
-                ],
-                capture_output=True,
-                timeout=8,
-                check=False,
-                **_video_subprocess_platform_kwargs(),
-            )
-        except Exception:
-            return b""
-        return bytes(proc.stdout or b"")
-
-    @staticmethod
-    def _read_exact(stream, byte_count: int) -> bytes:
-        if stream is None or byte_count <= 0:
-            return b""
-        chunks: list[bytes] = []
-        remaining = int(byte_count)
-        while remaining > 0:
-            chunk = stream.read(remaining)
-            if not chunk:
-                return b"".join(chunks)
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
-
-    def _terminate_process_locked(self) -> None:
-        proc = self._process
-        self._process = None
-        if proc is None:
-            return
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=0.5)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=0.5)
-            except Exception:
-                pass
-
-    def _publish_frame(self, tag: int, path: str, pts_ms: int, width: int, height: int, payload: bytes) -> None:
-        should_emit = False
-        with self._condition:
-            if self._shutdown:
-                return
-            self._latest_frame = (int(tag), str(path), int(pts_ms), int(width), int(height), bytes(payload))
-            if not self._frame_signal_pending:
-                self._frame_signal_pending = True
-                should_emit = True
-        if not should_emit:
-            return
-        try:
-            self.frameDecoded.emit()
-        except Exception:
-            with self._condition:
-                self._frame_signal_pending = False
-
-
-def _video_subprocess_platform_kwargs() -> dict:
-    if os.name != "nt":
-        return {}
-    kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    try:
-        startup = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
-        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
-        startup.wShowWindow = 0
-        kwargs["startupinfo"] = startup
-    except Exception:
-        pass
-    return kwargs
-
-
 class VideoDisplayMixin:
     @staticmethod
     def _manual_video_route_value_from_modes(mode_playing: str, mode_idle: str, *, default: str = "blank") -> str:
@@ -353,6 +55,32 @@ class VideoDisplayMixin:
     @staticmethod
     def _slot_allows_video_loading(slot: Optional[SoundButtonData]) -> bool:
         return not bool(getattr(slot, "disable_video_loading", False)) if slot is not None else True
+
+    def _video_transition_fade_duration_seconds(self) -> float:
+        return max(0.0, min(10.0, float(getattr(self, "video_display_transition_fade_sec", 0.5) or 0.0)))
+
+    def _apply_video_widget_transition_fade_duration(self, widget: Optional[VideoDisplayWidget]) -> None:
+        if widget is None:
+            return
+        setter = getattr(widget, "set_transition_duration_seconds", None)
+        if callable(setter):
+            setter(self._video_transition_fade_duration_seconds())
+
+    def _sync_video_widget_transition_fade_durations(self) -> None:
+        self._apply_video_widget_transition_fade_duration(getattr(self, "video_preview_widget", None))
+        self._apply_video_widget_transition_fade_duration(getattr(self, "ndi_preview_widget", None))
+        video_window = getattr(self, "_video_display_window", None)
+        if video_window is not None:
+            self._apply_video_widget_transition_fade_duration(video_window.display_widget)
+        metronome_window = getattr(self, "_metronome_display_window", None)
+        if metronome_window is not None:
+            self._apply_video_widget_transition_fade_duration(metronome_window.display_widget)
+
+    def _on_video_transition_fade_duration_changed(self, value: float) -> None:
+        self.video_display_transition_fade_sec = max(0.0, min(10.0, float(value or 0.0)))
+        self._sync_video_widget_transition_fade_durations()
+        if not self._suspend_settings_save:
+            self._save_settings()
 
     def _path_may_have_video(self, path: str) -> bool:
         candidate = str(path or "").strip()
@@ -386,9 +114,21 @@ class VideoDisplayMixin:
         index = self.video_route_combo.findData(manual_route)
         self.video_route_combo.setCurrentIndex(index if index >= 0 else 0)
         form.addRow("Otherwise:", self.video_route_combo)
+
+        video_fade_spin = QDoubleSpinBox(panel)
+        video_fade_spin.setDecimals(2)
+        video_fade_spin.setRange(0.0, 10.0)
+        video_fade_spin.setSingleStep(0.1)
+        video_fade_spin.setSuffix(" s")
+        video_fade_spin.setValue(self._video_transition_fade_duration_seconds())
+        video_fade_spin.setToolTip("Fade duration when switching video display modes. Set to 0 to disable.")
+        video_fade_spin.valueChanged.connect(self._on_video_transition_fade_duration_changed)
+        self.video_transition_fade_spin = video_fade_spin
+        form.addRow("Fade Duration:", video_fade_spin)
         layout.addLayout(form)
 
         self.video_preview_widget = VideoDisplayWidget(panel, allow_fullscreen_toggle=False)
+        self._apply_video_widget_transition_fade_duration(self.video_preview_widget)
         self.video_preview_widget.setMinimumHeight(180)
         self.video_preview_widget.surfaceChanged.connect(self._on_video_surface_geometry_changed)
         layout.addWidget(self.video_preview_widget, 1)
@@ -747,7 +487,7 @@ class VideoDisplayMixin:
         slot, info = self._current_video_slot_and_probe()
         if slot is not None and info.has_video and self._stage_playback_status() == "playing":
             return ""
-        return _VIDEO_BACKDROP_MESSAGE
+        return tr(_VIDEO_BACKDROP_MESSAGE)
 
     def _video_output_dimensions(self, info: Optional[MediaProbeInfo]) -> tuple[int, int]:
         width = int(getattr(info, "width", 0) or 0) if info is not None else 0
@@ -765,10 +505,6 @@ class VideoDisplayMixin:
         if width <= 0 or height <= 0:
             return 640, 360
         return width, height
-
-    def _next_video_request_tag(self) -> int:
-        self._video_request_tag_serial = max(0, int(getattr(self, "_video_request_tag_serial", 0))) + 1
-        return self._video_request_tag_serial
 
     def _video_target_surface_pixel_size(self) -> tuple[int, int]:
         candidates: list[tuple[int, int]] = []
@@ -867,7 +603,6 @@ class VideoDisplayMixin:
             self._video_surface_geometry_refresh_inflight = False
 
     def _invalidate_video_playback_sync(self, *, refresh: bool = False) -> None:
-        self._video_transport_revision = max(0, int(getattr(self, "_video_transport_revision", 0))) + 1
         self._clear_video_frame_runtime(preserve_current_frame=True)
         if refresh:
             self._refresh_video_display(force=True)
@@ -904,6 +639,63 @@ class VideoDisplayMixin:
             return True
         return bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() == "video"
 
+    def _current_video_session_id(self) -> str:
+        if self.current_playing is not None:
+            try:
+                player = self._player_for_slot_key(self.current_playing)
+            except Exception:
+                player = None
+            player_id = str(getattr(player, "player_id", "") or "").strip()
+            if player_id:
+                return player_id
+        pending = getattr(self, "_pending_video_synced_start", None)
+        if isinstance(pending, dict):
+            return str(pending.get("player_id", "") or "").strip()
+        return ""
+
+    def _clear_active_video_session(self) -> None:
+        session_id = str(getattr(self, "_video_active_session_id", "") or "").strip()
+        if session_id:
+            clear_method = getattr(getattr(self, "_audio_service", None), "clear_video_session", None)
+            if callable(clear_method):
+                try:
+                    clear_method(session_id)
+                except Exception:
+                    pass
+        self._video_active_session_id = ""
+        self._video_active_session_source_path = ""
+        self._video_active_session_config_key = None
+
+    def _update_current_video_frame_from_session(self, frame_snapshot: object) -> bool:
+        image = getattr(frame_snapshot, "image", QImage())
+        if not isinstance(image, QImage) or image.isNull():
+            return False
+        pts_ms = max(0, int(getattr(frame_snapshot, "pts_ms", 0) or 0))
+        path = str(getattr(frame_snapshot, "source_path", "") or "").strip()
+        cache_key = (self._normalized_media_probe_key(path), pts_ms) if path else None
+        frame_image = QImage(image)
+        pixmap = QPixmap.fromImage(frame_image)
+        if pixmap.isNull():
+            return False
+        self._video_current_frame_key = cache_key
+        self._video_current_frame_image = frame_image
+        self._video_current_frame_pixmap = pixmap
+        self._video_last_frame_pts_ms = pts_ms
+        self._apply_video_frame_to_targets()
+        submit_method = getattr(getattr(self, "_audio_service", None), "submit_video_destination_frame", None)
+        if callable(submit_method):
+            try:
+                submit_method(
+                    "local_program",
+                    frame_image,
+                    route_mode="video",
+                    pts_ms=pts_ms,
+                    source_path=path,
+                )
+            except Exception:
+                pass
+        return True
+
     def _current_video_display_position_ms(self) -> int:
         if self.current_playing is None:
             try:
@@ -929,12 +721,19 @@ class VideoDisplayMixin:
         candidate = str(path or "").strip()
         if not candidate:
             return QPixmap()
-        info = self._media_probe_for_path(candidate)
-        bucket_ms = self._video_frame_bucket_ms(position_ms, info)
-        cache_key = (self._normalized_media_probe_key(candidate), bucket_ms)
-        cached = self._video_frame_cache.get(cache_key)
-        if cached is not None:
-            return QPixmap(cached)
+        current_key = getattr(self, "_video_current_frame_key", None)
+        normalized = self._normalized_media_probe_key(candidate)
+        if isinstance(current_key, tuple) and current_key and current_key[0] == normalized:
+            return QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        return QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+
+    def _current_video_surface_pixmap(self) -> QPixmap:
+        current = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        if not current.isNull():
+            return current
+        slot, info = self._current_video_slot_and_probe()
+        if slot is None or not bool(getattr(info, "has_video", False)):
+            return QPixmap()
         return QPixmap()
 
     def _render_widget_snapshot(self, widget: QWidget, width: int = 960, height: int = 540) -> QPixmap:
@@ -1352,40 +1151,37 @@ class VideoDisplayMixin:
     def _sync_output_surface_widget(self, widget: Optional[VideoDisplayWidget], mode: str, *, force: bool = False) -> None:
         if widget is None:
             return
-        widget.configure_overlay(
+        self._apply_video_widget_transition_fade_duration(widget)
+        backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
+        active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+        video_pixmap = QPixmap()
+        content_pixmap = QPixmap()
+        backdrop_pixmap = self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap()
+        lyric_html = ""
+        if mode == DISPLAY_FOCUS_VIDEO:
+            video_pixmap = self._current_video_surface_pixmap()
+            lyric_html = self._current_video_lyric_html()
+        elif mode == DISPLAY_FOCUS_STAGE:
+            content_pixmap = self._render_stage_display_snapshot()
+        elif mode == DISPLAY_FOCUS_LYRIC:
+            content_pixmap = self._render_lyric_display_snapshot()
+        elif mode == DISPLAY_FOCUS_IMAGE:
+            content_pixmap = self._slot_display_image_pixmap(active_slot)
+        elif mode == DISPLAY_FOCUS_METRONOME:
+            content_pixmap = self._render_metronome_display_snapshot(active_slot, max(1, widget.width()), max(1, widget.height()))
+        widget.apply_surface_state(
+            mode=mode,
+            video_pixmap=video_pixmap,
+            content_pixmap=content_pixmap,
+            backdrop_pixmap=backdrop_pixmap,
+            lyric_html=lyric_html,
             overlay_rect=self.video_display_lyric_overlay_rect,
             show_lyric_overlay=self.video_display_show_lyric_overlay and mode == "video",
             show_stage_alert=self.video_display_show_stage_alert and mode == "video",
+            alert_text=self._stage_alert_message if self._stage_alert_active() else "",
+            show_backdrop_message=bool(backdrop_message),
+            backdrop_message_text=backdrop_message,
         )
-        widget.set_mode(mode)
-        widget.set_alert_text(self._stage_alert_message if self._stage_alert_active() else "")
-        widget.set_backdrop_pixmap(self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap())
-        backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
-        widget.configure_backdrop(show_message=bool(backdrop_message), message_text=backdrop_message)
-        active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
-        if mode == DISPLAY_FOCUS_VIDEO:
-            runtime_image = self._runtime_video_destination_frame("local_program")
-            if not runtime_image.isNull():
-                widget.set_video_pixmap(QPixmap.fromImage(runtime_image))
-            else:
-                widget.set_video_pixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
-            widget.set_content_pixmap(QPixmap())
-            widget.set_lyric_html(self._current_video_lyric_html())
-            return
-        if mode == DISPLAY_FOCUS_STAGE:
-            widget.set_content_pixmap(self._render_stage_display_snapshot())
-        elif mode == DISPLAY_FOCUS_LYRIC:
-            widget.set_content_pixmap(self._render_lyric_display_snapshot())
-        elif mode == DISPLAY_FOCUS_IMAGE:
-            widget.set_content_pixmap(self._slot_display_image_pixmap(active_slot))
-        elif mode == DISPLAY_FOCUS_METRONOME:
-            widget.set_content_pixmap(
-                self._render_metronome_display_snapshot(active_slot, max(1, widget.width()), max(1, widget.height()))
-            )
-        else:
-            widget.set_content_pixmap(QPixmap())
-        widget.set_video_pixmap(QPixmap())
-        widget.set_lyric_html("")
 
     def _sync_video_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
         self._sync_output_surface_widget(widget, self._active_video_route_mode(), force=force)
@@ -1490,6 +1286,7 @@ class VideoDisplayMixin:
         widget = getattr(self, "ndi_preview_widget", None)
         if widget is None:
             widget = VideoDisplayWidget(self, allow_fullscreen_toggle=False)
+            self._apply_video_widget_transition_fade_duration(widget)
             widget.hide()
             self.ndi_preview_widget = widget
         return widget
@@ -1506,21 +1303,13 @@ class VideoDisplayMixin:
     def _render_ndi_frame_image(self) -> QImage:
         width, height = self._ndi_output_dimensions()
         mode = self._active_ndi_route_mode()
-        if (
-            mode == "video"
-            and (not bool(getattr(self, "video_display_show_lyric_overlay", False)))
-            and (not (bool(getattr(self, "video_display_show_stage_alert", False)) and self._stage_alert_active()))
-        ):
-            image = self._current_ndi_video_frame_image()
-            if not image.isNull():
-                return image.scaled(
-                    max(1, int(width)),
-                    max(1, int(height)),
-                    Qt.IgnoreAspectRatio,
-                    Qt.FastTransformation,
-                )
         widget = self._ensure_ndi_preview_widget()
         self._sync_output_surface_widget(widget, mode, force=True)
+        target_width = max(1, int(width))
+        target_height = max(1, int(height))
+        if widget.width() != target_width or widget.height() != target_height:
+            widget.resize(target_width, target_height)
+            self._sync_output_surface_widget(widget, mode, force=True)
         return self._render_widget_image(widget, width, height)
 
     def _ndi_audio_players(self) -> List[ExternalMediaPlayer]:
@@ -1793,13 +1582,17 @@ class VideoDisplayMixin:
                 service = getattr(self, "_audio_service", None)
                 submit = getattr(service, "submit_video_destination_frame", None)
                 if callable(submit):
+                    source_path = ""
+                    slot, _info = self._current_video_slot_and_probe()
+                    if slot is not None:
+                        source_path = str(slot.file_path or "").strip()
                     try:
                         submit(
                             "ndi_program",
                             cached,
                             route_mode=mode,
                             pts_ms=max(0, int(getattr(self, "_video_last_frame_pts_ms", 0) or 0)),
-                            source_path=str(getattr(self, "_video_requested_frame_path", "") or ""),
+                            source_path=source_path,
                         )
                     except Exception:
                         pass
@@ -1853,19 +1646,12 @@ class VideoDisplayMixin:
                 display_widget.set_video_pixmap(pixmap)
 
     def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
-        self._video_requested_frame_key = None
-        self._video_requested_frame_path = ""
-        self._video_decode_inflight_key = None
-        self._video_stream_path_key = ""
-        self._video_stream_interval_ms = 0
-        self._video_stream_dimensions = (0, 0)
-        self._video_active_request_tag = 0
-        self._video_active_stream_revision = -1
-        self._video_last_frame_pts_ms = 0
+        self._clear_active_video_session()
         if not preserve_current_frame:
             self._video_current_frame_key = None
             self._video_current_frame_pixmap = QPixmap()
             self._video_current_frame_image = QImage()
+            self._video_last_frame_pts_ms = 0
             clear_method = getattr(getattr(self, "_audio_service", None), "clear_video_destination_frame", None)
             if callable(clear_method):
                 try:
@@ -1876,14 +1662,6 @@ class VideoDisplayMixin:
                     clear_method("ndi_program")
                 except Exception:
                     pass
-        dispatcher = getattr(self, "_video_frame_dispatcher", None)
-        if dispatcher is not None:
-            try:
-                dispatcher.clear()
-            except Exception:
-                pass
-        if (not self.preload_video_enabled) and (not preserve_current_frame):
-            self._video_frame_cache.clear()
 
     def _video_decode_allowed_during_switch_blank(self) -> bool:
         if not bool(getattr(self, "_video_force_blank_until_frame", False)):
@@ -1893,184 +1671,107 @@ class VideoDisplayMixin:
 
     def _queue_video_frame_refresh(self, *, force: bool = False) -> None:
         if not self._video_display_target_visible():
-            if force or self._video_stream_path_key or self._video_decode_inflight_key is not None:
+            if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
         slot, info = self._current_video_slot_and_probe()
         route_mode = self._active_video_route_mode()
         allow_decode_while_blank = self._video_decode_allowed_during_switch_blank()
         if slot is None or (not info.has_video) or (route_mode != "video" and not allow_decode_while_blank):
-            if force:
+            if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
         path = str(slot.file_path or "").strip()
         if not path:
-            if force:
+            if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
+        session_id = self._current_video_session_id()
+        if not session_id:
+            return
+        service = getattr(self, "_audio_service", None)
+        configure = getattr(service, "configure_video_session", None)
+        prime = getattr(service, "prime_video_session", None)
+        snapshot_getter = getattr(service, "video_session_snapshot", None)
+        frame_getter = getattr(service, "video_session_frame", None)
+        if not (callable(configure) and callable(snapshot_getter) and callable(frame_getter)):
+            return
         position_ms = self._current_video_display_position_ms()
-        bucket_ms = self._video_frame_bucket_ms(position_ms, info)
-        cache_key = (self._normalized_media_probe_key(path), bucket_ms)
-        self._video_requested_frame_key = cache_key
-        self._video_requested_frame_path = path
-        dispatcher = getattr(self, "_video_frame_dispatcher", None)
-        if dispatcher is None:
-            return
-        status = self._stage_playback_status()
-        width, height = self._video_decode_dimensions(info)
-        interval_ms = self._video_frame_interval_ms(info)
-        normalized_key = cache_key[0]
-        if status == "playing":
+        width, height = self._video_target_decode_dimensions(info)
+        previous_session_id = str(getattr(self, "_video_active_session_id", "") or "").strip()
+        previous_source_path = str(getattr(self, "_video_active_session_source_path", "") or "").strip()
+        source_changed = self._normalized_media_probe_key(previous_source_path) != self._normalized_media_probe_key(path)
+        normalized_path = self._normalized_media_probe_key(path)
+        config_key = (str(session_id), normalized_path, int(width), int(height))
+        configure_required = bool(
+            force
+            or source_changed
+            or previous_session_id != session_id
+            or getattr(self, "_video_active_session_config_key", None) != config_key
+        )
+        if previous_session_id and previous_session_id != session_id:
+            self._clear_active_video_session()
+        if configure_required:
+            try:
+                configured = bool(
+                    configure(
+                        session_id,
+                        path,
+                        position_ms=position_ms,
+                        width=width,
+                        height=height,
+                        force=bool(force or source_changed or previous_session_id != session_id),
+                    )
+                )
+            except Exception:
+                configured = False
+            if not configured:
+                return
+            self._video_active_session_config_key = config_key
+        self._video_active_session_id = session_id
+        self._video_active_session_source_path = path
+        snapshot = snapshot_getter(session_id)
+        snapshot_path = self._normalized_media_probe_key(str(getattr(snapshot, "source_path", "") or ""))
+        if callable(prime):
+            should_prime = bool(configure_required or not bool(getattr(snapshot, "primed", False)))
             if (
-                self._video_stream_path_key == normalized_key
-                and self._video_stream_interval_ms == interval_ms
-                and tuple(getattr(self, "_video_stream_dimensions", (0, 0))) == (width, height)
-                and int(getattr(self, "_video_active_stream_revision", -1)) == int(getattr(self, "_video_transport_revision", 0))
-                and isinstance(self._video_decode_inflight_key, tuple)
-                and self._video_decode_inflight_key
-                and self._video_decode_inflight_key[0] == "stream"
+                not should_prime
+                and int(getattr(snapshot, "state", ExternalMediaPlayer.StoppedState))
+                != ExternalMediaPlayer.PlayingState
             ):
-                return
-            should_restart_stream = force
-            if normalized_key != str(getattr(self, "_video_stream_path_key", "") or ""):
-                should_restart_stream = True
-            if int(getattr(self, "_video_stream_interval_ms", 0) or 0) != interval_ms:
-                should_restart_stream = True
-            if tuple(getattr(self, "_video_stream_dimensions", (0, 0))) != (width, height):
-                should_restart_stream = True
-            if int(getattr(self, "_video_active_stream_revision", -1)) != int(getattr(self, "_video_transport_revision", 0)):
-                should_restart_stream = True
-            if should_restart_stream:
-                tag = self._next_video_request_tag()
-                self._video_stream_path_key = normalized_key
-                self._video_stream_interval_ms = interval_ms
-                self._video_stream_dimensions = (width, height)
-                self._video_active_request_tag = tag
-                self._video_active_stream_revision = int(getattr(self, "_video_transport_revision", 0))
-                self._video_last_frame_pts_ms = bucket_ms
-                self._video_decode_inflight_key = ("stream", bucket_ms)
-                dispatcher.request_stream(tag, path, bucket_ms, width, height, interval_ms)
-            return
-            cached = self._video_frame_cache.get(cache_key)
-            if cached is not None:
-                if force or self._video_current_frame_key != cache_key:
-                    self._video_current_frame_key = cache_key
-                    self._video_current_frame_pixmap = QPixmap(cached)
-                    self._video_current_frame_image = QImage()
-                    self._apply_video_frame_to_targets()
-                return
-        if self._video_decode_inflight_key == cache_key:
-            return
-        self._video_stream_path_key = ""
-        self._video_stream_interval_ms = 0
-        self._video_stream_dimensions = (0, 0)
-        self._video_last_frame_pts_ms = bucket_ms
-        self._video_decode_inflight_key = cache_key
-        tag = self._next_video_request_tag()
-        self._video_active_request_tag = tag
-        dispatcher.request_frame(tag, path, bucket_ms, width, height)
+                should_prime = (
+                    snapshot_path != normalized_path
+                    or abs(position_ms - max(0, int(getattr(snapshot, "frame_pts_ms", 0) or 0)))
+                    > max(40, int(self._video_frame_interval_ms(info)))
+                )
+            if should_prime:
+                try:
+                    prime(session_id, position_ms)
+                except Exception:
+                    pass
+        frame_snapshot = frame_getter(session_id)
+        expected_blank_key = str(getattr(self, "_video_force_blank_expected_path", "") or "")
+        frame_path = self._normalized_media_probe_key(str(getattr(frame_snapshot, "source_path", "") or ""))
+        if bool(getattr(self, "_video_force_blank_until_frame", False)) and expected_blank_key and (
+            snapshot_path == expected_blank_key or frame_path == expected_blank_key
+        ):
+            if bool(getattr(snapshot, "primed", False)) or bool(getattr(frame_snapshot, "ready", False)):
+                self._clear_video_switch_blank()
+        if bool(getattr(frame_snapshot, "ready", False)) and frame_path == normalized_path:
+            if self._update_current_video_frame_from_session(frame_snapshot):
+                self._refresh_ndi_output(force=False)
+        if bool(getattr(snapshot, "primed", False)) and snapshot_path == normalized_path:
+            complete_pending_start = getattr(self, "_complete_pending_video_synced_start", None)
+            if callable(complete_pending_start):
+                try:
+                    complete_pending_start(normalized_path)
+                except Exception:
+                    pass
 
     def _tick_video_refresh(self) -> None:
         if self._active_video_route_mode() != "video" and not self._video_decode_allowed_during_switch_blank():
             return
         self._queue_video_frame_refresh()
-
-    def _on_video_frame_ready(self) -> None:
-        if bool(getattr(self, "_shutdown_in_progress", False)):
-            return
-        dispatcher = getattr(self, "_video_frame_dispatcher", None)
-        if dispatcher is None:
-            return
-        try:
-            frame = dispatcher.take_latest_frame()
-        except Exception:
-            frame = None
-        if not frame:
-            return
-        self._on_video_frame_decoded(*frame)
-
-    def _on_video_frame_decoded(self, tag: int, path: str, bucket_ms: int, width: int, height: int, payload: bytes) -> None:
-        candidate = str(path or "").strip()
-        if not candidate or not payload:
-            return
-        if int(tag) != int(getattr(self, "_video_active_request_tag", 0) or 0):
-            return
-        cache_key = (self._normalized_media_probe_key(candidate), max(0, int(bucket_ms)))
-        expected_blank_key = str(getattr(self, "_video_force_blank_expected_path", "") or "")
-        if bool(getattr(self, "_video_force_blank_until_frame", False)) and expected_blank_key and cache_key[0] == expected_blank_key:
-            self._clear_video_switch_blank()
-        image = QImage(payload, max(1, int(width)), max(1, int(height)), max(1, int(width)) * 3, QImage.Format_RGB888)
-        if image.isNull():
-            return
-        frame_image = image.copy()
-        rotation = int(getattr(self._media_probe_for_path(candidate), "rotation_deg", 0) or 0)
-        if rotation in {90, 180, 270}:
-            transform = QTransform()
-            transform.rotate(rotation)
-            frame_image = frame_image.transformed(transform, Qt.SmoothTransformation)
-        pixmap = QPixmap.fromImage(frame_image)
-        if pixmap.isNull():
-            return
-        if self.preload_video_enabled:
-            self._video_frame_cache[cache_key] = QPixmap(pixmap)
-            if len(self._video_frame_cache) > 120:
-                oldest_keys = list(self._video_frame_cache.keys())[:-120]
-                for old_key in oldest_keys:
-                    self._video_frame_cache.pop(old_key, None)
-        else:
-            self._video_frame_cache.clear()
-        inflight_key = getattr(self, "_video_decode_inflight_key", None)
-        if inflight_key == cache_key or (isinstance(inflight_key, tuple) and inflight_key and inflight_key[0] == "stream"):
-            self._video_decode_inflight_key = None
-        slot, info = self._current_video_slot_and_probe()
-        if slot is None or (not info.has_video) or self._active_video_route_mode() != "video":
-            return
-        active_path = str(slot.file_path or "").strip()
-        active_key = self._normalized_media_probe_key(active_path)
-        if active_key != cache_key[0]:
-            return
-        self._video_current_frame_key = cache_key
-        self._video_current_frame_image = QImage(frame_image)
-        self._video_current_frame_pixmap = QPixmap(pixmap)
-        self._video_last_frame_pts_ms = bucket_ms
-        submit_method = getattr(getattr(self, "_audio_service", None), "submit_video_destination_frame", None)
-        if callable(submit_method):
-            try:
-                submit_method(
-                    "local_program",
-                    frame_image,
-                    route_mode="video",
-                    pts_ms=max(0, int(bucket_ms)),
-                    source_path=active_path,
-                )
-            except Exception:
-                pass
-        self._apply_video_frame_to_targets()
-        self._refresh_ndi_output(force=False)
-        complete_pending_start = getattr(self, "_complete_pending_video_synced_start", None)
-        if callable(complete_pending_start):
-            try:
-                complete_pending_start(active_key)
-            except Exception:
-                pass
-        desired_key = getattr(self, "_video_requested_frame_key", None)
-        desired_path = str(getattr(self, "_video_requested_frame_path", "") or "").strip()
-        if self._stage_playback_status() == "playing":
-            return
-        if desired_key is None or desired_key == cache_key:
-            return
-        if desired_key[0] != active_key or desired_path != active_path:
-            return
-        if self._video_frame_cache.get(desired_key) is not None:
-            return
-        dispatcher = getattr(self, "_video_frame_dispatcher", None)
-        if dispatcher is None or self._video_decode_inflight_key is not None:
-            return
-        self._video_decode_inflight_key = desired_key
-        width, height = self._video_decode_dimensions(info)
-        tag = self._next_video_request_tag()
-        self._video_active_request_tag = tag
-        dispatcher.request_frame(tag, desired_path, desired_key[1], width, height)
 
     def _refresh_video_display(self, force: bool = False) -> None:
         self._configure_local_video_destination()
@@ -2080,19 +1781,9 @@ class VideoDisplayMixin:
         if preview is not None and (preview.isVisible() or force):
             self._sync_video_surface_widget(preview, force=force)
         if self._video_display_window is not None and (self._video_display_window.isVisible() or force):
-            self._video_display_window.configure_overlay(
-                overlay_rect=self.video_display_lyric_overlay_rect,
-                show_lyric_overlay=self.video_display_show_lyric_overlay and self._active_video_route_mode() == "video",
-                show_stage_alert=self.video_display_show_stage_alert and self._active_video_route_mode() == "video",
-            )
             self._sync_video_surface_widget(self._video_display_window.display_widget, force=force)
         metronome_window = getattr(self, "_metronome_display_window", None)
         if metronome_window is not None and (metronome_window.isVisible() or force):
-            metronome_window.configure_overlay(
-                overlay_rect=self.video_display_lyric_overlay_rect,
-                show_lyric_overlay=False,
-                show_stage_alert=False,
-            )
             self._sync_metronome_surface_widget(metronome_window.display_widget, force=force)
         if self._active_video_route_mode() == "video":
             self._queue_video_frame_refresh(force=force)

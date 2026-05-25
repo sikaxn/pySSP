@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QColorDialog,
+    QDoubleSpinBox,
     QDialog,
     QDialogButtonBox,
     QDockWidget,

@@ -4,6 +4,14 @@ from ..shared import *
 from ..widgets import *
 
 
+_DISPLAY_OPTIONS_PAGE_TITLE = "Display"
+_DISPLAY_OPTIONS_TAB_LABELS = {
+    "video": "Video Display",
+    "stage": "Stage Display",
+    "lyric": "Lyric Display",
+}
+
+
 class CommonPageBuilderMixin:
     def _add_page(self, title: str, icon, page: QWidget) -> None:
         scroll = QScrollArea()
@@ -14,26 +22,68 @@ class CommonPageBuilderMixin:
         scroll.setWidget(page)
         self.stack.addWidget(scroll)
         item = QListWidgetItem(icon, title)
+        item.setData(SOURCE_TEXT_ROLE, title)
         self.page_list.addItem(item)
 
-    def _build_stage_lyric_display_page(self, stage_page: QWidget, lyric_page: QWidget) -> QWidget:
+    def _build_display_options_page(self, *, video_page: QWidget, stage_page: QWidget, lyric_page: QWidget) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        tabs = QTabWidget()
-        tabs.addTab(stage_page, "Stage Display")
-        tabs.addTab(lyric_page, "Lyric Display")
-        layout.addWidget(tabs)
+        self.display_options_tabs = QTabWidget()
+        self._display_options_tab_keys = []
+        for key, tab_page in [
+            ("video", video_page),
+            ("stage", stage_page),
+            ("lyric", lyric_page),
+        ]:
+            label = _DISPLAY_OPTIONS_TAB_LABELS[key]
+            self.display_options_tabs.addTab(tab_page, label)
+            tab_index = self.display_options_tabs.count() - 1
+            self.display_options_tabs.tabBar().setTabData(tab_index, label)
+            self._display_options_tab_keys.append(key)
+        layout.addWidget(self.display_options_tabs)
         return page
+
+    def _select_display_options_tab(self, key: str) -> None:
+        tabs = getattr(self, "display_options_tabs", None)
+        tab_keys = list(getattr(self, "_display_options_tab_keys", []))
+        if not isinstance(tabs, QTabWidget) or not tab_keys:
+            return
+        token = str(key or "").strip().lower()
+        tab_key = "video"
+        if token in {"stage", "stage display", "stage and lyric display", "stage and lyric display setting"}:
+            tab_key = "stage"
+        elif token in {"lyric", "lyric display", "lyric display setting"}:
+            tab_key = "lyric"
+        elif token in {"video", "video display", "video display setting"}:
+            tab_key = "video"
+        if tab_key not in tab_keys:
+            return
+        tabs.setCurrentIndex(tab_keys.index(tab_key))
+
+    def _current_display_options_tab_key(self) -> str:
+        tabs = getattr(self, "display_options_tabs", None)
+        tab_keys = list(getattr(self, "_display_options_tab_keys", []))
+        if not isinstance(tabs, QTabWidget) or not tab_keys:
+            return "video"
+        index = max(0, min(tabs.currentIndex(), len(tab_keys) - 1))
+        return str(tab_keys[index])
 
     def select_page(self, title: Optional[str]) -> bool:
         needle = str(title or "").strip().lower()
+        display_tab_key = ""
         if needle == "display":
-            needle = "stage and lyric display"
-        if needle in {"stage display", "lyric", "lyric display", "stage and lyric display setting"}:
-            needle = "stage and lyric display"
-        if needle in {"video", "video display", "video display setting"}:
-            needle = "video display"
+            needle = _DISPLAY_OPTIONS_PAGE_TITLE.lower()
+            display_tab_key = "video"
+        elif needle in {"stage", "stage display", "stage and lyric display", "stage and lyric display setting"}:
+            needle = _DISPLAY_OPTIONS_PAGE_TITLE.lower()
+            display_tab_key = "stage"
+        elif needle in {"lyric", "lyric display", "lyric display setting"}:
+            needle = _DISPLAY_OPTIONS_PAGE_TITLE.lower()
+            display_tab_key = "lyric"
+        elif needle in {"video", "video display", "video display setting"}:
+            needle = _DISPLAY_OPTIONS_PAGE_TITLE.lower()
+            display_tab_key = "video"
         if needle in {"companion satellite", "automation setup"}:
             needle = "automation"
         if needle == "audio device / timecode":
@@ -46,8 +96,11 @@ class CommonPageBuilderMixin:
             item = self.page_list.item(index)
             if item is None:
                 continue
-            if item.text().strip().lower() == needle:
+            source_text = str(item.data(SOURCE_TEXT_ROLE) or item.text() or "").strip().lower()
+            if source_text == needle:
                 self.page_list.setCurrentRow(index)
+                if display_tab_key:
+                    self._select_display_options_tab(display_tab_key)
                 return True
         return False
 

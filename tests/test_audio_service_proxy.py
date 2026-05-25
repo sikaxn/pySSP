@@ -3,10 +3,18 @@ from __future__ import annotations
 import queue
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtGui import QImage
 from PyQt5.QtWidgets import QApplication
 
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController, AudioStateCache
-from pyssp.engine.types import EngineDiagnosticsSnapshot, RuntimeSessionSnapshot, TransportSnapshot, VideoDestinationSnapshot
+from pyssp.engine.types import (
+    EngineDiagnosticsSnapshot,
+    RuntimeSessionSnapshot,
+    TransportSnapshot,
+    VideoDestinationSnapshot,
+    VideoFrameSnapshot,
+    VideoSessionSnapshot,
+)
 
 
 class _FakeAudioController(QObject):
@@ -227,3 +235,44 @@ def test_video_destination_snapshots_return_cached_value_on_timeout() -> None:
     result = AudioServiceController.video_destination_snapshots(controller)
 
     assert result == (cached,)
+
+
+def test_video_session_snapshot_returns_cached_value_on_timeout() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    cached = VideoSessionSnapshot(
+        session_id="player-1",
+        source_path="clip.mp4",
+        configured=True,
+        primed=True,
+        state=1,
+        position_ms=1200,
+        duration_ms=5000,
+        frame_pts_ms=1188,
+        frame_width=640,
+        frame_height=360,
+        backend_name="pyav",
+    )
+    controller._last_video_session_snapshots = {"player-1": cached}
+    controller.call = lambda *args, **kwargs: (_ for _ in ()).throw(queue.Empty())
+
+    result = AudioServiceController.video_session_snapshot(controller, "player-1")
+
+    assert result == cached
+
+
+def test_video_session_frame_uses_runtime_response() -> None:
+    controller = AudioServiceController.__new__(AudioServiceController)
+    image = QImage(8, 8, QImage.Format_RGB32)
+    frame = VideoFrameSnapshot(
+        session_id="player-1",
+        source_path="clip.mp4",
+        pts_ms=1188,
+        ready=True,
+        image=image,
+    )
+    controller._last_video_session_snapshots = {}
+    controller.call = lambda *args, **kwargs: frame
+
+    result = AudioServiceController.video_session_frame(controller, "player-1")
+
+    assert result == frame

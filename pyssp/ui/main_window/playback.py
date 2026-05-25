@@ -781,6 +781,7 @@ class PlaybackMixin:
         self,
         slot: SoundButtonData,
         playing_key: Tuple[str, int, int],
+        player: Optional[ExternalMediaPlayer],
         start_callback: Callable[[], None],
     ) -> bool:
         has_video = bool(getattr(self, "_slot_has_video_media", lambda _slot: False)(slot))
@@ -801,6 +802,7 @@ class PlaybackMixin:
             "path_key": normalized_path,
             "callback": start_callback,
             "playing_key": playing_key,
+            "player_id": str(getattr(player, "player_id", "") or "").strip(),
             "armed_at": time.monotonic(),
         }
         try:
@@ -997,7 +999,7 @@ class PlaybackMixin:
         start_callback = lambda p=player, s=slot, key=playing_key, target=target_volume, fade=fade_in_on: self._start_primary_loaded_playback(
             p, s, key, target, fade
         )
-        if self._arm_video_synced_start(slot, playing_key, start_callback):
+        if self._arm_video_synced_start(slot, playing_key, player, start_callback):
             self._refresh_sound_grid()
             self._update_now_playing_label(self._build_now_playing_text(slot))
             return
@@ -1027,7 +1029,7 @@ class PlaybackMixin:
         start_callback = lambda old=old_player, new=new_player, s=slot, key=playing_key, target=target_volume: self._start_cross_loaded_playback(
             old, new, s, key, target
         )
-        if self._arm_video_synced_start(slot, playing_key, start_callback):
+        if self._arm_video_synced_start(slot, playing_key, new_player, start_callback):
             self._refresh_sound_grid()
             self._update_now_playing_label(self._build_now_playing_text(slot))
             return
@@ -1053,7 +1055,7 @@ class PlaybackMixin:
         start_callback = lambda p=player, s=slot, key=playing_key, target=target_volume, fade=fade_in_on: self._start_multi_loaded_playback(
             p, s, key, target, fade
         )
-        if self._arm_video_synced_start(slot, playing_key, start_callback):
+        if self._arm_video_synced_start(slot, playing_key, player, start_callback):
             self._refresh_sound_grid()
             self._update_now_playing_label(self._build_now_playing_text(slot))
             return

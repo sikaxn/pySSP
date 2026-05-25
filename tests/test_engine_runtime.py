@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtGui import QImage
 
 from pyssp.audio_service import AudioService
 import pyssp.engine.runtime as runtime_module
+import pyssp.engine.video_session as video_session_module
 from pyssp.engine import FFmpegEngineServices, MediaRuntime
-from pyssp.engine.types import MediaProbeResult
+from pyssp.engine.types import MediaProbeResult, VideoFrameSnapshot, VideoSessionSnapshot
 
 
 class _FakePlayer(QObject):
@@ -52,6 +54,52 @@ class _FakePlayer(QObject):
 
     def outputBlockSize(self) -> int:
         return 1024
+
+
+class _FakeVideoSession:
+    def __init__(
+        self,
+        session_id: str,
+        _state_getter,
+        _position_getter,
+        _duration_getter,
+    ) -> None:
+        self.session_id = str(session_id)
+        self.configure_calls: list[tuple[str, int, int, int, bool]] = []
+        self.prime_calls: list[int] = []
+        self.clear_count = 0
+        self.shutdown_count = 0
+        self.snapshot_value = VideoSessionSnapshot(session_id=self.session_id)
+        self.frame_value = VideoFrameSnapshot(session_id=self.session_id)
+
+    def configure(
+        self,
+        source_path: str,
+        *,
+        position_ms: int = 0,
+        width: int = 0,
+        height: int = 0,
+        force: bool = False,
+    ) -> bool:
+        self.configure_calls.append((str(source_path), int(position_ms), int(width), int(height), bool(force)))
+        return True
+
+    def clear(self) -> bool:
+        self.clear_count += 1
+        return True
+
+    def prime(self, position_ms: int | None = None) -> bool:
+        self.prime_calls.append(0 if position_ms is None else int(position_ms))
+        return True
+
+    def snapshot(self) -> VideoSessionSnapshot:
+        return self.snapshot_value
+
+    def current_frame(self) -> VideoFrameSnapshot:
+        return self.frame_value
+
+    def shutdown(self) -> None:
+        self.shutdown_count += 1
 
 
 def test_media_runtime_tracks_reference_session_and_multi_play_policy():
@@ -106,6 +154,116 @@ def test_audio_service_delegates_session_ownership_to_runtime():
     assert service._dispatch("primary", "delete", {}) is True
     assert runtime.has_session("primary") is False
     assert player.deleted is True
+
+
+def test_media_runtime_manages_video_sessions_alongside_players():
+    runtime = MediaRuntime(player_factory=_FakePlayer, video_session_factory=_FakeVideoSession)
+    try:
+        runtime.create_legacy_session("primary")
+        session = runtime._video_sessions["primary"]
+        assert runtime.configure_session_video(
+            "primary",
+            "clip.mp4",
+            position_ms=1200,
+            width=640,
+            height=360,
+            force=True,
+        ) is True
+        assert runtime.prime_session_video("primary", position_ms=1200) is True
+
+        assert session.configure_calls == [("clip.mp4", 1200, 640, 360, True)]
+        assert session.prime_calls == [1200]
+
+        image = QImage(16, 9, QImage.Format_RGB32)
+        session.snapshot_value = VideoSessionSnapshot(
+            session_id="primary",
+            source_path="clip.mp4",
+            configured=True,
+            primed=True,
+            state=1,
+            position_ms=1200,
+            duration_ms=5000,
+            frame_pts_ms=1188,
+            frame_width=16,
+            frame_height=9,
+            backend_name="pyav",
+        )
+        session.frame_value = VideoFrameSnapshot(
+            session_id="primary",
+            source_path="clip.mp4",
+            pts_ms=1188,
+            ready=True,
+            image=image,
+        )
+
+        assert runtime.video_session_snapshot("primary") == session.snapshot_value
+        assert runtime.video_session_frame("primary") == session.frame_value
+        assert runtime.clear_session_video("primary") is True
+        assert session.clear_count == 1
+    finally:
+        runtime.shutdown()
+
+
+def test_audio_service_dispatches_runtime_video_session_commands():
+    runtime = MediaRuntime(player_factory=_FakePlayer, video_session_factory=_FakeVideoSession)
+    service = AudioService(runtime=runtime)
+    try:
+        assert service._dispatch("primary", "create", {}) is True
+        assert service._dispatch(
+            "primary",
+            "configureVideoSession",
+            {"source_path": "clip.mp4", "position_ms": 900, "width": 320, "height": 180, "force": True},
+        ) is True
+        assert service._dispatch("primary", "primeVideoSession", {"position_ms": 900}) is True
+        assert service._dispatch("primary", "clearVideoSession", {}) is True
+    finally:
+        runtime.shutdown()
+
+
+def test_pyav_frame_source_preserves_lookahead_frame():
+    def _solid_image(color) -> QImage:
+        image = QImage(8, 8, QImage.Format_RGB32)
+        image.fill(color)
+        return image
+
+    frames = [
+        {"pts_ms": 0, "image": _solid_image(Qt.red)},
+        {"pts_ms": 40, "image": _solid_image(Qt.green)},
+        {"pts_ms": 80, "image": _solid_image(Qt.blue)},
+    ]
+
+    source = video_session_module._PyAVFrameSource.__new__(video_session_module._PyAVFrameSource)
+    source._path = "clip.mp4"
+    source._width = 8
+    source._height = 8
+    source._container = object()
+    source._stream = object()
+    source._decoder = object()
+    source._eof = False
+    source._rotation_deg = 0
+    source._last_selected_image = QImage()
+    source._last_selected_pts_ms = 0
+    source._pending_image = QImage()
+    source._pending_pts_ms = -1
+    source._last_decoded_pts_ms = -1
+    source._last_seek_target_ms = -1
+    source._ensure_open = lambda: None
+    source._should_seek = lambda _target_ms: False
+    source._seek_to = lambda _target_ms: None
+    source._frame_pts_ms = lambda frame: int(frame["pts_ms"])
+    source._frame_to_image = lambda frame: QImage(frame["image"])
+    source._next_frame = lambda: frames.pop(0) if frames else None
+
+    first_image, first_pts = source.frame_at(10)
+    second_image, second_pts = source.frame_at(50)
+    third_image, third_pts = source.frame_at(90)
+
+    assert first_pts == 0
+    assert second_pts == 40
+    assert third_pts == 80
+    assert first_image.pixelColor(0, 0).name() == "#ff0000"
+    assert second_image.pixelColor(0, 0).name() == "#00ff00"
+    assert third_image.pixelColor(0, 0).name() == "#0000ff"
 
 
 def test_ffmpeg_engine_services_wrap_existing_support_module(monkeypatch):

@@ -21,9 +21,12 @@ from pyssp.engine.types import (
     PlaybackSessionId,
     RuntimeSessionSnapshot,
     TransportSnapshot,
+    VideoFrameSnapshot,
     VideoDestinationId,
     VideoDestinationSnapshot,
+    VideoSessionSnapshot,
 )
+from pyssp.engine.video_session import UnifiedVideoSession
 from pyssp.ndi_output import NDIOutputConfig, NDIOutputDispatcher
 from pyssp.ndi_support import NDICapabilityStatus
 
@@ -126,18 +129,23 @@ class MediaRuntime:
         self,
         *,
         player_factory: Optional[Callable[[], ExternalMediaPlayer]] = None,
+        video_session_factory: Optional[
+            Callable[[PlaybackSessionId, Callable[[], int], Callable[[], int], Callable[[], int]], UnifiedVideoSession]
+        ] = None,
         ffmpeg_services: Optional[FFmpegEngineServices] = None,
         audio_bus_ids: tuple[AudioBusId, ...] = _DEFAULT_AUDIO_BUS_IDS,
         video_destination_ids: tuple[VideoDestinationId, ...] = _DEFAULT_VIDEO_DESTINATION_IDS,
         clock: Optional[Callable[[], float]] = None,
     ) -> None:
         self._player_factory = player_factory or ExternalMediaPlayer
+        self._video_session_factory = video_session_factory
         self._ffmpeg = ffmpeg_services or FFmpegEngineServices()
         self._audio_bus_ids = tuple(audio_bus_ids)
         self._video_destination_ids = tuple(video_destination_ids)
         self._clock = clock or time.perf_counter
         self._lock = threading.RLock()
         self._sessions: dict[PlaybackSessionId, _SessionRecord] = {}
+        self._video_sessions: dict[PlaybackSessionId, UnifiedVideoSession] = {}
         self._video_destinations: dict[VideoDestinationId, _DestinationRecord] = {
             destination_id: _DestinationRecord(destination_id=destination_id)
             for destination_id in self._video_destination_ids
@@ -180,6 +188,7 @@ class MediaRuntime:
             player = self._player_factory()
             record = _SessionRecord(session_id=token, player=player)
             self._sessions[token] = record
+            self._video_sessions[token] = self._create_video_session(token)
         try:
             player.setOutputMonitorId(token)
         except Exception:
@@ -199,10 +208,17 @@ class MediaRuntime:
 
     def delete_session(self, session_id: PlaybackSessionId) -> bool:
         record: Optional[_SessionRecord]
+        video_session: Optional[UnifiedVideoSession]
         with self._lock:
             record = self._sessions.pop(str(session_id), None)
+            video_session = self._video_sessions.pop(str(session_id), None)
         if record is None:
             return False
+        if video_session is not None:
+            try:
+                video_session.shutdown()
+            except Exception:
+                pass
         try:
             record.player.stop()
         except Exception:
@@ -360,6 +376,58 @@ class MediaRuntime:
 
     def probe_media(self, path: str) -> MediaProbeResult:
         return self._ffmpeg.probe_media_info(path)
+
+    def configure_session_video(
+        self,
+        session_id: PlaybackSessionId,
+        source_path: str,
+        *,
+        position_ms: int = 0,
+        width: int = 0,
+        height: int = 0,
+        force: bool = False,
+    ) -> bool:
+        with self._lock:
+            video_session = self._video_sessions.get(str(session_id))
+        if video_session is None:
+            return False
+        return bool(
+            video_session.configure(
+                source_path,
+                position_ms=position_ms,
+                width=width,
+                height=height,
+                force=force,
+            )
+        )
+
+    def clear_session_video(self, session_id: PlaybackSessionId) -> bool:
+        with self._lock:
+            video_session = self._video_sessions.get(str(session_id))
+        if video_session is None:
+            return False
+        return bool(video_session.clear())
+
+    def prime_session_video(self, session_id: PlaybackSessionId, position_ms: int = 0) -> bool:
+        with self._lock:
+            video_session = self._video_sessions.get(str(session_id))
+        if video_session is None:
+            return False
+        return bool(video_session.prime(position_ms=position_ms))
+
+    def video_session_snapshot(self, session_id: PlaybackSessionId) -> VideoSessionSnapshot:
+        with self._lock:
+            video_session = self._video_sessions.get(str(session_id))
+        if video_session is None:
+            return VideoSessionSnapshot(session_id=str(session_id))
+        return video_session.snapshot()
+
+    def video_session_frame(self, session_id: PlaybackSessionId) -> VideoFrameSnapshot:
+        with self._lock:
+            video_session = self._video_sessions.get(str(session_id))
+        if video_session is None:
+            return VideoFrameSnapshot(session_id=str(session_id))
+        return video_session.current_frame()
 
     def _ensure_audio_output_stream_for_player(self, player: ExternalMediaPlayer) -> None:
         with self._lock:
@@ -662,6 +730,11 @@ class MediaRuntime:
                         idle=source.startswith("idle_tone"),
                     )
                 )
+            except TypeError:
+                try:
+                    sent = bool(dispatcher.send_audio_frames(chunk, sample_rate))
+                except Exception:
+                    sent = False
             except Exception:
                 sent = False
         if sent and consume_map:
@@ -836,3 +909,57 @@ class MediaRuntime:
             or record.position_ms > 0
             or record.duration_ms > 0
         )
+
+    def _create_video_session(self, session_id: PlaybackSessionId) -> UnifiedVideoSession:
+        if callable(self._video_session_factory):
+            return self._video_session_factory(
+                str(session_id),
+                lambda sid=str(session_id): self._session_state_value(sid),
+                lambda sid=str(session_id): self._session_position_value(sid),
+                lambda sid=str(session_id): self._session_duration_value(sid),
+            )
+        return UnifiedVideoSession(
+            str(session_id),
+            state_getter=lambda sid=str(session_id): self._session_state_value(sid),
+            position_getter=lambda sid=str(session_id): self._session_position_value(sid),
+            duration_getter=lambda sid=str(session_id): self._session_duration_value(sid),
+            clock=self._clock,
+        )
+
+    def _session_state_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            record = self._sessions.get(str(session_id))
+            if record is None:
+                return ExternalMediaPlayer.StoppedState
+            player = record.player
+        try:
+            return int(player.state())
+        except Exception:
+            return ExternalMediaPlayer.StoppedState
+
+    def _session_position_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            record = self._sessions.get(str(session_id))
+            if record is None:
+                return 0
+            player = record.player
+        try:
+            if player.state() == ExternalMediaPlayer.PlayingState:
+                return max(0, int(player.enginePositionMs()))
+        except Exception:
+            pass
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
+
+    def _session_duration_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            record = self._sessions.get(str(session_id))
+            if record is None:
+                return 0
+            player = record.player
+        try:
+            return max(0, int(player.duration()))
+        except Exception:
+            return 0

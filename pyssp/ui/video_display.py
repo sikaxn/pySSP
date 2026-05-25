@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import time
 from typing import Optional
 
-from PyQt5.QtCore import QEvent, QRect, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QTextDocument
+from PyQt5.QtCore import QEvent, QRect, QRectF, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QTextDocument
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from pyssp.i18n import tr
@@ -42,6 +43,15 @@ class VideoDisplayWidget(QWidget):
         self._alert_text = ""
         self._show_backdrop_message = False
         self._backdrop_message_text = ""
+        self._transition_duration_sec = 0.0
+        self._transition_prev_frame = QImage()
+        self._transition_prev_frame_size = QSize()
+        self._transition_started_at = 0.0
+        self._transition_progress = 1.0
+        self._transition_timer = QTimer(self)
+        self._transition_timer.setInterval(16)
+        self._transition_timer.setTimerType(Qt.PreciseTimer)
+        self._transition_timer.timeout.connect(self._tick_transition)
         self._lyric_doc = QTextDocument(self)
         self._lyric_doc.setDocumentMargin(0.0)
         self._install_fullscreen_filter(self)
@@ -101,10 +111,52 @@ class VideoDisplayWidget(QWidget):
         self._show_stage_alert = bool(show_stage_alert)
         self.update()
 
+    def set_transition_duration_seconds(self, seconds: float) -> None:
+        self._transition_duration_sec = max(0.0, float(seconds or 0.0))
+        if self._transition_duration_sec <= 0.0:
+            self._finish_transition()
+
+    def is_transition_active(self) -> bool:
+        return self._update_transition_progress()
+
+    def apply_surface_state(
+        self,
+        *,
+        mode: str,
+        video_pixmap: Optional[QPixmap] = None,
+        content_pixmap: Optional[QPixmap] = None,
+        backdrop_pixmap: Optional[QPixmap] = None,
+        lyric_html: str = "",
+        overlay_rect: Optional[dict[str, int]] = None,
+        show_lyric_overlay: bool = False,
+        show_stage_alert: bool = False,
+        alert_text: str = "",
+        show_backdrop_message: bool = False,
+        backdrop_message_text: str = "",
+    ) -> None:
+        token = str(mode or "blank").strip().lower()
+        if token != self._mode:
+            self._begin_mode_transition()
+        self._mode = token
+        self._video_pixmap = QPixmap() if video_pixmap is None else QPixmap(video_pixmap)
+        self._content_pixmap = QPixmap() if content_pixmap is None else QPixmap(content_pixmap)
+        self._backdrop_pixmap = QPixmap() if backdrop_pixmap is None else QPixmap(backdrop_pixmap)
+        self._lyric_html = str(lyric_html or "")
+        if overlay_rect is not None:
+            self._overlay_rect = dict(overlay_rect)
+        self._show_lyric_overlay = bool(show_lyric_overlay)
+        self._show_stage_alert = bool(show_stage_alert)
+        self._alert_text = str(alert_text or "").strip()
+        self._show_backdrop_message = bool(show_backdrop_message)
+        self._backdrop_message_text = str(backdrop_message_text or "").strip()
+        self._lyric_doc.setHtml(self._lyric_html)
+        self.update()
+
     def set_mode(self, mode: str) -> None:
         token = str(mode or "blank").strip().lower()
         if token == self._mode:
             return
+        self._begin_mode_transition()
         self._mode = token
         self.update()
 
@@ -134,6 +186,60 @@ class VideoDisplayWidget(QWidget):
         self._backdrop_message_text = str(message_text or "").strip()
         self.update()
 
+    def _capture_current_frame(self) -> QImage:
+        size = self.size()
+        if size.width() <= 0 or size.height() <= 0:
+            return QImage()
+        image = QImage(size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.black)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        self._paint_surface(painter, QRect(0, 0, size.width(), size.height()))
+        painter.end()
+        return image
+
+    def _begin_mode_transition(self) -> None:
+        if self._transition_duration_sec <= 0.0:
+            self._finish_transition()
+            return
+        frame = self._capture_current_frame()
+        if frame.isNull():
+            self._finish_transition()
+            return
+        self._transition_prev_frame = frame
+        self._transition_prev_frame_size = frame.size()
+        self._transition_started_at = time.monotonic()
+        self._transition_progress = 0.0
+        if not self._transition_timer.isActive():
+            self._transition_timer.start()
+
+    def _update_transition_progress(self) -> bool:
+        if self._transition_prev_frame.isNull():
+            self._transition_progress = 1.0
+            return False
+        duration = max(0.0, float(self._transition_duration_sec))
+        if duration <= 0.0:
+            self._finish_transition()
+            return False
+        elapsed = max(0.0, time.monotonic() - float(self._transition_started_at))
+        self._transition_progress = max(0.0, min(1.0, elapsed / duration))
+        if self._transition_progress >= 1.0:
+            self._finish_transition()
+            return False
+        return True
+
+    def _tick_transition(self) -> None:
+        self._update_transition_progress()
+        self.update()
+
+    def _finish_transition(self) -> None:
+        if self._transition_timer.isActive():
+            self._transition_timer.stop()
+        self._transition_prev_frame = QImage()
+        self._transition_prev_frame_size = QSize()
+        self._transition_started_at = 0.0
+        self._transition_progress = 1.0
+
     def _draw_colour_bars(self, painter: QPainter, rect: QRect) -> None:
         colors = ["#BEBEBE", "#BEBE00", "#00BEBE", "#00BE00", "#BE00BE", "#BE0000", "#0000BE"]
         bar_width = max(1, int(rect.width() / max(1, len(colors))))
@@ -142,32 +248,43 @@ class VideoDisplayWidget(QWidget):
             width = bar_width if idx < len(colors) - 1 else rect.right() - left + 1
             painter.fillRect(QRect(left, rect.y(), width, rect.height()), QColor(color_hex))
 
+    @staticmethod
+    def _scaled_target_rect(rect: QRect, source_width: int, source_height: int, *, keep_aspect: bool) -> QRect:
+        if not keep_aspect:
+            return QRect(rect)
+        source_width = max(1, int(source_width))
+        source_height = max(1, int(source_height))
+        scale = min(rect.width() / float(source_width), rect.height() / float(source_height))
+        width = max(1, int(round(source_width * scale)))
+        height = max(1, int(round(source_height * scale)))
+        return QRect(
+            rect.x() + max(0, (rect.width() - width) // 2),
+            rect.y() + max(0, (rect.height() - height) // 2),
+            width,
+            height,
+        )
+
     def _draw_scaled_pixmap(self, painter: QPainter, rect: QRect, pixmap: QPixmap, *, keep_aspect: bool) -> None:
         if pixmap.isNull():
             return
-        target = QRect(rect)
-        if keep_aspect:
-            source_width = max(1, pixmap.width())
-            source_height = max(1, pixmap.height())
-            scale = min(rect.width() / float(source_width), rect.height() / float(source_height))
-            width = max(1, int(round(source_width * scale)))
-            height = max(1, int(round(source_height * scale)))
-            target = QRect(
-                rect.x() + max(0, (rect.width() - width) // 2),
-                rect.y() + max(0, (rect.height() - height) // 2),
-                width,
-                height,
-            )
+        target = self._scaled_target_rect(rect, pixmap.width(), pixmap.height(), keep_aspect=keep_aspect)
         if target.size() == pixmap.size():
             painter.drawPixmap(target.topLeft(), pixmap)
             return
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.drawPixmap(target, pixmap, pixmap.rect())
 
-    def paintEvent(self, _event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        bounds = self.rect()
+    def _draw_scaled_image(self, painter: QPainter, rect: QRect, image: QImage, *, keep_aspect: bool) -> None:
+        if image.isNull():
+            return
+        target = self._scaled_target_rect(rect, image.width(), image.height(), keep_aspect=keep_aspect)
+        if target.size() == image.size():
+            painter.drawImage(target.topLeft(), image)
+            return
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.drawImage(target, image)
+
+    def _paint_surface(self, painter: QPainter, bounds: QRect) -> None:
         mode = self._mode
         if mode == "white_screen":
             painter.fillRect(bounds, QColor("#FFFFFF"))
@@ -219,6 +336,23 @@ class VideoDisplayWidget(QWidget):
                 self._backdrop_message_text,
             )
 
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        bounds = self.rect()
+        self._paint_surface(painter, bounds)
+        if self._update_transition_progress():
+            painter.save()
+            painter.setOpacity(max(0.0, min(1.0, 1.0 - float(self._transition_progress))))
+            self._draw_scaled_image(
+                painter,
+                bounds,
+                self._transition_prev_frame,
+                keep_aspect=self._transition_prev_frame_size.isValid()
+                and self._transition_prev_frame_size != bounds.size(),
+            )
+            painter.restore()
+
 
 class VideoDisplayWindow(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -235,6 +369,9 @@ class VideoDisplayWindow(QWidget):
 
     def set_mode(self, mode: str) -> None:
         self.display_widget.set_mode(mode)
+
+    def set_transition_duration_seconds(self, seconds: float) -> None:
+        self.display_widget.set_transition_duration_seconds(seconds)
 
     def set_video_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self.display_widget.set_video_pixmap(pixmap)

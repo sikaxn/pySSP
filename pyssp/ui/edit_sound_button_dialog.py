@@ -455,6 +455,7 @@ class EditSoundButtonDialog(QDialog):
                 self.audio_analysis_status_label.setText(tr("No analysis"))
             return
         source = str(self._audio_analysis_method or self._audio_beat_source or "analysis").replace("_", " ").strip().title()
+        source = tr(source)
         confidence = int(
             round(
                 max(
@@ -468,7 +469,7 @@ class EditSoundButtonDialog(QDialog):
             )
         )
         self.audio_analysis_status_label.setText(
-            f"{source}: {len(self._audio_beat_times_ms)} beats, {confidence}%"
+            f"{source}: {len(self._audio_beat_times_ms)} {tr('beats')}, {confidence}%"
         )
 
     def _audio_beat_map_from_inputs(self) -> Optional[AudioBeatMap]:

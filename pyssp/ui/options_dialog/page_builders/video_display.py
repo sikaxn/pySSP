@@ -181,7 +181,7 @@ class VideoDisplayPageMixin:
         self.ndi_output_status_label.setWordWrap(True)
         ndi_form.addRow("Status:", self.ndi_output_status_label)
         self.ndi_output_download_label = QLabel(
-            f'<a href="{str(ndi_download_url or "").strip()}">Download NDI SDK / Runtime</a>'
+            f'<a href="{str(ndi_download_url or "").strip()}">{tr("Download NDI SDK / Runtime")}</a>'
         )
         self.ndi_output_download_label.setOpenExternalLinks(True)
         ndi_form.addRow("Install:", self.ndi_output_download_label)

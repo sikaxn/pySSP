@@ -101,12 +101,14 @@ class StateLogicMixin:
             if source_title == "colour":
                 self._restore_color_defaults()
                 return
-            if source_title == "stage and lyric display":
-                self._restore_display_defaults()
-                self._restore_lyric_defaults()
-                return
-            if source_title == "video display":
-                self._restore_video_display_defaults()
+            if source_title in {"display", "stage and lyric display", "video display"}:
+                active_tab = self._current_display_options_tab_key() if hasattr(self, "_current_display_options_tab_key") else "video"
+                if active_tab == "stage":
+                    self._restore_display_defaults()
+                elif active_tab == "lyric":
+                    self._restore_lyric_defaults()
+                else:
+                    self._restore_video_display_defaults()
                 return
             if source_title == "window layout":
                 self._restore_window_layout_defaults()

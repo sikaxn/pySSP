@@ -12,7 +12,15 @@ from PyQt5.QtGui import QImage
 
 from pyssp.audio_engine import ExternalMediaPlayer
 from pyssp.dsp import DSPConfig
-from pyssp.engine import EngineDiagnosticsSnapshot, MediaRuntime, RuntimeSessionSnapshot, TransportSnapshot, VideoDestinationSnapshot
+from pyssp.engine import (
+    EngineDiagnosticsSnapshot,
+    MediaRuntime,
+    RuntimeSessionSnapshot,
+    TransportSnapshot,
+    VideoDestinationSnapshot,
+    VideoFrameSnapshot,
+    VideoSessionSnapshot,
+)
 from pyssp.ndi_support import NDICapabilityStatus
 
 
@@ -145,6 +153,26 @@ class AudioService(QObject):
             return self._runtime.video_destination_snapshots()
         if command == "videoDestinationFrame":
             return self._runtime.video_destination_frame(str(payload.get("destination_id", "local_program")))
+        if command == "configureVideoSession":
+            return self._runtime.configure_session_video(
+                player_id,
+                str(payload.get("source_path", "") or ""),
+                position_ms=max(0, int(payload.get("position_ms", 0) or 0)),
+                width=max(2, int(payload.get("width", 640) or 640)),
+                height=max(2, int(payload.get("height", 360) or 360)),
+                force=bool(payload.get("force", False)),
+            )
+        if command == "clearVideoSession":
+            return self._runtime.clear_session_video(player_id)
+        if command == "primeVideoSession":
+            return self._runtime.prime_session_video(
+                player_id,
+                position_ms=max(0, int(payload.get("position_ms", 0) or 0)),
+            )
+        if command == "videoSessionSnapshot":
+            return self._runtime.video_session_snapshot(player_id)
+        if command == "videoSessionFrame":
+            return self._runtime.video_session_frame(player_id)
         if command == "setMultiPlayEnabled":
             self._runtime.set_multi_play_enabled(bool(payload.get("enabled", False)))
             return True
@@ -333,6 +361,7 @@ class AudioServiceController(QObject):
         )
         self._last_runtime_session_snapshots: tuple[RuntimeSessionSnapshot, ...] = ()
         self._last_video_destination_snapshots: tuple[VideoDestinationSnapshot, ...] = ()
+        self._last_video_session_snapshots: Dict[str, VideoSessionSnapshot] = {}
         self._shutdown = False
         self._thread.start()
         if parent is not None:
@@ -479,6 +508,69 @@ class AudioServiceController(QObject):
         if isinstance(result, QImage):
             return result
         return QImage()
+
+    def configure_video_session(
+        self,
+        player_id: str,
+        source_path: str,
+        *,
+        position_ms: int,
+        width: int,
+        height: int,
+        force: bool = False,
+    ) -> bool:
+        result = self.call(
+            str(player_id),
+            "configureVideoSession",
+            {
+                "source_path": str(source_path or ""),
+                "position_ms": max(0, int(position_ms)),
+                "width": max(2, int(width)),
+                "height": max(2, int(height)),
+                "force": bool(force),
+            },
+            timeout=1.0,
+        )
+        return bool(result)
+
+    def clear_video_session(self, player_id: str) -> None:
+        self._last_video_session_snapshots.pop(str(player_id), None)
+        self.post(str(player_id), "clearVideoSession", {})
+
+    def prime_video_session(self, player_id: str, position_ms: int) -> None:
+        self.post(str(player_id), "primeVideoSession", {"position_ms": max(0, int(position_ms))})
+
+    def video_session_snapshot(self, player_id: str) -> VideoSessionSnapshot:
+        cached = self._last_video_session_snapshots.get(str(player_id), VideoSessionSnapshot(session_id=str(player_id)))
+        try:
+            result = self.call(str(player_id), "videoSessionSnapshot", {}, timeout=0.5)
+        except Exception:
+            return cached
+        if isinstance(result, VideoSessionSnapshot):
+            self._last_video_session_snapshots[str(player_id)] = result
+            return result
+        return cached
+
+    def video_session_frame(self, player_id: str) -> VideoFrameSnapshot:
+        try:
+            result = self.call(str(player_id), "videoSessionFrame", {}, timeout=0.5)
+        except Exception:
+            snapshot = self._last_video_session_snapshots.get(str(player_id), VideoSessionSnapshot(session_id=str(player_id)))
+            return VideoFrameSnapshot(
+                session_id=str(player_id),
+                source_path=str(snapshot.source_path or ""),
+                pts_ms=max(0, int(snapshot.frame_pts_ms)),
+                ready=False,
+            )
+        if isinstance(result, VideoFrameSnapshot):
+            return result
+        snapshot = self._last_video_session_snapshots.get(str(player_id), VideoSessionSnapshot(session_id=str(player_id)))
+        return VideoFrameSnapshot(
+            session_id=str(player_id),
+            source_path=str(snapshot.source_path or ""),
+            pts_ms=max(0, int(snapshot.frame_pts_ms)),
+            ready=False,
+        )
 
     def set_session_slot_key(self, player_id: str, slot_key: Optional[tuple[str, int, int]]) -> None:
         payload = {"slot_key": list(slot_key) if slot_key is not None else None}

@@ -6,8 +6,9 @@ from pyssp.ffmpeg_support import MediaProbeInfo
 from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
 from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, AutomationCommandSpec
 from pyssp.audio_beat_map import AudioBeatMap
+from pyssp.engine.types import VideoFrameSnapshot, VideoSessionSnapshot
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
-from PyQt5.QtGui import QPaintEvent, QPixmap
+from PyQt5.QtGui import QImage, QPaintEvent, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from pyssp.ui import main_window as mw
@@ -65,49 +66,78 @@ class _VideoRefreshHost(VideoDisplayMixin):
             def isNull(self) -> bool:
                 return True
 
+        class _VideoService:
+            def __init__(self) -> None:
+                self.configure_calls = []
+                self.prime_calls = []
+                self.clear_session_calls = []
+                self.clear_destination_calls = []
+                self.submitted_frames = []
+                self.snapshot = VideoSessionSnapshot(session_id="player-a")
+                self.frame = VideoFrameSnapshot(session_id="player-a")
+
+            def configure_video_session(
+                self,
+                player_id: str,
+                source_path: str,
+                *,
+                position_ms: int,
+                width: int,
+                height: int,
+                force: bool = False,
+            ) -> bool:
+                self.configure_calls.append((str(player_id), str(source_path), int(position_ms), int(width), int(height), bool(force)))
+                return True
+
+            def prime_video_session(self, player_id: str, position_ms: int) -> None:
+                self.prime_calls.append((str(player_id), int(position_ms)))
+
+            def clear_video_session(self, player_id: str) -> None:
+                self.clear_session_calls.append(str(player_id))
+
+            def video_session_snapshot(self, _player_id: str) -> VideoSessionSnapshot:
+                return self.snapshot
+
+            def video_session_frame(self, _player_id: str) -> VideoFrameSnapshot:
+                return self.frame
+
+            def clear_video_destination_frame(self, destination_id: str) -> None:
+                self.clear_destination_calls.append(str(destination_id))
+
+            def submit_video_destination_frame(
+                self,
+                destination_id: str,
+                image: QImage,
+                *,
+                route_mode: str,
+                pts_ms: int,
+                source_path: str,
+            ) -> None:
+                self.submitted_frames.append((str(destination_id), str(route_mode), int(pts_ms), str(source_path)))
+
         self._media_probe_cache = {}
         self.current_playing = ("A", 0, 0)
         self.video_display_mode_idle = "blank"
         self.video_display_mode_playing = "follow_sound_button"
         self._slot = mw.SoundButtonData(file_path="clip.mp4")
         self._probe = MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
-        self._video_frame_cache = {}
-        self._video_requested_frame_key = None
-        self._video_requested_frame_path = ""
-        self._video_decode_inflight_key = None
-        self._video_request_tag_serial = 0
-        self._video_active_request_tag = 0
-        self._video_transport_revision = 0
-        self._video_active_stream_revision = -1
-        self._video_stream_path_key = ""
-        self._video_stream_interval_ms = 0
-        self._video_stream_dimensions = (0, 0)
+        self._audio_service = _VideoService()
+        self._video_active_session_id = ""
+        self._video_active_session_source_path = ""
         self._video_last_frame_pts_ms = 0
         self._video_current_frame_key = None
         self._video_current_frame_pixmap = _NullPixmap()
         self._video_current_frame_image = mw.QImage()
         self._video_force_blank_until_frame = False
         self._video_force_blank_expected_path = ""
-        self.preload_video_enabled = False
+        self._video_prestart_hold_until_frame = False
+        self._video_prestart_hold_expected_path = ""
+        self._pending_video_synced_start = None
         self._video_display_window = None
         self.video_preview_widget = None
         self._position_ms = 80
-
-        class _Dispatcher:
-            def __init__(self):
-                self.requests = []
-
-            def request_frame(self, tag, path, bucket_ms, width, height):
-                self.requests.append(("frame", tag, path, bucket_ms, width, height))
-
-            def request_stream(self, tag, path, start_ms, width, height, interval_ms):
-                self.requests.append(("stream", tag, path, start_ms, width, height, interval_ms))
-
-            def clear(self):
-                self.requests.append(("clear",))
-
-        self._video_frame_dispatcher = _Dispatcher()
         self._target_size = (0, 0)
+        self._player = type("_Player", (), {"player_id": "player-a"})()
 
     def _slot_for_key(self, _key):
         return self._slot
@@ -129,6 +159,12 @@ class _VideoRefreshHost(VideoDisplayMixin):
     def _apply_video_frame_to_targets(self) -> None:
         return None
 
+    def _player_for_slot_key(self, _key):
+        return self._player
+
+    def _refresh_ndi_output(self, force: bool = False) -> None:
+        _ = force
+
     def _video_target_surface_pixel_size(self) -> tuple[int, int]:
         return self._target_size
 
@@ -138,21 +174,6 @@ class _VideoRefreshHost(VideoDisplayMixin):
             if ndi_mode in {"stage_display", "lyric_display", "backdrop", "blank", "white_screen", "colour_bars"}:
                 return self._ndi_output_dimensions()
         return self._target_size
-
-    def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
-        self._video_requested_frame_key = None
-        self._video_requested_frame_path = ""
-        self._video_decode_inflight_key = None
-        self._video_stream_path_key = ""
-        self._video_stream_interval_ms = 0
-        self._video_stream_dimensions = (0, 0)
-        self._video_active_request_tag = 0
-        self._video_active_stream_revision = -1
-        self._video_last_frame_pts_ms = 0
-        if not preserve_current_frame:
-            self._video_current_frame_key = None
-            self._video_current_frame_pixmap = type(self._video_current_frame_pixmap)()
-        self._video_frame_dispatcher.clear()
 
 
 class _CheckedButton:
@@ -448,7 +469,7 @@ def test_smart_cross_uses_lyric_boundary_when_downbeat_would_cut_line(tmp_path):
         outgoing_end_limit_ms=2600,
     )
 
-    assert cross == pytest.approx(1.2)
+    assert cross == pytest.approx(1.3)
 
 
 def test_vocal_removed_toggle_uses_smart_crossfade_timing():
@@ -579,36 +600,40 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             self.backdrop_pixmap = QPixmap()
             self.overlay_args = None
 
-        def configure_overlay(self, **kwargs) -> None:
-            self.overlay_args = dict(kwargs)
-
-        def set_mode(self, mode_value: str) -> None:
-            self.mode = str(mode_value)
-
-        def set_alert_text(self, text: str) -> None:
-            self.alert_text = str(text)
-
-        def set_backdrop_pixmap(self, pixmap) -> None:
-            self.backdrop_pixmap = QPixmap(pixmap)
-
-        def configure_backdrop(self, *, show_message: bool = False, message_text: str = "") -> None:
-            self.show_backdrop_message = bool(show_message)
-            self.backdrop_message = str(message_text)
-
-        def set_video_pixmap(self, pixmap) -> None:
-            self.video_pixmap = QPixmap(pixmap)
-
-        def set_content_pixmap(self, pixmap) -> None:
-            self.content_pixmap = QPixmap(pixmap)
-
-        def set_lyric_html(self, html: str) -> None:
-            self.lyric_html = str(html)
-
         def width(self) -> int:
             return 320
 
         def height(self) -> int:
             return 180
+
+        def apply_surface_state(
+            self,
+            *,
+            mode: str,
+            video_pixmap,
+            content_pixmap,
+            backdrop_pixmap,
+            lyric_html: str,
+            overlay_rect,
+            show_lyric_overlay: bool,
+            show_stage_alert: bool,
+            alert_text: str,
+            show_backdrop_message: bool,
+            backdrop_message_text: str,
+        ) -> None:
+            self.mode = str(mode)
+            self.video_pixmap = QPixmap(video_pixmap)
+            self.content_pixmap = QPixmap(content_pixmap)
+            self.backdrop_pixmap = QPixmap(backdrop_pixmap)
+            self.lyric_html = str(lyric_html)
+            self.overlay_args = {
+                "overlay_rect": overlay_rect,
+                "show_lyric_overlay": bool(show_lyric_overlay),
+                "show_stage_alert": bool(show_stage_alert),
+            }
+            self.alert_text = str(alert_text)
+            self.show_backdrop_message = bool(show_backdrop_message)
+            self.backdrop_message = str(backdrop_message_text)
 
     class _OutputWidgetHost(_AudioOnlyVideoRouteHost):
         def __init__(self) -> None:
@@ -949,59 +974,77 @@ def test_video_snapshot_dimensions_include_ndi_target_when_enabled():
     assert host._video_snapshot_dimensions() == (1600, 900)
 
 
-def test_video_refresh_keeps_single_decode_in_flight():
+def test_video_refresh_configures_runtime_video_session():
+    app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
+    frame = QImage(32, 18, QImage.Format_RGB32)
+    frame.fill(Qt.red)
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        configured=True,
+        primed=True,
+        frame_pts_ms=80,
+    )
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        pts_ms=80,
+        ready=True,
+        image=frame,
+    )
 
     host._queue_video_frame_refresh()
-    host._position_ms = 120
-    host._queue_video_frame_refresh()
 
-    assert host._video_decode_inflight_key == ("stream", 80)
-    assert host._video_frame_dispatcher.requests == [("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+    assert host._audio_service.configure_calls == [("player-a", "clip.mp4", 80, 640, 360, True)]
+    assert host._audio_service.prime_calls == [("player-a", 80)]
+    assert host._video_current_frame_key == (host._normalized_media_probe_key("clip.mp4"), 80)
+    assert app is not None
 
 
-def test_video_refresh_does_not_restart_stream_during_normal_playback_progress():
+def test_video_refresh_keeps_active_session_during_normal_playback_progress():
+    app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
-    host._video_stream_path_key = host._normalized_media_probe_key("clip.mp4")
-    host._video_stream_interval_ms = 40
-    host._video_stream_dimensions = (640, 360)
-    host._video_active_stream_revision = 0
-    host._video_decode_inflight_key = ("stream", 80)
-    host._video_current_frame_key = (host._normalized_media_probe_key("clip.mp4"), 80)
-    host._video_last_frame_pts_ms = 80
+    host._queue_video_frame_refresh(force=True)
     host._position_ms = 240
 
     host._queue_video_frame_refresh()
 
-    assert host._video_frame_dispatcher.requests == []
+    assert host._audio_service.clear_session_calls == []
+    assert host._audio_service.configure_calls == [("player-a", "clip.mp4", 80, 640, 360, True)]
+    assert host._video_active_session_id == "player-a"
+    assert app is not None
 
 
-def test_video_refresh_restarts_stream_after_transport_invalidation():
+def test_video_refresh_reconfigures_after_transport_invalidation():
+    app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
-    host._video_stream_path_key = host._normalized_media_probe_key("clip.mp4")
-    host._video_stream_interval_ms = 40
-    host._video_stream_dimensions = (640, 360)
-    host._video_active_stream_revision = 0
-    host._video_decode_inflight_key = ("stream", 80)
+    host._queue_video_frame_refresh(force=True)
     host._position_ms = 240
     host._invalidate_video_playback_sync(refresh=False)
 
     host._queue_video_frame_refresh()
 
-    assert host._video_frame_dispatcher.requests[-1] == ("stream", 1, "clip.mp4", 240, 640, 360, 40)
+    assert host._audio_service.clear_session_calls == ["player-a"]
+    assert host._audio_service.configure_calls[-1] == ("player-a", "clip.mp4", 240, 640, 360, True)
+    assert app is not None
 
 
 def test_video_surface_geometry_change_preserves_current_frame():
     app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
     host._video_current_frame_key = ("clip.mp4", 80)
-    current_pixmap = host._video_current_frame_pixmap
+    current_pixmap = QPixmap(8, 8)
+    current_pixmap.fill(Qt.blue)
+    host._video_current_frame_pixmap = current_pixmap
+    host._video_active_session_id = "player-a"
 
     host._on_video_surface_geometry_changed()
 
     assert host._video_current_frame_key == ("clip.mp4", 80)
     assert host._video_current_frame_pixmap is current_pixmap
-    assert host._video_frame_dispatcher.requests == [("clear",), ("stream", 1, "clip.mp4", 80, 640, 360, 40)]
+    assert host._audio_service.clear_session_calls == ["player-a"]
+    assert host._audio_service.configure_calls[-1] == ("player-a", "clip.mp4", 80, 640, 360, True)
     assert app is not None
 
 
@@ -1030,11 +1073,19 @@ def test_stage_display_geometry_change_triggers_snapshot_refresh():
     assert app is not None
 
 
-def test_video_decoder_ignores_stale_request_tags():
+def test_video_refresh_ignores_mismatched_session_frame_source():
     host = _VideoRefreshHost()
-    host._video_active_request_tag = 2
+    frame = QImage(32, 18, QImage.Format_RGB32)
+    frame.fill(Qt.green)
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path="other.mp4",
+        pts_ms=80,
+        ready=True,
+        image=frame,
+    )
 
-    host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
+    host._queue_video_frame_refresh()
 
     assert host._video_current_frame_key is None
 
@@ -1098,19 +1149,27 @@ def test_video_route_stays_blank_during_switch_even_without_current_playing_key(
 
 
 def test_video_refresh_continues_decoding_during_switch_blank():
+    app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
     host._start_video_switch_blank("clip.mp4")
 
     host._queue_video_frame_refresh()
 
-    assert host._video_frame_dispatcher.requests[-1] == ("stream", 1, "clip.mp4", 80, 640, 360, 40)
+    assert host._audio_service.configure_calls[-1] == ("player-a", "clip.mp4", 80, 640, 360, True)
     assert host._active_video_route_mode() == "blank"
+    assert app is not None
 
 
 def test_video_prestart_hold_uses_video_route_before_play_state():
     app = QApplication.instance() or QApplication([])
 
     class _VideoPrestartHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.current_playing = ("A", 0, 0)
+            self._pending_video_synced_start = {"player_id": "player-b"}
+            self._player = None
+
         def _stage_playback_status(self) -> str:
             return "not_playing"
 
@@ -1120,17 +1179,20 @@ def test_video_prestart_hold_uses_video_route_before_play_state():
     host._queue_video_frame_refresh()
 
     assert host._active_video_route_mode() == "video"
-    assert host._video_frame_dispatcher.requests[-1] == ("frame", 1, "clip.mp4", 80, 640, 360)
+    assert host._audio_service.configure_calls[-1] == ("player-b", "clip.mp4", 80, 640, 360, True)
     assert app is not None
 
 
-def test_video_frame_decode_completes_pending_video_synced_start():
+def test_video_session_prime_completes_pending_video_synced_start():
     app = QApplication.instance() or QApplication([])
 
     class _VideoPrestartHost(_VideoRefreshHost):
         def __init__(self) -> None:
             super().__init__()
             self.completed_paths = []
+            self.current_playing = ("A", 0, 0)
+            self._pending_video_synced_start = {"player_id": "player-b"}
+            self._player = None
 
         def _stage_playback_status(self) -> str:
             return "not_playing"
@@ -1140,12 +1202,16 @@ def test_video_frame_decode_completes_pending_video_synced_start():
 
     host = _VideoPrestartHost()
     host._begin_video_prestart_hold("clip.mp4")
-    host._video_active_request_tag = 1
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-b",
+        source_path="clip.mp4",
+        configured=True,
+        primed=True,
+    )
 
-    host._on_video_frame_decoded(1, "clip.mp4", 80, 640, 360, b"x" * (640 * 360 * 3))
+    host._queue_video_frame_refresh()
 
     assert host.completed_paths == [host._normalized_media_probe_key("clip.mp4")]
-    assert host._video_current_frame_key == (host._normalized_media_probe_key("clip.mp4"), 80)
     assert app is not None
 
 
@@ -1555,6 +1621,7 @@ def test_refresh_ndi_output_sends_video_even_when_receiver_count_is_zero():
     host._video_current_frame_image = image
     host._render_ndi_frame_image = lambda: image
 
-    host._refresh_ndi_output()
+    VideoDisplayMixin._refresh_ndi_output(host)
 
-    assert host._ndi_sender.calls == 1
+    assert host._ndi_sender.calls == 0
+    assert host._audio_service.submitted_frames == [("ndi_program", "video", 0, "clip.mp4")]

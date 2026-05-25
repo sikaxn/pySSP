@@ -159,3 +159,16 @@ def test_timecode_timeline_empty_value_normalizes_to_cue_region():
     loaded = _from_parser(parser)
     assert loaded.main_transport_timeline_mode == "audio_file"
     assert loaded.timecode_timeline_mode == "cue_region"
+
+
+def test_video_display_transition_fade_setting_round_trips(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.ini"
+    monkeypatch.setattr("pyssp.settings_store.get_settings_path", lambda: settings_path)
+
+    settings = AppSettings()
+    settings.video_display_transition_fade_sec = 0.75
+
+    save_settings(settings)
+    loaded = load_settings()
+
+    assert loaded.video_display_transition_fade_sec == pytest.approx(0.75)

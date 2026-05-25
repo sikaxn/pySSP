@@ -15,7 +15,7 @@ from .settings_archive import SettingsArchiveMixin
 from .timecode import TimecodeMixin
 from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
-from .video_display import VideoDisplayMixin, _VideoFrameDecodeDispatcher
+from .video_display import VideoDisplayMixin
 from pyssp.companion_satellite import CompanionSatelliteClient
 from pyssp.ndi_debug import set_ndi_debug_options
 from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
@@ -544,6 +544,10 @@ class MainWindow(
         self.video_display_show_backdrop_message = bool(
             getattr(self.settings, "video_display_show_backdrop_message", True)
         )
+        self.video_display_transition_fade_sec = max(
+            0.0,
+            min(10.0, float(getattr(self.settings, "video_display_transition_fade_sec", 0.5) or 0.0)),
+        )
         self.video_display_show_lyric_overlay = bool(getattr(self.settings, "video_display_show_lyric_overlay", False))
         self.video_display_show_stage_alert = bool(getattr(self.settings, "video_display_show_stage_alert", False))
         self.video_display_lyric_overlay_rect = dict(
@@ -1053,23 +1057,15 @@ class MainWindow(
         self.video_follow_sound_button_focus_checkbox: Optional[QCheckBox] = None
         self.video_route_combo: Optional[QComboBox] = None
         self._video_refresh_timer: Optional[QTimer] = None
-        self._video_frame_dispatcher = _VideoFrameDecodeDispatcher(self)
         self._ndi_last_config: Optional[NDIOutputConfig] = None
         self._ndi_audio_player_buffers: Dict[int, np.ndarray] = {}
         self._ndi_audio_last_sample_rate = 48000
         self._ndi_audio_last_channel_count = 2
-        self._video_requested_frame_key: Optional[Tuple[str, int]] = None
-        self._video_requested_frame_path: str = ""
-        self._video_decode_inflight_key: Optional[Tuple[str, int]] = None
-        self._video_request_tag_serial: int = 0
-        self._video_active_request_tag: int = 0
-        self._video_transport_revision: int = 0
-        self._video_active_stream_revision: int = -1
-        self._video_stream_path_key: str = ""
-        self._video_stream_interval_ms: int = 0
-        self._video_stream_dimensions: Tuple[int, int] = (0, 0)
+        self._video_active_session_id: str = ""
+        self._video_active_session_source_path: str = ""
         self._video_last_frame_pts_ms: int = 0
         self._video_current_frame_key: Optional[Tuple[str, int]] = None
+        self._video_current_frame_image = QImage()
         self._video_current_frame_pixmap = QPixmap()
         self._divider_docks: Dict[str, QDockWidget] = {}
         self._navigation_menu: Optional[QMenu] = None
@@ -1108,7 +1104,6 @@ class MainWindow(
         self._stage_lyric_cache_error: str = ""
         self._video_display_window: Optional[VideoDisplayWindow] = None
         self._metronome_display_window: Optional[MetronomeDisplayWindow] = None
-        self._video_frame_cache: Dict[Tuple[str, int], QPixmap] = {}
         self._media_probe_cache: Dict[str, MediaProbeInfo] = {}
         self._lyric_display_window: Optional[LyricDisplayWindow] = None
         self._lyric_navigator_window: Optional[LyricNavigatorWindow] = None
@@ -1196,7 +1191,6 @@ class MainWindow(
         self.meter_timer.timeout.connect(self._tick_meter)
         self.meter_timer.start(60)
 
-        self._video_frame_dispatcher.frameDecoded.connect(self._on_video_frame_ready)
         self._video_refresh_timer = QTimer(self)
         self._video_refresh_timer.setTimerType(Qt.PreciseTimer)
         self._video_refresh_timer.timeout.connect(self._tick_video_refresh)
@@ -1280,12 +1274,6 @@ class MainWindow(
         if timer is not None:
             try:
                 timer.stop()
-            except Exception:
-                pass
-        dispatcher = getattr(self, "_video_frame_dispatcher", None)
-        if dispatcher is not None:
-            try:
-                dispatcher.stop()
             except Exception:
                 pass
         ndi_preview = getattr(self, "ndi_preview_widget", None)

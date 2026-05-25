@@ -1712,6 +1712,10 @@ class SettingsArchiveMixin:
         self.settings.video_display_show_backdrop_message = bool(
             getattr(self, "video_display_show_backdrop_message", True)
         )
+        self.settings.video_display_transition_fade_sec = max(
+            0.0,
+            min(10.0, float(getattr(self, "video_display_transition_fade_sec", 0.5) or 0.0)),
+        )
         self.settings.video_display_show_lyric_overlay = bool(getattr(self, "video_display_show_lyric_overlay", False))
         self.settings.video_display_show_stage_alert = bool(getattr(self, "video_display_show_stage_alert", False))
         self.settings.video_display_lyric_overlay_rect = dict(

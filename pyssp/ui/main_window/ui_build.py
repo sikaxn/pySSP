@@ -77,6 +77,7 @@ class UiBuildMixin:
         self._apply_top_control_layout()
         if not self._restore_saved_dock_layout():
             self._apply_default_dock_layout()
+        self._prune_invalid_standalone_docks()
         self._build_window_menu()
         self._sync_window_layout_lock_ui()
 
@@ -295,12 +296,19 @@ class UiBuildMixin:
     def _park_hidden_dock(self, dock: Optional[QDockWidget]) -> None:
         if dock is None:
             return
+        preserve_docked_position = False
+        try:
+            preserve_docked_position = not dock.isFloating() and self.dockWidgetArea(dock) != Qt.NoDockWidgetArea
+        except Exception:
+            preserve_docked_position = False
+        dock.hide()
+        if preserve_docked_position:
+            return
         try:
             if not dock.isFloating():
                 dock.setFloating(True)
         except Exception:
             pass
-        dock.hide()
 
     def _window_menu_docks(self) -> List[QDockWidget]:
         docks = [
@@ -676,11 +684,15 @@ class UiBuildMixin:
             self._dock_canvas.show()
 
     def _handle_dock_top_level_changed(self, dock: Optional[QDockWidget], floating: bool) -> None:
-        if dock is not None and floating and dock.isVisible():
+        if dock is not None:
             name = str(dock.objectName() or "").strip()
-            if name and name not in self.standalone_docks:
-                self.standalone_docks = [*self.standalone_docks, name]
-                self._apply_dock_mode(dock)
+            if name:
+                updated = [value for value in self.standalone_docks if value != name]
+                if floating and dock.isVisible():
+                    updated.append(name)
+                if updated != self.standalone_docks:
+                    self.standalone_docks = updated
+                    self._apply_dock_mode(dock)
         self._handle_dock_runtime_layout_change()
 
     def _handle_dock_runtime_layout_change(self) -> None:
@@ -740,6 +752,21 @@ class UiBuildMixin:
             if dock is None:
                 continue
             self._apply_dock_mode(dock)
+
+    def _prune_invalid_standalone_docks(self) -> None:
+        if not self.standalone_docks:
+            return
+        tracked = set(self.standalone_docks)
+        updated: List[str] = []
+        for dock in self._window_menu_docks():
+            if dock is None:
+                continue
+            name = str(dock.objectName() or "").strip()
+            if not name or name not in tracked:
+                continue
+            if dock.isFloating() and name not in updated:
+                updated.append(name)
+        self.standalone_docks = updated
 
     def _apply_dock_mode(self, dock: QDockWidget) -> None:
         standalone = self._is_standalone_dock(dock)

@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
+from PyQt5.QtGui import QImage
+
 PlaybackSessionId = str
 AudioBusId = Literal[
     "voice_pre",
@@ -148,3 +150,28 @@ class VideoDestinationSnapshot:
     last_audio_error: str = ""
     last_network_config_error: str = ""
     last_network_config_path: str = ""
+
+
+@dataclass(frozen=True)
+class VideoSessionSnapshot:
+    session_id: PlaybackSessionId
+    source_path: str = ""
+    configured: bool = False
+    primed: bool = False
+    state: int = 0
+    position_ms: int = 0
+    duration_ms: int = 0
+    frame_pts_ms: int = 0
+    frame_width: int = 0
+    frame_height: int = 0
+    backend_name: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class VideoFrameSnapshot:
+    session_id: PlaybackSessionId
+    source_path: str = ""
+    pts_ms: int = 0
+    ready: bool = False
+    image: QImage = field(default_factory=QImage)

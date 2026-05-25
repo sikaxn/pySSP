@@ -68,7 +68,7 @@ class LyricsStageMixin:
             self,
             on_toggle_transparent_mode=self._set_lyric_display_transparent_mode,
             on_adjust_font_size=self._adjust_lyric_display_font_size,
-            on_open_settings=lambda: self._open_options_dialog(initial_page="Stage and Lyric Display"),
+            on_open_settings=lambda: self._open_options_dialog(initial_page="Lyric Display"),
         )
         window.destroyed.connect(lambda _obj=None, closed_window=window: self._on_lyric_display_destroyed(closed_window))
         return window

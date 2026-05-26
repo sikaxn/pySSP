@@ -338,7 +338,7 @@ class NDIOutputDispatcher:
         *,
         sender_factory: Optional[Callable[[NDICapabilityStatus], NDIOutputSender]] = None,
         connection_poll_interval_sec: float = 0.25,
-        max_audio_queue_blocks: int = 24,
+        max_audio_queue_blocks: int = 48,
     ) -> None:
         self._status = status
         self._sender = (sender_factory or NDIOutputSender)(status)

@@ -12,7 +12,7 @@ from PyQt5.QtGui import QImage
 
 from pyssp.ndi_debug import ndi_debug_print_enabled
 from pyssp.audio_engine import ExternalMediaPlayer
-from pyssp.audio_engine import consume_output_monitor_chunk, list_output_monitor_players, mix_output_monitor_chunk
+from pyssp.audio_engine import consume_output_monitor_chunk, list_output_monitor_players, mix_output_monitor_chunk, output_monitor_frame_counts
 from pyssp.engine.ffmpeg import FFmpegEngineServices
 from pyssp.engine.types import (
     AudioBusId,
@@ -44,6 +44,8 @@ _DEFAULT_VIDEO_DESTINATION_IDS: tuple[VideoDestinationId, ...] = (
     "ndi_program",
     "monitor_program",
 )
+_DESTINATION_IDLE_WAIT_SEC = 0.01
+_DESTINATION_MIN_WAIT_SEC = 0.001
 _NDI_LOGGER = logging.getLogger("pyssp.ndi")
 
 
@@ -558,28 +560,40 @@ class MediaRuntime:
         )
         dispatcher.configure(config)
 
+    @staticmethod
+    def _destination_video_wait_timeout(record: Optional[_DestinationRecord], now: float) -> float:
+        if record is None or (not record.enabled) or record.frame_image is None:
+            return _DESTINATION_IDLE_WAIT_SEC
+        frame_interval_sec = max(1.0 / max(1.0, float(record.fps)), 0.005)
+        remaining = frame_interval_sec - max(0.0, float(now) - float(record.last_video_sent_at))
+        if remaining <= 0.0:
+            return 0.0
+        return max(_DESTINATION_MIN_WAIT_SEC, min(_DESTINATION_IDLE_WAIT_SEC, remaining))
+
     def _destination_loop(self) -> None:
         last_connection_poll = 0.0
         while not self._stop_destinations.is_set():
-            self._destinations_wake.wait(timeout=0.01)
-            self._destinations_wake.clear()
             now = self._clock()
             dispatcher: Optional[NDIOutputDispatcher]
+            should_send_video = False
+            wait_timeout = _DESTINATION_IDLE_WAIT_SEC
+            frame = QImage()
+            route_mode = "blank"
+            last_video_source_path = ""
+            frame_submit_count = 0
+            last_video_pts_ms = 0
             with self._lock:
                 record = self._video_destinations.get("ndi_program")
                 dispatcher = self._ndi_dispatcher
-                if record is None or dispatcher is None or (not record.enabled):
-                    continue
-                frame_interval_sec = max(1.0 / max(1.0, float(record.fps)), 0.005)
-                should_send_video = (
-                    record.frame_image is not None
-                    and (now - float(record.last_video_sent_at)) >= frame_interval_sec
-                )
-                frame = QImage(record.frame_image) if should_send_video and record.frame_image is not None else QImage()
-                route_mode = str(record.route_mode or "blank")
-                last_video_source_path = str(record.last_video_source_path or "")
-                frame_submit_count = int(record.frame_submit_count)
-                last_video_pts_ms = int(record.last_video_pts_ms)
+                if record is not None and dispatcher is not None and record.enabled:
+                    wait_timeout = self._destination_video_wait_timeout(record, now)
+                    should_send_video = record.frame_image is not None and wait_timeout <= 0.0
+                    if should_send_video and record.frame_image is not None:
+                        frame = QImage(record.frame_image)
+                        route_mode = str(record.route_mode or "blank")
+                        last_video_source_path = str(record.last_video_source_path or "")
+                        frame_submit_count = int(record.frame_submit_count)
+                        last_video_pts_ms = int(record.last_video_pts_ms)
             if should_send_video and not frame.isNull():
                 try:
                     sent = bool(
@@ -614,6 +628,10 @@ class MediaRuntime:
                     record = self._video_destinations.get("ndi_program")
                     if record is not None:
                             record.connection_count = connection_count
+            if self._stop_destinations.is_set():
+                break
+            self._destinations_wake.wait(timeout=wait_timeout)
+            self._destinations_wake.clear()
 
     @staticmethod
     def _ndi_video_source_kind(*, route_mode: str, source_path: str) -> str:
@@ -688,7 +706,16 @@ class MediaRuntime:
             ordered_player_ids = self._ordered_output_monitor_players_locked(mode)
             ordered_player_count = len(ordered_player_ids)
             if ordered_player_ids:
-                mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
+                max_available = 0
+                for player_id in ordered_player_ids:
+                    counts = output_monitor_frame_counts(player_id)
+                    max_available = max(max_available, max(0, int(counts.get(mode, 0) or 0)))
+                target_frames = min(frame_count, max_available)
+                mixed = None
+                if target_frames > 0:
+                    mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=target_frames, mode=mode)
+                else:
+                    mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
                 if mixed is not None:
                     mixed_chunk, mixed_consume_map = mixed
                     if mixed_chunk.ndim == 2 and len(mixed_chunk) > 0 and mixed_chunk.shape[1] > 0:

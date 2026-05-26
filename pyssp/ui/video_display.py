@@ -43,6 +43,7 @@ class VideoDisplayWidget(QWidget):
         self._alert_text = ""
         self._show_backdrop_message = False
         self._backdrop_message_text = ""
+        self._surface_state_key = ("blank", "")
         self._transition_duration_sec = 0.0
         self._transition_prev_frame = QImage()
         self._transition_prev_frame_size = QSize()
@@ -133,10 +134,13 @@ class VideoDisplayWidget(QWidget):
         alert_text: str = "",
         show_backdrop_message: bool = False,
         backdrop_message_text: str = "",
+        transition_key: str = "",
     ) -> None:
         token = str(mode or "blank").strip().lower()
-        if token != self._mode:
+        surface_key = (token, str(transition_key or "").strip())
+        if surface_key != self._surface_state_key:
             self._begin_mode_transition()
+        self._surface_state_key = surface_key
         self._mode = token
         self._video_pixmap = QPixmap() if video_pixmap is None else QPixmap(video_pixmap)
         self._content_pixmap = QPixmap() if content_pixmap is None else QPixmap(content_pixmap)
@@ -157,6 +161,7 @@ class VideoDisplayWidget(QWidget):
         if token == self._mode:
             return
         self._begin_mode_transition()
+        self._surface_state_key = (token, "")
         self._mode = token
         self.update()
 

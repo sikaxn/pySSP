@@ -81,3 +81,74 @@ def test_load_ndi_access_manager_settings_reads_defaults_and_normalizes(tmp_path
     assert settings.multicast_send_ttl == 6
     assert settings.multicast_send_netmask == "255.255.255.0"
     assert settings.multicast_send_netprefix == "239.20.20.0"
+
+
+def test_apply_ndi_access_manager_settings_clears_blank_network_overrides_but_preserves_unrelated_sections(tmp_path):
+    config_path = tmp_path / "NDI" / "ndi-config.v1.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "ndi": {
+                    "groups": {"recv": "Public"},
+                    "networks": {"apps": [{"name": "Remote Connection 1"}], "discovery": "10.0.0.2,10.0.0.3"},
+                    "adapters": {"allowed": ["10.0.0.177"]},
+                    "multicast": {
+                        "recv": {"enable": True, "subnets": []},
+                        "send": {"enable": True, "ttl": 4, "netmask": "255.255.255.0", "netprefix": "239.20.20.0"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_ndi_access_manager_settings(
+        NDIAccessManagerSettings.normalized(
+            send_groups="Public",
+            discovery_servers="",
+            allowed_adapters=(),
+        ),
+        path=config_path,
+    )
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["ndi"]["groups"]["send"] == "Public"
+    assert payload["ndi"]["groups"]["recv"] == "Public"
+    assert "discovery" not in payload["ndi"]["networks"]
+    assert payload["ndi"]["networks"]["apps"] == [{"name": "Remote Connection 1"}]
+    assert "adapters" not in payload["ndi"]
+    assert payload["ndi"]["multicast"]["recv"]["enable"] is True
+    assert "send" not in payload["ndi"]["multicast"]
+
+
+def test_apply_ndi_access_manager_settings_cleans_up_empty_network_overrides(tmp_path):
+    config_path = tmp_path / "NDI" / "ndi-config.v1.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "ndi": {
+                    "groups": {"recv": "Public"},
+                    "networks": {"discovery": ""},
+                    "adapters": {"allowed": []},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_ndi_access_manager_settings(
+        NDIAccessManagerSettings.normalized(
+            send_groups="Public",
+            discovery_servers="",
+            allowed_adapters=(),
+        ),
+        path=config_path,
+    )
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["ndi"]["groups"]["send"] == "Public"
+    assert payload["ndi"]["groups"]["recv"] == "Public"
+    assert "networks" not in payload["ndi"]
+    assert "adapters" not in payload["ndi"]

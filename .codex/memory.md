@@ -198,6 +198,19 @@ NDI audio
 - Current cutover choice:
   - keep `ExternalMediaPlayer` as the v1 execution node
   - move session ownership, FFmpeg service ownership, transport snapshots, and engine diagnostics into `MediaRuntime`
+
+## 2026-05-26
+
+- Video display handoff between two video sources should preserve the outgoing frame until the incoming clip has a real decoded frame ready.
+- `pyssp/ui/main_window/video_display.py` now keeps the current video frame through `_start_video_switch_blank()` and `_begin_video_prestart_hold()` instead of clearing it immediately.
+- During a forced video switch, route selection now stays on `video` when a valid current frame exists, which prevents blank/backdrop flashes during video-to-video transitions.
+- Video switch blank is no longer cleared merely because the new session is `primed`; it now waits for the first ready frame from the expected source.
+- `VideoDisplayWidget.apply_surface_state(...)` now accepts a `transition_key` so same-mode transitions, especially `video -> video`, can crossfade only when the displayed source actually changes.
+- Added regressions covering:
+  - same-mode video crossfade by transition key
+  - holding the last frame during video-to-video switch blank
+  - preserving current frame during video prestart hold
+  - keeping switch blank armed until the first ready frame arrives
   - keep `AudioPlayerProxy` / `AudioServiceController` as the UI-facing compatibility layer
 - `pyssp/audio_service.py` now delegates player session ownership to `MediaRuntime` instead of owning the player registry directly.
 - `AudioServiceController` now exposes runtime helpers:

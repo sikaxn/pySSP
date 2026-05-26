@@ -15,6 +15,11 @@ from pyssp.ui.video_display import VideoDisplayWidget
 _VIDEO_FILE_EXTENSIONS = {str(token or "").strip().lower() for token in FFMPEG_VIDEO_EXTENSIONS}
 _VIDEO_FRAME_FALLBACK_INTERVAL_MS = 33
 _VIDEO_BACKDROP_MESSAGE = "No video is playing"
+_DEFERRED_SNAPSHOT_ROUTE_MODES = {
+    DISPLAY_FOCUS_STAGE,
+    DISPLAY_FOCUS_LYRIC,
+    DISPLAY_FOCUS_METRONOME,
+}
 _MERGED_VIDEO_ROUTE_OPTIONS = [
     (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_FOCUS_VIDEO], DISPLAY_FOCUS_VIDEO),
     (DISPLAY_ROUTE_SOURCE_LABELS[DISPLAY_FOCUS_IMAGE], DISPLAY_FOCUS_IMAGE),
@@ -416,9 +421,9 @@ class VideoDisplayMixin:
             if focus == DISPLAY_FOCUS_VIDEO and expected_path and self._path_may_have_video(expected_path):
                 expected_info = self._media_probe_for_path(expected_path)
                 if expected_info.has_video:
-                    return "blank"
+                    return "video" if self._current_video_frame_available() else "blank"
             if focus == DISPLAY_FOCUS_VIDEO and slot is not None and info.has_video:
-                return "blank"
+                return "video" if self._current_video_frame_available() else "blank"
         if slot is None:
             return str(self.video_display_mode_idle or "blank")
         status = self._stage_playback_status()
@@ -457,6 +462,17 @@ class VideoDisplayMixin:
 
     def _video_presentation_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
         return max(60.0, float(self._video_target_fps(info)))
+
+    def _video_output_send_fps(
+        self,
+        info: Optional[MediaProbeInfo] = None,
+        *,
+        route_mode: Optional[str] = None,
+    ) -> float:
+        mode = str(route_mode or "").strip() or self._active_video_route_mode()
+        if mode == DISPLAY_FOCUS_VIDEO:
+            return max(1.0, float(self._video_target_fps(info)))
+        return max(1.0, float(self._configured_video_output_fps()))
 
     def _video_presentation_interval_ms(self, info: Optional[MediaProbeInfo] = None) -> int:
         fps = max(1.0, float(self._video_presentation_fps(info)))
@@ -649,7 +665,7 @@ class VideoDisplayMixin:
     def _start_video_switch_blank(self, expected_path: str = "") -> None:
         self._video_force_blank_until_frame = True
         self._video_force_blank_expected_path = self._normalized_media_probe_key(expected_path) if expected_path else ""
-        self._clear_video_frame_runtime(preserve_current_frame=False)
+        self._clear_video_frame_runtime(preserve_current_frame=True)
         self._refresh_video_display(force=True)
 
     def _clear_video_switch_blank(self) -> None:
@@ -659,7 +675,7 @@ class VideoDisplayMixin:
     def _begin_video_prestart_hold(self, expected_path: str = "") -> None:
         self._video_prestart_hold_until_frame = True
         self._video_prestart_hold_expected_path = self._normalized_media_probe_key(expected_path) if expected_path else ""
-        self._clear_video_frame_runtime(preserve_current_frame=False)
+        self._clear_video_frame_runtime(preserve_current_frame=True)
         self._refresh_video_display(force=True)
 
     def _clear_video_prestart_hold(self) -> None:
@@ -775,6 +791,26 @@ class VideoDisplayMixin:
             return QPixmap()
         return QPixmap()
 
+    def _current_video_frame_available(self) -> bool:
+        pixmap = getattr(self, "_video_current_frame_pixmap", None)
+        if pixmap is None:
+            return False
+        try:
+            return not bool(pixmap.isNull())
+        except Exception:
+            return False
+
+    def _current_video_transition_key(self, slot: Optional[SoundButtonData]) -> str:
+        current_key = getattr(self, "_video_current_frame_key", None)
+        if isinstance(current_key, tuple) and current_key:
+            source_key = str(current_key[0] or "").strip()
+            if source_key:
+                return source_key
+        path = str(getattr(slot, "file_path", "") or "").strip()
+        if path:
+            return f"pending:{self._normalized_media_probe_key(path)}"
+        return ""
+
     def _render_widget_snapshot(self, widget: QWidget, width: int = 960, height: int = 540) -> QPixmap:
         widget.resize(width, height)
         widget.ensurePolished()
@@ -799,6 +835,42 @@ class VideoDisplayMixin:
         painter.end()
         return image
 
+    @staticmethod
+    def _scaled_pixmap_image(
+        pixmap: QPixmap,
+        width: int,
+        height: int,
+        *,
+        keep_aspect: bool = False,
+    ) -> QImage:
+        if pixmap.isNull():
+            return QImage()
+        target_width = max(1, int(width))
+        target_height = max(1, int(height))
+        if keep_aspect:
+            image = QImage(target_width, target_height, QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.black)
+            painter = QPainter(image)
+            target = VideoDisplayWidget._scaled_target_rect(
+                QRect(0, 0, target_width, target_height),
+                pixmap.width(),
+                pixmap.height(),
+                keep_aspect=True,
+            )
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.drawPixmap(target, pixmap, pixmap.rect())
+            painter.end()
+            return image
+        if pixmap.width() == target_width and pixmap.height() == target_height:
+            return pixmap.toImage()
+        scaled = pixmap.scaled(
+            target_width,
+            target_height,
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        return scaled.toImage()
+
     def _video_snapshot_dimensions(self) -> tuple[int, int]:
         width, height = self._configured_video_output_dimensions()
         if width > 0 and height > 0:
@@ -819,6 +891,61 @@ class VideoDisplayMixin:
             window.set_transparent_mode_enabled(False)
             self._video_lyric_snapshot_window = window
         return window
+
+    def _lyric_display_snapshot_role_styles(self) -> dict[str, dict[str, object]]:
+        if self.lyric_display_auto_adjust_role_sizes:
+            sizes = {
+                key: max(
+                    8,
+                    int(round(self.lyric_display_font_size * (self.lyric_display_role_scale_percents.get(key, 100) / 100.0))),
+                )
+                for key in ("played", "current", "next")
+            }
+        else:
+            sizes = dict(self.lyric_display_role_sizes)
+        return {
+            key: {
+                "size": int(sizes[key]),
+                "color": self.lyric_display_role_colors[key],
+                "bold": self.lyric_display_role_bold[key],
+                "italic": self.lyric_display_role_italic[key],
+            }
+            for key in ("played", "current", "next")
+        }
+
+    def _current_lyric_display_snapshot_text(
+        self,
+        *,
+        has_active_track: bool,
+        lyric_path: str,
+        position_ms: int,
+        force_blank: bool,
+    ) -> str:
+        if force_blank:
+            return ""
+        if not has_active_track:
+            return "No sound is currently playing." if self.lyric_display_show_not_playing_message else ""
+        path = str(lyric_path or "").strip()
+        if not path:
+            return "No lyric file assigned for this sound." if self.lyric_display_show_not_playing_message else ""
+        if not os.path.exists(path):
+            return f"Lyric file not found:\n{path}"
+        lines, error = self._load_stage_lyric_lines(path)
+        if error:
+            return error
+        if not lines:
+            return "No lyrics were found in this file."
+        segments = lyric_segments_around_position(
+            lines,
+            max(0, int(position_ms)),
+            self.lyric_display_previous_line_count,
+            self.lyric_display_next_line_count,
+        )
+        return lyric_segments_to_html(
+            segments,
+            font_family=self.lyric_display_font_family,
+            role_styles=self._lyric_display_snapshot_role_styles(),
+        )
 
     def _render_stage_display_snapshot(self, target_width: Optional[int] = None, target_height: Optional[int] = None) -> QPixmap:
         if target_width is None or target_height is None:
@@ -931,6 +1058,12 @@ class VideoDisplayMixin:
                 has_active_track = True
                 lyric_path = str(slot.lyric_file or "").strip()
                 position_ms = self._lyric_position_ms_for_key(self.current_playing)
+        display_text = self._current_lyric_display_snapshot_text(
+            has_active_track=has_active_track,
+            lyric_path=lyric_path,
+            position_ms=position_ms,
+            force_blank=bool(self._lyric_force_blank),
+        )
         cache_key = _freeze_snapshot_token(
             (
                 int(target_width),
@@ -948,7 +1081,7 @@ class VideoDisplayMixin:
                 self.lyric_display_role_italic,
                 has_active_track,
                 lyric_path,
-                int(position_ms),
+                display_text,
                 bool(self._lyric_force_blank),
             )
         )
@@ -1197,17 +1330,23 @@ class VideoDisplayMixin:
         content_pixmap = QPixmap()
         backdrop_pixmap = self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap()
         lyric_html = ""
+        transition_key = ""
         if mode == DISPLAY_FOCUS_VIDEO:
             video_pixmap = self._current_video_surface_pixmap()
             lyric_html = self._current_video_lyric_html()
+            transition_key = self._current_video_transition_key(active_slot)
         elif mode == DISPLAY_FOCUS_STAGE:
             content_pixmap = self._render_stage_display_snapshot()
         elif mode == DISPLAY_FOCUS_LYRIC:
             content_pixmap = self._render_lyric_display_snapshot()
         elif mode == DISPLAY_FOCUS_IMAGE:
             content_pixmap = self._slot_display_image_pixmap(active_slot)
+            if active_slot is not None:
+                transition_key = self._normalized_media_probe_key(str(active_slot.file_path or "").strip())
         elif mode == DISPLAY_FOCUS_METRONOME:
             content_pixmap = self._render_metronome_display_snapshot(active_slot, max(1, widget.width()), max(1, widget.height()))
+        elif mode == "backdrop":
+            transition_key = self._resolved_video_backdrop_path()
         widget.apply_surface_state(
             mode=mode,
             video_pixmap=video_pixmap,
@@ -1220,6 +1359,7 @@ class VideoDisplayMixin:
             alert_text=self._stage_alert_message if self._stage_alert_active() else "",
             show_backdrop_message=bool(backdrop_message),
             backdrop_message_text=backdrop_message,
+            transition_key=transition_key,
         )
 
     def _sync_video_surface_widget(self, widget: Optional[VideoDisplayWidget], *, force: bool = False) -> None:
@@ -1302,11 +1442,12 @@ class VideoDisplayMixin:
         if not callable(configure):
             return
         slot, info = self._current_video_slot_and_probe()
+        route_mode = self._active_video_route_mode()
         target_width, target_height = self._video_target_surface_pixel_size()
         source_width, source_height = self._video_output_dimensions(info)
         width = max(2, int(target_width or source_width or 640))
         height = max(2, int(target_height or source_height or 360))
-        fps = max(1.0, float(self._video_presentation_fps(info)))
+        fps = self._video_output_send_fps(info, route_mode=route_mode)
         source_name = "local-program"
         if slot is not None:
             source_name = str(slot.file_path or "").strip() or source_name
@@ -1314,7 +1455,7 @@ class VideoDisplayMixin:
             configure(
                 "local_program",
                 enabled=bool(self._video_display_target_visible()),
-                route_mode=self._active_video_route_mode(),
+                route_mode=route_mode,
                 width=width,
                 height=height,
                 fps=fps,
@@ -1354,6 +1495,25 @@ class VideoDisplayMixin:
     def _render_ndi_frame_image(self) -> QImage:
         width, height = self._ndi_output_dimensions()
         mode = self._active_ndi_route_mode()
+        if mode == DISPLAY_FOCUS_STAGE:
+            return self._scaled_pixmap_image(
+                self._render_stage_display_snapshot(width, height),
+                width,
+                height,
+            )
+        if mode == DISPLAY_FOCUS_LYRIC:
+            return self._scaled_pixmap_image(
+                self._render_lyric_display_snapshot(width, height),
+                width,
+                height,
+            )
+        if mode == DISPLAY_FOCUS_METRONOME:
+            active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+            return self._scaled_pixmap_image(
+                self._render_metronome_display_snapshot(active_slot, max(1, int(width)), max(1, int(height))),
+                width,
+                height,
+            )
         widget = self._ensure_ndi_preview_widget()
         self._sync_output_surface_widget(widget, mode, force=True)
         target_width = max(1, int(width))
@@ -1487,11 +1647,13 @@ class VideoDisplayMixin:
                     pass
             return False
         width, height = self._ndi_output_dimensions()
+        route_mode = self._active_ndi_route_mode()
+        _slot, info = self._current_video_slot_and_probe()
         config = NDIOutputConfig(
             source_name=str(getattr(self, "ndi_output_name", "pyssp-video") or "pyssp-video").strip() or "pyssp-video",
             width=width,
             height=height,
-            fps=max(1.0, float(self._video_presentation_fps())),
+            fps=self._video_output_send_fps(info, route_mode=route_mode),
             audio_enabled=bool(getattr(self, "ndi_output_audio_enabled", True)),
             groups=str(getattr(self, "ndi_output_group", "Public") or "Public").strip() or "Public",
             discovery_servers=str(getattr(self, "ndi_output_discovery_servers", "") or "").strip(),
@@ -1509,7 +1671,7 @@ class VideoDisplayMixin:
                 configure_method(
                     "ndi_program",
                     enabled=True,
-                    route_mode=self._active_ndi_route_mode(),
+                    route_mode=route_mode,
                     width=config.width,
                     height=config.height,
                     fps=config.fps,
@@ -1686,6 +1848,34 @@ class VideoDisplayMixin:
             return
         self._send_ndi_audio()
 
+    def _should_defer_snapshot_surface_refresh(self, *, force: bool = False) -> bool:
+        if force:
+            return False
+        if self._active_video_route_mode() in _DEFERRED_SNAPSHOT_ROUTE_MODES:
+            return True
+        if bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() in _DEFERRED_SNAPSHOT_ROUTE_MODES:
+            return True
+        metronome_window = getattr(self, "_metronome_display_window", None)
+        if metronome_window is not None and metronome_window.isVisible():
+            return True
+        return False
+
+    def _sync_video_display_surfaces(self, *, force: bool = False) -> None:
+        preview = getattr(self, "video_preview_widget", None)
+        if preview is not None and (preview.isVisible() or force):
+            self._sync_video_surface_widget(preview, force=force)
+        if self._video_display_window is not None and (self._video_display_window.isVisible() or force):
+            self._sync_video_surface_widget(self._video_display_window.display_widget, force=force)
+        metronome_window = getattr(self, "_metronome_display_window", None)
+        if metronome_window is not None and (metronome_window.isVisible() or force):
+            self._sync_metronome_surface_widget(metronome_window.display_widget, force=force)
+
+    def _apply_video_display_refresh(self, *, force: bool = False) -> None:
+        self._sync_video_display_surfaces(force=force)
+        if self._active_video_route_mode() == "video":
+            self._queue_video_frame_refresh(force=force)
+        self._refresh_ndi_output(force=force)
+
     def _apply_video_frame_to_targets(self) -> None:
         pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())
         preview = getattr(self, "video_preview_widget", None)
@@ -1800,16 +1990,22 @@ class VideoDisplayMixin:
                     prime(session_id, position_ms)
                 except Exception:
                     pass
+        previous_frame_key = getattr(self, "_video_current_frame_key", None)
+        previous_frame_source = ""
+        if isinstance(previous_frame_key, tuple) and previous_frame_key:
+            previous_frame_source = str(previous_frame_key[0] or "").strip()
         frame_snapshot = frame_getter(session_id)
         expected_blank_key = str(getattr(self, "_video_force_blank_expected_path", "") or "")
         frame_path = self._normalized_media_probe_key(str(getattr(frame_snapshot, "source_path", "") or ""))
-        if bool(getattr(self, "_video_force_blank_until_frame", False)) and expected_blank_key and (
-            snapshot_path == expected_blank_key or frame_path == expected_blank_key
-        ):
-            if bool(getattr(snapshot, "primed", False)) or bool(getattr(frame_snapshot, "ready", False)):
-                self._clear_video_switch_blank()
         if bool(getattr(frame_snapshot, "ready", False)) and frame_path == normalized_path:
             if self._update_current_video_frame_from_session(frame_snapshot):
+                blank_cleared = False
+                if bool(getattr(self, "_video_force_blank_until_frame", False)) and expected_blank_key and frame_path == expected_blank_key:
+                    self._clear_video_switch_blank()
+                    blank_cleared = True
+                if blank_cleared or frame_path != previous_frame_source:
+                    self._configure_local_video_destination()
+                    self._sync_video_display_surfaces(force=False)
                 self._refresh_ndi_output(force=False)
         if bool(getattr(snapshot, "primed", False)) and snapshot_path == normalized_path:
             complete_pending_start = getattr(self, "_complete_pending_video_synced_start", None)
@@ -1823,24 +2019,21 @@ class VideoDisplayMixin:
         should_refresh_video = self._active_video_route_mode() == "video" or self._video_decode_allowed_during_switch_blank()
         if should_refresh_video:
             self._queue_video_frame_refresh()
-        if bool(getattr(self, "ndi_output_enabled", False)) and self._video_surface_transition_active():
+        if bool(getattr(self, "_pending_video_surface_refresh", False)):
+            self._pending_video_surface_refresh = False
+            self._apply_video_display_refresh(force=False)
+        elif bool(getattr(self, "ndi_output_enabled", False)) and self._video_surface_transition_active():
             self._refresh_ndi_output(force=False)
 
     def _refresh_video_display(self, force: bool = False) -> None:
         self._configure_local_video_destination()
         if force and self._active_video_route_mode() != "video":
             self._clear_video_frame_runtime()
-        preview = getattr(self, "video_preview_widget", None)
-        if preview is not None and (preview.isVisible() or force):
-            self._sync_video_surface_widget(preview, force=force)
-        if self._video_display_window is not None and (self._video_display_window.isVisible() or force):
-            self._sync_video_surface_widget(self._video_display_window.display_widget, force=force)
-        metronome_window = getattr(self, "_metronome_display_window", None)
-        if metronome_window is not None and (metronome_window.isVisible() or force):
-            self._sync_metronome_surface_widget(metronome_window.display_widget, force=force)
-        if self._active_video_route_mode() == "video":
-            self._queue_video_frame_refresh(force=force)
-        self._refresh_ndi_output(force=force)
+        if self._should_defer_snapshot_surface_refresh(force=force):
+            self._pending_video_surface_refresh = True
+            return
+        self._pending_video_surface_refresh = False
+        self._apply_video_display_refresh(force=force)
 
     def _slot_or_media_has_audio(self, slot: Optional[SoundButtonData]) -> bool:
         if slot is None:

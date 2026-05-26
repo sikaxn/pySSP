@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from pyssp.ffmpeg_support import MediaProbeInfo
@@ -7,6 +9,7 @@ from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
 from pyssp.automation_command import AUTOMATION_SOURCE_TYPE, AutomationCommandSpec
 from pyssp.audio_beat_map import AudioBeatMap
 from pyssp.engine.types import VideoFrameSnapshot, VideoSessionSnapshot
+from pyssp.lyrics import LyricLine
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPaintEvent, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel
@@ -630,6 +633,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             alert_text: str,
             show_backdrop_message: bool,
             backdrop_message_text: str,
+            transition_key: str = "",
         ) -> None:
             self.mode = str(mode)
             self.video_pixmap = QPixmap(video_pixmap)
@@ -644,6 +648,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             self.alert_text = str(alert_text)
             self.show_backdrop_message = bool(show_backdrop_message)
             self.backdrop_message = str(backdrop_message_text)
+            self.transition_key = str(transition_key)
 
     class _OutputWidgetHost(_AudioOnlyVideoRouteHost):
         def __init__(self) -> None:
@@ -928,6 +933,80 @@ def test_lyric_display_snapshot_reuses_hidden_renderer_and_cached_pixmap(monkeyp
     assert app is not None
 
 
+def test_lyric_display_snapshot_reuses_cached_pixmap_when_visible_text_is_unchanged(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    created = []
+
+    class _FakeLyricWindow:
+        def __init__(self, _parent):
+            created.append(self)
+
+        def set_transparent_mode_enabled(self, _enabled: bool) -> None:
+            return None
+
+        def configure_display_settings(self, **_kwargs) -> None:
+            return None
+
+        def update_playback_state(self, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(video_display_module, "LyricDisplayWindow", _FakeLyricWindow)
+    monkeypatch.setattr(video_display_module.os.path, "exists", lambda _path: True)
+
+    class _LyricSnapshotHost(VideoDisplayMixin):
+        def __init__(self) -> None:
+            self.current_playing = ("A", 0, 0)
+            self.lyric_display_font_family = ""
+            self.lyric_display_font_size = 36
+            self.lyric_display_show_not_playing_message = True
+            self.lyric_display_previous_line_count = 0
+            self.lyric_display_next_line_count = 0
+            self.lyric_display_role_colors = {"played": "#AAA", "current": "#FFF000", "next": "#FFF"}
+            self.lyric_display_role_sizes = {"played": 18, "current": 28, "next": 22}
+            self.lyric_display_auto_adjust_role_sizes = True
+            self.lyric_display_role_scale_percents = {"played": 70, "current": 115, "next": 90}
+            self.lyric_display_role_bold = {"played": True, "current": True, "next": True}
+            self.lyric_display_role_italic = {"played": False, "current": False, "next": False}
+            self._lyric_force_blank = False
+            self._slot = mw.SoundButtonData(lyric_file="demo.lrc")
+            self._position_ms = 100
+            self.render_calls = 0
+
+        def _slot_for_key(self, _key):
+            return self._slot
+
+        def _lyric_position_ms_for_key(self, _slot_key) -> int:
+            return int(self._position_ms)
+
+        def _load_stage_lyric_lines(self, _lyric_path: str):
+            return (
+                [
+                    LyricLine(start_ms=0, end_ms=999, text="Alpha"),
+                    LyricLine(start_ms=1000, end_ms=1999, text="Beta"),
+                ],
+                "",
+            )
+
+        def _render_widget_snapshot(self, widget, width: int = 960, height: int = 540) -> QPixmap:
+            _ = widget
+            self.render_calls += 1
+            pixmap = QPixmap(width, height)
+            pixmap.fill(Qt.black)
+            return pixmap
+
+    host = _LyricSnapshotHost()
+
+    first = host._render_lyric_display_snapshot(640, 360)
+    host._position_ms = 150
+    second = host._render_lyric_display_snapshot(640, 360)
+
+    assert len(created) == 1
+    assert host.render_calls == 1
+    assert not first.isNull()
+    assert not second.isNull()
+    assert app is not None
+
+
 def test_video_frame_bucket_uses_media_fps():
     host = _AudioOnlyVideoRouteHost()
     host.ndi_output_fps = 25
@@ -943,6 +1022,56 @@ def test_video_frame_interval_uses_higher_source_fps():
     host.ndi_output_fps = 30
 
     assert host._video_frame_interval_ms(MediaProbeInfo(has_video=True, fps=60.0)) == 17
+
+
+def test_video_output_send_fps_only_uses_media_fps_for_video_routes():
+    host = _AudioOnlyVideoRouteHost()
+    host.ndi_output_fps = 30
+    info = MediaProbeInfo(has_video=True, fps=60.0)
+
+    assert host._video_output_send_fps(info, route_mode="video") == 60.0
+    assert host._video_output_send_fps(info, route_mode="stage_display") == 30.0
+
+
+def test_ndi_sender_configuration_uses_send_fps_not_preview_fps():
+    class _DestinationConfigHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ndi_output_enabled = True
+            self.ndi_output_fps = 25
+            self._ndi_status = SimpleNamespace(ready=True)
+            self.configure_calls: list[tuple[str, dict[str, object]]] = []
+
+            def _configure(destination_id: str, **kwargs) -> None:
+                self.configure_calls.append((str(destination_id), dict(kwargs)))
+
+            self._audio_service.configure_video_destination = _configure
+
+    host = _DestinationConfigHost()
+
+    assert host._configure_ndi_sender() is True
+    assert host.configure_calls[0][0] == "ndi_program"
+    assert host.configure_calls[0][1]["fps"] == 25.0
+
+
+def test_local_video_destination_configuration_uses_send_fps_not_preview_fps():
+    class _DestinationConfigHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ndi_output_fps = 25
+            self.configure_calls: list[tuple[str, dict[str, object]]] = []
+
+            def _configure(destination_id: str, **kwargs) -> None:
+                self.configure_calls.append((str(destination_id), dict(kwargs)))
+
+            self._audio_service.configure_video_destination = _configure
+
+    host = _DestinationConfigHost()
+
+    host._configure_local_video_destination()
+
+    assert host.configure_calls[0][0] == "local_program"
+    assert host.configure_calls[0][1]["fps"] == 25.0
 
 
 def test_sync_ndi_timer_intervals_updates_video_refresh_timer():
@@ -1138,6 +1267,38 @@ def test_stage_display_geometry_change_triggers_snapshot_refresh():
     assert app is not None
 
 
+def test_refresh_video_display_defers_snapshot_routes_until_video_tick():
+    class _DeferredSnapshotHost(_VideoRefreshHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ndi_output_enabled = True
+            self.ndi_calls: list[bool] = []
+
+        def _active_video_route_mode(self) -> str:
+            return "stage_display"
+
+        def _active_ndi_route_mode(self) -> str:
+            return "stage_display"
+
+        def _configure_local_video_destination(self) -> None:
+            return None
+
+        def _refresh_ndi_output(self, force: bool = False) -> None:
+            self.ndi_calls.append(bool(force))
+
+    host = _DeferredSnapshotHost()
+
+    host._refresh_video_display(force=False)
+
+    assert host.ndi_calls == []
+    assert host._pending_video_surface_refresh is True
+
+    host._tick_video_refresh()
+
+    assert host.ndi_calls == [False]
+    assert host._pending_video_surface_refresh is False
+
+
 def test_video_refresh_ignores_mismatched_session_frame_source():
     host = _VideoRefreshHost()
     frame = QImage(32, 18, QImage.Format_RGB32)
@@ -1213,6 +1374,44 @@ def test_video_route_stays_blank_during_switch_even_without_current_playing_key(
     assert host._active_video_route_mode() == "blank"
 
 
+def test_video_route_holds_last_frame_during_video_switch_when_one_is_available():
+    app = QApplication.instance() or QApplication([])
+
+    class _VideoSwitchRouteHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self._slot = mw.SoundButtonData(file_path="clip-b.mp4")
+            self._media_probe_cache = {}
+            self._video_force_blank_until_frame = False
+            self._video_force_blank_expected_path = ""
+            self._video_current_frame_key = ("clip-a.mp4", 1000)
+            self._video_current_frame_pixmap = QPixmap(32, 18)
+            self._video_current_frame_pixmap.fill(Qt.red)
+            self._video_current_frame_image = mw.QImage()
+
+        def _media_probe_for_path(self, path: str) -> MediaProbeInfo:
+            if str(path or "").strip().lower().endswith(".mp4"):
+                return MediaProbeInfo(has_video=True, has_audio=True, fps=25.0, duration_ms=10000, width=640, height=360)
+            return MediaProbeInfo()
+
+        def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
+            if not preserve_current_frame:
+                self._video_current_frame_key = None
+                self._video_current_frame_pixmap = QPixmap()
+
+        def _refresh_video_display(self, force: bool = False) -> None:
+            return None
+
+    host = _VideoSwitchRouteHost()
+
+    host._start_video_switch_blank("clip-b.mp4")
+
+    assert host._active_video_route_mode() == "video"
+    assert host._video_current_frame_key == ("clip-a.mp4", 1000)
+    assert host._video_current_frame_pixmap.isNull() is False
+    assert app is not None
+
+
 def test_video_refresh_continues_decoding_during_switch_blank():
     app = QApplication.instance() or QApplication([])
     host = _VideoRefreshHost()
@@ -1222,6 +1421,54 @@ def test_video_refresh_continues_decoding_during_switch_blank():
 
     assert host._audio_service.configure_calls[-1] == ("player-a", "clip.mp4", 80, 640, 360, True)
     assert host._active_video_route_mode() == "blank"
+    assert app is not None
+
+
+def test_video_refresh_keeps_switch_blank_armed_until_first_ready_frame():
+    app = QApplication.instance() or QApplication([])
+    host = _VideoRefreshHost()
+    host._video_current_frame_key = ("old.mp4", 40)
+    host._video_current_frame_pixmap = QPixmap(32, 18)
+    host._video_current_frame_pixmap.fill(Qt.red)
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        configured=True,
+        primed=True,
+        state=1,
+        position_ms=host._position_ms,
+        duration_ms=5000,
+        frame_pts_ms=host._position_ms,
+        frame_width=320,
+        frame_height=180,
+        backend_name="pyav",
+    )
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        pts_ms=host._position_ms,
+        ready=False,
+    )
+
+    host._start_video_switch_blank("clip.mp4")
+    host._queue_video_frame_refresh()
+
+    assert host._video_force_blank_until_frame is True
+
+    frame = QImage(32, 18, QImage.Format_RGB32)
+    frame.fill(Qt.green)
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        pts_ms=host._position_ms,
+        ready=True,
+        image=frame,
+    )
+
+    host._queue_video_frame_refresh()
+
+    assert host._video_force_blank_until_frame is False
+    assert host._video_current_frame_key == (host._normalized_media_probe_key("clip.mp4"), host._position_ms)
     assert app is not None
 
 
@@ -1245,6 +1492,20 @@ def test_video_prestart_hold_uses_video_route_before_play_state():
 
     assert host._active_video_route_mode() == "video"
     assert host._audio_service.configure_calls[-1] == ("player-b", "clip.mp4", 80, 640, 360, True)
+    assert app is not None
+
+
+def test_video_prestart_hold_preserves_current_frame_until_new_video_is_ready():
+    app = QApplication.instance() or QApplication([])
+    host = _VideoRefreshHost()
+    host._video_current_frame_key = ("old.mp4", 40)
+    host._video_current_frame_pixmap = QPixmap(32, 18)
+    host._video_current_frame_pixmap.fill(Qt.red)
+
+    host._begin_video_prestart_hold("clip.mp4")
+
+    assert host._video_current_frame_key == ("old.mp4", 40)
+    assert host._video_current_frame_pixmap.isNull() is False
     assert app is not None
 
 

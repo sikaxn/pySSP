@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QImage
 
+import pyssp.audio_engine as audio_engine_module
 from pyssp.audio_service import AudioService
 import pyssp.engine.runtime as runtime_module
 import pyssp.engine.video_session as video_session_module
@@ -356,6 +358,22 @@ def test_media_runtime_ndi_audio_keepalive_uses_nominal_block_size(monkeypatch):
         runtime.shutdown()
 
 
+def test_media_runtime_destination_video_wait_timeout_tracks_remaining_frame_time():
+    image = QImage(8, 8, QImage.Format_RGB32)
+    image.fill(Qt.black)
+    record = runtime_module._DestinationRecord(
+        destination_id="ndi_program",
+        enabled=True,
+        fps=60.0,
+        frame_image=image,
+        last_video_sent_at=1.0,
+    )
+
+    assert MediaRuntime._destination_video_wait_timeout(record, 1.0) == pytest.approx(0.01)
+    assert MediaRuntime._destination_video_wait_timeout(record, 1.010) == pytest.approx((1.0 / 60.0) - 0.010, abs=1e-6)
+    assert MediaRuntime._destination_video_wait_timeout(record, 1.017) == 0.0
+
+
 def test_media_runtime_ndi_audio_keepalive_uses_runtime_stream_format_without_players(monkeypatch):
     runtime = MediaRuntime(player_factory=_FakePlayer)
     try:
@@ -443,4 +461,34 @@ def test_media_runtime_ndi_audio_post_fader_uses_direct_mixed_block(monkeypatch)
         assert frames.shape == (1024, 2)
         assert np.allclose(frames, direct)
     finally:
+        runtime.shutdown()
+
+
+def test_media_runtime_ndi_audio_flushes_partial_monitor_tail_instead_of_idle_tone():
+    runtime = MediaRuntime(player_factory=_FakePlayer)
+    try:
+        runtime._audio_sample_rate = 48000
+        runtime._audio_channels = 2
+        runtime._audio_stream_blocksize = 1024
+        runtime._ndi_dispatcher = _CapturingDispatcher()
+        runtime._video_destinations["ndi_program"].enabled = True
+        runtime._video_destinations["ndi_program"].audio_enabled = True
+        runtime._video_destinations["ndi_program"].audio_tap_mode = "pre_fader"
+        audio_engine_module.clear_output_monitor_frames()
+        audio_engine_module.append_output_monitor_frames(
+            "player-a",
+            np.ones((600, 2), dtype=np.float32) * 0.375,
+            mode="pre_fader",
+        )
+
+        runtime._service_ndi_audio_from_render(1024)
+
+        assert len(runtime._ndi_dispatcher.audio_payloads) == 1
+        frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
+        assert sample_rate == 48000
+        assert frames.shape == (600, 2)
+        assert np.allclose(frames, np.ones((600, 2), dtype=np.float32) * 0.375)
+        assert audio_engine_module.output_monitor_frame_counts("player-a") == {"pre_fader": 0, "post_fader": 0}
+    finally:
+        audio_engine_module.clear_output_monitor_frames()
         runtime.shutdown()

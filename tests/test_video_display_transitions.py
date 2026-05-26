@@ -221,6 +221,43 @@ def test_video_display_widget_transition_expires_without_timer_events(qapp):
         widget.close()
 
 
+def test_video_display_widget_crossfades_same_mode_when_transition_key_changes(qapp):
+    widget = VideoDisplayWidget()
+    widget.resize(160, 90)
+    widget.show()
+
+    red = QPixmap(160, 90)
+    red.fill(QColor("#ff0000"))
+    blue = QPixmap(160, 90)
+    blue.fill(QColor("#0000ff"))
+
+    try:
+        widget.set_transition_duration_seconds(0.2)
+        widget.apply_surface_state(mode="video", video_pixmap=red, transition_key="clip-a")
+        qapp.processEvents()
+
+        widget.apply_surface_state(mode="video", video_pixmap=blue, transition_key="clip-b")
+        qapp.processEvents()
+
+        assert widget.is_transition_active() is True
+        mid_image = widget.grab().toImage()
+        mid_color = mid_image.pixelColor(mid_image.width() // 2, mid_image.height() // 2)
+        assert mid_color.red() > mid_color.blue()
+
+        deadline = time.monotonic() + 1.0
+        while widget.is_transition_active() and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.02)
+
+        assert widget.is_transition_active() is False
+        qapp.processEvents()
+        final_image = widget.grab().toImage()
+        final_color = final_image.pixelColor(final_image.width() // 2, final_image.height() // 2)
+        assert final_color.blue() > final_color.red()
+    finally:
+        widget.close()
+
+
 def test_queue_video_frame_refresh_uses_runtime_video_session_backend():
     host = _VideoSyncHarness()
     frame = QImage(320, 180, QImage.Format_RGB32)

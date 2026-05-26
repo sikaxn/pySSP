@@ -154,30 +154,57 @@ def apply_ndi_access_manager_settings(
         ndi["groups"] = groups
     groups["send"] = str(settings.send_groups or "Public")
 
+    discovery_servers = str(settings.discovery_servers or "").strip()
     networks = ndi.setdefault("networks", {})
     if not isinstance(networks, dict):
         networks = {}
         ndi["networks"] = networks
-    networks["discovery"] = str(settings.discovery_servers or "")
+    if discovery_servers:
+        networks["discovery"] = discovery_servers
+    else:
+        networks.pop("discovery", None)
+        if not networks:
+            ndi.pop("networks", None)
 
+    allowed_adapters = tuple(str(item or "").strip() for item in settings.allowed_adapters if str(item or "").strip())
     adapters = ndi.setdefault("adapters", {})
     if not isinstance(adapters, dict):
         adapters = {}
         ndi["adapters"] = adapters
-    adapters["allowed"] = list(settings.allowed_adapters)
+    if allowed_adapters:
+        adapters["allowed"] = list(allowed_adapters)
+    else:
+        adapters.pop("allowed", None)
+        if not adapters:
+            ndi.pop("adapters", None)
 
+    multicast_send_enabled = bool(settings.multicast_send_enabled)
+    multicast_send_ttl = int(settings.multicast_send_ttl)
+    multicast_send_netmask = str(settings.multicast_send_netmask or "255.255.0.0")
+    multicast_send_netprefix = str(settings.multicast_send_netprefix or "239.255.0.0")
+    has_multicast_override = (
+        multicast_send_enabled
+        or multicast_send_ttl != 1
+        or multicast_send_netmask != "255.255.0.0"
+        or multicast_send_netprefix != "239.255.0.0"
+    )
     multicast = ndi.setdefault("multicast", {})
     if not isinstance(multicast, dict):
         multicast = {}
         ndi["multicast"] = multicast
-    multicast_send = multicast.setdefault("send", {})
-    if not isinstance(multicast_send, dict):
-        multicast_send = {}
+    if has_multicast_override:
+        multicast_send = multicast.get("send", {})
+        if not isinstance(multicast_send, dict):
+            multicast_send = {}
         multicast["send"] = multicast_send
-    multicast_send["enable"] = bool(settings.multicast_send_enabled)
-    multicast_send["ttl"] = int(settings.multicast_send_ttl)
-    multicast_send["netmask"] = str(settings.multicast_send_netmask or "255.255.0.0")
-    multicast_send["netprefix"] = str(settings.multicast_send_netprefix or "239.255.0.0")
+        multicast_send["enable"] = multicast_send_enabled
+        multicast_send["ttl"] = multicast_send_ttl
+        multicast_send["netmask"] = multicast_send_netmask
+        multicast_send["netprefix"] = multicast_send_netprefix
+    else:
+        multicast.pop("send", None)
+        if not multicast:
+            ndi.pop("multicast", None)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

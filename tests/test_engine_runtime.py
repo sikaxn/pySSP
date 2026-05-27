@@ -352,7 +352,7 @@ def test_media_runtime_ndi_audio_keepalive_uses_nominal_block_size(monkeypatch):
         frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
         assert sample_rate == 48000
         assert frames.shape == (1024, 2)
-        assert np.max(np.abs(frames)) > 0.0
+        assert np.allclose(frames, 0.0)
         assert runtime._video_destinations["ndi_program"].audio_send_count == 1
     finally:
         runtime.shutdown()
@@ -393,7 +393,7 @@ def test_media_runtime_ndi_audio_keepalive_uses_runtime_stream_format_without_pl
         frames, sample_rate = runtime._ndi_dispatcher.audio_payloads[0]
         assert sample_rate == 44100
         assert frames.shape == (2048, 4)
-        assert np.max(np.abs(frames)) > 0.0
+        assert np.allclose(frames, 0.0)
         assert runtime._video_destinations["ndi_program"].last_audio_sample_rate == 44100
         assert runtime._video_destinations["ndi_program"].last_audio_channel_count == 4
     finally:

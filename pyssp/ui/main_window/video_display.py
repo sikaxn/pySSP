@@ -461,7 +461,7 @@ class VideoDisplayMixin:
         return max(1.0, float(fps))
 
     def _video_presentation_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
-        return max(60.0, float(self._video_target_fps(info)))
+        return max(1.0, float(self._video_target_fps(info)))
 
     def _video_output_send_fps(
         self,
@@ -694,6 +694,14 @@ class VideoDisplayMixin:
             return True
         return bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() == "video"
 
+    def _local_video_surface_visible(self) -> bool:
+        preview = getattr(self, "video_preview_widget", None)
+        if preview is not None and preview.isVisible():
+            return True
+        if self._video_display_window is not None and self._video_display_window.isVisible():
+            return True
+        return False
+
     def _current_video_session_id(self) -> str:
         if self.current_playing is not None:
             try:
@@ -729,12 +737,14 @@ class VideoDisplayMixin:
         path = str(getattr(frame_snapshot, "source_path", "") or "").strip()
         cache_key = (self._normalized_media_probe_key(path), pts_ms) if path else None
         frame_image = QImage(image)
-        pixmap = QPixmap.fromImage(frame_image)
-        if pixmap.isNull():
-            return False
         self._video_current_frame_key = cache_key
         self._video_current_frame_image = frame_image
-        self._video_current_frame_pixmap = pixmap
+        self._video_current_frame_pixmap = QPixmap()
+        if self._local_video_surface_visible():
+            pixmap = QPixmap.fromImage(frame_image)
+            if pixmap.isNull():
+                return False
+            self._video_current_frame_pixmap = pixmap
         self._video_last_frame_pts_ms = pts_ms
         self._apply_video_frame_to_targets()
         submit_method = getattr(getattr(self, "_audio_service", None), "submit_video_destination_frame", None)
@@ -750,6 +760,28 @@ class VideoDisplayMixin:
             except Exception:
                 pass
         return True
+
+    def _current_video_frame_pixmap(self) -> QPixmap:
+        pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        if not pixmap.isNull():
+            return pixmap
+        image = QImage(getattr(self, "_video_current_frame_image", QImage()))
+        if image.isNull():
+            return QPixmap()
+        pixmap = QPixmap.fromImage(image)
+        if pixmap.isNull():
+            return QPixmap()
+        self._video_current_frame_pixmap = QPixmap(pixmap)
+        return pixmap
+
+    def _current_video_surface_image(self) -> QImage:
+        image = QImage(getattr(self, "_video_current_frame_image", QImage()))
+        if not image.isNull():
+            return image
+        pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        if pixmap.isNull():
+            return QImage()
+        return pixmap.toImage()
 
     def _current_video_display_position_ms(self) -> int:
         if self.current_playing is None:
@@ -779,11 +811,11 @@ class VideoDisplayMixin:
         current_key = getattr(self, "_video_current_frame_key", None)
         normalized = self._normalized_media_probe_key(candidate)
         if isinstance(current_key, tuple) and current_key and current_key[0] == normalized:
-            return QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
-        return QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+            return self._current_video_frame_pixmap()
+        return self._current_video_frame_pixmap()
 
     def _current_video_surface_pixmap(self) -> QPixmap:
-        current = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        current = self._current_video_frame_pixmap()
         if not current.isNull():
             return current
         slot, info = self._current_video_slot_and_probe()
@@ -792,13 +824,7 @@ class VideoDisplayMixin:
         return QPixmap()
 
     def _current_video_frame_available(self) -> bool:
-        pixmap = getattr(self, "_video_current_frame_pixmap", None)
-        if pixmap is None:
-            return False
-        try:
-            return not bool(pixmap.isNull())
-        except Exception:
-            return False
+        return not bool(self._current_video_surface_image().isNull())
 
     def _current_video_transition_key(self, slot: Optional[SoundButtonData]) -> str:
         current_key = getattr(self, "_video_current_frame_key", None)
@@ -1326,13 +1352,14 @@ class VideoDisplayMixin:
         self._apply_video_widget_transition_fade_duration(widget)
         backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
         active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+        video_image = QImage()
         video_pixmap = QPixmap()
         content_pixmap = QPixmap()
         backdrop_pixmap = self._video_backdrop_pixmap() if mode == "backdrop" else QPixmap()
         lyric_html = ""
         transition_key = ""
         if mode == DISPLAY_FOCUS_VIDEO:
-            video_pixmap = self._current_video_surface_pixmap()
+            video_image = self._current_video_surface_image()
             lyric_html = self._current_video_lyric_html()
             transition_key = self._current_video_transition_key(active_slot)
         elif mode == DISPLAY_FOCUS_STAGE:
@@ -1349,6 +1376,7 @@ class VideoDisplayMixin:
             transition_key = self._resolved_video_backdrop_path()
         widget.apply_surface_state(
             mode=mode,
+            video_image=video_image,
             video_pixmap=video_pixmap,
             content_pixmap=content_pixmap,
             backdrop_pixmap=backdrop_pixmap,
@@ -1877,14 +1905,14 @@ class VideoDisplayMixin:
         self._refresh_ndi_output(force=force)
 
     def _apply_video_frame_to_targets(self) -> None:
-        pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())
+        image = self._current_video_surface_image()
         preview = getattr(self, "video_preview_widget", None)
         if preview is not None and preview.isVisible() and preview._mode == "video":
-            preview.set_video_pixmap(pixmap)
+            preview.set_video_image(image)
         if self._video_display_window is not None and self._video_display_window.isVisible():
             display_widget = self._video_display_window.display_widget
             if display_widget._mode == "video":
-                display_widget.set_video_pixmap(pixmap)
+                display_widget.set_video_image(image)
 
     def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
         self._clear_active_video_session()

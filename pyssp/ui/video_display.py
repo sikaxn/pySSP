@@ -33,6 +33,7 @@ class VideoDisplayWidget(QWidget):
         self.setAutoFillBackground(False)
         self._allow_fullscreen_toggle = bool(allow_fullscreen_toggle)
         self._mode = "blank"
+        self._video_image = QImage()
         self._video_pixmap = QPixmap()
         self._content_pixmap = QPixmap()
         self._backdrop_pixmap = QPixmap()
@@ -124,6 +125,7 @@ class VideoDisplayWidget(QWidget):
         self,
         *,
         mode: str,
+        video_image: Optional[QImage] = None,
         video_pixmap: Optional[QPixmap] = None,
         content_pixmap: Optional[QPixmap] = None,
         backdrop_pixmap: Optional[QPixmap] = None,
@@ -142,6 +144,7 @@ class VideoDisplayWidget(QWidget):
             self._begin_mode_transition()
         self._surface_state_key = surface_key
         self._mode = token
+        self._video_image = QImage() if video_image is None else QImage(video_image)
         self._video_pixmap = QPixmap() if video_pixmap is None else QPixmap(video_pixmap)
         self._content_pixmap = QPixmap() if content_pixmap is None else QPixmap(content_pixmap)
         self._backdrop_pixmap = QPixmap() if backdrop_pixmap is None else QPixmap(backdrop_pixmap)
@@ -165,8 +168,16 @@ class VideoDisplayWidget(QWidget):
         self._mode = token
         self.update()
 
+    def set_video_image(self, image: Optional[QImage]) -> None:
+        self._video_image = QImage() if image is None else QImage(image)
+        if image is not None:
+            self._video_pixmap = QPixmap()
+        self.update()
+
     def set_video_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self._video_pixmap = QPixmap() if pixmap is None else QPixmap(pixmap)
+        if pixmap is not None:
+            self._video_image = QImage()
         self.update()
 
     def set_content_pixmap(self, pixmap: Optional[QPixmap]) -> None:
@@ -298,7 +309,10 @@ class VideoDisplayWidget(QWidget):
         if mode == "colour_bars":
             self._draw_colour_bars(painter, bounds)
         elif mode == "video":
-            self._draw_scaled_pixmap(painter, bounds, self._video_pixmap, keep_aspect=True)
+            if not self._video_image.isNull():
+                self._draw_scaled_image(painter, bounds, self._video_image, keep_aspect=True)
+            else:
+                self._draw_scaled_pixmap(painter, bounds, self._video_pixmap, keep_aspect=True)
         elif mode == "image":
             self._draw_scaled_pixmap(painter, bounds, self._content_pixmap, keep_aspect=True)
         elif mode == "backdrop":
@@ -377,6 +391,9 @@ class VideoDisplayWindow(QWidget):
 
     def set_transition_duration_seconds(self, seconds: float) -> None:
         self.display_widget.set_transition_duration_seconds(seconds)
+
+    def set_video_image(self, image: Optional[QImage]) -> None:
+        self.display_widget.set_video_image(image)
 
     def set_video_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self.display_widget.set_video_pixmap(pixmap)

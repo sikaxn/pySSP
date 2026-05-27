@@ -608,6 +608,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             self.backdrop_message = ""
             self.show_backdrop_message = False
             self.lyric_html = ""
+            self.video_image = mw.QImage()
             self.video_pixmap = QPixmap()
             self.content_pixmap = QPixmap()
             self.backdrop_pixmap = QPixmap()
@@ -623,6 +624,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             self,
             *,
             mode: str,
+            video_image=None,
             video_pixmap,
             content_pixmap,
             backdrop_pixmap,
@@ -636,6 +638,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             transition_key: str = "",
         ) -> None:
             self.mode = str(mode)
+            self.video_image = mw.QImage() if video_image is None else mw.QImage(video_image)
             self.video_pixmap = QPixmap(video_pixmap)
             self.content_pixmap = QPixmap(content_pixmap)
             self.backdrop_pixmap = QPixmap(backdrop_pixmap)
@@ -717,6 +720,8 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
     assert widget.mode == mode
     assert widget.lyric_html == expected_html
     assert widget.content_pixmap.isNull() is (not expect_content)
+    if mode == "video":
+        assert widget.video_image.isNull() is False
     if mode == "stage_display":
         assert host.stage_snapshot_calls == 1
     if mode == "lyric_display":

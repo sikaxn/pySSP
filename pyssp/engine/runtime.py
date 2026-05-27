@@ -156,7 +156,6 @@ class MediaRuntime:
         self._audio_stream_blocksize = 1024
         self._audio_sample_rate = 48000
         self._audio_channels = 2
-        self._ndi_idle_phase = 0.0
         self._ndi_last_audio_source = ""
         self._ndi_last_audio_log_at = 0.0
         self._start_counter = 0
@@ -693,7 +692,7 @@ class MediaRuntime:
             )
         source = "idle"
         ordered_player_count = 0
-        silent_replaced = False
+        silent_fallback = False
         chunk = None
         consume_map: dict[str, int] = {}
         if mode == "post_fader" and mixed_post_fader is not None:
@@ -724,12 +723,12 @@ class MediaRuntime:
                         consume_map = dict(mixed_consume_map)
                         source = f"monitor_{mode}"
         if chunk is None:
-            chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
-            source = "idle_tone"
+            chunk = self._ndi_silence_audio_block(frame_count, channel_count)
+            source = "idle_silence"
         elif not np.any(np.abs(chunk) > 1.0e-7):
-            chunk = self._ndi_idle_audio_block(frame_count, channel_count, sample_rate)
-            source = "idle_tone_after_silence"
-            silent_replaced = True
+            chunk = self._ndi_silence_audio_block(frame_count, channel_count)
+            source = "idle_silence_after_silence"
+            silent_fallback = True
         now = self._clock()
         if (
             ndi_debug_print_enabled()
@@ -745,7 +744,7 @@ class MediaRuntime:
                 sample_rate,
                 channel_count,
                 ordered_player_count,
-                silent_replaced,
+                silent_fallback,
             )
         sent = False
         if chunk.ndim == 2 and len(chunk) > 0 and chunk.shape[1] > 0:
@@ -754,7 +753,7 @@ class MediaRuntime:
                     dispatcher.send_audio_frames(
                         chunk,
                         sample_rate,
-                        idle=source.startswith("idle_tone"),
+                        idle=source.startswith("idle_silence"),
                     )
                 )
             except TypeError:
@@ -776,18 +775,10 @@ class MediaRuntime:
             if sent:
                 record.audio_send_count += 1
 
-    def _ndi_idle_audio_block(self, frames: int, channel_count: int, sample_rate: int) -> np.ndarray:
+    def _ndi_silence_audio_block(self, frames: int, channel_count: int) -> np.ndarray:
         frame_count = max(1, int(frames))
         channels = max(1, int(channel_count))
-        sr = max(1, int(sample_rate))
-        amplitude = 5.0e-4
-        frequency_hz = 997.0
-        phase_step = (2.0 * np.pi * frequency_hz) / float(sr)
-        phase = float(self._ndi_idle_phase)
-        angles = phase + (np.arange(frame_count, dtype=np.float32) * phase_step)
-        tone = (np.sin(angles) * amplitude).astype(np.float32, copy=False)
-        self._ndi_idle_phase = float((phase + (frame_count * phase_step)) % (2.0 * np.pi))
-        return np.repeat(tone[:, np.newaxis], channels, axis=1)
+        return np.zeros((frame_count, channels), dtype=np.float32)
 
     def configure_video_destination(
         self,

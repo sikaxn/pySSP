@@ -83,6 +83,7 @@ class _VideoSyncHarness(VideoDisplayMixin):
         self,
         *,
         use_pending_session: bool = False,
+        local_video_visible: bool = True,
     ) -> None:
         self._audio_service = _FakeVideoSessionService()
         self._slot = SoundButtonData(file_path=r"C:\Media\clip.mp4")
@@ -102,12 +103,16 @@ class _VideoSyncHarness(VideoDisplayMixin):
         self._video_display_window = None
         self.video_preview_widget = None
         self.ndi_output_enabled = False
+        self._local_video_visible = bool(local_video_visible)
         self.current_position_ms = 1200
         self.current_playing = None if use_pending_session else ("A", 0, 0)
         self._player = SimpleNamespace(player_id="player-a")
 
     def _video_display_target_visible(self) -> bool:
         return True
+
+    def _local_video_surface_visible(self) -> bool:
+        return bool(self._local_video_visible)
 
     def _current_video_slot_and_probe(self):
         return self._slot, self._info
@@ -221,6 +226,26 @@ def test_video_display_widget_transition_expires_without_timer_events(qapp):
         widget.close()
 
 
+def test_video_display_widget_paints_video_image(qapp):
+    widget = VideoDisplayWidget()
+    widget.resize(160, 90)
+    widget.show()
+
+    frame = QImage(160, 90, QImage.Format_RGB32)
+    frame.fill(QColor("#3366cc"))
+
+    try:
+        widget.apply_surface_state(mode="video", video_image=frame, transition_key="clip-a")
+        qapp.processEvents()
+
+        image = widget.grab().toImage()
+        color = image.pixelColor(image.width() // 2, image.height() // 2)
+        assert color.blue() > color.red()
+        assert widget._video_image.isNull() is False
+    finally:
+        widget.close()
+
+
 def test_video_display_widget_crossfades_same_mode_when_transition_key_changes(qapp):
     widget = VideoDisplayWidget()
     widget.resize(160, 90)
@@ -314,6 +339,40 @@ def test_queue_video_frame_refresh_uses_pending_session_during_prestart_hold():
     assert host._completed_pending_paths == [host._normalized_media_probe_key(host._slot.file_path)]
 
 
+def test_queue_video_frame_refresh_skips_eager_pixmap_conversion_without_local_surface():
+    host = _VideoSyncHarness(local_video_visible=False)
+    frame = QImage(320, 180, QImage.Format_RGB32)
+    frame.fill(QColor("#224466"))
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        configured=True,
+        primed=True,
+        state=1,
+        position_ms=host.current_position_ms,
+        duration_ms=5000,
+        frame_pts_ms=host.current_position_ms,
+        frame_width=320,
+        frame_height=180,
+        backend_name="pyav",
+    )
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        pts_ms=host.current_position_ms,
+        ready=True,
+        image=frame,
+    )
+
+    host._queue_video_frame_refresh(force=True)
+
+    assert host._video_current_frame_image.isNull() is False
+    assert host._video_current_frame_pixmap.isNull() is True
+    assert host._audio_service.submitted_frames == [
+        ("local_program", "video", host.current_position_ms, host._slot.file_path)
+    ]
+
+
 class _ExplodingAudioService:
     def video_destination_frame(self, _destination_id: str):
         raise AssertionError("visible video sync should not fetch local_program frames")
@@ -348,6 +407,6 @@ def test_sync_output_surface_widget_uses_local_video_frame_cache(qapp):
         host._sync_output_surface_widget(widget, "video", force=True)
         qapp.processEvents()
 
-        assert widget._video_pixmap.isNull() is False
+        assert widget._video_image.isNull() is False or widget._video_pixmap.isNull() is False
     finally:
         widget.close()

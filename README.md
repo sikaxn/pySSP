@@ -43,6 +43,11 @@ python -m venv .venv
 - `run_ssp_venv.bat`: run app from `.venv`
 - `run_ssp_cleanstart_venv.bat`: run with `--cleanstart` (resets settings)
 - `run_ssp_venv.sh`: macOS/Linux launcher from `.venv` (`./run_ssp_venv.sh`)
+- `run_ssp_wsl.sh`: Ubuntu WSL launcher using `.venv-wsl` (`./run_ssp_wsl.sh setup`, then `./run_ssp_wsl.sh`)
+
+### Ubuntu WSL
+
+For Ubuntu WSL setup and test-run steps, see `docs/WSL_UBUNTU_SETUP.md`.
 
 ## Command-line flags
 

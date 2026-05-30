@@ -292,6 +292,14 @@ def _prompt_first_run_language() -> str:
         return "en"
 
 
+def _startup_default_language_override() -> str:
+    raw = str(os.getenv("PYSSP_DEFAULT_LANGUAGE", "") or "").strip()
+    if not raw:
+        return ""
+    normalized = normalize_language(raw)
+    return normalized if normalized in {"en", "zh_cn"} else ""
+
+
 def _confirm_cleanstart_warning() -> bool:
     answer = QMessageBox.warning(
         None,
@@ -306,7 +314,8 @@ def _confirm_cleanstart_warning() -> bool:
 def _resolve_startup_language(preferred_if_missing: Optional[str] = None) -> str:
     settings_path = get_settings_path()
     if not settings_path.exists():
-        selected_language = normalize_language(preferred_if_missing or _prompt_first_run_language())
+        fallback_language = _startup_default_language_override()
+        selected_language = normalize_language(preferred_if_missing or fallback_language or _prompt_first_run_language())
         settings = load_settings()
         settings.ui_language = selected_language
         save_settings(settings)

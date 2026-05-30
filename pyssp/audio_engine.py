@@ -511,6 +511,35 @@ class _NullOutputStream:
         return
 
 
+def _preferred_sdl_audio_drivers() -> List[Optional[str]]:
+    original_driver = os.environ.get("SDL_AUDIODRIVER")
+    candidates: List[Optional[str]] = []
+
+    if original_driver:
+        candidates.append(original_driver)
+
+    if sys.platform.startswith("linux"):
+        candidates.extend(["pulseaudio", None, "pipewire", "alsa"])
+    elif sys.platform == "darwin":
+        candidates.extend([None, "coreaudio"])
+    elif sys.platform == "win32":
+        candidates.extend([None, "wasapi", "directsound", "winmm"])
+    else:
+        candidates.append(None)
+
+    candidates.append("dummy")
+
+    ordered: List[Optional[str]] = []
+    seen = set()
+    for driver in candidates:
+        key = "<default>" if driver is None else driver
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(driver)
+    return ordered
+
+
 def _ensure_decoder() -> None:
     global _DECODER_READY
     with _DECODER_LOCK:
@@ -519,9 +548,8 @@ def _ensure_decoder() -> None:
         if not pygame.get_init():
             pygame.init()
         if not pygame.mixer.get_init():
-            original_driver = os.environ.get("SDL_AUDIODRIVER")
             init_errors: List[str] = []
-            for driver in [original_driver, "wasapi", "directsound", "winmm", "dummy"]:
+            for driver in _preferred_sdl_audio_drivers():
                 try:
                     if pygame.mixer.get_init():
                         pygame.mixer.quit()

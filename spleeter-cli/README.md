@@ -19,7 +19,31 @@ Typical flow:
 
 Notes:
 - this CLI is CPU-only
-- it writes the accompaniment stem as the vocal-removed track
-- ffmpeg conversion is handled inside the CLI
+- it subtracts the estimated vocals from the original waveform to create the
+  vocal-removed track. The default model's accompaniment zeros frequencies above
+  its modeled band (about 11 kHz at 44.1 kHz), making full-rate output sound
+  bandwidth-limited. Subtraction preserves that upper band, including any vocal
+  content the model cannot estimate there.
+- pySSP handles ffmpeg conversion before/after this WAV-only CLI; decoding uses
+  floating-point WAV without forcing a sample rate
+- the input WAV's sample rate is used in the separator configuration and output;
+  no stage explicitly resamples the audio
+- the bundled pretrained model uses fixed STFT dimensions trained at 44.1 kHz;
+  preserving other input rates does not guarantee equivalent separation quality
+  (changing the configured rate does not retrain the model or scale its STFT)
+- the output WAV remains 16-bit PCM; final encoding explicitly requires the
+  original sample rate and fails if the codec cannot support it
 - macOS Apple Silicon uses Python 3.10 plus `tensorflow-macos==2.12.0`
 - `build_pyinstaller_mac.sh` will create `.venv-spleeter` and install the macOS dependency set automatically
+
+Tests (run from the repository root):
+- `.venv-spleeter/Scripts/python.exe -m unittest discover -s spleeter-cli/tests -v`
+  runs standalone CLI tests without pySSP or pytest dependencies. Set
+  `SPLEETER_MODEL_TEST=1` to also exercise the bundled model at 22,050 and 48,000 Hz.
+- `.venv/Scripts/python.exe -m pytest spleeter-cli/tests/integration -q`
+  checks pySSP's ffmpeg handoff and final encoding using the main app environment.
+- On macOS/Linux, use the corresponding environment's `bin/python` path.
+
+These changes concern generated files. pySSP playback separately converts audio
+to the shared mixer/device rate; it does not modify the generated file. Rebuild
+the standalone CLI and regenerate existing tracks to apply CLI changes.

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,7 @@ def main() -> int:
     from scipy.io import wavfile  # type: ignore
     import tensorflow as tf  # type: ignore
     from spleeter.separator import Separator  # type: ignore
+    from spleeter.utils.configuration import load_configuration  # type: ignore
 
     try:
         tf.config.set_visible_devices([], "GPU")
@@ -49,13 +51,30 @@ def main() -> int:
     sample_rate, waveform = wavfile.read(input_path)
     waveform_f32 = _to_float32_stereo(waveform)
 
-    separator = Separator("spleeter:2stems", multiprocess=False)
-    sources = separator.separate(waveform_f32, audio_descriptor=input_path)
-    accompaniment = sources.get("accompaniment")
-    if accompaniment is None:
-        raise RuntimeError("Spleeter did not produce accompaniment output.")
+    # separate() accepts raw samples without a sample-rate argument. Configure
+    # the separator before it builds its graph, and never resample the waveform.
+    params = load_configuration("spleeter:2stems")
+    params["sample_rate"] = int(sample_rate)
+    with tempfile.TemporaryDirectory(prefix="pyssp_spleeter_config_") as config_dir:
+        config_path = Path(config_dir) / "2stems.json"
+        config_path.write_text(json.dumps(params), encoding="utf-8")
+        separator = Separator(str(config_path), multiprocess=False)
+        sources = separator.separate(waveform_f32, audio_descriptor=input_path)
+    accompaniment = _full_band_accompaniment(waveform_f32, sources)
     wavfile.write(output_path, int(sample_rate), _to_int16_pcm(accompaniment))
     return 0
+
+
+def _full_band_accompaniment(waveform: np.ndarray, sources: dict) -> np.ndarray:
+    # The default model zeros stem masks above its modeled frequency band.
+    # Subtract only the estimated vocals to retain the original upper band.
+    vocals = sources.get("vocals")
+    if vocals is None:
+        raise RuntimeError("Spleeter did not produce vocals output.")
+    vocals = np.asarray(vocals, dtype=np.float32)
+    if vocals.shape != waveform.shape:
+        raise RuntimeError(f"Spleeter vocals shape {vocals.shape} does not match input {waveform.shape}.")
+    return waveform - vocals
 
 
 def _bundled_model_root() -> str:

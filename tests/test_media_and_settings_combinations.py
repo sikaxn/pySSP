@@ -10,7 +10,7 @@ import pytest
 from pyssp.audio_format_support import build_audio_file_dialog_filter
 from pyssp.lyrics import line_for_position, parse_lyric_file
 from pyssp.set_loader import load_set_file
-from pyssp.settings_store import AppSettings, load_settings, save_settings
+from pyssp.settings_store import AppSettings, _from_parser, load_settings, save_settings
 
 
 def _write_dummy_wav(path: Path, duration_sec: float = 0.25, sample_rate: int = 22050) -> None:
@@ -172,3 +172,22 @@ def test_video_display_transition_fade_setting_round_trips(tmp_path, monkeypatch
     loaded = load_settings()
 
     assert loaded.video_display_transition_fade_sec == pytest.approx(0.75)
+
+
+def test_playback_engine_setting_round_trips_and_normalizes(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.ini"
+    monkeypatch.setattr("pyssp.settings_store.get_settings_path", lambda: settings_path)
+
+    settings = AppSettings()
+    settings.playback_engine_mode = "v2"
+
+    save_settings(settings)
+    loaded = load_settings()
+
+    assert loaded.playback_engine_mode == "v2"
+
+    parser = configparser.ConfigParser()
+    parser["main"] = {"playback_engine_mode": "bogus"}
+    normalized = _from_parser(parser)
+
+    assert normalized.playback_engine_mode == "legacy"

@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pyssp.playback_engine import PLAYBACK_ENGINE_LEGACY, PLAYBACK_ENGINE_V2
 from pyssp.settings_store import default_companion_satellite_serial_suffix, default_quick_action_keys
 from pyssp.timecode import MIDI_OUTPUT_DEVICE_NONE, TIMECODE_MODE_FOLLOW
 from pyssp.ui.options_dialog import OptionsDialog
@@ -161,8 +162,12 @@ def _build_dialog(**overrides):
         preload_audio_memory_limit_mb=defaults["preload_audio_memory_limit_mb"],
         preload_memory_pressure_enabled=defaults["preload_memory_pressure_enabled"],
         preload_pause_on_playback=defaults["preload_pause_on_playback"],
+        playback_engine_mode=str(overrides.get("playback_engine_mode", defaults["playback_engine_mode"])),
         preload_video_enabled=bool(
             overrides.get("preload_video_enabled", defaults["preload_video_enabled"])
+        ),
+        video_low_spec_mode=bool(
+            overrides.get("video_low_spec_mode", defaults["video_low_spec_mode"])
         ),
         preload_total_ram_mb=16384,
         preload_ram_cap_mb=14720,
@@ -485,6 +490,9 @@ def _build_dialog(**overrides):
                 defaults["video_display_show_backdrop_message"],
             )
         ),
+        video_display_show_fps_overlay=bool(
+            overrides.get("video_display_show_fps_overlay", defaults["video_display_show_fps_overlay"])
+        ),
         video_display_show_lyric_overlay=bool(
             overrides.get("video_display_show_lyric_overlay", defaults["video_display_show_lyric_overlay"])
         ),
@@ -706,6 +714,7 @@ def test_playback_timeline_toggle_controls_jog_group(qapp):
 
 def test_restore_defaults_playback_page_resets_controls(qapp):
     dialog = _build_dialog(initial_page="Playback")
+    dialog.playback_engine_combo.setCurrentIndex(dialog.playback_engine_combo.findData(PLAYBACK_ENGINE_V2))
     dialog.cue_timeline_audio_file_radio.setChecked(True)
     dialog.jog_outside_stop_cue_or_end_radio.setChecked(True)
     dialog.candidate_error_keep_radio.setChecked(True)
@@ -713,10 +722,30 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
     dialog.select_page("Playback")
     dialog._restore_defaults_current_page()
 
+    assert dialog.selected_playback_engine_mode() == PLAYBACK_ENGINE_LEGACY
     assert dialog.selected_main_transport_timeline_mode() == "cue_region"
     assert dialog.selected_main_jog_outside_cue_action() == "stop_immediately"
     assert dialog.selected_candidate_error_action() == "stop_playback"
     assert dialog.jog_outside_group.isEnabled() is False
+
+
+def test_playback_engine_controls_switch_panels_and_round_trip(qapp):
+    dialog = _build_dialog(playback_engine_mode=PLAYBACK_ENGINE_V2, initial_page="Playback")
+    try:
+        assert dialog.selected_playback_engine_mode() == PLAYBACK_ENGINE_V2
+        assert dialog.playback_engine_combo.currentData() == PLAYBACK_ENGINE_V2
+        assert dialog.playback_engine_stack.currentIndex() == 1
+        assert "takes effect after restarting" in dialog.playback_engine_restart_note.text()
+        assert "Playback V2-specific settings will appear here" in dialog.playback_v2_future_settings_label.text()
+
+        dialog.playback_engine_combo.setCurrentIndex(dialog.playback_engine_combo.findData(PLAYBACK_ENGINE_LEGACY))
+
+        assert dialog.selected_playback_engine_mode() == PLAYBACK_ENGINE_LEGACY
+        assert dialog.playback_engine_stack.currentIndex() == 0
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
 
 
 def test_window_layout_sound_button_hidden_columns_round_trip_and_restore_defaults(qapp):
@@ -781,12 +810,14 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         video_display_use_default_backdrop=False,
         video_display_backdrop_path=r"C:\Media\fallback.png",
         video_display_show_backdrop_message=False,
+        video_display_show_fps_overlay=True,
         video_display_show_lyric_overlay=True,
         video_display_show_stage_alert=True,
         ndi_output_enabled=True,
         ndi_output_name="Sanctuary Feed",
         ndi_output_mode_playing="stage_display",
         ndi_output_mode_idle="backdrop",
+        video_low_spec_mode=True,
         ndi_output_resolution_mode="custom",
         ndi_output_width=1600,
         ndi_output_height=900,
@@ -820,6 +851,7 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.video_display_use_default_backdrop_checkbox.isChecked() is False
         assert dialog.video_display_backdrop_path_edit.text() == r"C:\Media\fallback.png"
         assert dialog.video_display_show_backdrop_message_checkbox.isChecked() is False
+        assert dialog.video_display_show_fps_overlay_checkbox.isChecked() is True
         assert dialog.video_display_show_lyric_overlay_checkbox.isChecked() is True
         assert dialog.video_display_show_stage_alert_checkbox.isChecked() is True
         assert dialog.selected_video_display_mode_playing() == "backdrop"
@@ -835,6 +867,7 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_video_display_use_default_backdrop() is False
         assert dialog.selected_video_display_backdrop_path() == r"C:\Media\fallback.png"
         assert dialog.selected_video_display_show_backdrop_message() is False
+        assert dialog.selected_video_display_show_fps_overlay() is True
         assert dialog.selected_video_display_show_lyric_overlay() is True
         assert dialog.selected_video_display_show_stage_alert() is True
         assert dialog.ndi_output_name_edit.text() == "Sanctuary Feed"
@@ -843,6 +876,8 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.ndi_output_route_combo.currentData() == "backdrop"
         assert dialog.ndi_output_follow_sound_button_focus_checkbox.isEnabled() is False
         assert dialog.ndi_output_route_combo.isEnabled() is False
+        assert dialog.video_low_spec_mode_checkbox.isChecked() is True
+        assert "1280x720 and 30 fps" in dialog.video_output_profile_note_label.text()
         assert dialog.ndi_output_resolution_mode_combo.currentData() == "custom"
         assert dialog.ndi_output_width_spin.value() == 1600
         assert dialog.ndi_output_height_spin.value() == 900
@@ -859,6 +894,7 @@ def test_video_display_and_preload_video_controls_round_trip(qapp):
         assert dialog.selected_ndi_output_name() == "Sanctuary Feed"
         assert dialog.selected_ndi_output_mode_playing() == "backdrop"
         assert dialog.selected_ndi_output_mode_idle() == "backdrop"
+        assert dialog.selected_video_low_spec_mode() is True
         assert dialog.selected_ndi_output_resolution_mode() == "custom"
         assert dialog.selected_ndi_output_width() == 1600
         assert dialog.selected_ndi_output_height() == 900

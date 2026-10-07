@@ -199,3 +199,4 @@ Pipfile.lock
 /pretrained_models/
 /pyssp/assets/spleeter_models/
 /.venv-spleeter
+/.venv-wsl

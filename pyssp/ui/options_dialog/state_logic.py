@@ -396,6 +396,7 @@ class StateLogicMixin:
         self.video_display_show_backdrop_message_checkbox.setChecked(
             bool(d.get("video_display_show_backdrop_message", True))
         )
+        self.video_display_show_fps_overlay_checkbox.setChecked(bool(d.get("video_display_show_fps_overlay", False)))
         self.video_display_show_lyric_overlay_checkbox.setChecked(bool(d.get("video_display_show_lyric_overlay", False)))
         self.video_display_show_stage_alert_checkbox.setChecked(bool(d.get("video_display_show_stage_alert", False)))
         overlay_gadgets = self.video_display_overlay_editor.gadgets()
@@ -442,6 +443,7 @@ class StateLogicMixin:
             )
             == DISPLAY_FOCUS_FOLLOW
         )
+        self.video_low_spec_mode_checkbox.setChecked(bool(d.get("video_low_spec_mode", False)))
         self._set_combo_data_or_default(
             self.ndi_output_route_combo,
             _merged_manual_route_value(
@@ -483,6 +485,7 @@ class StateLogicMixin:
         self._sync_ndi_route_controls()
         self._sync_video_display_backdrop_controls()
         self._sync_video_display_lyric_role_size_mode()
+        self._update_video_output_profile_note()
         self._sync_ndi_controls()
 
     def _restore_window_layout_defaults(self) -> None:
@@ -843,6 +846,12 @@ class StateLogicMixin:
 
     def _restore_playback_defaults(self) -> None:
         d = self._DEFAULTS
+        self._set_combo_data_or_default(
+            self.playback_engine_combo,
+            normalize_playback_engine(d.get("playback_engine_mode", PLAYBACK_ENGINE_LEGACY)),
+            PLAYBACK_ENGINE_LEGACY,
+        )
+        self._sync_playback_engine_panel()
         self.max_multi_play_spin.setValue(int(d["max_multi_play_songs"]))
         if d["multi_play_limit_action"] == "disallow_more_play":
             self.multi_play_disallow_radio.setChecked(True)

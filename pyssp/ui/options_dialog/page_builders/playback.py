@@ -7,6 +7,7 @@ from ..widgets import *
 class PlaybackPageMixin:
     def _build_playback_page(
         self,
+        playback_engine_mode: str,
         max_multi_play_songs: int,
         multi_play_limit_action: str,
         playlist_play_mode: str,
@@ -22,6 +23,52 @@ class PlaybackPageMixin:
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+
+        engine_group = QGroupBox("Playback Engine")
+        engine_layout = QVBoxLayout(engine_group)
+        engine_form = QFormLayout()
+        self.playback_engine_combo = QComboBox()
+        for engine_id, label in playback_engine_options():
+            self.playback_engine_combo.addItem(label, engine_id)
+        engine_form.addRow("Engine:", self.playback_engine_combo)
+        engine_layout.addLayout(engine_form)
+
+        self.playback_engine_restart_note = QLabel(
+            "Changing playback engine takes effect after restarting the app."
+        )
+        self.playback_engine_restart_note.setWordWrap(True)
+        engine_layout.addWidget(self.playback_engine_restart_note)
+
+        self.playback_engine_stack = QStackedWidget()
+
+        legacy_panel = QWidget()
+        legacy_layout = QVBoxLayout(legacy_panel)
+        legacy_note = QLabel(
+            "Legacy uses the current ExternalMediaPlayer and MediaRuntime playback path."
+        )
+        legacy_note.setWordWrap(True)
+        legacy_layout.addWidget(legacy_note)
+        legacy_layout.addStretch(1)
+        self.playback_engine_stack.addWidget(legacy_panel)
+
+        v2_panel = QWidget()
+        v2_layout = QVBoxLayout(v2_panel)
+        v2_note = QLabel(
+            "Playback V2 owns runtime orchestration for sessions, transport, video, and NDI while audio rendering is still driven by the current player node."
+        )
+        v2_note.setWordWrap(True)
+        v2_layout.addWidget(v2_note)
+        self.playback_v2_future_settings_label = QLabel(
+            "Playback V2-specific settings will appear here as decoder, clocking, and cache controls move into the new engine."
+        )
+        self.playback_v2_future_settings_label.setWordWrap(True)
+        self.playback_v2_future_settings_label.setStyleSheet("color:#555;")
+        v2_layout.addWidget(self.playback_v2_future_settings_label)
+        v2_layout.addStretch(1)
+        self.playback_engine_stack.addWidget(v2_panel)
+
+        engine_layout.addWidget(self.playback_engine_stack)
+        layout.addWidget(engine_group)
 
         form = QFormLayout()
         self.max_multi_play_spin = QSpinBox()
@@ -185,7 +232,20 @@ class PlaybackPageMixin:
         self.cue_timeline_cue_region_radio.toggled.connect(self._sync_jog_outside_group_enabled)
         self.cue_timeline_audio_file_radio.toggled.connect(self._sync_jog_outside_group_enabled)
         self._sync_jog_outside_group_enabled()
+        self._set_combo_data_or_default(
+            self.playback_engine_combo,
+            normalize_playback_engine(playback_engine_mode),
+            PLAYBACK_ENGINE_LEGACY,
+        )
+        self.playback_engine_combo.currentIndexChanged.connect(self._sync_playback_engine_panel)
+        self._sync_playback_engine_panel()
 
         layout.addStretch(1)
         return page
+
+    def _sync_playback_engine_panel(self) -> None:
+        if not hasattr(self, "playback_engine_stack"):
+            return
+        mode = normalize_playback_engine(self.playback_engine_combo.currentData() or PLAYBACK_ENGINE_LEGACY)
+        self.playback_engine_stack.setCurrentIndex(1 if mode == PLAYBACK_ENGINE_V2 else 0)
 

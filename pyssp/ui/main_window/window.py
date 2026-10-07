@@ -188,7 +188,13 @@ class MainWindow(
         )
         self.preload_pause_on_playback = bool(getattr(self.settings, "preload_pause_on_playback", True))
         self.preload_use_ffmpeg = bool(getattr(self.settings, "preload_use_ffmpeg", True))
+        self.playback_engine_mode = normalize_playback_engine(
+            getattr(self.settings, "playback_engine_mode", PLAYBACK_ENGINE_LEGACY)
+        )
+        self._active_playback_engine_mode = self.playback_engine_mode
+        self._playback_engine_restart_required = False
         self.preload_video_enabled = bool(getattr(self.settings, "preload_video_enabled", False))
+        self.video_low_spec_mode = bool(getattr(self.settings, "video_low_spec_mode", False))
         self.waveform_cache_limit_mb = max(128, min(16384, int(getattr(self.settings, "waveform_cache_limit_mb", 1024))))
         self.waveform_cache_clear_on_launch = bool(getattr(self.settings, "waveform_cache_clear_on_launch", True))
         self._preload_runtime_paused = False
@@ -548,6 +554,7 @@ class MainWindow(
             0.0,
             min(10.0, float(getattr(self.settings, "video_display_transition_fade_sec", 0.5) or 0.0)),
         )
+        self.video_display_show_fps_overlay = bool(getattr(self.settings, "video_display_show_fps_overlay", False))
         self.video_display_show_lyric_overlay = bool(getattr(self.settings, "video_display_show_lyric_overlay", False))
         self.video_display_show_stage_alert = bool(getattr(self.settings, "video_display_show_stage_alert", False))
         self.video_display_lyric_overlay_rect = dict(
@@ -871,7 +878,7 @@ class MainWindow(
         self._companion_satellite_api_version = ""
         self._companion_satellite_caps: Dict[str, bool] = {}
         self._main_thread_executor = MainThreadExecutor(self)
-        self._audio_service = AudioServiceController(self)
+        self._audio_service = AudioServiceController(self, playback_engine_mode=self.playback_engine_mode)
 
         startup_audio_warning: Optional[str] = None
         configured_device = self.audio_output_device.strip()
@@ -934,11 +941,13 @@ class MainWindow(
         self.midi_connection_warning_banner = QLabel("")
         self.vocal_removed_warning_banner = QLabel("")
         self.playback_warning_banner = QLabel("")
+        self.video_backend_warning_banner = QLabel("")
         self.save_notice_banner = QLabel("")
         self.info_notice_banner = QLabel("")
         self.status_totals_label = QLabel("")
         self.status_hover_label = QLabel("Button: -")
         self.status_now_playing_label = QLabel("Now Playing: -")
+        self.video_status_label = QLabel("")
         self.timecode_status_label = QLabel("")
         self.web_remote_status_label = QLabel("")
         self.companion_satellite_status_icon = QLabel("")
@@ -1152,6 +1161,7 @@ class MainWindow(
             self._engage_lock_screen()
         self.statusBar().addWidget(self.status_hover_label)
         self.statusBar().addWidget(self.status_now_playing_label, 1)
+        self.statusBar().addPermanentWidget(self.video_status_label)
         self.statusBar().addPermanentWidget(self.timecode_status_label)
         self.statusBar().addPermanentWidget(self.web_remote_status_label)
         self.companion_satellite_status_icon.setAlignment(Qt.AlignCenter)

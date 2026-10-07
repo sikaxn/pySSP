@@ -635,6 +635,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             alert_text: str,
             show_backdrop_message: bool,
             backdrop_message_text: str,
+            show_fps_overlay: bool = False,
             transition_key: str = "",
         ) -> None:
             self.mode = str(mode)
@@ -645,6 +646,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
             self.lyric_html = str(lyric_html)
             self.overlay_args = {
                 "overlay_rect": overlay_rect,
+                "show_fps_overlay": bool(show_fps_overlay),
                 "show_lyric_overlay": bool(show_lyric_overlay),
                 "show_stage_alert": bool(show_stage_alert),
             }
@@ -657,6 +659,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
         def __init__(self) -> None:
             super().__init__()
             self.video_display_lyric_overlay_rect = {"x": 0, "y": 0, "w": 10000, "h": 10000}
+            self.video_display_show_fps_overlay = True
             self.video_display_show_lyric_overlay = True
             self.video_display_show_stage_alert = True
             self._stage_alert_message = "Alert"
@@ -721,7 +724,8 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
     assert widget.lyric_html == expected_html
     assert widget.content_pixmap.isNull() is (not expect_content)
     if mode == "video":
-        assert widget.video_image.isNull() is False
+        assert widget.video_pixmap.isNull() is False
+        assert widget.video_image.isNull() is True
     if mode == "stage_display":
         assert host.stage_snapshot_calls == 1
     if mode == "lyric_display":
@@ -731,6 +735,7 @@ def test_sync_output_surface_widget_supports_all_display_modes(mode, expected_ht
     if mode == "backdrop":
         assert widget.show_backdrop_message is True
         assert widget.backdrop_message == "No video is playing"
+    assert widget.overlay_args["show_fps_overlay"] is True
     assert app is not None
 
 
@@ -750,6 +755,88 @@ def test_video_widget_paints_lyric_overlay_without_type_error():
     widget.paintEvent(QPaintEvent(widget.rect()))
 
     assert widget._lyric_html
+
+
+def test_sync_output_surface_widget_uses_full_image_for_ndi_preview():
+    app = QApplication.instance() or QApplication([])
+
+    class _CaptureWidget:
+        def __init__(self) -> None:
+            self.video_image = mw.QImage()
+            self.video_pixmap = QPixmap()
+            self.overlay_args = None
+
+        def width(self) -> int:
+            return 320
+
+        def height(self) -> int:
+            return 180
+
+        def apply_surface_state(
+            self,
+            *,
+            mode: str,
+            video_image=None,
+            video_pixmap,
+            content_pixmap,
+            backdrop_pixmap,
+            lyric_html: str,
+            overlay_rect,
+            show_lyric_overlay: bool,
+            show_stage_alert: bool,
+            alert_text: str,
+            show_backdrop_message: bool,
+            backdrop_message_text: str,
+            show_fps_overlay: bool = False,
+            transition_key: str = "",
+        ) -> None:
+            _ = (
+                mode,
+                content_pixmap,
+                backdrop_pixmap,
+                lyric_html,
+                overlay_rect,
+                show_lyric_overlay,
+                show_stage_alert,
+                alert_text,
+                show_backdrop_message,
+                backdrop_message_text,
+                transition_key,
+            )
+            self.video_image = mw.QImage() if video_image is None else mw.QImage(video_image)
+            self.video_pixmap = QPixmap(video_pixmap)
+            self.overlay_args = {"show_fps_overlay": bool(show_fps_overlay)}
+
+    class _NDIPreviewHost(_AudioOnlyVideoRouteHost):
+        def __init__(self) -> None:
+            super().__init__()
+            self.video_display_transition_fade_sec = 0.0
+            self.video_display_lyric_overlay_rect = {"x": 0, "y": 0, "w": 10000, "h": 10000}
+            self.video_display_show_fps_overlay = True
+            self.video_display_show_lyric_overlay = False
+            self.video_display_show_stage_alert = False
+            self._stage_alert_message = ""
+            self._video_current_frame_image = QImage(1920, 1080, QImage.Format_RGB32)
+            self._video_current_frame_image.fill(Qt.black)
+            self._video_current_frame_pixmap = QPixmap(320, 180)
+            self._video_current_frame_pixmap.fill(Qt.white)
+
+        def _stage_alert_active(self) -> bool:
+            return False
+
+        def _current_video_lyric_html(self) -> str:
+            return ""
+
+    host = _NDIPreviewHost()
+    widget = _CaptureWidget()
+    host.ndi_preview_widget = widget
+
+    host._sync_output_surface_widget(widget, "video", force=True)
+
+    assert widget.video_image.size() == host._video_current_frame_image.size()
+    assert widget.video_pixmap.isNull() is True
+    assert widget.overlay_args["show_fps_overlay"] is False
+    assert app is not None
 
 
 def test_metronome_display_snapshot_supports_audio_beat_map():
@@ -1094,7 +1181,80 @@ def test_sync_ndi_timer_intervals_updates_video_refresh_timer():
 
     host._sync_ndi_timer_intervals()
 
+    assert host._video_refresh_timer.interval == 33
+
+
+def test_sync_ndi_timer_intervals_uses_current_source_fps_when_video_is_active():
+    class _Timer:
+        def __init__(self) -> None:
+            self.interval = None
+
+        def setInterval(self, value: int) -> None:
+            self.interval = int(value)
+
+    host = _VideoRefreshHost()
+    host.ndi_output_fps = 30
+    host._probe = MediaProbeInfo(has_video=True, has_audio=True, fps=60.0, duration_ms=10000, width=640, height=360)
+    host._video_refresh_timer = _Timer()
+    host._ndi_audio_players = lambda: []
+
+    host._sync_ndi_timer_intervals()
+
     assert host._video_refresh_timer.interval == 17
+
+
+def test_update_video_backend_warning_shows_decode_error_for_active_source():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    host = _VideoRefreshHost()
+    host.video_backend_warning_banner = QLabel("")
+    snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        configured=True,
+        backend_name="pyav",
+        error="tuple index out of range",
+    )
+
+    host._update_video_backend_warning(snapshot, source_path="clip.mp4")
+
+    assert "Video decode failed (pyav)" in host.video_backend_warning_banner.text()
+    assert "tuple index out of range" in host.video_backend_warning_banner.text()
+
+
+def test_update_video_status_label_reports_frame_counter_and_pts():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    host = _VideoRefreshHost()
+    host.video_status_label = QLabel("")
+    image = QImage(640, 360, QImage.Format_RGB32)
+    image.fill(Qt.black)
+    snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        configured=True,
+        primed=True,
+        backend_name="pyav",
+        frame_pts_ms=1000,
+        frame_width=640,
+        frame_height=360,
+    )
+    frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path="clip.mp4",
+        pts_ms=1000,
+        ready=True,
+        image=image,
+    )
+
+    host._update_video_status_label(snapshot, frame_snapshot=frame, info=MediaProbeInfo(fps=30.0))
+
+    text = host.video_status_label.text()
+    assert "Video: pyav" in text
+    assert "ready" in text
+    assert "frame=30" in text
+    assert "pts=1000ms" in text
+    assert "640x360" in text
 
 
 def test_tick_video_refresh_updates_ndi_during_transition():
@@ -1146,6 +1306,19 @@ def test_video_target_decode_dimensions_follow_global_profile():
     rotated = MediaProbeInfo(width=1920, height=1080, rotation_deg=90)
     host.ndi_output_resolution_mode = "720p"
     assert host._video_target_decode_dimensions(rotated) == (720, 405)
+
+    host.video_low_spec_mode = True
+    host.ndi_output_resolution_mode = "source"
+    assert host._video_target_decode_dimensions(info) == (1280, 720)
+
+
+def test_video_target_fps_respects_low_spec_mode():
+    host = _VideoRefreshHost()
+    host.video_low_spec_mode = True
+    host.ndi_output_fps = 60
+
+    assert host._configured_video_output_fps() == 30
+    assert host._video_target_fps(MediaProbeInfo(fps=59.94)) == 30.0
 
 
 def test_video_snapshot_dimensions_follow_global_profile():

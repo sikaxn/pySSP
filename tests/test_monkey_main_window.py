@@ -1159,6 +1159,53 @@ def test_seek_transport_updates_elapsed_and_timecode_immediately(qapp, monkeypat
 
 
 @pytest.mark.monkey
+def test_stop_playback_clears_pending_async_media_load_state(qapp, monkeypatch, tmp_path):
+    audio_path = tmp_path / "pending_load.wav"
+    _write_dummy_wav(audio_path)
+
+    settings = AppSettings()
+    settings.tips_open_on_startup = False
+    settings.reset_all_on_startup = False
+    settings.last_group = "A"
+    settings.last_page = 0
+    settings.web_remote_enabled = False
+    monkeypatch.setattr(mw, "shutdown_audio_preload", lambda: None)
+    monkeypatch.setattr(mw.MainWindow, "closeEvent", lambda self, event: event.accept())
+    monkeypatch.setattr(mw.MainWindow, "_init_audio_players", mw.MainWindow._init_silent_audio_players)
+    monkeypatch.setattr(mw, "load_settings", lambda s=settings: s)
+
+    window = mw.MainWindow()
+    window.show()
+    qapp.processEvents()
+    try:
+        window._reset_set_data()
+        slot = window.data["A"][0][0]
+        slot.file_path = str(audio_path)
+        slot.title = "Pending Load Song"
+        pending_key = ("A", 0, 0)
+        window.current_playing = pending_key
+        window._pending_player_media_loads[id(window.player)] = {
+            "request_id": 77,
+            "player": window.player,
+            "slot": slot,
+            "playing_key": pending_key,
+            "on_success": lambda: None,
+        }
+        window.statusBar().showMessage("Reading audio file... Pending Load Song")
+
+        window._stop_playback()
+        qapp.processEvents()
+
+        assert window._pending_player_media_loads == {}
+        assert window.statusBar().currentMessage() == ""
+        assert window.current_playing is None
+
+        assert window._play_slot(0, prefer_immediate_load=True) is True
+    finally:
+        _cleanup_main_window(window, qapp)
+
+
+@pytest.mark.monkey
 def test_utility_set_save_writes_compatible_lyric_and_autoscript_fields(qapp, monkeypatch, tmp_path):
     settings = AppSettings()
     settings.tips_open_on_startup = False

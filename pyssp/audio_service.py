@@ -4,6 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import itertools
 import queue
+import time
 import weakref
 from typing import Any, Dict, Optional, Tuple
 
@@ -20,7 +21,9 @@ from pyssp.engine import (
     VideoDestinationSnapshot,
     VideoFrameSnapshot,
     VideoSessionSnapshot,
+    create_media_runtime,
 )
+from pyssp.playback_engine import PLAYBACK_ENGINE_LEGACY
 from pyssp.ndi_support import NDICapabilityStatus
 
 
@@ -135,9 +138,17 @@ class AudioService(QObject):
             except Exception:
                 pass
 
-    def __init__(self, runtime: Optional[MediaRuntime] = None) -> None:
+    def __init__(
+        self,
+        runtime: Optional[MediaRuntime] = None,
+        *,
+        playback_engine_mode: str = PLAYBACK_ENGINE_LEGACY,
+    ) -> None:
         super().__init__()
-        self._runtime = runtime or MediaRuntime(player_factory=lambda: ExternalMediaPlayer(owns_output_stream=False))
+        self._runtime = runtime or create_media_runtime(
+            playback_engine_mode=playback_engine_mode,
+            player_factory=lambda: ExternalMediaPlayer(owns_output_stream=False),
+        )
 
     def _player(self, player_id: str) -> ExternalMediaPlayer:
         return self._runtime.player_for_session(str(player_id))
@@ -217,7 +228,7 @@ class AudioService(QObject):
             return self._runtime.clear_video_destination_frame(str(payload.get("destination_id", "ndi_program")))
         if command == "create":
             if not self._runtime.has_session(player_id):
-                player = self._runtime.create_legacy_session(player_id)
+                player = self._runtime.create_session(player_id)
                 player.positionChanged.connect(lambda value, pid=player_id: self.positionChanged.emit(pid, int(value)))
                 player.durationChanged.connect(lambda value, pid=player_id: self.durationChanged.emit(pid, int(value)))
                 player.stateChanged.connect(lambda value, pid=player_id: self.stateChanged.emit(pid, int(value)))
@@ -319,10 +330,16 @@ class AudioServiceController(QObject):
     stateChanged = pyqtSignal(str, int)
     mediaLoadFinished = pyqtSignal(str, int, bool, str)
 
-    def __init__(self, parent: Optional[QObject] = None, runtime: Optional[MediaRuntime] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QObject] = None,
+        runtime: Optional[MediaRuntime] = None,
+        *,
+        playback_engine_mode: str = PLAYBACK_ENGINE_LEGACY,
+    ) -> None:
         super().__init__(parent)
         self._thread = QThread(self)
-        self._service = AudioService(runtime=runtime)
+        self._service = AudioService(runtime=runtime, playback_engine_mode=playback_engine_mode)
         self._service.moveToThread(self._thread)
         self.commandRequested.connect(self._service.handle_command, type=Qt.QueuedConnection)
         self.state_cache = AudioStateCache()
@@ -691,6 +708,8 @@ class AudioPlayerProxy(QObject):
         self._player_id = str(player_id)
         self._state = self.StoppedState
         self._position_ms = 0
+        self._engine_position_anchor_ms = 0
+        self._engine_position_anchor_at = time.perf_counter()
         self._duration_ms = 0
         self._volume = 100
         self._meter_levels: Tuple[float, float] = (0.0, 0.0)
@@ -720,6 +739,7 @@ class AudioPlayerProxy(QObject):
         request_id = int(next(self._media_request_counter))
         self._state = self.StoppedState
         self._position_ms = 0
+        self._sync_engine_position_anchor(0)
         self._duration_ms = 0
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
@@ -734,18 +754,23 @@ class AudioPlayerProxy(QObject):
         self._post("setDSPConfig", {"dsp_config": dsp_config})
 
     def play(self) -> None:
+        self._position_ms = self.enginePositionMs()
         self._state = self.PlayingState
+        self._sync_engine_position_anchor(self._position_ms)
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._post("play")
 
     def pause(self) -> None:
+        self._position_ms = self.enginePositionMs()
         self._state = self.PausedState
+        self._sync_engine_position_anchor(self._position_ms)
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._post("pause")
 
     def stop(self) -> None:
         self._state = self.StoppedState
         self._position_ms = 0
+        self._sync_engine_position_anchor(0)
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
         self._post("stop")
@@ -755,6 +780,7 @@ class AudioPlayerProxy(QObject):
 
     def setPosition(self, position_ms: int) -> None:
         self._position_ms = max(0, int(position_ms))
+        self._sync_engine_position_anchor(self._position_ms)
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
         self._post("setPosition", {"position_ms": self._position_ms})
 
@@ -762,7 +788,14 @@ class AudioPlayerProxy(QObject):
         return int(self._position_ms)
 
     def enginePositionMs(self) -> int:
-        return int(self._position_ms)
+        base = max(0, int(self._position_ms))
+        if self._state != self.PlayingState:
+            return base
+        elapsed_ms = max(0, int(round((time.perf_counter() - float(self._engine_position_anchor_at)) * 1000.0)))
+        estimated = max(base, int(self._engine_position_anchor_ms) + elapsed_ms)
+        if self._duration_ms > 0:
+            estimated = min(estimated, max(0, int(self._duration_ms)))
+        return max(0, int(estimated))
 
     def duration(self) -> int:
         return int(self._duration_ms)
@@ -885,6 +918,7 @@ class AudioPlayerProxy(QObject):
         if str(player_id) != self._player_id:
             return
         self._position_ms = max(0, int(value))
+        self._sync_engine_position_anchor(self._position_ms)
         self.positionChanged.emit(self._position_ms)
 
     def _on_duration_changed(self, player_id: str, value: int) -> None:
@@ -900,7 +934,13 @@ class AudioPlayerProxy(QObject):
             return
         if str(player_id) != self._player_id:
             return
-        self._state = int(value)
+        next_state = int(value)
+        if self._state == self.PlayingState and next_state != self.PlayingState:
+            self._position_ms = self.enginePositionMs()
+        self._state = next_state
+        if self._state == self.StoppedState:
+            self._position_ms = 0
+        self._sync_engine_position_anchor(self._position_ms)
         self.stateChanged.emit(self._state)
 
     def _on_media_load_finished(self, player_id: str, request_id: int, ok: bool, error: str) -> None:
@@ -909,6 +949,10 @@ class AudioPlayerProxy(QObject):
         if str(player_id) != self._player_id:
             return
         self.mediaLoadFinished.emit(int(request_id), bool(ok), str(error))
+
+    def _sync_engine_position_anchor(self, position_ms: int) -> None:
+        self._engine_position_anchor_ms = max(0, int(position_ms))
+        self._engine_position_anchor_at = time.perf_counter()
 
 
 def _build_media_payload(source: Any, dsp_config: Optional[DSPConfig], request_id: int) -> dict:

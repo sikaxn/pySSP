@@ -46,6 +46,7 @@ class VideoDisplayPageMixin:
         use_default_backdrop: bool,
         backdrop_path: str,
         show_backdrop_message: bool,
+        show_fps_overlay: bool,
         show_lyric_overlay: bool,
         show_stage_alert: bool,
         lyric_overlay_rect: Dict[str, int],
@@ -66,6 +67,7 @@ class VideoDisplayPageMixin:
         ndi_output_name: str,
         ndi_output_mode_playing: str,
         ndi_output_mode_idle: str,
+        video_low_spec_mode: bool,
         ndi_output_resolution_mode: str,
         ndi_output_width: int,
         ndi_output_height: int,
@@ -214,6 +216,12 @@ class VideoDisplayPageMixin:
         )
         self.video_output_profile_note_label.setWordWrap(True)
         ndi_form.addRow("Profile:", self.video_output_profile_note_label)
+        self.video_low_spec_mode_checkbox = QCheckBox("Low-spec mode for older CPUs")
+        self.video_low_spec_mode_checkbox.setChecked(bool(video_low_spec_mode))
+        self.video_low_spec_mode_checkbox.setToolTip(
+            "Cap video decode/output at 1280x720 and 30 fps to reduce CPU load on older machines."
+        )
+        ndi_form.addRow(self.video_low_spec_mode_checkbox)
         self.ndi_output_resolution_mode_combo = QComboBox()
         for label, value in [
             ("Source / Native", "source"),
@@ -286,6 +294,7 @@ class VideoDisplayPageMixin:
         self.ndi_output_audio_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_multicast_enabled_checkbox.toggled.connect(self._sync_ndi_controls)
         self.ndi_output_resolution_mode_combo.currentIndexChanged.connect(self._sync_ndi_controls)
+        self.video_low_spec_mode_checkbox.toggled.connect(self._update_video_output_profile_note)
         self.video_display_follow_sound_button_focus_checkbox.toggled.connect(self._sync_ndi_route_controls)
         self.video_display_route_combo.currentIndexChanged.connect(self._sync_ndi_route_controls)
         self._sync_ndi_route_controls()
@@ -293,6 +302,12 @@ class VideoDisplayPageMixin:
 
         overlay_group = QGroupBox("Overlay")
         overlay_form = QFormLayout(overlay_group)
+        self.video_display_show_fps_overlay_checkbox = QCheckBox("Show FPS overlay on video display")
+        self.video_display_show_fps_overlay_checkbox.setChecked(bool(show_fps_overlay))
+        self.video_display_show_fps_overlay_checkbox.setToolTip(
+            "Shows actual display repaint cadence for the video display path, not the source file frame rate."
+        )
+        overlay_form.addRow(self.video_display_show_fps_overlay_checkbox)
         self.video_display_show_lyric_overlay_checkbox = QCheckBox("Show lyric on video")
         self.video_display_show_lyric_overlay_checkbox.setChecked(bool(show_lyric_overlay))
         overlay_form.addRow(self.video_display_show_lyric_overlay_checkbox)
@@ -438,6 +453,15 @@ class VideoDisplayPageMixin:
         layout.addStretch(1)
         return page
 
+    def _update_video_output_profile_note(self) -> None:
+        message = (
+            "Base resolution and frame rate apply to the main video display and NDI output. "
+            "Resizing the video window only changes on-screen scaling."
+        )
+        if bool(self.video_low_spec_mode_checkbox.isChecked()):
+            message += " Low-spec mode clamps playback to 1280x720 and 30 fps."
+        self.video_output_profile_note_label.setText(message)
+
     def _sync_video_display_lyric_role_size_mode(self) -> None:
         enabled = not bool(self.video_display_lyric_auto_adjust_role_sizes_checkbox.isChecked())
         for spin in [
@@ -469,6 +493,7 @@ class VideoDisplayPageMixin:
     def _sync_ndi_controls(self) -> None:
         ready = bool(getattr(self, "_ndi_capability_ready", False))
         enabled = ready and bool(self.ndi_output_enabled_checkbox.isChecked())
+        self._update_video_output_profile_note()
         for widget in [
             self.ndi_output_name_edit,
             self.ndi_output_resolution_mode_combo,

@@ -26,6 +26,8 @@ _SESSION_SEEK_BACKOFF_MS = 250
 _SESSION_MAX_FORWARD_DRIFT_MS = 750
 _SESSION_MAX_DECODE_FRAMES = 180
 _SESSION_FFMPEG_FRAME_TIMEOUT_SEC = 8.0
+_SESSION_FFMPEG_STREAM_RESTART_BACKOFF_MS = 250
+_SESSION_FFMPEG_STREAM_MAX_FORWARD_GAP_MS = 4000
 
 
 class _PyAVFrameSource:
@@ -36,6 +38,7 @@ class _PyAVFrameSource:
         self._container = None
         self._stream = None
         self._decoder = None
+        self._video_stream_index = 0
         self._eof = False
         self._rotation_deg = 0
         self._last_selected_image = QImage()
@@ -66,6 +69,7 @@ class _PyAVFrameSource:
         self._container = None
         self._stream = None
         self._decoder = None
+        self._video_stream_index = 0
         self._eof = False
         self._last_selected_image = QImage()
         self._last_selected_pts_ms = 0
@@ -136,7 +140,8 @@ class _PyAVFrameSource:
         if self._container is not None and self._stream is not None and self._decoder is not None:
             return
         container = _pyav.open(self._path, mode="r")
-        stream = next(iter(container.streams.video), None)
+        video_streams = list(container.streams.video)
+        stream = video_streams[0] if video_streams else None
         if stream is None:
             container.close()
             raise RuntimeError("No video stream found")
@@ -146,7 +151,8 @@ class _PyAVFrameSource:
             pass
         self._container = container
         self._stream = stream
-        self._decoder = iter(container.decode(video=stream.index))
+        self._video_stream_index = 0
+        self._decoder = iter(container.decode(video=self._video_stream_index))
         self._eof = False
         self._rotation_deg = self._stream_rotation_deg(stream)
 
@@ -180,7 +186,7 @@ class _PyAVFrameSource:
                 raise
         if self._container is None or self._stream is None:
             return
-        self._decoder = iter(self._container.decode(video=self._stream.index))
+        self._decoder = iter(self._container.decode(video=max(0, int(self._video_stream_index))))
         self._eof = False
         self._last_seek_target_ms = max(0, int(target_ms))
         self._last_selected_image = QImage()
@@ -260,6 +266,9 @@ class _FFmpegFrameSource:
             self._frame_interval_ms = max(16, int(round(1000.0 / fps)))
         self._last_image = QImage()
         self._last_bucket_ms = -1
+        self._proc = None
+        self._stream_start_ms = 0
+        self._next_frame_pts_ms = 0
 
     @property
     def backend_name(self) -> str:
@@ -280,6 +289,9 @@ class _FFmpegFrameSource:
     def close(self) -> None:
         self._last_image = QImage()
         self._last_bucket_ms = -1
+        self._next_frame_pts_ms = 0
+        self._stream_start_ms = 0
+        self._close_process()
 
     def frame_at(self, target_ms: int) -> tuple[QImage, int]:
         bucket_ms = self._bucket_ms(target_ms)
@@ -288,9 +300,38 @@ class _FFmpegFrameSource:
         ffmpeg = str(get_ffmpeg_executable() or "").strip()
         if not ffmpeg:
             raise RuntimeError("FFmpeg executable is not available")
-        seconds = max(0.0, float(bucket_ms) / 1000.0)
+        if self._should_restart_stream(bucket_ms):
+            self._restart_stream(ffmpeg, max(0, bucket_ms - _SESSION_FFMPEG_STREAM_RESTART_BACKOFF_MS))
+        return self._advance_to_bucket(bucket_ms)
+
+    def _bucket_ms(self, target_ms: int) -> int:
+        target_ms = max(0, int(target_ms))
+        interval = max(16, int(self._frame_interval_ms))
+        return max(0, int(round(target_ms / float(interval)) * interval))
+
+    def _should_restart_stream(self, bucket_ms: int) -> bool:
+        proc = self._proc
+        if proc is None:
+            return True
         try:
-            proc = subprocess.run(
+            if proc.poll() is not None:
+                return True
+        except Exception:
+            return True
+        if self._last_bucket_ms >= 0 and bucket_ms + self._frame_interval_ms < self._last_bucket_ms:
+            return True
+        if self._last_bucket_ms >= 0 and (bucket_ms - self._last_bucket_ms) > _SESSION_FFMPEG_STREAM_MAX_FORWARD_GAP_MS:
+            return True
+        if bucket_ms + self._frame_interval_ms < self._stream_start_ms:
+            return True
+        return False
+
+    def _restart_stream(self, ffmpeg: str, seek_ms: int) -> None:
+        self._close_process()
+        seconds = max(0.0, float(seek_ms) / 1000.0)
+        frame_bytes = max(1, int(self._width) * int(self._height) * 3)
+        try:
+            self._proc = subprocess.Popen(
                 [
                     ffmpeg,
                     "-hide_banner",
@@ -308,25 +349,61 @@ class _FFmpegFrameSource:
                     "-dn",
                     "-vf",
                     f"scale={int(self._width)}:{int(self._height)}:flags=bilinear",
-                    "-frames:v",
-                    "1",
                     "-pix_fmt",
                     "rgb24",
                     "-f",
                     "rawvideo",
                     "-",
                 ],
-                capture_output=True,
-                timeout=_SESSION_FFMPEG_FRAME_TIMEOUT_SEC,
-                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=frame_bytes * 2,
                 **_video_subprocess_platform_kwargs(),
             )
         except Exception as exc:
-            raise RuntimeError(f"FFmpeg frame decode failed: {exc}") from exc
-        payload = bytes(proc.stdout or b"")
-        expected = max(1, int(self._width) * int(self._height) * 3)
-        if proc.returncode != 0 or len(payload) < expected:
+            self._proc = None
+            raise RuntimeError(f"FFmpeg stream start failed: {exc}") from exc
+        self._stream_start_ms = max(0, int(seek_ms))
+        self._next_frame_pts_ms = self._stream_start_ms
+        self._last_image = QImage()
+        self._last_bucket_ms = -1
+
+    def _advance_to_bucket(self, target_bucket_ms: int) -> tuple[QImage, int]:
+        candidate_image = QImage(self._last_image)
+        candidate_bucket_ms = int(self._last_bucket_ms)
+        max_frames = max(
+            1,
+            min(
+                _SESSION_MAX_DECODE_FRAMES,
+                int(max(1, (target_bucket_ms - max(candidate_bucket_ms, self._stream_start_ms)) / float(self._frame_interval_ms))) + 4,
+            ),
+        )
+        for _ in range(max_frames):
+            if candidate_bucket_ms >= target_bucket_ms and not candidate_image.isNull():
+                break
+            image, bucket_ms = self._read_next_frame()
+            if image.isNull():
+                break
+            candidate_image = image
+            candidate_bucket_ms = bucket_ms
+            if candidate_bucket_ms >= target_bucket_ms:
+                break
+        if candidate_image.isNull():
             raise RuntimeError("FFmpeg returned no video frame")
+        self._last_image = QImage(candidate_image)
+        self._last_bucket_ms = max(0, int(candidate_bucket_ms))
+        return QImage(candidate_image), max(0, int(candidate_bucket_ms))
+
+    def _read_next_frame(self) -> tuple[QImage, int]:
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            return QImage(), -1
+        expected = max(1, int(self._width) * int(self._height) * 3)
+        payload = self._read_exact(proc.stdout, expected)
+        if payload is None:
+            self._close_process()
+            return QImage(), -1
         image = QImage(
             payload,
             max(1, int(self._width)),
@@ -338,14 +415,47 @@ class _FFmpegFrameSource:
             transform = QTransform()
             transform.rotate(self._rotation_deg)
             image = image.transformed(transform, Qt.SmoothTransformation)
-        self._last_image = QImage(image)
-        self._last_bucket_ms = bucket_ms
-        return QImage(image), max(0, int(bucket_ms))
+        bucket_ms = self._bucket_ms(self._next_frame_pts_ms)
+        self._next_frame_pts_ms = max(0, int(bucket_ms + self._frame_interval_ms))
+        return image, max(0, int(bucket_ms))
 
-    def _bucket_ms(self, target_ms: int) -> int:
-        target_ms = max(0, int(target_ms))
-        interval = max(16, int(self._frame_interval_ms))
-        return max(0, int(round(target_ms / float(interval)) * interval))
+    def _close_process(self) -> None:
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            if proc.stdout is not None:
+                proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=0.5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _read_exact(stream, expected: int) -> Optional[bytes]:
+        remaining = max(1, int(expected))
+        chunks: list[bytes] = []
+        while remaining > 0:
+            chunk = stream.read(remaining)
+            if not chunk:
+                return None
+            if isinstance(chunk, memoryview):
+                chunk = chunk.tobytes()
+            else:
+                chunk = bytes(chunk)
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
 
 def _video_subprocess_platform_kwargs() -> dict:

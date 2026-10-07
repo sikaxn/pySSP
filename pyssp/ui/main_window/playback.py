@@ -1296,7 +1296,14 @@ class PlaybackMixin:
         self._refresh_timecode_panel()
         self._refresh_stage_display()
         refresh_video = getattr(self, "_refresh_video_display", None)
-        if callable(refresh_video):
+        should_refresh_video = True
+        should_refresh_checker = getattr(self, "_video_position_change_requires_surface_refresh", None)
+        if callable(should_refresh_checker):
+            try:
+                should_refresh_video = bool(should_refresh_checker())
+            except Exception:
+                should_refresh_video = True
+        if callable(refresh_video) and should_refresh_video:
             refresh_video()
 
     def _on_secondary_position_changed(self, _pos: int) -> None:

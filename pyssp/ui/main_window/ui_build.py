@@ -161,6 +161,11 @@ class UiBuildMixin:
         )
         layout.addWidget(self.playback_warning_banner)
         self._configure_banner_label(
+            self.video_backend_warning_banner,
+            "QLabel{background:#FFF4DD; color:#5A3400; border:1px solid #C98B1F; padding:6px; font-weight:bold;}",
+        )
+        layout.addWidget(self.video_backend_warning_banner)
+        self._configure_banner_label(
             self.save_notice_banner,
             "QLabel{background:#E4F7E7; color:#165A20; border:1px solid #2E9B47; padding:6px; font-weight:bold;}",
         )
@@ -1498,12 +1503,24 @@ class UiBuildMixin:
         runtime_session_map = {session.session_id: session for session in runtime_sessions}
         ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
         ffprobe_path = str(get_ffprobe_executable() or "").strip()
+        current_video_session_snapshot = None
         current_video_slot = None
         current_video_probe = MediaProbeInfo()
         try:
             current_video_slot, current_video_probe = self._current_video_slot_and_probe()
         except Exception:
             current_video_slot, current_video_probe = None, MediaProbeInfo()
+        current_video_session_id = ""
+        try:
+            current_video_session_id = str(self._current_video_session_id() or "").strip()
+        except Exception:
+            current_video_session_id = ""
+        video_session_snapshot_getter = getattr(self._audio_service, "video_session_snapshot", None)
+        if current_video_session_id and callable(video_session_snapshot_getter):
+            try:
+                current_video_session_snapshot = video_session_snapshot_getter(current_video_session_id)
+            except Exception:
+                current_video_session_snapshot = None
         ndi_runtime_snapshot = None
         for destination in runtime_diagnostics.video_destinations:
             if str(getattr(destination, "destination_id", "") or "") == "ndi_program":
@@ -1529,6 +1546,9 @@ class UiBuildMixin:
             ("runtime_transport_position_ms", int(runtime_transport.position_ms)),
             ("runtime_transport_duration_ms", int(runtime_transport.duration_ms)),
             ("runtime_session_count", int(runtime_diagnostics.session_count)),
+            ("playback_engine_active_mode", str(getattr(self, "_active_playback_engine_mode", "") or "")),
+            ("playback_engine_selected_mode", str(getattr(self, "playback_engine_mode", "") or "")),
+            ("playback_engine_restart_required", bool(getattr(self, "_playback_engine_restart_required", False))),
             ("runtime_render_core", str(getattr(runtime_diagnostics, "render_core", "") or "")),
             ("runtime_audio_output_stream_active", bool(getattr(runtime_diagnostics, "audio_output_stream_active", False))),
             ("runtime_audio_sample_rate", int(getattr(runtime_diagnostics, "audio_output_sample_rate", 0) or 0)),
@@ -1585,6 +1605,7 @@ class UiBuildMixin:
             ("ffmpeg_path", ffmpeg_path or "not found"),
             ("ffprobe_path", ffprobe_path or "not found"),
             ("ffmpeg_version", ffmpeg_version_text() or "unknown"),
+            ("video_low_spec_mode", bool(getattr(self, "video_low_spec_mode", False))),
             ("ndi_enabled", bool(getattr(self, "ndi_output_enabled", False))),
             ("ndi_ready", bool(getattr(getattr(self, "_ndi_status", None), "ready", False))),
             ("ndi_backend", str(getattr(getattr(self, "_ndi_status", None), "ndi_backend_name", "ndi-runtime") or "ndi-runtime")),
@@ -1632,6 +1653,14 @@ class UiBuildMixin:
                     f"rotation={int(current_video_probe.rotation_deg)}"
                 ),
             ),
+            (
+                "current_video_backend",
+                str(getattr(current_video_session_snapshot, "backend_name", "") or ""),
+            ),
+            (
+                "current_video_backend_error",
+                str(getattr(current_video_session_snapshot, "error", "") or ""),
+            ),
         ]
         player_records: List[dict] = []
         runtime_players = self._insight_runtime_players()
@@ -1645,6 +1674,9 @@ class UiBuildMixin:
         sessions = self._audio_service.runtime_session_snapshots()
         return {
             "engine_diagnostics": {
+                "active_engine_mode": str(getattr(self, "_active_playback_engine_mode", "") or ""),
+                "selected_engine_mode": str(getattr(self, "playback_engine_mode", "") or ""),
+                "restart_required": bool(getattr(self, "_playback_engine_restart_required", False)),
                 "generated_at": float(diagnostics.generated_at),
                 "session_count": int(diagnostics.session_count),
                 "active_session_ids": list(diagnostics.active_session_ids),

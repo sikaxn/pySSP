@@ -109,6 +109,7 @@ from pyssp.ffmpeg_support import (
     media_has_video_stream,
     probe_media_info,
 )
+from pyssp.playback_engine import PLAYBACK_ENGINE_LEGACY, normalize_playback_engine
 from pyssp.dsp import DSPConfig, normalize_config
 from pyssp.display_focus import (
     DISPLAY_FOCUS_BACKDROP,

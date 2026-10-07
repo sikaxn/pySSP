@@ -193,6 +193,9 @@ class SelectionMixin:
     def selected_video_display_show_backdrop_message(self) -> bool:
         return bool(self.video_display_show_backdrop_message_checkbox.isChecked())
 
+    def selected_video_display_show_fps_overlay(self) -> bool:
+        return bool(self.video_display_show_fps_overlay_checkbox.isChecked())
+
     def selected_video_display_show_lyric_overlay(self) -> bool:
         return bool(self.video_display_show_lyric_overlay_checkbox.isChecked())
 
@@ -347,8 +350,14 @@ class SelectionMixin:
     def selected_preload_use_ffmpeg(self) -> bool:
         return bool(self.preload_use_ffmpeg_checkbox.isChecked())
 
+    def selected_playback_engine_mode(self) -> str:
+        return normalize_playback_engine(self.playback_engine_combo.currentData() or PLAYBACK_ENGINE_LEGACY)
+
     def selected_preload_video_enabled(self) -> bool:
         return bool(self.preload_video_enabled_checkbox.isChecked())
+
+    def selected_video_low_spec_mode(self) -> bool:
+        return bool(self.video_low_spec_mode_checkbox.isChecked())
 
     def selected_waveform_cache_limit_mb(self) -> int:
         step_mb = int(self._waveform_cache_slider_step_mb)

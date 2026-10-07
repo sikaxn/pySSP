@@ -20,6 +20,7 @@ from pyssp.display_focus import (
     normalize_display_route_source,
     normalize_display_output_mode,
 )
+from pyssp.playback_engine import PLAYBACK_ENGINE_LEGACY, normalize_playback_engine
 from pyssp.set_loader import parse_delphi_color
 
 
@@ -712,7 +713,9 @@ class AppSettings:
     preload_memory_pressure_enabled: bool = True
     preload_pause_on_playback: bool = True
     preload_use_ffmpeg: bool = True
+    playback_engine_mode: str = PLAYBACK_ENGINE_LEGACY
     preload_video_enabled: bool = False
+    video_low_spec_mode: bool = False
     waveform_cache_limit_mb: int = 1024
     waveform_cache_clear_on_launch: bool = True
     max_multi_play_songs: int = 5
@@ -1024,6 +1027,7 @@ class AppSettings:
     video_display_backdrop_path: str = ""
     video_display_show_backdrop_message: bool = True
     video_display_transition_fade_sec: float = 0.5
+    video_display_show_fps_overlay: bool = False
     video_display_show_lyric_overlay: bool = False
     video_display_show_stage_alert: bool = False
     video_display_lyric_overlay_rect: dict[str, int] = field(default_factory=default_video_display_lyric_overlay_rect)
@@ -1194,7 +1198,9 @@ def save_settings(settings: AppSettings) -> None:
         "preload_memory_pressure_enabled": "1" if settings.preload_memory_pressure_enabled else "0",
         "preload_pause_on_playback": "1" if settings.preload_pause_on_playback else "0",
         "preload_use_ffmpeg": "1" if settings.preload_use_ffmpeg else "0",
+        "playback_engine_mode": normalize_playback_engine(settings.playback_engine_mode),
         "preload_video_enabled": "1" if settings.preload_video_enabled else "0",
+        "video_low_spec_mode": "1" if settings.video_low_spec_mode else "0",
         "waveform_cache_limit_mb": str(settings.waveform_cache_limit_mb),
         "waveform_cache_clear_on_launch": "1" if settings.waveform_cache_clear_on_launch else "0",
         "max_multi_play_songs": str(settings.max_multi_play_songs),
@@ -1548,6 +1554,7 @@ def save_settings(settings: AppSettings) -> None:
         "video_display_backdrop_path": _encode_ascii_setting(settings.video_display_backdrop_path),
         "video_display_show_backdrop_message": "1" if settings.video_display_show_backdrop_message else "0",
         "video_display_transition_fade_sec": str(_clamp_float(float(settings.video_display_transition_fade_sec), 0.0, 10.0)),
+        "video_display_show_fps_overlay": "1" if settings.video_display_show_fps_overlay else "0",
         "video_display_show_lyric_overlay": "1" if settings.video_display_show_lyric_overlay else "0",
         "video_display_show_stage_alert": "1" if settings.video_display_show_stage_alert else "0",
         "video_display_lyric_overlay_rect": json.dumps(
@@ -1732,6 +1739,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         0.0,
         10.0,
     )
+    video_display_show_fps_overlay = _get_bool(section, "video_display_show_fps_overlay", False)
     video_display_show_lyric_overlay = _get_bool(section, "video_display_show_lyric_overlay", False)
     video_display_show_stage_alert = _get_bool(section, "video_display_show_stage_alert", False)
     raw_video_display_lyric_overlay_rect = str(section.get("video_display_lyric_overlay_rect", "")).strip()
@@ -1835,7 +1843,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
     max_multi_play_songs = _clamp_int(_get_int(section, "max_multi_play_songs", 5), 1, 32)
     preload_audio_memory_limit_mb = _clamp_int(_get_int(section, "preload_audio_memory_limit_mb", 512), 64, 1048576)
     waveform_cache_limit_mb = _clamp_int(_get_int(section, "waveform_cache_limit_mb", 1024), 128, 16384)
+    playback_engine_mode = normalize_playback_engine(section.get("playback_engine_mode", PLAYBACK_ENGINE_LEGACY))
     preload_video_enabled = _get_bool(section, "preload_video_enabled", False)
+    video_low_spec_mode = _get_bool(section, "video_low_spec_mode", False)
     multi_play_limit_action = str(section.get("multi_play_limit_action", "stop_oldest")).strip().lower()
     if multi_play_limit_action not in {"disallow_more_play", "stop_oldest"}:
         multi_play_limit_action = "stop_oldest"
@@ -2284,7 +2294,9 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         preload_memory_pressure_enabled=_get_bool(section, "preload_memory_pressure_enabled", True),
         preload_pause_on_playback=_get_bool(section, "preload_pause_on_playback", True),
         preload_use_ffmpeg=_get_bool(section, "preload_use_ffmpeg", True),
+        playback_engine_mode=playback_engine_mode,
         preload_video_enabled=preload_video_enabled,
+        video_low_spec_mode=video_low_spec_mode,
         waveform_cache_limit_mb=waveform_cache_limit_mb,
         waveform_cache_clear_on_launch=_get_bool(section, "waveform_cache_clear_on_launch", True),
         max_multi_play_songs=max_multi_play_songs,
@@ -2604,6 +2616,7 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         video_display_backdrop_path=video_display_backdrop_path,
         video_display_show_backdrop_message=video_display_show_backdrop_message,
         video_display_transition_fade_sec=video_display_transition_fade_sec,
+        video_display_show_fps_overlay=video_display_show_fps_overlay,
         video_display_show_lyric_overlay=video_display_show_lyric_overlay,
         video_display_show_stage_alert=video_display_show_stage_alert,
         video_display_lyric_overlay_rect=parsed_video_display_lyric_overlay_rect,

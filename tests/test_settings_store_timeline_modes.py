@@ -64,6 +64,21 @@ def test_meter_output_tap_mode_defaults_post_fader_and_loads_pre_fader():
     assert settings.meter_output_tap_mode == "post_fader"
 
 
+def test_playback_engine_mode_defaults_legacy_and_normalizes_invalid_values():
+    parser = configparser.ConfigParser()
+    parser["main"] = {}
+    settings = _from_parser(parser)
+    assert settings.playback_engine_mode == "legacy"
+
+    parser["main"]["playback_engine_mode"] = "v2"
+    settings = _from_parser(parser)
+    assert settings.playback_engine_mode == "v2"
+
+    parser["main"]["playback_engine_mode"] = "something-else"
+    settings = _from_parser(parser)
+    assert settings.playback_engine_mode == "legacy"
+
+
 def test_launchpad_empty_sound_button_lights_default_on_and_loads_false():
     parser = configparser.ConfigParser()
     parser["main"] = {}

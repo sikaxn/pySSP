@@ -9,7 +9,7 @@ import pyssp.audio_engine as audio_engine_module
 from pyssp.audio_service import AudioService
 import pyssp.engine.runtime as runtime_module
 import pyssp.engine.video_session as video_session_module
-from pyssp.engine import FFmpegEngineServices, MediaRuntime
+from pyssp.engine import FFmpegEngineServices, MediaRuntime, PlaybackV2Runtime, create_media_runtime
 from pyssp.engine.types import MediaProbeResult, VideoFrameSnapshot, VideoSessionSnapshot
 
 
@@ -132,6 +132,64 @@ def test_media_runtime_tracks_reference_session_and_multi_play_policy():
     snapshot = runtime.transport_snapshot()
     assert snapshot.reference_session_id == "b"
     assert snapshot.active_session_ids == ("b",)
+
+
+def test_runtime_factory_selects_legacy_and_v2_modes():
+    legacy_runtime = create_media_runtime(playback_engine_mode="legacy", player_factory=_FakePlayer)
+    v2_runtime = create_media_runtime(playback_engine_mode="v2", player_factory=_FakePlayer)
+
+    try:
+        assert isinstance(legacy_runtime, MediaRuntime)
+        assert not isinstance(legacy_runtime, PlaybackV2Runtime)
+        assert isinstance(v2_runtime, PlaybackV2Runtime)
+    finally:
+        legacy_runtime.shutdown()
+        v2_runtime.shutdown()
+
+
+def test_playback_v2_runtime_marks_render_core_and_tracks_session_shell():
+    runtime = create_media_runtime(playback_engine_mode="v2", player_factory=_FakePlayer)
+
+    try:
+        runtime.create_session("player-1")
+        diagnostics = runtime.diagnostics_snapshot()
+
+        assert diagnostics.render_core == "playback_v2_shared_mix_graph_v1"
+        assert runtime.set_session_slot_key("player-1", ("A", 0, 1)) is True
+    finally:
+        runtime.shutdown()
+
+
+def test_playback_v2_runtime_tracks_transport_like_legacy_runtime():
+    runtime = create_media_runtime(playback_engine_mode="v2", player_factory=_FakePlayer)
+
+    try:
+        a = runtime.create_session("a")
+        b = runtime.create_session("b")
+        a.durationChanged.emit(5000)
+        b.durationChanged.emit(6000)
+        a.positionChanged.emit(1200)
+        b.positionChanged.emit(2400)
+        a.play()
+        b.play()
+
+        snapshot = runtime.transport_snapshot()
+        assert snapshot.reference_session_id == "b"
+        assert snapshot.position_ms == 2400
+        assert snapshot.duration_ms == 6000
+        assert snapshot.playing_session_ids == ("a", "b")
+
+        runtime.set_multi_play_enabled(True)
+        snapshot = runtime.transport_snapshot()
+        assert snapshot.reference_session_id == "a"
+        assert snapshot.position_ms == 1200
+
+        runtime.delete_session("a")
+        snapshot = runtime.transport_snapshot()
+        assert snapshot.reference_session_id == "b"
+        assert snapshot.active_session_ids == ("b",)
+    finally:
+        runtime.shutdown()
 
 
 def test_audio_service_delegates_session_ownership_to_runtime():
@@ -266,6 +324,42 @@ def test_pyav_frame_source_preserves_lookahead_frame():
     assert first_image.pixelColor(0, 0).name() == "#ff0000"
     assert second_image.pixelColor(0, 0).name() == "#00ff00"
     assert third_image.pixelColor(0, 0).name() == "#0000ff"
+
+
+def test_pyav_frame_source_decodes_first_video_stream_without_using_global_stream_index(monkeypatch):
+    decode_calls: list[dict[str, int]] = []
+
+    class _FakeStream:
+        def __init__(self) -> None:
+            self.index = 1
+            self.metadata = {}
+            self.time_base = None
+            self.thread_type = None
+
+    class _FakeContainer:
+        def __init__(self) -> None:
+            self.streams = type("_Streams", (), {"video": [_FakeStream()]})()
+
+        def decode(self, **kwargs):
+            decode_calls.append(dict(kwargs))
+            return iter(())
+
+        def close(self) -> None:
+            return None
+
+    class _FakePyAV:
+        @staticmethod
+        def open(_path: str, mode: str = "r"):
+            assert mode == "r"
+            return _FakeContainer()
+
+    monkeypatch.setattr(video_session_module, "_pyav", _FakePyAV())
+
+    source = video_session_module._PyAVFrameSource("clip.mp4", 640, 360)
+    source._ensure_open()
+
+    assert decode_calls == [{"video": 0}]
+    source.close()
 
 
 def test_ffmpeg_engine_services_wrap_existing_support_module(monkeypatch):

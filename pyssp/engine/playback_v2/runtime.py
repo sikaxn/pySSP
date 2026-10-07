@@ -1,0 +1,955 @@
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+import numpy as np
+from PyQt5.QtGui import QImage
+
+from pyssp.audio_engine import (
+    ExternalMediaPlayer,
+    consume_output_monitor_chunk,
+    list_output_monitor_players,
+    mix_output_monitor_chunk,
+    output_monitor_frame_counts,
+)
+from pyssp.engine.ffmpeg import FFmpegEngineServices
+from pyssp.engine.types import (
+    AudioBusId,
+    EngineDiagnosticsSnapshot,
+    MediaProbeResult,
+    PlaybackSessionId,
+    RuntimeSessionSnapshot,
+    TransportSnapshot,
+    VideoDestinationId,
+    VideoDestinationSnapshot,
+    VideoFrameSnapshot,
+    VideoSessionSnapshot,
+)
+from pyssp.engine.video_session import UnifiedVideoSession
+from pyssp.ndi_debug import ndi_debug_print_enabled
+from pyssp.ndi_output import NDIOutputConfig, NDIOutputDispatcher
+from pyssp.ndi_support import NDICapabilityStatus
+
+from .destination import PlaybackV2DestinationState
+from .session import PlaybackV2SessionState
+from .telemetry import PlaybackV2Telemetry
+
+_DEFAULT_AUDIO_BUS_IDS: tuple[AudioBusId, ...] = (
+    "voice_pre",
+    "voice_post",
+    "program_pre",
+    "program_post",
+    "main_lr",
+    "aux_ndi",
+    "aux_monitor",
+)
+_DEFAULT_VIDEO_DESTINATION_IDS: tuple[VideoDestinationId, ...] = (
+    "local_program",
+    "ndi_program",
+    "monitor_program",
+)
+_DESTINATION_IDLE_WAIT_SEC = 0.01
+_DESTINATION_MIN_WAIT_SEC = 0.001
+_NDI_LOGGER = logging.getLogger("pyssp.ndi")
+
+
+@dataclass
+class _RuntimeOutputStreamProxy:
+    callback: Callable
+    sample_rate: int
+    channels: int
+    stream_blocksize: int = 1024
+
+    def _audio_callback(self, outdata, frames, time_info, status) -> None:
+        self.callback(outdata, frames, time_info, status)
+
+    @property
+    def _sample_rate(self) -> int:
+        return int(self.sample_rate)
+
+    @property
+    def _channels(self) -> int:
+        return int(self.channels)
+
+    @property
+    def _stream_blocksize(self) -> int:
+        return int(self.stream_blocksize)
+
+    @_stream_blocksize.setter
+    def _stream_blocksize(self, value: int) -> None:
+        self.stream_blocksize = max(1, int(value))
+
+
+class PlaybackV2Runtime:
+    """Playback V2 runtime that owns session, transport, video, and NDI orchestration."""
+
+    def __init__(
+        self,
+        *,
+        player_factory: Optional[Callable[[], ExternalMediaPlayer]] = None,
+        video_session_factory: Optional[
+            Callable[[PlaybackSessionId, Callable[[], int], Callable[[], int], Callable[[], int]], UnifiedVideoSession]
+        ] = None,
+        ffmpeg_services: Optional[FFmpegEngineServices] = None,
+        audio_bus_ids: tuple[AudioBusId, ...] = _DEFAULT_AUDIO_BUS_IDS,
+        video_destination_ids: tuple[VideoDestinationId, ...] = _DEFAULT_VIDEO_DESTINATION_IDS,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self._player_factory = player_factory or ExternalMediaPlayer
+        self._video_session_factory = video_session_factory
+        self._ffmpeg = ffmpeg_services or FFmpegEngineServices()
+        self._audio_bus_ids = tuple(audio_bus_ids)
+        self._video_destination_ids = tuple(video_destination_ids)
+        self._clock = clock or time.perf_counter
+        self._lock = threading.RLock()
+        self._sessions: dict[PlaybackSessionId, PlaybackV2SessionState] = {}
+        self._video_destinations: dict[VideoDestinationId, PlaybackV2DestinationState] = {
+            destination_id: PlaybackV2DestinationState(destination_id=destination_id)
+            for destination_id in self._video_destination_ids
+        }
+        self._audio_stream = None
+        self._audio_stream_blocksize = 1024
+        self._audio_sample_rate = 48000
+        self._audio_channels = 2
+        self._ndi_last_audio_source = ""
+        self._ndi_last_audio_log_at = 0.0
+        self._start_counter = 0
+        self._multi_play_enabled = False
+        self._ndi_dispatcher: Optional[NDIOutputDispatcher] = None
+        self._ndi_status_signature: tuple[bool, str, str, str] = (False, "", "", "")
+        self._destinations_wake = threading.Event()
+        self._stop_destinations = threading.Event()
+        self._destinations_thread = threading.Thread(
+            target=self._destination_loop,
+            name="pyssp-playback-v2-destinations",
+            daemon=True,
+        )
+        self._destinations_thread.start()
+        self._shutdown_complete = False
+        self._telemetry = PlaybackV2Telemetry()
+
+    @property
+    def ffmpeg(self) -> FFmpegEngineServices:
+        return self._ffmpeg
+
+    def has_session(self, session_id: PlaybackSessionId) -> bool:
+        with self._lock:
+            return str(session_id) in self._sessions
+
+    def create_session(self, session_id: PlaybackSessionId) -> ExternalMediaPlayer:
+        token = str(session_id)
+        with self._lock:
+            existing = self._sessions.get(token)
+            if existing is not None:
+                return existing.player
+            player = self._player_factory()
+            video_session = self._create_video_session(token)
+            session = PlaybackV2SessionState(
+                session_id=token,
+                player=player,
+                video_session=video_session,
+            )
+            self._sessions[token] = session
+            self._telemetry.created_session_count += 1
+        try:
+            player.setOutputMonitorId(token)
+        except Exception:
+            pass
+        self._ensure_audio_output_stream_for_player(player)
+        player.positionChanged.connect(lambda value, sid=token: self._on_position_changed(sid, value))
+        player.durationChanged.connect(lambda value, sid=token: self._on_duration_changed(sid, value))
+        player.stateChanged.connect(lambda value, sid=token: self._on_state_changed(sid, value))
+        return player
+
+    def create_legacy_session(self, session_id: PlaybackSessionId) -> ExternalMediaPlayer:
+        return self.create_session(session_id)
+
+    def player_for_session(self, session_id: PlaybackSessionId) -> ExternalMediaPlayer:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                raise RuntimeError(f"Media session not found: {session_id}")
+            return session.player
+
+    def delete_session(self, session_id: PlaybackSessionId) -> bool:
+        session: Optional[PlaybackV2SessionState]
+        with self._lock:
+            session = self._sessions.pop(str(session_id), None)
+        if session is None:
+            return False
+        try:
+            session.video_session.shutdown()
+        except Exception:
+            pass
+        try:
+            session.player.stop()
+        except Exception:
+            pass
+        try:
+            session.player.deleteLater()
+        except Exception:
+            pass
+        self._telemetry.deleted_session_count += 1
+        return True
+
+    def set_session_slot_key(self, session_id: PlaybackSessionId, slot_key: Optional[tuple[str, int, int]]) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return False
+            session.slot_key = tuple(slot_key) if slot_key is not None else None
+            return True
+
+    def session_snapshots(self) -> tuple[RuntimeSessionSnapshot, ...]:
+        with self._lock:
+            sessions = sorted(self._sessions.values(), key=lambda item: (item.started_order, item.session_id))
+            return tuple(
+                RuntimeSessionSnapshot(
+                    session_id=session.session_id,
+                    runtime_id=max(-1, int(session.started_order)),
+                    started_at=float(session.started_at),
+                    state=int(session.state),
+                    position_ms=max(0, int(session.position_ms)),
+                    duration_ms=max(0, int(session.duration_ms)),
+                    slot_key=tuple(session.slot_key) if session.slot_key is not None else None,
+                )
+                for session in sessions
+            )
+
+    def video_destination_snapshots(self) -> tuple[VideoDestinationSnapshot, ...]:
+        with self._lock:
+            snapshots: list[VideoDestinationSnapshot] = []
+            dispatcher = self._ndi_dispatcher
+            for destination_id in self._video_destination_ids:
+                record = self._video_destinations.get(
+                    destination_id,
+                    PlaybackV2DestinationState(destination_id=destination_id),
+                )
+                frame = QImage(record.frame_image) if record.frame_image is not None else QImage()
+                last_audio_mode = ""
+                last_audio_error = ""
+                audio_drop_count = 0
+                audio_recovery_count = 0
+                sender_ready = False
+                if destination_id == "ndi_program" and dispatcher is not None:
+                    sender_ready = bool(getattr(dispatcher, "available", False))
+                    last_audio_mode = str(getattr(dispatcher, "_last_audio_mode", "") or "")
+                    last_audio_error = str(getattr(dispatcher, "_last_audio_error", "") or "")
+                    audio_drop_count = max(0, int(getattr(dispatcher, "_audio_drop_count", 0) or 0))
+                    audio_recovery_count = max(0, int(getattr(dispatcher, "_audio_recovery_count", 0) or 0))
+                    last_network_config_error = str(getattr(dispatcher, "_last_network_config_error", "") or "")
+                    last_network_config_path = str(getattr(dispatcher, "_last_network_config_path", "") or "")
+                else:
+                    last_network_config_error = ""
+                    last_network_config_path = ""
+                snapshots.append(
+                    VideoDestinationSnapshot(
+                        destination_id=destination_id,
+                        enabled=bool(record.enabled),
+                        route_mode=str(record.route_mode or "blank"),
+                        source_name=str(record.source_name or ""),
+                        width=max(0, int(record.width)),
+                        height=max(0, int(record.height)),
+                        fps=max(0.0, float(record.fps)),
+                        audio_enabled=bool(record.audio_enabled),
+                        audio_tap_mode=str(record.audio_tap_mode or "post_fader"),
+                        groups=str(record.groups or "Public"),
+                        discovery_servers=str(record.discovery_servers or ""),
+                        allowed_adapters=tuple(record.allowed_adapters),
+                        multicast_enabled=bool(record.multicast_enabled),
+                        multicast_ttl=max(1, int(record.multicast_ttl)),
+                        multicast_netmask=str(record.multicast_netmask or "255.255.0.0"),
+                        multicast_netprefix=str(record.multicast_netprefix or "239.255.0.0"),
+                        sender_ready=sender_ready,
+                        connection_count=max(0, int(record.connection_count)),
+                        has_current_frame=not frame.isNull(),
+                        current_frame_width=max(0, int(frame.width())),
+                        current_frame_height=max(0, int(frame.height())),
+                        last_video_pts_ms=max(0, int(record.last_video_pts_ms)),
+                        last_video_source_path=str(record.last_video_source_path or ""),
+                        frame_submit_count=max(0, int(record.frame_submit_count)),
+                        video_send_count=max(0, int(record.video_send_count)),
+                        audio_send_count=max(0, int(record.audio_send_count)),
+                        audio_drop_count=audio_drop_count,
+                        audio_recovery_count=audio_recovery_count,
+                        last_audio_sample_rate=max(1, int(record.last_audio_sample_rate)),
+                        last_audio_channel_count=max(1, int(record.last_audio_channel_count)),
+                        last_audio_mode=last_audio_mode,
+                        last_audio_error=last_audio_error,
+                        last_network_config_error=last_network_config_error,
+                        last_network_config_path=last_network_config_path,
+                    )
+                )
+            return tuple(snapshots)
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown_complete:
+                return
+            self._shutdown_complete = True
+        self._stop_destinations.set()
+        self._destinations_wake.set()
+        try:
+            self._destinations_thread.join(timeout=1.5)
+        except Exception:
+            pass
+        self._shutdown_audio_output_stream()
+        dispatcher: Optional[NDIOutputDispatcher]
+        with self._lock:
+            dispatcher = self._ndi_dispatcher
+            self._ndi_dispatcher = None
+        if dispatcher is not None:
+            try:
+                dispatcher.shutdown()
+            except Exception:
+                pass
+        with self._lock:
+            session_ids = list(self._sessions.keys())
+        for session_id in session_ids:
+            self.delete_session(session_id)
+        self._ffmpeg.shutdown()
+
+    def set_multi_play_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._multi_play_enabled = bool(enabled)
+
+    def transport_snapshot(self) -> TransportSnapshot:
+        with self._lock:
+            return self._transport_snapshot_locked()
+
+    def diagnostics_snapshot(self) -> EngineDiagnosticsSnapshot:
+        with self._lock:
+            snapshot = self._transport_snapshot_locked()
+            session_count = len(self._sessions)
+        return EngineDiagnosticsSnapshot(
+            generated_at=self._clock(),
+            session_count=session_count,
+            active_session_ids=snapshot.active_session_ids,
+            playing_session_ids=snapshot.playing_session_ids,
+            reference_session_id=snapshot.reference_session_id,
+            ffmpeg_available=self._ffmpeg.available(),
+            ffmpeg_source=self._ffmpeg.source(),
+            ffmpeg_version=self._ffmpeg.version_text(),
+            audio_bus_ids=self._audio_bus_ids,
+            video_destination_ids=self._video_destination_ids,
+            render_core="playback_v2_shared_mix_graph_v1",
+            audio_output_stream_active=self._audio_stream is not None,
+            audio_output_sample_rate=max(0, int(self._audio_sample_rate)),
+            audio_output_channels=max(0, int(self._audio_channels)),
+            audio_output_blocksize=max(0, int(self._audio_stream_blocksize)),
+            local_video_runtime_enabled=True,
+            video_destinations=self.video_destination_snapshots(),
+        )
+
+    def probe_media(self, path: str) -> MediaProbeResult:
+        return self._ffmpeg.probe_media_info(path)
+
+    def configure_session_video(
+        self,
+        session_id: PlaybackSessionId,
+        source_path: str,
+        *,
+        position_ms: int = 0,
+        width: int = 0,
+        height: int = 0,
+        force: bool = False,
+    ) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+        if session is None:
+            return False
+        return bool(
+            session.video_session.configure(
+                source_path,
+                position_ms=position_ms,
+                width=width,
+                height=height,
+                force=force,
+            )
+        )
+
+    def clear_session_video(self, session_id: PlaybackSessionId) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+        if session is None:
+            return False
+        return bool(session.video_session.clear())
+
+    def prime_session_video(self, session_id: PlaybackSessionId, position_ms: int = 0) -> bool:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+        if session is None:
+            return False
+        return bool(session.video_session.prime(position_ms=position_ms))
+
+    def video_session_snapshot(self, session_id: PlaybackSessionId) -> VideoSessionSnapshot:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+        if session is None:
+            return VideoSessionSnapshot(session_id=str(session_id))
+        return session.video_session.snapshot()
+
+    def video_session_frame(self, session_id: PlaybackSessionId) -> VideoFrameSnapshot:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+        if session is None:
+            return VideoFrameSnapshot(session_id=str(session_id))
+        return session.video_session.current_frame()
+
+    def _ensure_audio_output_stream_for_player(self, player: ExternalMediaPlayer) -> None:
+        with self._lock:
+            if self._audio_stream is not None:
+                return
+            try:
+                self._audio_sample_rate = max(1, int(player.sampleRate()))
+            except Exception:
+                self._audio_sample_rate = 48000
+            self._audio_channels = max(1, int(getattr(player, "_channels", self._audio_channels) or self._audio_channels))
+            proxy = _RuntimeOutputStreamProxy(
+                callback=self._audio_output_callback,
+                sample_rate=self._audio_sample_rate,
+                channels=self._audio_channels,
+                stream_blocksize=1024,
+            )
+            stream = ExternalMediaPlayer._create_stream(proxy)
+            self._audio_stream = stream
+            self._audio_stream_blocksize = max(1, int(proxy._stream_blocksize))
+        try:
+            self._audio_stream.start()
+        except Exception:
+            pass
+
+    def _shutdown_audio_output_stream(self) -> None:
+        stream = None
+        with self._lock:
+            stream = self._audio_stream
+            self._audio_stream = None
+        if stream is None:
+            return
+        try:
+            stream.stop()
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    def _audio_output_callback(self, outdata, frames, _time_info, _status) -> None:
+        frame_count = max(0, int(frames))
+        if frame_count <= 0:
+            return
+        outdata.fill(0.0)
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            active_players: list[ExternalMediaPlayer] = []
+            for session in self._sessions.values():
+                try:
+                    if session.player.wantsAudioRender():
+                        active_players.append(session.player)
+                except Exception:
+                    continue
+        finally:
+            self._lock.release()
+        if not active_players:
+            self._service_ndi_audio_from_render(frame_count)
+            return
+        mixed = np.zeros((frame_count, self._audio_channels), dtype=np.float32)
+        for player in active_players:
+            try:
+                block = np.asarray(player.renderAudioBlock(frame_count), dtype=np.float32)
+            except Exception:
+                continue
+            if block.ndim != 2 or len(block) <= 0:
+                continue
+            channels = min(int(block.shape[1]), int(mixed.shape[1]))
+            take = min(int(len(block)), frame_count)
+            if take <= 0 or channels <= 0:
+                continue
+            mixed[:take, :channels] += block[:take, :channels]
+        np.clip(mixed, -1.0, 1.0, out=mixed)
+        outdata[:frame_count, : mixed.shape[1]] = mixed
+        self._service_ndi_audio_from_render(frame_count, mixed_post_fader=mixed)
+
+    def _configure_ndi_destination_locked(
+        self,
+        record: PlaybackV2DestinationState,
+        ndi_status: Optional[NDICapabilityStatus],
+    ) -> None:
+        if record.destination_id != "ndi_program":
+            return
+        enabled = bool(record.enabled and ndi_status is not None and ndi_status.ready and ndi_status.runtime_library_path)
+        signature = (
+            bool(getattr(ndi_status, "ready", False)),
+            str(getattr(ndi_status, "runtime_library_path", "") or ""),
+            str(getattr(ndi_status, "ndi_runtime_version", "") or ""),
+            str(getattr(ndi_status, "ndi_backend_name", "") or ""),
+        )
+        if not enabled:
+            dispatcher = self._ndi_dispatcher
+            self._ndi_dispatcher = None
+            self._ndi_status_signature = (False, "", "", "")
+            record.connection_count = 0
+            if dispatcher is not None:
+                try:
+                    dispatcher.stop()
+                except Exception:
+                    pass
+            return
+        if self._ndi_dispatcher is None or self._ndi_status_signature != signature:
+            old_dispatcher = self._ndi_dispatcher
+            self._ndi_dispatcher = NDIOutputDispatcher(ndi_status)
+            self._ndi_status_signature = signature
+            if old_dispatcher is not None:
+                try:
+                    old_dispatcher.shutdown()
+                except Exception:
+                    pass
+        dispatcher = self._ndi_dispatcher
+        if dispatcher is None:
+            return
+        config = NDIOutputConfig(
+            source_name=record.source_name,
+            width=record.width,
+            height=record.height,
+            fps=record.fps,
+            audio_enabled=bool(record.audio_enabled),
+            groups=str(record.groups or "Public"),
+            discovery_servers=str(record.discovery_servers or ""),
+            allowed_adapters=tuple(record.allowed_adapters),
+            multicast_enabled=bool(record.multicast_enabled),
+            multicast_ttl=max(1, int(record.multicast_ttl)),
+            multicast_netmask=str(record.multicast_netmask or "255.255.0.0"),
+            multicast_netprefix=str(record.multicast_netprefix or "239.255.0.0"),
+        )
+        dispatcher.configure(config)
+
+    @staticmethod
+    def _destination_video_wait_timeout(record: Optional[PlaybackV2DestinationState], now: float) -> float:
+        if record is None or (not record.enabled) or record.frame_image is None:
+            return _DESTINATION_IDLE_WAIT_SEC
+        frame_interval_sec = max(1.0 / max(1.0, float(record.fps)), 0.005)
+        remaining = frame_interval_sec - max(0.0, float(now) - float(record.last_video_sent_at))
+        if remaining <= 0.0:
+            return 0.0
+        return max(_DESTINATION_MIN_WAIT_SEC, min(_DESTINATION_IDLE_WAIT_SEC, remaining))
+
+    def _destination_loop(self) -> None:
+        last_connection_poll = 0.0
+        while not self._stop_destinations.is_set():
+            now = self._clock()
+            dispatcher: Optional[NDIOutputDispatcher]
+            should_send_video = False
+            wait_timeout = _DESTINATION_IDLE_WAIT_SEC
+            frame = QImage()
+            route_mode = "blank"
+            last_video_source_path = ""
+            frame_submit_count = 0
+            last_video_pts_ms = 0
+            with self._lock:
+                record = self._video_destinations.get("ndi_program")
+                dispatcher = self._ndi_dispatcher
+                if record is not None and dispatcher is not None and record.enabled:
+                    wait_timeout = self._destination_video_wait_timeout(record, now)
+                    should_send_video = record.frame_image is not None and wait_timeout <= 0.0
+                    if should_send_video and record.frame_image is not None:
+                        frame = QImage(record.frame_image)
+                        route_mode = str(record.route_mode or "blank")
+                        last_video_source_path = str(record.last_video_source_path or "")
+                        frame_submit_count = int(record.frame_submit_count)
+                        last_video_pts_ms = int(record.last_video_pts_ms)
+            if should_send_video and not frame.isNull():
+                try:
+                    sent = bool(
+                        dispatcher.send_video_frame(
+                            frame,
+                            route_mode=route_mode,
+                            source_path=last_video_source_path,
+                            frame_submit_count=frame_submit_count,
+                            pts_ms=last_video_pts_ms,
+                            source_kind=self._ndi_video_source_kind(
+                                route_mode=route_mode,
+                                source_path=last_video_source_path,
+                            ),
+                        )
+                    )
+                except Exception:
+                    sent = False
+                if sent:
+                    with self._lock:
+                        record = self._video_destinations.get("ndi_program")
+                        if record is not None:
+                            record.video_send_count += 1
+                            record.last_video_sent_at = now
+                            record.last_video_pts_ms = last_video_pts_ms
+            if (now - last_connection_poll) >= 0.25:
+                last_connection_poll = now
+                try:
+                    connection_count = max(0, int(dispatcher.get_num_connections(0.0)))
+                except Exception:
+                    connection_count = 0
+                with self._lock:
+                    record = self._video_destinations.get("ndi_program")
+                    if record is not None:
+                        record.connection_count = connection_count
+            if self._stop_destinations.is_set():
+                break
+            self._destinations_wake.wait(timeout=wait_timeout)
+            self._destinations_wake.clear()
+
+    @staticmethod
+    def _ndi_video_source_kind(*, route_mode: str, source_path: str) -> str:
+        mode = str(route_mode or "").strip().lower() or "unknown"
+        path = str(source_path or "").strip()
+        if mode == "video":
+            return "media_video_frame" if path else "video_route_frame"
+        if mode == "image":
+            return "image_route_frame"
+        if mode == "backdrop":
+            return "backdrop_frame"
+        if mode == "blank":
+            return "blank_frame"
+        if mode == "white_screen":
+            return "white_screen_frame"
+        if mode == "colour_bars":
+            return "colour_bars_frame"
+        if mode == "lyric_display":
+            return "lyric_display_frame"
+        if mode == "stage_display":
+            return "stage_display_frame"
+        if mode == "metronome_display":
+            return "metronome_display_frame"
+        if path:
+            return f"{mode}_frame:{os.path.basename(path)}"
+        return f"{mode}_frame"
+
+    def _ordered_output_monitor_players_locked(self, mode: str) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        transport = self._transport_snapshot_locked()
+        for session_id in transport.playing_session_ids:
+            if session_id in seen:
+                continue
+            seen.add(session_id)
+            ordered.append(session_id)
+        for player_id in list_output_monitor_players(mode):
+            token = str(player_id or "").strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            ordered.append(token)
+        return ordered
+
+    def _service_ndi_audio_from_render(self, frames: int, mixed_post_fader: Optional[np.ndarray] = None) -> None:
+        frame_count = max(0, int(frames))
+        if frame_count <= 0:
+            return
+        with self._lock:
+            record = self._video_destinations.get("ndi_program")
+            dispatcher = self._ndi_dispatcher
+            if record is None or dispatcher is None or (not record.enabled) or (not record.audio_enabled):
+                return
+            mode = str(record.audio_tap_mode or "post_fader")
+            sample_rate = max(1, int(getattr(self, "_audio_sample_rate", record.last_audio_sample_rate or 48000) or 48000))
+            channel_count = max(
+                1,
+                int(getattr(self, "_audio_channels", record.last_audio_channel_count or 2) or 2),
+            )
+        source = "idle"
+        ordered_player_count = 0
+        silent_fallback = False
+        chunk = None
+        consume_map: dict[str, int] = {}
+        if mode == "post_fader" and mixed_post_fader is not None:
+            direct = np.asarray(mixed_post_fader, dtype=np.float32)
+            if direct.ndim == 2 and len(direct) > 0 and direct.shape[1] > 0:
+                chunk = np.ascontiguousarray(direct[:frame_count, :], dtype=np.float32)
+                channel_count = int(chunk.shape[1])
+                source = "render_post_fader"
+        else:
+            ordered_player_ids = self._ordered_output_monitor_players_locked(mode)
+            ordered_player_count = len(ordered_player_ids)
+            if ordered_player_ids:
+                max_available = 0
+                for player_id in ordered_player_ids:
+                    counts = output_monitor_frame_counts(player_id)
+                    max_available = max(max_available, max(0, int(counts.get(mode, 0) or 0)))
+                target_frames = min(frame_count, max_available)
+                if target_frames > 0:
+                    mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=target_frames, mode=mode)
+                else:
+                    mixed = mix_output_monitor_chunk(ordered_player_ids, target_frames=frame_count, mode=mode)
+                if mixed is not None:
+                    mixed_chunk, mixed_consume_map = mixed
+                    if mixed_chunk.ndim == 2 and len(mixed_chunk) > 0 and mixed_chunk.shape[1] > 0:
+                        chunk = np.ascontiguousarray(mixed_chunk, dtype=np.float32)
+                        channel_count = int(chunk.shape[1])
+                        consume_map = dict(mixed_consume_map)
+                        source = f"monitor_{mode}"
+        if chunk is None:
+            chunk = self._ndi_silence_audio_block(frame_count, channel_count)
+            source = "idle_silence"
+        elif not np.any(np.abs(chunk) > 1.0e-7):
+            chunk = self._ndi_silence_audio_block(frame_count, channel_count)
+            source = "idle_silence_after_silence"
+            silent_fallback = True
+        now = self._clock()
+        if (
+            ndi_debug_print_enabled()
+            and (source != self._ndi_last_audio_source or (now - self._ndi_last_audio_log_at) >= 5.0)
+        ):
+            self._ndi_last_audio_source = source
+            self._ndi_last_audio_log_at = now
+            _NDI_LOGGER.warning(
+                "NDI audio source=%s mode=%s frames=%d sample_rate=%d channels=%d ordered_players=%d silent_replaced=%s",
+                source,
+                mode,
+                frame_count,
+                sample_rate,
+                channel_count,
+                ordered_player_count,
+                silent_fallback,
+            )
+        sent = False
+        if chunk.ndim == 2 and len(chunk) > 0 and chunk.shape[1] > 0:
+            try:
+                sent = bool(
+                    dispatcher.send_audio_frames(
+                        chunk,
+                        sample_rate,
+                        idle=source.startswith("idle_silence"),
+                    )
+                )
+            except TypeError:
+                try:
+                    sent = bool(dispatcher.send_audio_frames(chunk, sample_rate))
+                except Exception:
+                    sent = False
+            except Exception:
+                sent = False
+        if sent and consume_map:
+            consume_output_monitor_chunk(consume_map, mode=mode)
+        with self._lock:
+            record = self._video_destinations.get("ndi_program")
+            if record is None:
+                return
+            record.last_audio_sent_at = now
+            record.last_audio_sample_rate = sample_rate
+            record.last_audio_channel_count = channel_count
+            if sent:
+                record.audio_send_count += 1
+
+    def _ndi_silence_audio_block(self, frames: int, channel_count: int) -> np.ndarray:
+        frame_count = max(1, int(frames))
+        channels = max(1, int(channel_count))
+        return np.zeros((frame_count, channels), dtype=np.float32)
+
+    def configure_video_destination(
+        self,
+        destination_id: VideoDestinationId,
+        *,
+        enabled: bool,
+        route_mode: str,
+        width: int,
+        height: int,
+        fps: float,
+        source_name: str = "",
+        audio_enabled: bool = False,
+        audio_tap_mode: str = "post_fader",
+        groups: str = "Public",
+        discovery_servers: str = "",
+        allowed_adapters: tuple[str, ...] = (),
+        multicast_enabled: bool = False,
+        multicast_ttl: int = 1,
+        multicast_netmask: str = "255.255.0.0",
+        multicast_netprefix: str = "239.255.0.0",
+        ndi_status: Optional[NDICapabilityStatus] = None,
+    ) -> bool:
+        destination_token = str(destination_id)
+        if destination_token not in self._video_destinations:
+            return False
+        with self._lock:
+            record = self._video_destinations[destination_token]
+            record.enabled = bool(enabled)
+            record.route_mode = str(route_mode or "blank")
+            record.source_name = str(source_name or "pyssp-video").strip() or "pyssp-video"
+            record.width = max(2, int(width))
+            record.height = max(2, int(height))
+            record.fps = max(1.0, float(fps))
+            record.audio_enabled = bool(audio_enabled)
+            record.audio_tap_mode = str(audio_tap_mode or "post_fader").strip().lower() or "post_fader"
+            record.groups = str(groups or "Public").strip() or "Public"
+            record.discovery_servers = str(discovery_servers or "").strip()
+            record.allowed_adapters = tuple(
+                str(item or "").strip() for item in allowed_adapters if str(item or "").strip()
+            )
+            record.multicast_enabled = bool(multicast_enabled)
+            record.multicast_ttl = max(1, min(255, int(multicast_ttl)))
+            record.multicast_netmask = str(multicast_netmask or "255.255.0.0").strip() or "255.255.0.0"
+            record.multicast_netprefix = str(multicast_netprefix or "239.255.0.0").strip() or "239.255.0.0"
+            self._configure_ndi_destination_locked(record, ndi_status)
+        self._destinations_wake.set()
+        return True
+
+    def submit_video_destination_frame(
+        self,
+        destination_id: VideoDestinationId,
+        image: QImage,
+        *,
+        route_mode: Optional[str] = None,
+        pts_ms: int = 0,
+        source_path: str = "",
+    ) -> bool:
+        destination_token = str(destination_id)
+        if destination_token not in self._video_destinations or image.isNull():
+            return False
+        with self._lock:
+            record = self._video_destinations[destination_token]
+            if route_mode is not None:
+                record.route_mode = str(route_mode or record.route_mode or "blank")
+            record.frame_image = image.copy()
+            record.last_video_pts_ms = max(0, int(pts_ms))
+            record.last_video_source_path = str(source_path or "").strip()
+            record.frame_submit_count += 1
+        self._destinations_wake.set()
+        return True
+
+    def clear_video_destination_frame(self, destination_id: VideoDestinationId) -> bool:
+        destination_token = str(destination_id)
+        if destination_token not in self._video_destinations:
+            return False
+        with self._lock:
+            record = self._video_destinations[destination_token]
+            record.frame_image = None
+            record.last_video_pts_ms = 0
+            record.last_video_source_path = ""
+        return True
+
+    def video_destination_frame(self, destination_id: VideoDestinationId) -> QImage:
+        destination_token = str(destination_id)
+        with self._lock:
+            record = self._video_destinations.get(destination_token)
+            if record is None or record.frame_image is None:
+                return QImage()
+            return QImage(record.frame_image)
+
+    def _on_position_changed(self, session_id: PlaybackSessionId, value: int) -> None:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return
+            session.position_ms = max(0, int(value))
+
+    def _on_duration_changed(self, session_id: PlaybackSessionId, value: int) -> None:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return
+            session.duration_ms = max(0, int(value))
+
+    def _on_state_changed(self, session_id: PlaybackSessionId, value: int) -> None:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return
+            next_state = int(value)
+            if next_state == ExternalMediaPlayer.PlayingState and session.state != ExternalMediaPlayer.PlayingState:
+                session.started_order = self._start_counter
+                session.started_at = self._clock()
+                self._start_counter += 1
+            session.state = next_state
+            if next_state == ExternalMediaPlayer.StoppedState:
+                session.position_ms = 0
+
+    def _transport_snapshot_locked(self) -> TransportSnapshot:
+        active_ids: list[PlaybackSessionId] = []
+        playing_sessions: list[PlaybackV2SessionState] = []
+        for session_id, session in self._sessions.items():
+            if self._record_is_active(session):
+                active_ids.append(session_id)
+            if session.state == ExternalMediaPlayer.PlayingState:
+                playing_sessions.append(session)
+        reference: Optional[PlaybackV2SessionState] = None
+        if playing_sessions:
+            if self._multi_play_enabled:
+                reference = min(playing_sessions, key=lambda item: (item.started_order, item.started_at, item.session_id))
+            else:
+                reference = max(playing_sessions, key=lambda item: (item.started_order, item.started_at, item.session_id))
+        return TransportSnapshot(
+            generated_at=self._clock(),
+            reference_session_id=reference.session_id if reference is not None else None,
+            active_session_ids=tuple(sorted(active_ids)),
+            playing_session_ids=tuple(sorted(item.session_id for item in playing_sessions)),
+            multi_play_enabled=bool(self._multi_play_enabled),
+            position_ms=max(0, int(reference.position_ms)) if reference is not None else 0,
+            duration_ms=max(0, int(reference.duration_ms)) if reference is not None else 0,
+            state=int(reference.state) if reference is not None else ExternalMediaPlayer.StoppedState,
+        )
+
+    @staticmethod
+    def _record_is_active(session: PlaybackV2SessionState) -> bool:
+        return (
+            session.state in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}
+            or session.position_ms > 0
+            or session.duration_ms > 0
+        )
+
+    def _create_video_session(self, session_id: PlaybackSessionId) -> UnifiedVideoSession:
+        if callable(self._video_session_factory):
+            return self._video_session_factory(
+                str(session_id),
+                lambda sid=str(session_id): self._session_state_value(sid),
+                lambda sid=str(session_id): self._session_position_value(sid),
+                lambda sid=str(session_id): self._session_duration_value(sid),
+            )
+        return UnifiedVideoSession(
+            str(session_id),
+            state_getter=lambda sid=str(session_id): self._session_state_value(sid),
+            position_getter=lambda sid=str(session_id): self._session_position_value(sid),
+            duration_getter=lambda sid=str(session_id): self._session_duration_value(sid),
+            clock=self._clock,
+        )
+
+    def _session_state_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return ExternalMediaPlayer.StoppedState
+            player = session.player
+        try:
+            return int(player.state())
+        except Exception:
+            return ExternalMediaPlayer.StoppedState
+
+    def _session_position_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return 0
+            player = session.player
+        try:
+            if player.state() == ExternalMediaPlayer.PlayingState:
+                return max(0, int(player.enginePositionMs()))
+        except Exception:
+            pass
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
+
+    def _session_duration_value(self, session_id: PlaybackSessionId) -> int:
+        with self._lock:
+            session = self._sessions.get(str(session_id))
+            if session is None:
+                return 0
+            player = session.player
+        try:
+            return max(0, int(player.duration()))
+        except Exception:
+            return 0

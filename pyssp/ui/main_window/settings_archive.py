@@ -1333,7 +1333,11 @@ class SettingsArchiveMixin:
         self.settings.preload_memory_pressure_enabled = bool(self.preload_memory_pressure_enabled)
         self.settings.preload_pause_on_playback = bool(self.preload_pause_on_playback)
         self.settings.preload_use_ffmpeg = bool(self.preload_use_ffmpeg)
+        self.settings.playback_engine_mode = normalize_playback_engine(
+            getattr(self, "playback_engine_mode", PLAYBACK_ENGINE_LEGACY)
+        )
         self.settings.preload_video_enabled = bool(getattr(self, "preload_video_enabled", False))
+        self.settings.video_low_spec_mode = bool(getattr(self, "video_low_spec_mode", False))
         self.settings.waveform_cache_limit_mb = int(self.waveform_cache_limit_mb)
         self.settings.waveform_cache_clear_on_launch = bool(self.waveform_cache_clear_on_launch)
         self.settings.max_multi_play_songs = self.max_multi_play_songs
@@ -1716,6 +1720,7 @@ class SettingsArchiveMixin:
             0.0,
             min(10.0, float(getattr(self, "video_display_transition_fade_sec", 0.5) or 0.0)),
         )
+        self.settings.video_display_show_fps_overlay = bool(getattr(self, "video_display_show_fps_overlay", False))
         self.settings.video_display_show_lyric_overlay = bool(getattr(self, "video_display_show_lyric_overlay", False))
         self.settings.video_display_show_stage_alert = bool(getattr(self, "video_display_show_stage_alert", False))
         self.settings.video_display_lyric_overlay_rect = dict(

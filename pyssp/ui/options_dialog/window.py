@@ -126,6 +126,7 @@ class OptionsDialog(
         "video_display_use_default_backdrop": True,
         "video_display_backdrop_path": "",
         "video_display_show_backdrop_message": True,
+        "video_display_show_fps_overlay": False,
         "video_display_show_lyric_overlay": False,
         "video_display_show_stage_alert": False,
         "video_display_lyric_overlay_rect": {"x": 800, "y": 6800, "w": 8400, "h": 2400},
@@ -204,7 +205,9 @@ class OptionsDialog(
         "preload_memory_pressure_enabled": True,
         "preload_pause_on_playback": True,
         "preload_use_ffmpeg": True,
+        "playback_engine_mode": PLAYBACK_ENGINE_LEGACY,
         "preload_video_enabled": False,
+        "video_low_spec_mode": False,
         "waveform_cache_limit_mb": 1024,
         "waveform_cache_clear_on_launch": True,
         "fade_in_sec": 1.0,
@@ -514,7 +517,9 @@ class OptionsDialog(
         preload_audio_memory_limit_mb: int,
         preload_memory_pressure_enabled: bool,
         preload_pause_on_playback: bool,
+        playback_engine_mode: str,
         preload_video_enabled: bool,
+        video_low_spec_mode: bool,
         preload_total_ram_mb: int,
         preload_ram_cap_mb: int,
         timecode_audio_output_device: str,
@@ -643,6 +648,7 @@ class OptionsDialog(
         video_display_use_default_backdrop: bool,
         video_display_backdrop_path: str,
         video_display_show_backdrop_message: bool,
+        video_display_show_fps_overlay: bool,
         video_display_show_lyric_overlay: bool,
         video_display_show_stage_alert: bool,
         video_display_lyric_overlay_rect: Dict[str, int],
@@ -902,6 +908,7 @@ class OptionsDialog(
         self._verify_sound_file_on_add = bool(verify_sound_file_on_add)
         self._allow_other_unsupported_audio_files = bool(allow_other_unsupported_audio_files)
         self._disable_path_safety = bool(disable_path_safety)
+        self._playback_engine_mode = normalize_playback_engine(playback_engine_mode)
         self._is_playback_or_loading_active = is_playback_or_loading_active
         self._hotkey_labels: Dict[str, str] = {key: label for key, label in self._HOTKEY_ROWS}
         self.hotkey_warning_label: Optional[QLabel] = None
@@ -1031,6 +1038,7 @@ class OptionsDialog(
                 use_default_backdrop=video_display_use_default_backdrop,
                 backdrop_path=video_display_backdrop_path,
                 show_backdrop_message=video_display_show_backdrop_message,
+                show_fps_overlay=video_display_show_fps_overlay,
                 show_lyric_overlay=video_display_show_lyric_overlay,
                 show_stage_alert=video_display_show_stage_alert,
                 lyric_overlay_rect=video_display_lyric_overlay_rect,
@@ -1071,6 +1079,7 @@ class OptionsDialog(
                 ndi_output_name=ndi_output_name,
                 ndi_output_mode_playing=ndi_output_mode_playing,
                 ndi_output_mode_idle=ndi_output_mode_idle,
+                video_low_spec_mode=video_low_spec_mode,
                 ndi_output_resolution_mode=ndi_output_resolution_mode,
                 ndi_output_width=ndi_output_width,
                 ndi_output_height=ndi_output_height,
@@ -1124,6 +1133,7 @@ class OptionsDialog(
             "Playback",
             self._mono_icon("play"),
             self._build_playback_page(
+                playback_engine_mode=self._playback_engine_mode,
                 max_multi_play_songs=max_multi_play_songs,
                 multi_play_limit_action=multi_play_limit_action,
                 playlist_play_mode=playlist_play_mode,

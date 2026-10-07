@@ -77,6 +77,21 @@ def test_proxy_hot_state_reads_use_cache_without_blocking_call() -> None:
     assert controller.calls == []
 
 
+def test_proxy_engine_position_extrapolates_while_playing_without_blocking_call(monkeypatch) -> None:
+    _app()
+    controller = _FakeAudioController()
+    player = AudioPlayerProxy(controller, "player-test")
+    now = {"value": 100.0}
+    monkeypatch.setattr("pyssp.audio_service.time.perf_counter", lambda: now["value"])
+
+    player.setPosition(1000)
+    player.play()
+    now["value"] = 100.045
+
+    assert player.enginePositionMs() == 1045
+    assert controller.calls == []
+
+
 def test_proxy_set_media_async_supports_structured_utility_source() -> None:
     _app()
     controller = _FakeAudioController()

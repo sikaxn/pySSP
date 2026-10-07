@@ -675,6 +675,7 @@ class ActionsInputMixin:
         self._vocal_toggle_fade_jobs.clear()
         self._pending_vocal_removed_toggles.clear()
         self._clear_pending_deferred_audio_start()
+        self._cancel_all_pending_player_media_loads()
         self._auto_transition_done = True
         self._auto_end_fade_track = None
         self._auto_end_fade_done = False
@@ -1928,7 +1929,9 @@ class ActionsInputMixin:
             preload_memory_pressure_enabled=self.preload_memory_pressure_enabled,
             preload_pause_on_playback=self.preload_pause_on_playback,
             preload_use_ffmpeg=self.preload_use_ffmpeg,
+            playback_engine_mode=self.playback_engine_mode,
             preload_video_enabled=self.preload_video_enabled,
+            video_low_spec_mode=self.video_low_spec_mode,
             waveform_cache_limit_mb=self.waveform_cache_limit_mb,
             waveform_cache_clear_on_launch=self.waveform_cache_clear_on_launch,
             preload_total_ram_mb=total_ram_mb,
@@ -2079,6 +2082,7 @@ class ActionsInputMixin:
             video_display_use_default_backdrop=self.video_display_use_default_backdrop,
             video_display_backdrop_path=self.video_display_backdrop_path,
             video_display_show_backdrop_message=self.video_display_show_backdrop_message,
+            video_display_show_fps_overlay=self.video_display_show_fps_overlay,
             video_display_show_lyric_overlay=self.video_display_show_lyric_overlay,
             video_display_show_stage_alert=self.video_display_show_stage_alert,
             video_display_lyric_overlay_rect=self.video_display_lyric_overlay_rect,
@@ -2217,6 +2221,7 @@ class ActionsInputMixin:
         self.video_display_use_default_backdrop = dialog.selected_video_display_use_default_backdrop()
         self.video_display_backdrop_path = dialog.selected_video_display_backdrop_path()
         self.video_display_show_backdrop_message = dialog.selected_video_display_show_backdrop_message()
+        self.video_display_show_fps_overlay = dialog.selected_video_display_show_fps_overlay()
         self.video_display_show_lyric_overlay = dialog.selected_video_display_show_lyric_overlay()
         self.video_display_show_stage_alert = dialog.selected_video_display_show_stage_alert()
         self.video_display_lyric_overlay_rect = dialog.selected_video_display_lyric_overlay_rect()
@@ -2234,6 +2239,7 @@ class ActionsInputMixin:
         self.ndi_output_name = dialog.selected_ndi_output_name()
         self.ndi_output_mode_playing = dialog.selected_ndi_output_mode_playing()
         self.ndi_output_mode_idle = dialog.selected_ndi_output_mode_idle()
+        self.video_low_spec_mode = dialog.selected_video_low_spec_mode()
         self.ndi_output_resolution_mode = dialog.selected_ndi_output_resolution_mode()
         self.ndi_output_width = dialog.selected_ndi_output_width()
         self.ndi_output_height = dialog.selected_ndi_output_height()
@@ -2523,6 +2529,10 @@ class ActionsInputMixin:
         if self._search_window is not None:
             self._search_window.set_double_click_action(self.search_double_click_action)
         selected_device = dialog.selected_audio_output_device()
+        self.playback_engine_mode = dialog.selected_playback_engine_mode()
+        self._playback_engine_restart_required = self.playback_engine_mode != self._active_playback_engine_mode
+        if self._playback_engine_restart_required:
+            self._show_info_notice_banner("Playback engine change saved. Restart the app to apply it.", 8000)
         self.preload_audio_enabled = dialog.selected_preload_audio_enabled()
         self.preload_current_page_audio = dialog.selected_preload_current_page_audio()
         self.preload_audio_memory_limit_mb = dialog.selected_preload_audio_memory_limit_mb()

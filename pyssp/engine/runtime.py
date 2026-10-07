@@ -180,6 +180,9 @@ class MediaRuntime:
         with self._lock:
             return str(session_id) in self._sessions
 
+    def create_session(self, session_id: PlaybackSessionId) -> ExternalMediaPlayer:
+        return self.create_legacy_session(session_id)
+
     def create_legacy_session(self, session_id: PlaybackSessionId) -> ExternalMediaPlayer:
         token = str(session_id)
         with self._lock:

@@ -10,10 +10,13 @@ from pyssp.ffmpeg_support import FFMPEG_VIDEO_EXTENSIONS
 from pyssp.utility_audio import utility_source_payload
 from pyssp.utility_audio import UTILITY_SOURCE_TYPE
 from pyssp.utility_audio import UTILITY_MODE_METRONOME, UTILITY_MODE_PINK_NOISE, UTILITY_MODE_WAVEFORM
-from pyssp.ui.video_display import VideoDisplayWidget
+from pyssp.ui.video_display import OffscreenVideoDisplayWidget, VideoDisplayWidget
 
 _VIDEO_FILE_EXTENSIONS = {str(token or "").strip().lower() for token in FFMPEG_VIDEO_EXTENSIONS}
 _VIDEO_FRAME_FALLBACK_INTERVAL_MS = 33
+_VIDEO_LOW_SPEC_MAX_WIDTH = 1280
+_VIDEO_LOW_SPEC_MAX_HEIGHT = 720
+_VIDEO_LOW_SPEC_MAX_FPS = 30
 _VIDEO_BACKDROP_MESSAGE = "No video is playing"
 _DEFERRED_SNAPSHOT_ROUTE_MODES = {
     DISPLAY_FOCUS_STAGE,
@@ -440,11 +443,35 @@ class VideoDisplayMixin:
     def _active_ndi_route_mode(self) -> str:
         return self._active_video_route_mode()
 
+    def _video_low_spec_mode_enabled(self) -> bool:
+        return bool(getattr(self, "video_low_spec_mode", False))
+
+    def _clamp_video_dimensions_for_low_spec(self, width: int, height: int) -> tuple[int, int]:
+        target_width = max(2, int(width))
+        target_height = max(2, int(height))
+        if not self._video_low_spec_mode_enabled():
+            return target_width, target_height
+        scale = min(
+            1.0,
+            min(
+                _VIDEO_LOW_SPEC_MAX_WIDTH / float(target_width),
+                _VIDEO_LOW_SPEC_MAX_HEIGHT / float(target_height),
+            ),
+        )
+        if scale >= 0.999:
+            return target_width, target_height
+        return (
+            max(2, int(round(target_width * scale))),
+            max(2, int(round(target_height * scale))),
+        )
+
     def _configured_video_output_fps(self) -> int:
         try:
             fps = max(1, int(getattr(self, "ndi_output_fps", 30) or 30))
         except Exception:
             fps = 30
+        if self._video_low_spec_mode_enabled():
+            fps = min(_VIDEO_LOW_SPEC_MAX_FPS, fps)
         return max(1, min(120, int(fps)))
 
     def _video_target_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
@@ -458,6 +485,8 @@ class VideoDisplayMixin:
                 source_fps = 0.0
             if source_fps > 0.0:
                 fps = max(fps, min(120.0, source_fps))
+        if self._video_low_spec_mode_enabled():
+            fps = min(float(_VIDEO_LOW_SPEC_MAX_FPS), fps)
         return max(1.0, float(fps))
 
     def _video_presentation_fps(self, info: Optional[MediaProbeInfo] = None) -> float:
@@ -544,25 +573,149 @@ class VideoDisplayMixin:
     def _configured_video_output_dimensions(self, info: Optional[MediaProbeInfo] = None) -> tuple[int, int]:
         mode = str(getattr(self, "ndi_output_resolution_mode", "source") or "source").strip().lower()
         if mode == "720p":
-            return 1280, 720
+            return self._clamp_video_dimensions_for_low_spec(1280, 720)
         if mode == "1080p":
-            return 1920, 1080
+            return self._clamp_video_dimensions_for_low_spec(1920, 1080)
         if mode == "custom":
-            return (
+            return self._clamp_video_dimensions_for_low_spec(
                 max(2, int(getattr(self, "ndi_output_width", 1920) or 1920)),
                 max(2, int(getattr(self, "ndi_output_height", 1080) or 1080)),
             )
         if info is not None:
             width, height = self._video_output_dimensions(info)
             if width > 0 and height > 0:
-                return width, height
+                return self._clamp_video_dimensions_for_low_spec(width, height)
         slot, current_info = self._current_video_slot_and_probe()
         if slot is not None and bool(getattr(current_info, "has_video", False)):
-            return self._video_output_dimensions(current_info)
-        return (
+            width, height = self._video_output_dimensions(current_info)
+            return self._clamp_video_dimensions_for_low_spec(width, height)
+        return self._clamp_video_dimensions_for_low_spec(
             max(2, int(getattr(self, "ndi_output_width", 1920) or 1920)),
             max(2, int(getattr(self, "ndi_output_height", 1080) or 1080)),
         )
+
+    def _clear_video_backend_warning(self) -> None:
+        banner = getattr(self, "video_backend_warning_banner", None)
+        if banner is None:
+            return
+        banner.setVisible(False)
+        banner.setText("")
+
+    def _set_video_status_label(self, text: str, *, tooltip: str = "") -> None:
+        label = getattr(self, "video_status_label", None)
+        if label is None:
+            return
+        message = str(text or "").strip()
+        label.setText(message)
+        label.setToolTip(str(tooltip or "").strip())
+        try:
+            label.setVisible(bool(message))
+        except Exception:
+            pass
+
+    def _clear_video_status_label(self) -> None:
+        self._set_video_status_label("")
+
+    def _update_video_status_label(
+        self,
+        snapshot: Optional[object] = None,
+        *,
+        frame_snapshot: Optional[object] = None,
+        info: Optional[MediaProbeInfo] = None,
+    ) -> None:
+        label = getattr(self, "video_status_label", None)
+        if label is None:
+            return
+        backend = str(getattr(snapshot, "backend_name", "") or "").strip() or "unknown"
+        configured = bool(getattr(snapshot, "configured", False))
+        error = str(getattr(snapshot, "error", "") or "").strip()
+        ready = bool(getattr(frame_snapshot, "ready", False))
+        pts_ms = max(
+            0,
+            int(
+                (
+                    getattr(frame_snapshot, "pts_ms", 0)
+                    if frame_snapshot is not None and ready
+                    else getattr(snapshot, "frame_pts_ms", 0)
+                )
+                or 0
+            ),
+        )
+        frame_width = 0
+        frame_height = 0
+        if frame_snapshot is not None and ready:
+            image = getattr(frame_snapshot, "image", QImage())
+            if isinstance(image, QImage) and not image.isNull():
+                frame_width = max(0, int(image.width()))
+                frame_height = max(0, int(image.height()))
+        if frame_width <= 0 or frame_height <= 0:
+            frame_width = max(0, int(getattr(snapshot, "frame_width", 0) or 0))
+            frame_height = max(0, int(getattr(snapshot, "frame_height", 0) or 0))
+        fps = 0.0
+        if info is None:
+            try:
+                _slot, info = self._current_video_slot_and_probe()
+            except Exception:
+                info = None
+        if info is not None:
+            try:
+                fps = max(0.0, float(getattr(info, "fps", 0.0) or 0.0))
+            except Exception:
+                fps = 0.0
+        frame_number = max(0, int(round((float(pts_ms) / 1000.0) * fps))) if fps > 0.0 else None
+        if error:
+            condensed_error = " ".join(error.split())
+            if len(condensed_error) > 96:
+                condensed_error = f"{condensed_error[:93]}..."
+            self._set_video_status_label(
+                f"Video: {backend} error={condensed_error}",
+                tooltip=error,
+            )
+            return
+        if not configured:
+            self._clear_video_status_label()
+            return
+        parts = [f"Video: {backend}"]
+        if ready:
+            parts.append("ready")
+        else:
+            parts.append("waiting")
+        if frame_number is not None:
+            parts.append(f"frame={frame_number}")
+        parts.append(f"pts={pts_ms}ms")
+        if frame_width > 0 and frame_height > 0:
+            parts.append(f"{frame_width}x{frame_height}")
+        self._set_video_status_label(" ".join(parts))
+
+    def _update_video_backend_warning(self, snapshot: Optional[object], *, source_path: str = "") -> None:
+        banner = getattr(self, "video_backend_warning_banner", None)
+        if banner is None:
+            return
+        backend = str(getattr(snapshot, "backend_name", "") or "").strip().lower()
+        error = " ".join(str(getattr(snapshot, "error", "") or "").split())
+        snapshot_path = self._normalized_media_probe_key(str(getattr(snapshot, "source_path", "") or ""))
+        expected_path = self._normalized_media_probe_key(source_path) if source_path else ""
+        if error and bool(getattr(snapshot, "configured", False)) and (not expected_path or snapshot_path == expected_path):
+            if len(error) > 140:
+                error = f"{error[:137]}..."
+            banner.setText(f"Video decode failed ({backend or 'unknown'}): {error}")
+            banner.setVisible(True)
+            return
+        if (
+            backend != "ffmpeg"
+            or not bool(getattr(snapshot, "configured", False))
+            or (expected_path and snapshot_path != expected_path)
+        ):
+            self._clear_video_backend_warning()
+            return
+        text = (
+            "Video fallback active: using FFmpeg frame extraction instead of PyAV. "
+            "This path is slower and may stutter on older CPUs."
+        )
+        if not self._video_low_spec_mode_enabled():
+            text += " Enable Low-spec mode for older CPUs."
+        banner.setText(text)
+        banner.setVisible(True)
 
     def _video_target_surface_pixel_size(self) -> tuple[int, int]:
         candidates: list[tuple[int, int]] = []
@@ -582,6 +735,26 @@ class VideoDisplayMixin:
                 candidates.append((width, height))
         if bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() == "video":
             width, height = self._ndi_output_dimensions()
+            if width > 0 and height > 0:
+                candidates.append((width, height))
+        if not candidates:
+            return 0, 0
+        return max(candidates, key=lambda item: item[0] * item[1])
+
+    def _local_video_surface_pixel_size(self) -> tuple[int, int]:
+        candidates: list[tuple[int, int]] = []
+        for widget in (
+            getattr(self, "video_preview_widget", None),
+            None if self._video_display_window is None else self._video_display_window.display_widget,
+        ):
+            if widget is None or (not widget.isVisible()) or getattr(widget, "_mode", "") != "video":
+                continue
+            try:
+                dpr = max(1.0, float(widget.devicePixelRatioF()))
+            except Exception:
+                dpr = 1.0
+            width = max(0, int(round(widget.width() * dpr)))
+            height = max(0, int(round(widget.height() * dpr)))
             if width > 0 and height > 0:
                 candidates.append((width, height))
         if not candidates:
@@ -741,7 +914,16 @@ class VideoDisplayMixin:
         self._video_current_frame_image = frame_image
         self._video_current_frame_pixmap = QPixmap()
         if self._local_video_surface_visible():
-            pixmap = QPixmap.fromImage(frame_image)
+            local_width, local_height = self._local_video_surface_pixel_size()
+            scaled_image = QImage(frame_image)
+            if local_width > 0 and local_height > 0:
+                scaled_image = frame_image.scaled(
+                    max(1, int(local_width)),
+                    max(1, int(local_height)),
+                    Qt.KeepAspectRatio,
+                    Qt.FastTransformation,
+                )
+            pixmap = QPixmap.fromImage(scaled_image)
             if pixmap.isNull():
                 return False
             self._video_current_frame_pixmap = pixmap
@@ -762,7 +944,8 @@ class VideoDisplayMixin:
         return True
 
     def _current_video_frame_pixmap(self) -> QPixmap:
-        pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        cached_pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())
+        pixmap = QPixmap(cached_pixmap) if isinstance(cached_pixmap, QPixmap) else QPixmap()
         if not pixmap.isNull():
             return pixmap
         image = QImage(getattr(self, "_video_current_frame_image", QImage()))
@@ -778,7 +961,8 @@ class VideoDisplayMixin:
         image = QImage(getattr(self, "_video_current_frame_image", QImage()))
         if not image.isNull():
             return image
-        pixmap = QPixmap(getattr(self, "_video_current_frame_pixmap", QPixmap()))
+        cached_pixmap = getattr(self, "_video_current_frame_pixmap", QPixmap())
+        pixmap = QPixmap(cached_pixmap) if isinstance(cached_pixmap, QPixmap) else QPixmap()
         if pixmap.isNull():
             return QImage()
         return pixmap.toImage()
@@ -854,6 +1038,21 @@ class VideoDisplayMixin:
         layout = widget.layout()
         if layout is not None:
             layout.activate()
+        snapshotter = getattr(widget, "snapshot_image", None)
+        if callable(snapshotter):
+            try:
+                image = snapshotter()
+            except Exception:
+                image = QImage()
+            if isinstance(image, QImage) and not image.isNull():
+                if image.width() == max(1, int(width)) and image.height() == max(1, int(height)):
+                    return image
+                return image.scaled(
+                    max(1, int(width)),
+                    max(1, int(height)),
+                    Qt.IgnoreAspectRatio,
+                    Qt.SmoothTransformation,
+                )
         image = QImage(widget.size(), QImage.Format_ARGB32_Premultiplied)
         image.fill(Qt.black)
         painter = QPainter(image)
@@ -896,6 +1095,41 @@ class VideoDisplayMixin:
             Qt.SmoothTransformation,
         )
         return scaled.toImage()
+
+    @staticmethod
+    def _scaled_image_canvas(
+        image: QImage,
+        width: int,
+        height: int,
+        *,
+        keep_aspect: bool = False,
+    ) -> QImage:
+        if image.isNull():
+            return QImage()
+        target_width = max(1, int(width))
+        target_height = max(1, int(height))
+        if keep_aspect:
+            canvas = QImage(target_width, target_height, QImage.Format_ARGB32_Premultiplied)
+            canvas.fill(Qt.black)
+            painter = QPainter(canvas)
+            target = VideoDisplayWidget._scaled_target_rect(
+                QRect(0, 0, target_width, target_height),
+                image.width(),
+                image.height(),
+                keep_aspect=True,
+            )
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.drawImage(target, image)
+            painter.end()
+            return canvas
+        if image.width() == target_width and image.height() == target_height:
+            return QImage(image)
+        return image.scaled(
+            target_width,
+            target_height,
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
 
     def _video_snapshot_dimensions(self) -> tuple[int, int]:
         width, height = self._configured_video_output_dimensions()
@@ -1352,6 +1586,7 @@ class VideoDisplayMixin:
         self._apply_video_widget_transition_fade_duration(widget)
         backdrop_message = self._video_backdrop_message_text() if mode == "backdrop" else ""
         active_slot = self._slot_for_key(self.current_playing) if self.current_playing is not None else None
+        is_ndi_preview = widget is getattr(self, "ndi_preview_widget", None)
         video_image = QImage()
         video_pixmap = QPixmap()
         content_pixmap = QPixmap()
@@ -1359,7 +1594,12 @@ class VideoDisplayMixin:
         lyric_html = ""
         transition_key = ""
         if mode == DISPLAY_FOCUS_VIDEO:
-            video_image = self._current_video_surface_image()
+            if is_ndi_preview:
+                video_image = self._current_video_surface_image()
+            else:
+                video_pixmap = self._current_video_surface_pixmap()
+                if video_pixmap.isNull():
+                    video_image = self._current_video_surface_image()
             lyric_html = self._current_video_lyric_html()
             transition_key = self._current_video_transition_key(active_slot)
         elif mode == DISPLAY_FOCUS_STAGE:
@@ -1382,6 +1622,7 @@ class VideoDisplayMixin:
             backdrop_pixmap=backdrop_pixmap,
             lyric_html=lyric_html,
             overlay_rect=self.video_display_lyric_overlay_rect,
+            show_fps_overlay=bool(getattr(self, "video_display_show_fps_overlay", False)) and not is_ndi_preview,
             show_lyric_overlay=self.video_display_show_lyric_overlay and mode == "video",
             show_stage_alert=self.video_display_show_stage_alert and mode == "video",
             alert_text=self._stage_alert_message if self._stage_alert_active() else "",
@@ -1417,10 +1658,15 @@ class VideoDisplayMixin:
     def _ndi_output_dimensions(self) -> tuple[int, int]:
         return self._configured_video_output_dimensions()
 
-    def _sync_ndi_timer_intervals(self) -> None:
+    def _sync_ndi_timer_intervals(self, info: Optional[MediaProbeInfo] = None) -> None:
+        if info is None:
+            try:
+                _slot, info = self._current_video_slot_and_probe()
+            except Exception:
+                info = None
         timer = getattr(self, "_video_refresh_timer", None)
         if timer is not None:
-            interval_ms = self._video_presentation_interval_ms()
+            interval_ms = self._video_presentation_interval_ms(info)
             try:
                 timer.setInterval(interval_ms)
             except Exception:
@@ -1471,7 +1717,7 @@ class VideoDisplayMixin:
             return
         slot, info = self._current_video_slot_and_probe()
         route_mode = self._active_video_route_mode()
-        target_width, target_height = self._video_target_surface_pixel_size()
+        target_width, target_height = self._local_video_surface_pixel_size()
         source_width, source_height = self._video_output_dimensions(info)
         width = max(2, int(target_width or source_width or 640))
         height = max(2, int(target_height or source_height or 360))
@@ -1502,10 +1748,10 @@ class VideoDisplayMixin:
         except Exception:
             pass
 
-    def _ensure_ndi_preview_widget(self) -> VideoDisplayWidget:
+    def _ensure_ndi_preview_widget(self) -> OffscreenVideoDisplayWidget:
         widget = getattr(self, "ndi_preview_widget", None)
         if widget is None:
-            widget = VideoDisplayWidget(self, allow_fullscreen_toggle=False)
+            widget = OffscreenVideoDisplayWidget(self, allow_fullscreen_toggle=False)
             self._apply_video_widget_transition_fade_duration(widget)
             widget.hide()
             self.ndi_preview_widget = widget
@@ -1542,6 +1788,19 @@ class VideoDisplayMixin:
                 width,
                 height,
             )
+        if mode == DISPLAY_FOCUS_VIDEO:
+            current_frame = self._current_ndi_video_frame_image()
+            lyric_overlay_active = bool(self.video_display_show_lyric_overlay) and bool(
+                str(self._current_video_lyric_html() or "").strip()
+            )
+            stage_alert_active = bool(self.video_display_show_stage_alert) and self._stage_alert_active()
+            if (
+                not current_frame.isNull()
+                and not lyric_overlay_active
+                and not stage_alert_active
+                and not self._video_surface_transition_active()
+            ):
+                return self._scaled_image_canvas(current_frame, width, height, keep_aspect=True)
         widget = self._ensure_ndi_preview_widget()
         self._sync_output_surface_widget(widget, mode, force=True)
         target_width = max(1, int(width))
@@ -1888,6 +2147,19 @@ class VideoDisplayMixin:
             return True
         return False
 
+    def _video_position_change_requires_surface_refresh(self) -> bool:
+        active_video_mode = str(self._active_video_route_mode() or "")
+        if active_video_mode in _DEFERRED_SNAPSHOT_ROUTE_MODES:
+            return True
+        if active_video_mode == DISPLAY_FOCUS_VIDEO and bool(getattr(self, "video_display_show_lyric_overlay", False)):
+            return True
+        if bool(getattr(self, "ndi_output_enabled", False)) and self._active_ndi_route_mode() in _DEFERRED_SNAPSHOT_ROUTE_MODES:
+            return True
+        metronome_window = getattr(self, "_metronome_display_window", None)
+        if metronome_window is not None and metronome_window.isVisible():
+            return True
+        return False
+
     def _sync_video_display_surfaces(self, *, force: bool = False) -> None:
         preview = getattr(self, "video_preview_widget", None)
         if preview is not None and (preview.isVisible() or force):
@@ -1906,16 +2178,25 @@ class VideoDisplayMixin:
 
     def _apply_video_frame_to_targets(self) -> None:
         image = self._current_video_surface_image()
+        pixmap = self._current_video_frame_pixmap()
         preview = getattr(self, "video_preview_widget", None)
         if preview is not None and preview.isVisible() and preview._mode == "video":
-            preview.set_video_image(image)
+            if not pixmap.isNull():
+                preview.set_video_pixmap(pixmap)
+            else:
+                preview.set_video_image(image)
         if self._video_display_window is not None and self._video_display_window.isVisible():
             display_widget = self._video_display_window.display_widget
             if display_widget._mode == "video":
-                display_widget.set_video_image(image)
+                if not pixmap.isNull():
+                    display_widget.set_video_pixmap(pixmap)
+                else:
+                    display_widget.set_video_image(image)
 
     def _clear_video_frame_runtime(self, preserve_current_frame: bool = False) -> None:
         self._clear_active_video_session()
+        self._clear_video_backend_warning()
+        self._clear_video_status_label()
         if not preserve_current_frame:
             self._video_current_frame_key = None
             self._video_current_frame_pixmap = QPixmap()
@@ -1940,6 +2221,8 @@ class VideoDisplayMixin:
 
     def _queue_video_frame_refresh(self, *, force: bool = False) -> None:
         if not self._video_display_target_visible():
+            self._clear_video_backend_warning()
+            self._clear_video_status_label()
             if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
@@ -1947,16 +2230,23 @@ class VideoDisplayMixin:
         route_mode = self._active_video_route_mode()
         allow_decode_while_blank = self._video_decode_allowed_during_switch_blank()
         if slot is None or (not info.has_video) or (route_mode != "video" and not allow_decode_while_blank):
+            self._clear_video_backend_warning()
+            self._clear_video_status_label()
             if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
         path = str(slot.file_path or "").strip()
         if not path:
+            self._clear_video_backend_warning()
+            self._clear_video_status_label()
             if force or bool(getattr(self, "_video_active_session_id", "")):
                 self._clear_video_frame_runtime()
             return
+        self._sync_ndi_timer_intervals(info)
         session_id = self._current_video_session_id()
         if not session_id:
+            self._clear_video_backend_warning()
+            self._clear_video_status_label()
             return
         service = getattr(self, "_audio_service", None)
         configure = getattr(service, "configure_video_session", None)
@@ -1964,6 +2254,8 @@ class VideoDisplayMixin:
         snapshot_getter = getattr(service, "video_session_snapshot", None)
         frame_getter = getattr(service, "video_session_frame", None)
         if not (callable(configure) and callable(snapshot_getter) and callable(frame_getter)):
+            self._clear_video_backend_warning()
+            self._clear_video_status_label()
             return
         position_ms = self._current_video_display_position_ms()
         width, height = self._video_target_decode_dimensions(info)
@@ -2000,6 +2292,8 @@ class VideoDisplayMixin:
         self._video_active_session_id = session_id
         self._video_active_session_source_path = path
         snapshot = snapshot_getter(session_id)
+        self._update_video_status_label(snapshot, info=info)
+        self._update_video_backend_warning(snapshot, source_path=path)
         snapshot_path = self._normalized_media_probe_key(str(getattr(snapshot, "source_path", "") or ""))
         if callable(prime):
             should_prime = bool(configure_required or not bool(getattr(snapshot, "primed", False)))
@@ -2025,6 +2319,7 @@ class VideoDisplayMixin:
         frame_snapshot = frame_getter(session_id)
         expected_blank_key = str(getattr(self, "_video_force_blank_expected_path", "") or "")
         frame_path = self._normalized_media_probe_key(str(getattr(frame_snapshot, "source_path", "") or ""))
+        self._update_video_status_label(snapshot, frame_snapshot=frame_snapshot, info=info)
         if bool(getattr(frame_snapshot, "ready", False)) and frame_path == normalized_path:
             if self._update_current_video_frame_from_session(frame_snapshot):
                 blank_cleared = False

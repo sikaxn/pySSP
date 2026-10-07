@@ -90,6 +90,12 @@ from pyssp.midi_control import (
     split_midi_binding,
 )
 from pyssp.ndi_support import NDI_DOWNLOAD_URL, NDICapabilityStatus, probe_ndi_capability
+from pyssp.playback_engine import (
+    PLAYBACK_ENGINE_LEGACY,
+    PLAYBACK_ENGINE_V2,
+    normalize_playback_engine,
+    playback_engine_options,
+)
 from pyssp.timecode import (
     MIDI_OUTPUT_DEVICE_NONE,
     MTC_IDLE_KEEP_STREAM,

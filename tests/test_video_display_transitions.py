@@ -78,6 +78,18 @@ class _FakeVideoSessionService:
         return None
 
 
+class _BannerStub:
+    def __init__(self) -> None:
+        self.text = ""
+        self.visible = False
+
+    def setText(self, text: str) -> None:
+        self.text = str(text or "")
+
+    def setVisible(self, visible: bool) -> None:
+        self.visible = bool(visible)
+
+
 class _VideoSyncHarness(VideoDisplayMixin):
     def __init__(
         self,
@@ -102,11 +114,13 @@ class _VideoSyncHarness(VideoDisplayMixin):
         self._completed_pending_paths: list[str] = []
         self._video_display_window = None
         self.video_preview_widget = None
+        self.video_backend_warning_banner = _BannerStub()
         self.ndi_output_enabled = False
         self._local_video_visible = bool(local_video_visible)
         self.current_position_ms = 1200
         self.current_playing = None if use_pending_session else ("A", 0, 0)
         self._player = SimpleNamespace(player_id="player-a")
+        self.video_low_spec_mode = False
 
     def _video_display_target_visible(self) -> bool:
         return True
@@ -246,6 +260,54 @@ def test_video_display_widget_paints_video_image(qapp):
         widget.close()
 
 
+def test_video_display_widget_reports_present_fps_for_non_video_updates(qapp):
+    widget = VideoDisplayWidget()
+    widget.resize(160, 90)
+    widget.show()
+
+    red = QPixmap(160, 90)
+    red.fill(QColor("#ff0000"))
+    blue = QPixmap(160, 90)
+    blue.fill(QColor("#0000ff"))
+
+    try:
+        widget.apply_surface_state(mode="image", content_pixmap=red, show_fps_overlay=True)
+        qapp.processEvents()
+
+        widget.set_transition_duration_seconds(0.12)
+        widget.apply_surface_state(mode="backdrop", backdrop_pixmap=blue, show_fps_overlay=True)
+
+        deadline = time.monotonic() + 1.0
+        while widget.current_present_fps() <= 0.0 and time.monotonic() < deadline:
+            widget.paintGL()
+            qapp.processEvents()
+            time.sleep(0.01)
+
+        assert widget.current_present_fps() > 0.0
+    finally:
+        widget.close()
+
+
+def test_video_display_widget_caches_scaled_live_video_pixmap(qapp):
+    widget = VideoDisplayWidget()
+    widget.resize(160, 90)
+    widget.show()
+
+    frame = QPixmap(320, 180)
+    frame.fill(QColor("#3366cc"))
+
+    try:
+        widget.apply_surface_state(mode="video", video_pixmap=frame, transition_key="clip-a")
+        qapp.processEvents()
+        _ = widget.grab()
+
+        assert widget._video_scaled_pixmap_cache.isNull() is False
+        assert widget._video_scaled_pixmap_target_size.width() > 0
+        assert widget._video_scaled_pixmap_target_size.height() > 0
+    finally:
+        widget.close()
+
+
 def test_video_display_widget_crossfades_same_mode_when_transition_key_changes(qapp):
     widget = VideoDisplayWidget()
     widget.resize(160, 90)
@@ -373,6 +435,71 @@ def test_queue_video_frame_refresh_skips_eager_pixmap_conversion_without_local_s
     ]
 
 
+def test_update_current_video_frame_from_session_scales_local_pixmap_only():
+    class _LocalScaleHost(_VideoSyncHarness):
+        def _local_video_surface_pixel_size(self) -> tuple[int, int]:
+            return 160, 90
+
+    host = _LocalScaleHost()
+    frame = QImage(640, 360, QImage.Format_RGB32)
+    frame.fill(QColor("#224466"))
+    snapshot = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        pts_ms=host.current_position_ms,
+        ready=True,
+        image=frame,
+    )
+
+    assert host._update_current_video_frame_from_session(snapshot) is True
+    assert host._video_current_frame_image.size() == frame.size()
+    assert host._video_current_frame_pixmap.width() == 160
+    assert host._video_current_frame_pixmap.height() == 90
+
+
+def test_queue_video_frame_refresh_shows_ffmpeg_backend_warning():
+    host = _VideoSyncHarness(local_video_visible=False)
+    frame = QImage(320, 180, QImage.Format_RGB32)
+    frame.fill(QColor("#224466"))
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        configured=True,
+        primed=True,
+        state=1,
+        position_ms=host.current_position_ms,
+        duration_ms=5000,
+        frame_pts_ms=host.current_position_ms,
+        frame_width=320,
+        frame_height=180,
+        backend_name="ffmpeg",
+    )
+    host._audio_service.frame = VideoFrameSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        pts_ms=host.current_position_ms,
+        ready=True,
+        image=frame,
+    )
+
+    host._queue_video_frame_refresh(force=True)
+
+    assert host.video_backend_warning_banner.visible is True
+    assert "FFmpeg frame extraction" in host.video_backend_warning_banner.text
+    assert "Low-spec mode" in host.video_backend_warning_banner.text
+
+    host._audio_service.snapshot = VideoSessionSnapshot(
+        session_id="player-a",
+        source_path=host._slot.file_path,
+        configured=True,
+        primed=True,
+        backend_name="pyav",
+    )
+    host._queue_video_frame_refresh()
+
+    assert host.video_backend_warning_banner.visible is False
+
+
 class _ExplodingAudioService:
     def video_destination_frame(self, _destination_id: str):
         raise AssertionError("visible video sync should not fetch local_program frames")
@@ -407,6 +534,83 @@ def test_sync_output_surface_widget_uses_local_video_frame_cache(qapp):
         host._sync_output_surface_widget(widget, "video", force=True)
         qapp.processEvents()
 
-        assert widget._video_image.isNull() is False or widget._video_pixmap.isNull() is False
+        assert widget._video_pixmap.isNull() is False
+        assert widget._video_image.isNull() is True
     finally:
         widget.close()
+
+
+def test_apply_video_frame_to_targets_prefers_pixmap_for_local_video_widgets():
+    class _VideoWidgetStub:
+        def __init__(self) -> None:
+            self._mode = "video"
+            self.pixmap_calls = 0
+            self.image_calls = 0
+            self.last_pixmap = QPixmap()
+            self.last_image = QImage()
+
+        def isVisible(self) -> bool:
+            return True
+
+        def set_video_pixmap(self, pixmap: QPixmap) -> None:
+            self.pixmap_calls += 1
+            self.last_pixmap = QPixmap(pixmap)
+
+        def set_video_image(self, image: QImage) -> None:
+            self.image_calls += 1
+            self.last_image = QImage(image)
+
+    class _WindowStub:
+        def __init__(self, widget) -> None:
+            self.display_widget = widget
+
+        def isVisible(self) -> bool:
+            return True
+
+    class _LiveFrameHost(VideoDisplayMixin):
+        def __init__(self) -> None:
+            self._video_current_frame_image = QImage(32, 18, QImage.Format_RGB32)
+            self._video_current_frame_image.fill(QColor("#224466"))
+            self._video_current_frame_pixmap = QPixmap(32, 18)
+            self._video_current_frame_pixmap.fill(QColor("#224466"))
+            self.video_preview_widget = _VideoWidgetStub()
+            self._video_display_window = _WindowStub(_VideoWidgetStub())
+
+    host = _LiveFrameHost()
+
+    host._apply_video_frame_to_targets()
+
+    assert host.video_preview_widget.pixmap_calls == 1
+    assert host.video_preview_widget.image_calls == 0
+    assert host.video_preview_widget.last_pixmap.isNull() is False
+    assert host._video_display_window.display_widget.pixmap_calls == 1
+    assert host._video_display_window.display_widget.image_calls == 0
+
+
+def test_video_position_change_refresh_only_for_transport_dependent_routes():
+    class _VisibleWindow:
+        def __init__(self, visible: bool) -> None:
+            self._visible = bool(visible)
+
+        def isVisible(self) -> bool:
+            return self._visible
+
+    class _PositionRefreshHost(VideoDisplayMixin):
+        def __init__(self, *, video_mode: str, ndi_mode: str = "blank", lyric_overlay: bool = False, metronome_visible: bool = False) -> None:
+            self._video_mode = str(video_mode)
+            self._ndi_mode = str(ndi_mode)
+            self.video_display_show_lyric_overlay = bool(lyric_overlay)
+            self.ndi_output_enabled = self._ndi_mode != "blank"
+            self._metronome_display_window = _VisibleWindow(metronome_visible)
+
+        def _active_video_route_mode(self) -> str:
+            return self._video_mode
+
+        def _active_ndi_route_mode(self) -> str:
+            return self._ndi_mode
+
+    assert _PositionRefreshHost(video_mode="video", lyric_overlay=False)._video_position_change_requires_surface_refresh() is False
+    assert _PositionRefreshHost(video_mode="video", lyric_overlay=True)._video_position_change_requires_surface_refresh() is True
+    assert _PositionRefreshHost(video_mode="stage_display")._video_position_change_requires_surface_refresh() is True
+    assert _PositionRefreshHost(video_mode="blank", ndi_mode="lyric_display")._video_position_change_requires_surface_refresh() is True
+    assert _PositionRefreshHost(video_mode="blank", metronome_visible=True)._video_position_change_requires_surface_refresh() is True

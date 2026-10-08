@@ -44,6 +44,10 @@ python -m venv .venv
 - `run_ssp_cleanstart_venv.bat`: run with `--cleanstart` (resets settings)
 - `run_ssp_venv.sh`: macOS/Linux launcher from `.venv` (`./run_ssp_venv.sh`)
 
+For the tested Raspberry Pi source installation, including Python 3.13
+compatibility adjustments and desktop launchers, see the
+[Raspberry Pi installation guide](docs/source/raspberry_pi.md).
+
 ## Command-line flags
 
 - `--cleanstart` or `/cleanstart`

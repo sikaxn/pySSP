@@ -2256,15 +2256,15 @@ class PagesSlotsMixin:
                 "-dn",
                 "-ac",
                 "2",
-                "-ar",
-                "44100",
                 "-c:a",
-                "pcm_s16le",
+                "pcm_f32le",
                 output_wav_path,
             ]
         )
 
     def _ffmpeg_transcode_from_wav(self, source_wav_path: str, output_path: str) -> None:
+        import wave
+
         ffmpeg_path = str(get_ffmpeg_executable() or "").strip()
         if not ffmpeg_path:
             raise RuntimeError("ffmpeg is required to encode the generated WAV to the requested output format.")
@@ -2274,6 +2274,10 @@ class PagesSlotsMixin:
             codec_flags = ["-c:a", "libmp3lame", "-q:a", "2"]
         if not codec_flags:
             raise RuntimeError(f"Unsupported vocal removed output format: {ext or '(no extension)'}")
+        # The CLI emits PCM WAV. Explicitly require its rate so an encoder
+        # cannot silently select a different supported rate (e.g. 96k MP3).
+        with wave.open(source_wav_path, "rb") as source_wav:
+            sample_rate = source_wav.getframerate()
         self._run_ffmpeg_audio_command(
             [
                 ffmpeg_path,
@@ -2284,6 +2288,8 @@ class PagesSlotsMixin:
                 "-i",
                 source_wav_path,
                 *codec_flags,
+                "-ar",
+                str(sample_rate),
                 output_path,
             ]
         )

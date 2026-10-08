@@ -228,6 +228,7 @@ class AudioServiceController(QObject):
         self._thread = QThread(self)
         self._service = AudioService()
         self._service.moveToThread(self._thread)
+        self._thread.finished.connect(self._service.deleteLater)
         self.commandRequested.connect(self._service.handle_command, type=Qt.QueuedConnection)
         self.state_cache = AudioStateCache()
         self._service.positionChanged.connect(self._on_service_position_changed)
@@ -238,6 +239,7 @@ class AudioServiceController(QObject):
         self._counter = itertools.count(1)
         self._request_counter = itertools.count(1)
         self._pending_results: Dict[int, Future] = {}
+        self._shutdown = False
         self._thread.start()
 
     def create_player(self, parent: Optional[QObject] = None) -> "AudioPlayerProxy":
@@ -248,6 +250,8 @@ class AudioServiceController(QObject):
         return proxy
 
     def call(self, player_id: str, command: str, payload: Optional[dict] = None, timeout: float = 2.0):
+        if self._shutdown:
+            raise RuntimeError("Audio service has shut down")
         result_queue: "queue.Queue[Tuple[bool, object]]" = queue.Queue(maxsize=1)
         self.commandRequested.emit(str(player_id), str(command), dict(payload or {}), result_queue)
         ok, value = result_queue.get(timeout=max(0.1, float(timeout)))
@@ -258,9 +262,15 @@ class AudioServiceController(QObject):
         raise RuntimeError(str(value))
 
     def post(self, player_id: str, command: str, payload: Optional[dict] = None) -> None:
+        if self._shutdown:
+            return
         self.commandRequested.emit(str(player_id), str(command), dict(payload or {}), None)
 
     def request_async(self, player_id: str, command: str, payload: Optional[dict] = None) -> Future:
+        if self._shutdown:
+            future = Future()
+            future.set_exception(RuntimeError("Audio service has shut down"))
+            return future
         token = int(next(self._request_counter))
         future: Future = Future()
         self._pending_results[token] = future
@@ -268,11 +278,18 @@ class AudioServiceController(QObject):
         return future
 
     def shutdown(self) -> None:
+        if self._shutdown:
+            return
         try:
             for player_id in ["__all__"]:
                 self.call(player_id, "shutdown", {}, timeout=2.0)
         except Exception:
             pass
+        self._shutdown = True
+        for future in self._pending_results.values():
+            if not future.done():
+                future.set_exception(RuntimeError("Audio service has shut down"))
+        self._pending_results.clear()
         self._thread.quit()
         self._thread.wait(1500)
 

@@ -793,15 +793,21 @@ def test_sound_button_advanced_automation_pause_resume_fade_events(qapp, monkeyp
 
         assert window._play_slot(0) is True
 
+        # Advance a controlled clock past each fade deadline. Backdating a job
+        # by exactly its duration can round just short on Windows.
+        fade_time = mw.time.monotonic()
+        monkeypatch.setattr(mw.time, "monotonic", lambda: fade_time)
+
         window._pause_players([window.player])
         assert captured[-2] == ["6/1/1"]
         assert captured[-1] == ["6/1/2"]
 
-        for job in window._fade_jobs:
-            job["started"] -= float(job["duration"])
+        fade_time += 1.0
         window._tick_fades()
         assert captured[-2] == ["6/1/3"]
         assert captured[-1] == ["6/1/4"]
+        assert not window._fade_jobs
+        assert window.player.state() == mw.ExternalMediaPlayer.PausedState
 
         window._is_fade_in_enabled = lambda: True  # type: ignore[method-assign]
         window._resume_players([window.player])
@@ -809,10 +815,11 @@ def test_sound_button_advanced_automation_pause_resume_fade_events(qapp, monkeyp
         assert captured[-2] == ["6/1/7"]
         assert captured[-1] == ["6/1/6"]
 
-        for job in window._fade_jobs:
-            job["started"] -= float(job["duration"])
+        fade_time += 1.0
         window._tick_fades()
         assert captured[-1] == ["6/1/8"]
+        assert not window._fade_jobs
+        assert window.player.state() == mw.ExternalMediaPlayer.PlayingState
     finally:
         _cleanup_main_window(window, qapp)
 

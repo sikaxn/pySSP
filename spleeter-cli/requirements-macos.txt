@@ -1,6 +1,7 @@
 tensorflow-macos==2.12.0
 numpy<2.0
-scipy
+# Verified Apple Silicon wheel; 1.15.3 PROPACK fails macOS dyld validation.
+scipy==1.10.1
 pandas<2.0
 ffmpeg-python>=0.2.0,<0.3.0
 httpx[http2]>=0.19.0,<0.20.0

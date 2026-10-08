@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${ROOT_DIR}/.venv/bin/python"
 SPLEETER_CLI_EXE="${ROOT_DIR}/dist/spleeter-cli/spleeter-cli"
-SPLEETER_CLI_BUILD="${ROOT_DIR}/spleeter-cli/build_pyinstaller.bat"
+SPLEETER_CLI_BUILD="${ROOT_DIR}/spleeter-cli/build_pyinstaller_mac.sh"
 
 if [[ ! -x "${VENV_PY}" ]]; then
   echo '[ERROR] Virtual environment not found at ".venv/bin/python"'
@@ -26,10 +26,7 @@ if [[ ! -x "${SPLEETER_CLI_EXE}" ]]; then
       echo "[ERROR]   ${SPLEETER_CLI_BUILD}"
       exit 1
     fi
-    (
-      cd "${ROOT_DIR}/spleeter-cli"
-      cmd.exe /c build_pyinstaller.bat
-    )
+    bash "${SPLEETER_CLI_BUILD}"
     if [[ ! -x "${SPLEETER_CLI_EXE}" ]]; then
       echo "[ERROR] spleeter-cli build completed but executable is still missing."
       echo "[ERROR]   ${SPLEETER_CLI_EXE}"

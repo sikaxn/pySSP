@@ -48,7 +48,7 @@ ensure_spleeter_venv() {
 }
 
 ensure_spleeter_packages() {
-  if "${SPLEETER_PYTHON}" -c "import spleeter, tensorflow, scipy" >/dev/null 2>&1; then
+  if "${SPLEETER_PYTHON}" -c "import spleeter, tensorflow, scipy.io, scipy.sparse.linalg; from importlib.metadata import version; assert version('scipy') == '1.10.1'" >/dev/null 2>&1; then
     return 0
   fi
 

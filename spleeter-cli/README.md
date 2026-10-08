@@ -35,6 +35,9 @@ Notes:
   original sample rate and fails if the codec cannot support it
 - macOS Apple Silicon uses Python 3.10 plus `tensorflow-macos==2.12.0`
 - `build_pyinstaller_mac.sh` will create `.venv-spleeter` and install the macOS dependency set automatically
+- macOS pins SciPy to 1.10.1: the 1.15.3 Apple Silicon PROPACK library fails
+  dyld validation on the tested Mac. The build checks WAV and sparse-library
+  imports before reusing an existing environment.
 
 Tests (run from the repository root):
 - `.venv-spleeter/Scripts/python.exe -m unittest discover -s spleeter-cli/tests -v`

@@ -685,7 +685,9 @@ class PlaybackMixin:
                 self._cancel_main_waveform_refresh()
                 self._main_progress_waveform = []
                 self.progress_label.set_waveform([])
-            if isinstance(player, AudioPlayerProxy) or sys.platform == "darwin":
+            if isinstance(player, AudioPlayerProxy) or (
+                sys.platform == "darwin" and isinstance(player, ExternalMediaPlayer)
+            ):
                 request_id = player.setMediaAsync(source_payload, dsp_config=self._dsp_config)
                 self._pending_player_media_loads[id(player)] = {
                     "request_id": int(request_id),
@@ -2309,4 +2311,3 @@ class PlaybackMixin:
         self.player.durationChanged.connect(self._on_duration_changed)
         self.player.stateChanged.connect(self._on_state_changed)
         self.player_b.positionChanged.connect(self._on_secondary_position_changed)
-

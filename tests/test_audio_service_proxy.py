@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
-from pyssp.audio_service import AudioPlayerProxy, AudioStateCache
+import pytest
+
+from pyssp.audio_service import AudioPlayerProxy, AudioServiceController, AudioStateCache
 
 
 class _FakeAudioController(QObject):
@@ -28,6 +31,31 @@ class _FakeAudioController(QObject):
 
 def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+def test_audio_service_shutdown_is_repeatable_and_rejects_new_requests(monkeypatch) -> None:
+    app = _app()
+    controller = AudioServiceController()
+    try:
+        controller.shutdown()
+        assert not controller._thread.isRunning()
+        assert sip.isdeleted(controller._service)
+
+        def unexpected_call(*args, **kwargs):
+            raise AssertionError("Shutdown requested work from a stopped service")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(controller, "call", unexpected_call)
+            controller.shutdown()
+
+        with pytest.raises(RuntimeError, match="shut down"):
+            controller.call("player-test", "state")
+        with pytest.raises(RuntimeError, match="shut down"):
+            controller.request_async("player-test", "state").result()
+        controller.post("player-test", "play")
+        app.processEvents()
+    finally:
+        controller.shutdown()
 
 
 def test_proxy_set_media_async_posts_request_without_blocking_call() -> None:

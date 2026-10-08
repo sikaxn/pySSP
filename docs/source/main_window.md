@@ -13,6 +13,7 @@ The main window is the primary workspace for loading a set and triggering sounds
 - Transport and mode controls: playback and behavior buttons.
 - Fade and level controls: fade modes, volume, and seek.
 - Lock screen control: lock/unlock status and automation lock visibility.
+- Full Screen control: the button beside Lock toggles fullscreen and restores the previous window state. It is disabled while locked. On macOS, both controls are in the status bar.
 
 ## Main Control Buttons
 

@@ -246,6 +246,8 @@ class LockingMixin:
         self.statusBar().showMessage(status, 2500)
 
     def _sync_lock_ui_state(self) -> None:
+        if self.fullscreen_button is not None:
+            self.fullscreen_button.setEnabled(not self._ui_locked)
         if self.lock_screen_button is not None:
             self.lock_screen_button.setChecked(self._ui_locked)
             self.lock_screen_button.setToolTip(

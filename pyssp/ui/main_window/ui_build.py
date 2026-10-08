@@ -500,9 +500,50 @@ class UiBuildMixin:
             debug_crash_action.triggered.connect(self._trigger_debug_crash)
             help_menu.addAction(debug_crash_action)
         if sys.platform != "darwin":
-            self.lock_screen_button = self._create_lock_screen_button(self.menuBar(), auto_raise=True)
-            self.menuBar().setCornerWidget(self.lock_screen_button, Qt.TopRightCorner)
+            window_controls = QWidget(self.menuBar())
+            controls_layout = QHBoxLayout(window_controls)
+            controls_layout.setContentsMargins(0, 0, 0, 0)
+            controls_layout.setSpacing(2)
+            self.fullscreen_button = self._create_fullscreen_button(window_controls, auto_raise=True)
+            self.lock_screen_button = self._create_lock_screen_button(window_controls, auto_raise=True)
+            controls_layout.addWidget(self.fullscreen_button)
+            controls_layout.addWidget(self.lock_screen_button)
+            self.menuBar().setCornerWidget(window_controls, Qt.TopRightCorner)
         self._apply_hotkeys()
+
+    def _create_fullscreen_button(self, parent: QWidget, *, auto_raise: bool) -> QToolButton:
+        button = QToolButton(parent)
+        button.setCheckable(True)
+        button.setAutoRaise(bool(auto_raise))
+        button.setIconSize(QSize(18, 18))
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        button.clicked.connect(self._toggle_fullscreen)
+        self._sync_fullscreen_button(button)
+        return button
+
+    def _sync_fullscreen_button(self, button: QToolButton) -> None:
+        fullscreen = self.isFullScreen()
+        label = tr("Windowed") if fullscreen else tr("Full Screen")
+        button.setChecked(fullscreen)
+        button.setToolTip(label)
+        button.setAccessibleName(label)
+        icon = QStyle.SP_TitleBarNormalButton if fullscreen else QStyle.SP_TitleBarMaxButton
+        button.setIcon(self.style().standardIcon(icon))
+
+    def _toggle_fullscreen(self) -> None:
+        if self._ui_locked:
+            return
+        if self.isFullScreen():
+            self.setWindowState(getattr(self, "_window_state_before_fullscreen", Qt.WindowNoState))
+        else:
+            self._window_state_before_fullscreen = self.windowState()
+            self.showFullScreen()
+
+    def changeEvent(self, event) -> None:
+        QMainWindow.changeEvent(self, event)
+        button = getattr(self, "fullscreen_button", None)
+        if button is not None and event.type() in (QEvent.WindowStateChange, QEvent.LanguageChange):
+            self._sync_fullscreen_button(button)
 
     def _create_lock_screen_button(self, parent: QWidget, *, auto_raise: bool) -> QToolButton:
         button = QToolButton(parent)

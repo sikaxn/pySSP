@@ -819,6 +819,7 @@ class MainWindow(
         self._automation_locked = False
         self._lock_screen_overlay: Optional[LockScreenOverlay] = None
         self.lock_screen_button: Optional[QToolButton] = None
+        self.fullscreen_button: Optional[QToolButton] = None
         self._midi_poll_thread = MidiPollingThread(self)
         self._midi_poll_thread.midi_event.connect(self._on_midi_binding_triggered)
         self._midi_poll_thread.launchpad_event.connect(self._on_launchpad_binding_triggered)
@@ -932,6 +933,9 @@ class MainWindow(
         self.statusBar().addPermanentWidget(self.preload_status_icon)
         self.statusBar().addPermanentWidget(self.companion_satellite_status_icon)
         if sys.platform == "darwin":
+            self.fullscreen_button = self._create_fullscreen_button(self.statusBar(), auto_raise=False)
+            self.fullscreen_button.setMinimumSize(28, 20)
+            self.statusBar().addPermanentWidget(self.fullscreen_button)
             self.lock_screen_button = self._create_lock_screen_button(self.statusBar(), auto_raise=False)
             self.lock_screen_button.setMinimumSize(28, 20)
             self.statusBar().addPermanentWidget(self.lock_screen_button)

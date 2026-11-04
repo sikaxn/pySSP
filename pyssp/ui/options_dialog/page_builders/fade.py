@@ -49,11 +49,11 @@ class FadePageMixin:
 
         self.fade_on_stop_note = QLabel("During fade, click Stop again to force stop (skip fade).")
         self.fade_on_stop_note.setWordWrap(True)
-        self.fade_on_stop_note.setStyleSheet("color:#666666;")
+        self.fade_on_stop_note.setStyleSheet("")
         trigger_layout.addWidget(self.fade_on_stop_note)
         self.fade_dependency_note = QLabel("Note: These options work only when the matching Fade In/Fade Out control is active.")
         self.fade_dependency_note.setWordWrap(True)
-        self.fade_dependency_note.setStyleSheet("color:#666666;")
+        self.fade_dependency_note.setStyleSheet("")
         trigger_layout.addWidget(self.fade_dependency_note)
         layout.addWidget(trigger_group)
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from PyQt5.QtCore import QPoint
+from PyQt5.QtGui import QPainterPath, QPolygon
+
 from .shared import *
 from .constants import *
 from .helpers import *
@@ -128,7 +131,8 @@ class UiBuildMixin:
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(8)
         title = QLabel(tr("Button Legend:"))
-        title.setStyleSheet("color:#666666; font-size:9pt; font-weight:600;")
+        legend_text = "#B7BEC8" if self._effective_ui_theme == "dark" else "#666666"
+        title.setStyleSheet(f"color:{legend_text}; font-size:9pt; font-weight:600;")
         title_layout.addWidget(title)
         title_layout.addStretch(1)
         self._button_legend_layout.addWidget(title_row)
@@ -173,7 +177,7 @@ class UiBuildMixin:
                     "}"
                 )
                 text = QLabel(label_text)
-                text.setStyleSheet("color:#666666; font-size:9pt;")
+                text.setStyleSheet(f"color:{legend_text}; font-size:9pt;")
 
                 item_layout.addWidget(dot)
                 item_layout.addWidget(text)
@@ -505,8 +509,10 @@ class UiBuildMixin:
             controls_layout.setContentsMargins(0, 0, 0, 0)
             controls_layout.setSpacing(2)
             self.fullscreen_button = self._create_fullscreen_button(window_controls, auto_raise=True)
+            self.theme_button = self._create_theme_button(window_controls, auto_raise=True)
             self.lock_screen_button = self._create_lock_screen_button(window_controls, auto_raise=True)
             controls_layout.addWidget(self.fullscreen_button)
+            controls_layout.addWidget(self.theme_button)
             controls_layout.addWidget(self.lock_screen_button)
             self.menuBar().setCornerWidget(window_controls, Qt.TopRightCorner)
         self._apply_hotkeys()
@@ -527,8 +533,81 @@ class UiBuildMixin:
         button.setChecked(fullscreen)
         button.setToolTip(label)
         button.setAccessibleName(label)
-        icon = QStyle.SP_TitleBarNormalButton if fullscreen else QStyle.SP_TitleBarMaxButton
-        button.setIcon(self.style().standardIcon(icon))
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#F2F2F2" if getattr(self, "_effective_ui_theme", "bright") == "dark" else "#252A30"), 1.8))
+        painter.setBrush(Qt.NoBrush)
+        if fullscreen:
+            painter.drawRect(5, 2, 10, 10)
+            painter.drawRect(2, 5, 10, 10)
+        else:
+            painter.drawRect(2, 2, 14, 14)
+        painter.end()
+        button.setIcon(QIcon(pixmap))
+
+    def _create_theme_button(self, parent: QWidget, *, auto_raise: bool) -> QToolButton:
+        button = QToolButton(parent)
+        button.setAutoRaise(bool(auto_raise))
+        button.setIconSize(QSize(18, 18))
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        button.clicked.connect(self._cycle_ui_theme)
+        self._sync_theme_button(button)
+        return button
+
+    def _media_control_icon(self, kind: str) -> QIcon:
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#F2F2F2" if self._effective_ui_theme == "dark" else "#252A30"))
+        if kind == "play":
+            painter.drawPolygon(QPolygon([QPoint(4, 2), QPoint(15, 9), QPoint(4, 16)]))
+        elif kind == "pause":
+            painter.drawRoundedRect(3, 3, 4, 12, 0.5, 0.5)
+            painter.drawRoundedRect(11, 3, 4, 12, 0.5, 0.5)
+        else:
+            painter.drawRect(3, 3, 12, 12)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _sync_theme_button(self, button: Optional[QToolButton] = None) -> None:
+        button = button or getattr(self, "theme_button", None)
+        if button is None:
+            return
+        mode = self.ui_theme
+        label = {"bright": "Bright", "dark": "Dark mode", "system": "Follow system"}[mode]
+        button.setToolTip(f"UI Theme: {label} (click to change)")
+        button.setAccessibleName(f"UI Theme: {label}")
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        ink = QColor("#E9EFF7" if self._effective_ui_theme == "dark" else "#303840")
+        painter.setPen(QPen(ink, 1.7))
+        if mode == "bright":
+            painter.setBrush(ink)
+            painter.drawEllipse(7, 7, 6, 6)
+            for x1, y1, x2, y2 in ((10, 1, 10, 4), (10, 16, 10, 19),
+                                    (1, 10, 4, 10), (16, 10, 19, 10),
+                                    (3, 3, 5, 5), (15, 15, 17, 17),
+                                    (3, 17, 5, 15), (15, 5, 17, 3)):
+                painter.drawLine(x1, y1, x2, y2)
+        elif mode == "dark":
+            path = QPainterPath()
+            path.addEllipse(2, 2, 16, 16)
+            cutout = QPainterPath()
+            cutout.addEllipse(8, 0, 13, 14)
+            painter.fillPath(path.subtracted(cutout), ink)
+        else:
+            painter.drawRoundedRect(2, 3, 16, 12, 2, 2)
+            painter.drawLine(10, 15, 10, 18)
+            painter.drawLine(6, 18, 14, 18)
+            painter.drawLine(4, 10, 9, 5)
+        painter.end()
+        button.setIcon(QIcon(pixmap))
 
     def _toggle_fullscreen(self) -> None:
         if self._ui_locked:
@@ -549,7 +628,7 @@ class UiBuildMixin:
         button = QToolButton(parent)
         button.setCheckable(True)
         button.setAutoRaise(bool(auto_raise))
-        button.setIcon(QIcon(build_lock_icon()))
+        button.setIcon(QIcon(build_lock_icon(color="#F2F2F2" if self._effective_ui_theme == "dark" else "#252A30")))
         button.setIconSize(QSize(18, 18))
         button.setToolButtonStyle(Qt.ToolButtonIconOnly)
         button.clicked.connect(self._on_lock_screen_button_clicked)
@@ -1063,13 +1142,13 @@ class UiBuildMixin:
             btn = QPushButton(text)
             btn.setMinimumHeight(42)
             if text == "Pause":
-                btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+                btn.setIcon(self._media_control_icon("pause"))
                 btn.clicked.connect(self._toggle_pause)
             elif text == "STOP":
-                btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+                btn.setIcon(self._media_control_icon("stop"))
                 btn.clicked.connect(self._stop_playback)
             elif text == "Next":
-                btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                btn.setIcon(self._media_control_icon("play"))
                 btn.clicked.connect(self._play_next)
                 btn.setEnabled(False)
             elif text == "Cue":

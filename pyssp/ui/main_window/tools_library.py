@@ -170,7 +170,7 @@ class ToolsLibraryMixin:
             "but does not require a Launchpad connection and does not send MIDI or LED messages."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#555555;")
+        note.setStyleSheet("")
         root.addWidget(note)
 
         tabs = QTabWidget(dialog)

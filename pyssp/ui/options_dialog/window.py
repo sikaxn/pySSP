@@ -7,6 +7,7 @@ from .layout_helpers import LayoutHelpersMixin
 from .page_builders import PageBuilderMixin
 from .selections import SelectionMixin
 from .state_logic import StateLogicMixin
+from pyssp.ui.theme import DARK_BUTTON_COLORS, effective_ui_theme, normalize_ui_theme
 
 class OptionsDialog(
     PageBuilderMixin,
@@ -564,6 +565,9 @@ class OptionsDialog(
         waveform_cache_clear_on_launch: bool = True,
         is_playback_or_loading_active: Optional[Callable[[], bool]] = None,
         stage_display_gadgets: Optional[Dict[str, Dict[str, object]]] = None,
+        ui_theme: str = "bright",
+        bright_button_colors: Optional[Dict[str, str]] = None,
+        dark_button_colors: Optional[Dict[str, str]] = None,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -752,6 +756,21 @@ class OptionsDialog(
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
         self.state_colors = dict(state_colors)
+        self.ui_theme = normalize_ui_theme(ui_theme)
+        bright = dict(state_colors)
+        bright.update({
+            "active_group_color": active_group_color,
+            "inactive_group_color": inactive_group_color,
+            "sound_button_text_color": sound_button_text_color,
+        })
+        if bright_button_colors is not None:
+            bright.update(bright_button_colors)
+        self._color_palettes = {
+            "bright": bright,
+            "dark": {**DARK_BUTTON_COLORS, **(dark_button_colors or {})},
+        }
+        self._editing_palette = effective_ui_theme(self.ui_theme)
+        self._load_editing_palette()
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
         self._available_midi_devices = list(available_midi_devices)

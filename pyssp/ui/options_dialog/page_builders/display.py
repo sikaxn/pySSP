@@ -57,7 +57,7 @@ class DisplayPageMixin:
         self._display_gadget_layer_up_buttons: Dict[str, QPushButton] = {}
         self._display_gadget_layer_down_buttons: Dict[str, QPushButton] = {}
         labels = dict(self._DISPLAY_OPTION_SPECS)
-        header_style = "font-weight:bold; color:#666666;"
+        header_style = "font-weight:bold;"
         for col, text in enumerate(["Gadget", "Visible / Edit", "Hide Text", "Hide Border", "Orientation", "Layer"]):
             header = QLabel(text)
             header.setStyleSheet(header_style)

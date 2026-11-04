@@ -428,6 +428,9 @@ def _build_dialog(**overrides):
         lock_require_password=bool(overrides.get("lock_require_password", defaults["lock_require_password"])),
         lock_password=str(overrides.get("lock_password", defaults["lock_password"])),
         lock_restart_state=str(overrides.get("lock_restart_state", defaults["lock_restart_state"])),
+        ui_theme=overrides.get("ui_theme", "bright"),
+        bright_button_colors=overrides.get("bright_button_colors"),
+        dark_button_colors=overrides.get("dark_button_colors"),
         initial_page=overrides.get("initial_page"),
         parent=None,
     )
@@ -960,3 +963,32 @@ def test_options_dialog_uses_responsive_size(qapp):
     available = screen.availableGeometry()
     assert dialog.width() <= min(800, max(560, available.width() - 80))
     assert dialog.height() <= min(500, max(380, available.height() - 80))
+
+
+def test_colour_sets_are_edited_independently(qapp):
+    dialog = _build_dialog(initial_page="Colour", ui_theme="dark")
+    try:
+        assert dialog.ui_theme_combo.currentData() == "dark"
+        assert dialog.edit_palette_combo.currentData() == "dark"
+        dialog.state_colors["playing"] = "#123456"
+        dialog.edit_palette_combo.setCurrentIndex(dialog.edit_palette_combo.findData("bright"))
+        assert dialog.state_colors["playing"] == OptionsDialog._DEFAULTS["state_colors"]["playing"]
+        dialog.state_colors["playing"] = "#ABCDEF"
+        dialog.edit_palette_combo.setCurrentIndex(dialog.edit_palette_combo.findData("dark"))
+        assert dialog.state_colors["playing"] == "#123456"
+        palettes = dialog.selected_color_palettes()
+        assert palettes["bright"]["playing"] == "#ABCDEF"
+        assert palettes["dark"]["playing"] == "#123456"
+    finally:
+        dialog.close()
+
+
+def test_colour_page_omits_system_choice_on_linux(qapp, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    dialog = _build_dialog(initial_page="Colour")
+    try:
+        assert dialog.ui_theme_combo.findData("system") == -1
+        assert dialog.ui_theme_combo.findData("bright") >= 0
+        assert dialog.ui_theme_combo.findData("dark") >= 0
+    finally:
+        dialog.close()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from ..shared import *
 from ..widgets import *
 
@@ -8,6 +10,24 @@ class ColorsPageMixin:
     def _build_color_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+
+        theme_group = QGroupBox("UI Theme")
+        theme_form = QFormLayout(theme_group)
+        self.ui_theme_combo = QComboBox()
+        self.ui_theme_combo.addItem("Bright", "bright")
+        self.ui_theme_combo.addItem("Dark mode", "dark")
+        if sys.platform in {"win32", "darwin"}:
+            self.ui_theme_combo.addItem("Follow system", "system")
+        self.ui_theme_combo.setCurrentIndex(max(0, self.ui_theme_combo.findData(self.ui_theme)))
+        self.ui_theme_combo.currentIndexChanged.connect(self._ui_theme_changed)
+        theme_form.addRow("UI Theme:", self.ui_theme_combo)
+        self.edit_palette_combo = QComboBox()
+        self.edit_palette_combo.addItem("Bright colours", "bright")
+        self.edit_palette_combo.addItem("Dark colours", "dark")
+        self.edit_palette_combo.setCurrentIndex(max(0, self.edit_palette_combo.findData(self._editing_palette)))
+        self.edit_palette_combo.currentIndexChanged.connect(self._editing_palette_changed)
+        theme_form.addRow("Edit colours for:", self.edit_palette_combo)
+        layout.addWidget(theme_group)
 
         sound_group = QGroupBox("Sound Button States")
         sound_form = QFormLayout(sound_group)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pyssp.settings_store import _decode_ascii_setting, _encode_ascii_setting, _from_parser
+from pyssp.settings_store import AppSettings, _decode_ascii_setting, _encode_ascii_setting, _from_parser, load_settings, save_settings
 
 
 def test_timecode_and_main_timeline_modes_are_independent():
@@ -16,6 +16,20 @@ def test_timecode_and_main_timeline_modes_are_independent():
     settings = _from_parser(parser)
     assert settings.timecode_timeline_mode == "audio_file"
     assert settings.main_transport_timeline_mode == "cue_region"
+
+
+def test_ui_theme_and_dark_colours_round_trip_without_changing_bright(tmp_path, monkeypatch):
+    import pyssp.settings_store as store
+
+    path = tmp_path / "settings.ini"
+    monkeypatch.setattr(store, "get_settings_path", lambda: path)
+    settings = AppSettings(ui_theme="dark", color_playing="#123456",
+                           dark_button_colors={"playing": "#654321"})
+    save_settings(settings)
+    loaded = load_settings()
+    assert loaded.ui_theme == "dark"
+    assert loaded.color_playing == "#123456"
+    assert loaded.dark_button_colors["playing"] == "#654321"
 
 
 def test_timecode_timeline_mode_falls_back_to_main_when_missing():

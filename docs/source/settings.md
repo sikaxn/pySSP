@@ -141,6 +141,12 @@ Runtime behavior details:
 
 ![Color Settings](images/settings/colour.png)
 
+- `UI Theme`
+  - `Bright` and `Dark mode` choose the app appearance directly.
+  - `Follow system` tracks the Windows or macOS app appearance while pySSP is open. Linux offers Bright and Dark mode.
+  - The theme icon beside the fullscreen button cycles through the available choices.
+- `Edit colours for`
+  - Bright and Dark keep separate sound button, indicator, text, and group button colours. Existing custom colours become the Bright set.
 - `Sound Button States`
   - Configurable colors for: Playing, Played, Unplayed, Highlight, Lock, Error, Place Marker, Empty, Copied To Cue.
 - `Indicators`

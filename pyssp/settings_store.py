@@ -495,6 +495,8 @@ class AppSettings:
     last_set_path: str = ""
     active_group_color: str = "#EDE8C8"
     inactive_group_color: str = "#ECECEC"
+    ui_theme: str = "bright"
+    dark_button_colors: dict[str, str] = field(default_factory=dict)
     title_char_limit: int = 26
     show_file_notifications: bool = True
     now_playing_display_mode: str = "caption"
@@ -890,6 +892,8 @@ def save_settings(settings: AppSettings) -> None:
         "last_set_path": settings.last_set_path,
         "active_group_color": settings.active_group_color,
         "inactive_group_color": settings.inactive_group_color,
+        "ui_theme": settings.ui_theme,
+        "dark_button_colors": json.dumps(settings.dark_button_colors, sort_keys=True),
         "title_char_limit": str(settings.title_char_limit),
         "show_file_notifications": "1" if settings.show_file_notifications else "0",
         "now_playing_display_mode": settings.now_playing_display_mode,
@@ -1692,6 +1696,8 @@ def _from_parser(parser: configparser.ConfigParser) -> AppSettings:
         last_set_path=str(section.get("last_set_path", "")),
         active_group_color=_coerce_hex(str(section.get("active_group_color", "#EDE8C8")), "#EDE8C8"),
         inactive_group_color=_coerce_hex(str(section.get("inactive_group_color", "#ECECEC")), "#ECECEC"),
+        ui_theme=_read_ui_theme(section.get("ui_theme", "bright")),
+        dark_button_colors=_read_dark_button_colors(section.get("dark_button_colors", "{}")),
         title_char_limit=title_limit,
         show_file_notifications=_get_bool(section, "show_file_notifications", True),
         now_playing_display_mode=now_playing_display_mode,
@@ -2154,3 +2160,19 @@ def _coerce_hex(value: str, fallback: str) -> str:
         except ValueError:
             return fallback
     return fallback
+
+
+def _read_ui_theme(value: str) -> str:
+    theme = str(value or "").strip().lower()
+    return theme if theme in {"bright", "dark", "system"} else "bright"
+
+
+def _read_dark_button_colors(value: str) -> dict[str, str]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): color.strip().upper() for key, color in parsed.items()
+            if isinstance(color, str) and _coerce_hex(color, "")}

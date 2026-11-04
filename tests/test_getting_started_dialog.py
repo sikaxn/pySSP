@@ -6,6 +6,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from pyssp.ui.getting_started_dialog import GettingStartedDialog
+from pyssp.ui.theme import apply_ui_theme
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -47,3 +48,17 @@ def test_getting_started_dialog_shows_close_only_on_last_page(qapp):
 
     assert dialog._next_button.isVisible() is False
     assert dialog._close_button.isVisible() is True
+
+
+def test_getting_started_dialog_follows_live_palette(qapp):
+    dialog = GettingStartedDialog(version_text="1.2.3", build_text="20260425", beta_build=False)
+    try:
+        apply_ui_theme(qapp, "dark")
+        qapp.processEvents()
+        assert "background:#24272D" in dialog.styleSheet()
+        apply_ui_theme(qapp, "bright")
+        qapp.processEvents()
+        assert "background:#FFFDF7" in dialog.styleSheet()
+    finally:
+        apply_ui_theme(qapp, "bright")
+        dialog.close()

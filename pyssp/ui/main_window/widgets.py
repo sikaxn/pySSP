@@ -263,6 +263,15 @@ class NowPlayingLabel(QWidget):
         line_h = self.fontMetrics().lineSpacing()
         self.setFixedHeight((line_h * 3) + 10)
 
+    def set_theme(self, theme: str) -> None:
+        dark = theme == "dark"
+        self._prefix_label.setStyleSheet(
+            f"color:{'#8FBEFF' if dark else '#0A29E0'}; font-weight:700; font-size:11pt;"
+        )
+        self._value_label.setStyleSheet(
+            f"color:{'#F2F2F2' if dark else '#101010'}; font-size:11pt;"
+        )
+
     def set_now_playing_text(self, prefix: str, value: str) -> None:
         self._prefix = prefix
         self._value = value
@@ -354,7 +363,7 @@ class ToolListWindow(QDialog):
 
         self.note_label = QLabel("")
         self.note_label.setWordWrap(True)
-        self.note_label.setStyleSheet("color:#555555;")
+        self.note_label.setStyleSheet("")
         self.note_label.setVisible(False)
         root.addWidget(self.note_label)
 

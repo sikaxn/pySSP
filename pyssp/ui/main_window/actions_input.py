@@ -1023,10 +1023,10 @@ class ActionsInputMixin:
             paused_mode = self.player.state() == ExternalMediaPlayer.PausedState
         if paused_mode:
             pause_button.setText("Resume")
-            pause_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            pause_button.setIcon(self._media_control_icon("play"))
         else:
             pause_button.setText("Pause")
-            pause_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            pause_button.setIcon(self._media_control_icon("pause"))
         self._sync_control_button_instances("Pause")
         try:
             self._refresh_launchpad_feedback(force=False)
@@ -1898,6 +1898,9 @@ class ActionsInputMixin:
             ),
             stage_display_gadgets=self.stage_display_gadgets,
             ui_language=self.ui_language,
+            ui_theme=self.ui_theme,
+            bright_button_colors=self.bright_button_colors,
+            dark_button_colors=self.dark_button_colors,
             initial_page=initial_page,
             parent=self,
         )
@@ -1909,8 +1912,6 @@ class ActionsInputMixin:
             return
         self._midi_context_handler = None
         self._midi_context_block_actions = False
-        self.active_group_color = dialog.active_group_color
-        self.inactive_group_color = dialog.inactive_group_color
         self.title_char_limit = dialog.title_limit_spin.value()
         self.lock_allow_quit = dialog.selected_lock_allow_quit()
         self.lock_allow_system_hotkeys = dialog.selected_lock_allow_system_hotkeys()
@@ -2016,47 +2017,11 @@ class ActionsInputMixin:
         self.timecode_mtc_idle_behavior = dialog.selected_timecode_mtc_idle_behavior()
         self.timecode_sample_rate = dialog.selected_timecode_sample_rate()
         self.timecode_bit_depth = dialog.selected_timecode_bit_depth()
-        selected_colors = dialog.selected_state_colors()
-        self.state_colors["playing"] = selected_colors.get("playing", self.state_colors["playing"])
-        self.state_colors["played"] = selected_colors.get("played", self.state_colors["played"])
-        self.state_colors["assigned"] = selected_colors.get("unplayed", self.state_colors["assigned"])
-        self.state_colors["highlighted"] = selected_colors.get("highlight", self.state_colors["highlighted"])
-        self.state_colors["locked"] = selected_colors.get("lock", self.state_colors["locked"])
-        self.state_colors["missing"] = selected_colors.get("error", self.state_colors["missing"])
-        self.state_colors["marker"] = selected_colors.get("place_marker", self.state_colors["marker"])
-        self.state_colors["empty"] = selected_colors.get("empty", self.state_colors["empty"])
-        self.state_colors["copied"] = selected_colors.get("copied_to_cue", self.state_colors["copied"])
-        self.state_colors["cue_indicator"] = selected_colors.get("cue_indicator", self.state_colors["cue_indicator"])
-        self.state_colors["volume_indicator"] = selected_colors.get(
-            "volume_indicator",
-            self.state_colors["volume_indicator"],
-        )
-        self.state_colors["vocal_removed_indicator"] = selected_colors.get(
-            "vocal_removed_indicator",
-            self.state_colors["vocal_removed_indicator"],
-        )
-        self.state_colors["midi_indicator"] = selected_colors.get("midi_indicator", self.state_colors["midi_indicator"])
-        self.state_colors["lyric_indicator"] = selected_colors.get(
-            "lyric_indicator",
-            self.state_colors["lyric_indicator"],
-        )
-        self.state_colors["automation_indicator"] = selected_colors.get(
-            "automation_indicator",
-            self.state_colors["automation_indicator"],
-        )
-        self.state_colors["automation_indicator_bypassed"] = selected_colors.get(
-            "automation_indicator_bypassed",
-            self.state_colors["automation_indicator_bypassed"],
-        )
-        self.state_colors["automation_script_indicator"] = selected_colors.get(
-            "automation_script_indicator",
-            self.state_colors["automation_script_indicator"],
-        )
-        self.state_colors["automation_script_indicator_bypassed"] = selected_colors.get(
-            "automation_script_indicator_bypassed",
-            self.state_colors["automation_script_indicator_bypassed"],
-        )
-        self.sound_button_text_color = dialog.selected_sound_button_text_color()
+        selected_palettes = dialog.selected_color_palettes()
+        self.bright_button_colors = selected_palettes["bright"]
+        self.dark_button_colors = selected_palettes["dark"]
+        self.ui_theme = dialog.ui_theme
+        self._apply_theme_colors(refresh=True)
         self.hotkeys = dialog.selected_hotkeys()
         self.quick_action_enabled = dialog.selected_quick_action_enabled()
         self.quick_action_keys = dialog.selected_quick_action_keys()[:48]

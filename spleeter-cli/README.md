@@ -13,6 +13,10 @@ Expected output:
 - macOS executable `dist/spleeter-cli/spleeter-cli`
 
 Typical flow:
+For Linux ARM64, use `bash spleeter-cli/build_pyinstaller_linux.sh`, then
+`bash build_pyinstaller_linux.sh` at the repository root to bundle the CLI and
+create a `.deb`. See [the WSL/ARM64 build environment guide](../docs/source/raspberry_pi_build.md).
+
 1. Build this CLI from a Python environment that can install Spleeter.
 2. Run `spleeter-cli/build_pyinstaller.bat` on Windows or `spleeter-cli/build_pyinstaller_mac.sh` on macOS.
 3. The root build copies `dist\spleeter-cli\` into the pySSP app bundle.

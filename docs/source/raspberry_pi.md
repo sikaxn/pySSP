@@ -1,5 +1,10 @@
 # Raspberry Pi installation
 
+For a current pySSP `.deb` build, with optional Spleeter bundling, use
+[Build the Raspberry Pi Debian installer in WSL](raspberry_pi_build.md).
+The source-installation record below describes the original October 7 setup and
+the October 9 audio investigation; it is retained for reference and rollback.
+
 This guide records the source installation tested on October 7, 2026, including
 the adjustments needed for the Pi's Python version. It is a tested configuration,
 not a packaged Raspberry Pi release or a claim that every feature works on Linux.
@@ -158,6 +163,8 @@ cat > ~/.local/bin/pyssp <<'EOF'
 cd /home/ubuntu/pySSP || exit 1
 export QT_QPA_PLATFORM=xcb
 export ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf
+export PYSSP_AUDIO_BLOCKSIZE=2048
+export PYSSP_AUDIO_LATENCY=0.15
 exec /home/ubuntu/pyssp-venv/bin/python /home/ubuntu/pySSP/main.py "$@"
 EOF
 chmod +x ~/.local/bin/pyssp
@@ -182,6 +189,12 @@ Adjust `/home/ubuntu` for a different account. `QT_QPA_PLATFORM=xcb` uses the
 desktop's XWayland support. The ALSA setting points to Debian's configuration;
 the initial smoke run had logged a lookup for the nonexistent
 `/usr/local/share/alsa/alsa.conf`.
+
+The audio buffer overrides were added after the October 9 playback investigation
+below. They require the updated `audio_engine.py`; the original source snapshot
+ignored these variables. They trade some trigger responsiveness for stable output
+on this Pi. Other installations keep their existing defaults unless the variables
+are explicitly set.
 
 Open **pySSP** from the desktop or application menu. From a terminal within the
 desktop session, run `~/.local/bin/pyssp`.
@@ -264,3 +277,78 @@ The installed app supports the tested desktop, fullscreen, and audio/DSP paths.
 Vocal separation through Spleeter is unavailable until its optional backend is
 installed. MIDI hardware, NDI/video, external plugins, sustained playback, and
 performance under production workloads were not validated in this session.
+
+## October 9: headphone playback dropouts
+
+The initial installation's silent-buffer smoke check did not exercise sustained
+playback with a loaded sound library. The user subsequently reported skipping and
+crackling on every sound through the Pi headphone jack.
+
+### Evidence
+
+The Pi reported `throttled=0x0`, a temperature of about 59 degrees C, no swap use,
+and ample available RAM at the start of the investigation. A plain SoundDevice
+stream produced no reported output underruns on either the default output or the
+explicit headphone device during each eight-second check.
+
+The full pySSP application reproduced the failure using the user's restored set.
+A temporary wrapper around `sounddevice.OutputStream` counted PortAudio status
+flags and timed callbacks. Playback was attenuated for testing, and a separate
+settings copy prevented the tests from changing user preferences.
+
+| Test | Active-player output underruns | Requested / reported latency |
+| --- | --- | --- |
+| Original app timing, approximately 25 seconds | 94 | `low` / 23.2 ms |
+| 2,048 frames with `high` latency, approximately 25 seconds | 3 | `high` / 46.4 ms |
+| Original timing with current-page preloading disabled, approximately 25 seconds | 10 | `low` / 23.2 ms |
+| 2,048 frames with 0.15-second requested latency, approximately 45 seconds | 0 | 150 ms / 185.8 ms |
+| Installed override, three tracks over approximately 65 seconds | 0 on both players | 150 ms / 185.8 ms |
+
+These are diagnostic runs, not a controlled performance benchmark; the middle two
+runs also had profiling enabled. The original active callback had gaps up to
+121 ms, and the idle second player's callback had gaps up to 165 ms. Those gaps
+exceeded the original 23 ms output buffer. Even the idle stream underrunning
+points to scheduling delays beyond the cost of decoding the playing track alone.
+
+Profiling showed background FFmpeg preload work and repeated waveform drawing
+alongside the audio callbacks. The existing preload pause code cancels pending
+futures but does not interrupt a preload decode that has already started. These
+are sources of CPU/interpreter contention on this Pi. Disabling page preloading
+helped but did not eliminate underruns. The evidence supports insufficient output
+buffer headroom under application load, rather than a demonstrated headphone
+hardware fault. It does not isolate every source of scheduling delay.
+
+### Installed mitigation
+
+`audio_engine.py` now accepts two optional environment variables when opening
+player output streams:
+
+- `PYSSP_AUDIO_BLOCKSIZE`: integer frames per callback, from 64 to 16,384.
+- `PYSSP_AUDIO_LATENCY`: requested output latency in seconds, from 0.005 to 2.0.
+
+Invalid values fall back to the existing platform defaults. With no overrides,
+Windows/Linux still use 1,024 frames and `low` latency, and macOS still uses 2,048
+frames and `high` latency. No system-wide audio configuration was changed.
+
+The Pi launcher sets `PYSSP_AUDIO_BLOCKSIZE=2048` and
+`PYSSP_AUDIO_LATENCY=0.15`. PortAudio actually reports about **186 ms** on this
+device, since the driver rounds the requested buffering. This increases the delay
+between triggering a sound and hearing it. Existing preload preferences remain
+unchanged. This is a buffering mitigation, not a removal of the underlying UI and
+preload contention.
+
+The final run used the normal theme and localization hooks, switched between
+three library tracks, and kept the user's preload settings. It reported no
+partial audio blocks, although three playing callbacks made no source-position
+progress; the measurements do not constitute a recording or an audible-quality
+assessment. Focused tests passed on both Windows (35 tests) and the Pi (34 tests),
+including override validation and the existing playback/stream-seek checks.
+
+Diagnostic scripts and logs are retained under `/home/ubuntu/pyssp-diagnostics`
+and `/home/ubuntu/pyssp-diagnostic-*.log`; the probe scripts are
+`/home/ubuntu/pyssp-audio-probe.py` and `/home/ubuntu/pyssp-gui-probe.py`.
+The original engine and launcher were backed up in
+`/home/ubuntu/pyssp-diagnostics/before-audio-fix/`.
+
+To revert only the buffer settings, remove the two `PYSSP_AUDIO_*` export lines
+from `~/.local/bin/pyssp` and restart the app. The code defaults are unchanged.

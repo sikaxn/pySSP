@@ -4,6 +4,7 @@ from .shared import *
 from .constants import *
 from .helpers import *
 from .widgets import *
+from pyssp.ui.theme import BRIGHT_SETTINGS_KEYS
 
 
 class SettingsArchiveMixin:
@@ -1268,8 +1269,10 @@ class SettingsArchiveMixin:
         return False
 
     def _save_settings(self) -> None:
-        self.settings.active_group_color = self.active_group_color
-        self.settings.inactive_group_color = self.inactive_group_color
+        self.settings.ui_theme = self.ui_theme
+        self.settings.dark_button_colors = dict(self.dark_button_colors)
+        for key, field in BRIGHT_SETTINGS_KEYS.items():
+            setattr(self.settings, field, self.bright_button_colors[key])
         self.settings.title_char_limit = self.title_char_limit
         self.settings.show_file_notifications = self.show_file_notifications
         self.settings.lock_allow_quit = bool(self.lock_allow_quit)
@@ -1377,28 +1380,7 @@ class SettingsArchiveMixin:
         self.settings.main_progress_display_mode = self.main_progress_display_mode
         self.settings.main_progress_show_text = bool(self.main_progress_show_text)
         self.settings.main_jog_outside_cue_action = self.main_jog_outside_cue_action
-        self.settings.color_empty = self.state_colors["empty"]
-        self.settings.color_unplayed = self.state_colors["assigned"]
-        self.settings.color_highlight = self.state_colors["highlighted"]
-        self.settings.color_playing = self.state_colors["playing"]
-        self.settings.color_played = self.state_colors["played"]
-        self.settings.color_error = self.state_colors["missing"]
-        self.settings.color_lock = self.state_colors["locked"]
-        self.settings.color_place_marker = self.state_colors["marker"]
-        self.settings.color_copied_to_cue = self.state_colors["copied"]
-        self.settings.color_cue_indicator = self.state_colors["cue_indicator"]
-        self.settings.color_volume_indicator = self.state_colors["volume_indicator"]
-        self.settings.color_vocal_removed_indicator = self.state_colors["vocal_removed_indicator"]
-        self.settings.color_midi_indicator = self.state_colors["midi_indicator"]
-        self.settings.color_lyric_indicator = self.state_colors["lyric_indicator"]
-        self.settings.color_automation_indicator = self.state_colors["automation_indicator"]
-        self.settings.color_automation_indicator_bypassed = self.state_colors["automation_indicator_bypassed"]
-        self.settings.color_automation_script_indicator = self.state_colors["automation_script_indicator"]
-        self.settings.color_automation_script_indicator_bypassed = (
-            self.state_colors["automation_script_indicator_bypassed"]
-        )
         self.settings.warn_dual_automation_sources = bool(self.warn_dual_automation_sources)
-        self.settings.sound_button_text_color = self.sound_button_text_color
         self.settings.hotkey_new_set_1 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[0]
         self.settings.hotkey_new_set_2 = self.hotkeys.get("new_set", ("Ctrl+N", ""))[1]
         self.settings.hotkey_open_set_1 = self.hotkeys.get("open_set", ("Ctrl+O", ""))[0]

@@ -76,14 +76,15 @@ class PagesSlotsMixin:
         self._queue_current_page_audio_preload()
 
     def _refresh_group_buttons(self) -> None:
+        text_color = "#FFFFFF" if self._effective_ui_theme == "dark" else "#000000"
         for group, button in self.group_buttons.items():
             if group == self.current_group:
                 button.setStyleSheet(
-                    f"background: {self.active_group_color}; font-size: 18pt; font-weight: bold; border: 1px solid #7C7C7C;"
+                    f"background: {self.active_group_color}; color: {text_color}; font-size: 18pt; font-weight: bold; border: 1px solid #7C7C7C;"
                 )
             else:
                 button.setStyleSheet(
-                    f"background: {self.inactive_group_color}; font-size: 18pt; font-weight: bold; border: 1px solid #8A8A8A;"
+                    f"background: {self.inactive_group_color}; color: {text_color}; font-size: 18pt; font-weight: bold; border: 1px solid #8A8A8A;"
                 )
 
     def _refresh_page_list(self) -> None:

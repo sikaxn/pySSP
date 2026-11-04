@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from typing import Callable, Optional
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QColor, QFont, QPalette, QPixmap
 from PyQt5.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -17,6 +19,18 @@ from PyQt5.QtWidgets import (
 )
 
 from pyssp.i18n import normalize_language, tr
+
+
+_DARK_STYLE_COLORS = {
+    "#FFFDF7": "#24272D", "#F8F2E8": "#30343B", "#F0E7D9": "#41464F",
+    "#E7DCCB": "#505760", "#DDD0BC": "#363C43", "#F3E9D8": "#41464F",
+    "#EADFCB": "#505760", "#DFD0B8": "#363C43", "#F6EEDF": "#41464F",
+    "#EEE4D1": "#505760", "#E5D8C1": "#363C43", "#F4EBDC": "#41464F",
+    "#FFF3CD": "#50452C", "#F9E9D7": "#50452C",
+    "#3E3429": "#F1F2F4", "#2B221A": "#F1F2F4", "#342A21": "#F1F2F4",
+    "#6D6256": "#BFC5CD", "#766A5E": "#BFC5CD", "#7A6E5E": "#BFC5CD",
+    "#5C5348": "#D0D4DA", "#6C5F52": "#BFC5CD", "#6A4A00": "#F6D888",
+}
 
 
 class GettingStartedDialog(QDialog):
@@ -52,7 +66,7 @@ class GettingStartedDialog(QDialog):
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
         self.resize(980, 760)
-        self.setStyleSheet("QDialog{background:#FFFDF7;}")
+        self.setAutoFillBackground(True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -109,6 +123,43 @@ class GettingStartedDialog(QDialog):
         root.addLayout(button_row)
         self.set_language(self._language)
         self._sync_buttons()
+        self._base_styles = {widget: widget.styleSheet() for widget in self.findChildren(QWidget)
+                             if widget.styleSheet()}
+        self._apply_theme_styles()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange and hasattr(self, "_base_styles") and not getattr(self, "_applying_theme_styles", False):
+            self._apply_theme_styles()
+
+    def _apply_theme_styles(self) -> None:
+        if getattr(self, "_applying_theme_styles", False):
+            return
+        self._applying_theme_styles = True
+        app = QApplication.instance()
+        mode = app.property("_pyssp_applied_theme") if app is not None else None
+        dark = mode == "dark" if mode in {"bright", "dark"} else bool(
+            app is not None and app.palette().color(QPalette.Window).lightness() < 128
+        )
+        try:
+            palette = self.palette()
+            palette.setColor(QPalette.Window, QColor("#24272D" if dark else "#FFFDF7"))
+            foreground = QColor("#F1F2F4" if dark else "#2B221A")
+            for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+                palette.setColor(role, foreground)
+            self.setPalette(palette)
+            for widget, original in self._base_styles.items():
+                style = original
+                if dark:
+                    style = re.sub(
+                        r"#[0-9A-Fa-f]{6}",
+                        lambda match: _DARK_STYLE_COLORS.get(match.group(0).upper(), match.group(0)),
+                        style,
+                    )
+                if widget.styleSheet() != style:
+                    widget.setStyleSheet(style)
+        finally:
+            self._applying_theme_styles = False
 
     def _build_welcome_page(self, splash_image_path: str) -> QWidget:
         page = QWidget(self)

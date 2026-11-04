@@ -47,6 +47,8 @@ python -m venv .venv
 For the tested Raspberry Pi source installation, including Python 3.13
 compatibility adjustments and desktop launchers, see the
 [Raspberry Pi installation guide](docs/source/raspberry_pi.md).
+For an ARM64 PyInstaller build with bundled Spleeter and a Debian installer, see
+[Building for Raspberry Pi in WSL](docs/source/raspberry_pi_build.md).
 
 ## Command-line flags
 

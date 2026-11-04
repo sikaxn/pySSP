@@ -17,6 +17,10 @@ from .tools_library import ToolsLibraryMixin
 from .ui_build import UiBuildMixin
 from pyssp.companion_satellite import CompanionSatelliteClient
 from pyssp.ui.companion_satellite_window import CompanionSatelliteWindow
+from pyssp.ui.theme import (
+    STATE_TO_RUNTIME, apply_ui_theme, button_palette_from_settings,
+    effective_ui_theme, normalize_ui_theme, normalized_dark_button_colors,
+)
 
 
 def _stop_qthread_safely(thread: Optional[QThread], timeout_ms: int = 1500) -> None:
@@ -58,6 +62,59 @@ class MainWindow(
     LockingMixin,
     QMainWindow,
 ):
+    def _apply_theme_colors(self, *, refresh: bool) -> None:
+        theme = effective_ui_theme(self.ui_theme)
+        self._effective_ui_theme = theme
+        palette = self.dark_button_colors if theme == "dark" else self.bright_button_colors
+        self.active_group_color = palette["active_group_color"]
+        self.inactive_group_color = palette["inactive_group_color"]
+        self.sound_button_text_color = palette["sound_button_text_color"]
+        for key, value in palette.items():
+            if key in {"active_group_color", "inactive_group_color", "sound_button_text_color"}:
+                continue
+            self.state_colors[STATE_TO_RUNTIME.get(key, key)] = value
+        app = QApplication.instance()
+        if app is not None:
+            apply_ui_theme(app, theme)
+        if refresh:
+            accent = "#8FBEFF" if theme == "dark" else "#0A29E0"
+            self.page_status.setStyleSheet(f"font-size: 13pt; color: {accent}; font-weight: bold;")
+            self.now_playing_label.set_theme(theme)
+            self.main_lyric_label.set_theme(theme)
+            if getattr(self, "_button_legend_layout", None) is not None:
+                self._refresh_button_legend_label()
+            self._refresh_group_buttons()
+            self._refresh_page_list()
+            self._refresh_sound_grid()
+            if self._is_button_drag_enabled():
+                self._update_button_drag_visual_state()
+            for key, kind in (("Next", "play"), ("STOP", "stop")):
+                button = self._main_control_buttons_ui.get(key)
+                if button is not None:
+                    button.setIcon(self._media_control_icon(kind))
+                    self._sync_control_button_instances(key)
+            self._update_pause_button_label()
+            fullscreen_button = getattr(self, "fullscreen_button", None)
+            if fullscreen_button is not None:
+                self._sync_fullscreen_button(fullscreen_button)
+            lock_button = getattr(self, "lock_screen_button", None)
+            if lock_button is not None:
+                lock_button.setIcon(QIcon(build_lock_icon(
+                    color="#F2F2F2" if theme == "dark" else "#252A30"
+                )))
+            self._sync_theme_button()
+
+    def _check_system_theme(self) -> None:
+        if self.ui_theme == "system" and effective_ui_theme("system") != self._effective_ui_theme:
+            self._apply_theme_colors(refresh=True)
+
+    def _cycle_ui_theme(self) -> None:
+        modes = ["bright", "dark"] + (["system"] if sys.platform in {"win32", "darwin"} else [])
+        current = self.ui_theme if self.ui_theme in modes else "bright"
+        self.ui_theme = modes[(modes.index(current) + 1) % len(modes)]
+        self._apply_theme_colors(refresh=True)
+        self._save_settings()
+
     def __init__(self, *, show_getting_started_on_startup: bool = False) -> None:
         super().__init__()
         self._suspend_settings_save = True
@@ -68,6 +125,10 @@ class MainWindow(
         self.setWindowTitle(self.app_title_base)
         self.resize(1360, 900)
         self.settings: AppSettings = load_settings()
+        self.ui_theme = normalize_ui_theme(self.settings.ui_theme)
+        self.bright_button_colors = button_palette_from_settings(self.settings)
+        self.dark_button_colors = normalized_dark_button_colors(self.settings.dark_button_colors)
+        self._effective_ui_theme = effective_ui_theme(self.ui_theme)
         self.ui_language = normalize_language(getattr(self.settings, "ui_language", "en"))
         set_current_language(self.ui_language)
 
@@ -506,12 +567,14 @@ class MainWindow(
         # Migrate legacy default marker color so marker text remains readable.
         if str(self.settings.color_place_marker).strip().upper() == "#111111":
             self.settings.color_place_marker = COLORS["marker"]
+            self.bright_button_colors["place_marker"] = COLORS["marker"]
             self.state_colors["marker"] = COLORS["marker"]
             try:
                 save_settings(self.settings)
             except OSError:
                 pass
         self.sound_button_text_color = self.settings.sound_button_text_color
+        self._apply_theme_colors(refresh=False)
         self.hotkeys: Dict[str, tuple[str, str]] = {
             "new_set": (self.settings.hotkey_new_set_1, self.settings.hotkey_new_set_2),
             "open_set": (self.settings.hotkey_open_set_1, self.settings.hotkey_open_set_2),
@@ -905,6 +968,10 @@ class MainWindow(
         self._launchpad_layer_sensitivity = 2
 
         self._build_ui()
+        self._apply_theme_colors(refresh=True)
+        self._system_theme_timer = QTimer(self)
+        self._system_theme_timer.timeout.connect(self._check_system_theme)
+        self._system_theme_timer.start(2000)
         self._lock_screen_overlay = LockScreenOverlay(self)
         self._lock_screen_overlay.unlocked.connect(self._attempt_unlock_from_overlay)
         self._midi_poll_thread.start()
@@ -936,6 +1003,9 @@ class MainWindow(
             self.fullscreen_button = self._create_fullscreen_button(self.statusBar(), auto_raise=False)
             self.fullscreen_button.setMinimumSize(28, 20)
             self.statusBar().addPermanentWidget(self.fullscreen_button)
+            self.theme_button = self._create_theme_button(self.statusBar(), auto_raise=False)
+            self.theme_button.setMinimumSize(28, 20)
+            self.statusBar().addPermanentWidget(self.theme_button)
             self.lock_screen_button = self._create_lock_screen_button(self.statusBar(), auto_raise=False)
             self.lock_screen_button.setMinimumSize(28, 20)
             self.statusBar().addPermanentWidget(self.lock_screen_button)

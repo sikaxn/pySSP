@@ -1820,7 +1820,9 @@ class PlaybackMixin:
             )
             self.drag_mode_banner.setVisible(True)
             if self.centralWidget() is not None:
-                self.centralWidget().setStyleSheet("background:#FFF9E8;")
+                self.centralWidget().setStyleSheet(
+                    "background:#3A3525;" if self._effective_ui_theme == "dark" else "background:#FFF9E8;"
+                )
         else:
             self.drag_mode_banner.setVisible(False)
             if self.centralWidget() is not None:

@@ -7,6 +7,7 @@
 main_window
 startup
 raspberry_pi
+raspberry_pi_build
 group_page_sound_button
 edit_sound_button
 audio_device_timecode

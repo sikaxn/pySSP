@@ -7,6 +7,7 @@ from .layout_helpers import LayoutHelpersMixin
 from .page_builders import PageBuilderMixin
 from .selections import SelectionMixin
 from .state_logic import StateLogicMixin
+from pyssp.ui.theme import DARK_BUTTON_COLORS, effective_ui_theme, normalize_ui_theme
 
 class OptionsDialog(
     PageBuilderMixin,
@@ -16,6 +17,28 @@ class OptionsDialog(
     StateLogicMixin,
     QDialog,
 ):
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        app = QApplication.instance()
+        if app is not None and not getattr(self, "_theme_signal_connected", False):
+            app.paletteChanged.connect(self._on_application_palette_changed)
+            self._theme_signal_connected = True
+        self._on_application_palette_changed()
+
+    def hideEvent(self, event) -> None:
+        app = QApplication.instance()
+        if app is not None and getattr(self, "_theme_signal_connected", False):
+            app.paletteChanged.disconnect(self._on_application_palette_changed)
+            self._theme_signal_connected = False
+        super().hideEvent(event)
+
+    def _on_application_palette_changed(self, *_args) -> None:
+        app = QApplication.instance()
+        active_theme = app.property("_pyssp_applied_theme") if app is not None else None
+        if active_theme in {"bright", "dark"} and active_theme != self._dialog_theme:
+            self._dialog_theme = active_theme
+            self._refresh_page_icons()
+
     _LAUNCHPAD_ACTION_ROWS = [
         ("shift_layer", "Shift Layer (C9 only)"),
         ("play_selected_pause", "Play Selected / Pause"),
@@ -564,6 +587,9 @@ class OptionsDialog(
         waveform_cache_clear_on_launch: bool = True,
         is_playback_or_loading_active: Optional[Callable[[], bool]] = None,
         stage_display_gadgets: Optional[Dict[str, Dict[str, object]]] = None,
+        ui_theme: str = "bright",
+        bright_button_colors: Optional[Dict[str, str]] = None,
+        dark_button_colors: Optional[Dict[str, str]] = None,
         initial_page: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -752,6 +778,22 @@ class OptionsDialog(
         self.hotkey_warning_label: Optional[QLabel] = None
         self.ok_button: Optional[QPushButton] = None
         self.state_colors = dict(state_colors)
+        self.ui_theme = normalize_ui_theme(ui_theme)
+        self._dialog_theme = effective_ui_theme(self.ui_theme)
+        bright = dict(state_colors)
+        bright.update({
+            "active_group_color": active_group_color,
+            "inactive_group_color": inactive_group_color,
+            "sound_button_text_color": sound_button_text_color,
+        })
+        if bright_button_colors is not None:
+            bright.update(bright_button_colors)
+        self._color_palettes = {
+            "bright": bright,
+            "dark": {**DARK_BUTTON_COLORS, **(dark_button_colors or {})},
+        }
+        self._editing_palette = effective_ui_theme(self.ui_theme)
+        self._load_editing_palette()
         self._state_color_buttons: Dict[str, QPushButton] = {}
         self._available_audio_devices = list(available_audio_devices)
         self._available_midi_devices = list(available_midi_devices)
@@ -795,7 +837,7 @@ class OptionsDialog(
 
         self._add_page(
             "General",
-            self._mono_icon("info"),
+            "info",
             self._build_general_page(
                 title_char_limit=title_char_limit,
                 show_file_notifications=show_file_notifications,
@@ -811,12 +853,12 @@ class OptionsDialog(
         )
         self._add_page(
             "Language",
-            self._mono_icon("earth"),
+            "earth",
             self._build_language_page(self._ui_language),
         )
         self._add_page(
             "Lock Screen",
-            self._mono_icon("lock"),
+            "lock",
             self._build_lock_screen_page(
                 lock_allow_quit=lock_allow_quit,
                 lock_allow_system_hotkeys=lock_allow_system_hotkeys,
@@ -833,17 +875,17 @@ class OptionsDialog(
         )
         self._add_page(
             "Hotkey",
-            self._mono_icon("keyboard"),
+            "keyboard",
             self._build_hotkey_page(),
         )
         self._add_page(
             "Midi Control",
-            self._mono_icon("piano"),
+            "piano",
             self._build_midi_control_page(),
         )
         self._add_page(
             "Colour",
-            self._mono_icon("display"),
+            "display",
             self._build_color_page(),
         )
         stage_display_page = self._build_display_page()
@@ -860,17 +902,17 @@ class OptionsDialog(
             )
         self._add_page(
             "Stage and Lyric Display",
-            self._mono_icon("projector"),
+            "projector",
             self._build_stage_lyric_display_page(stage_display_page, lyric_display_page),
         )
         self._add_page(
             "Window Layout",
-            self._mono_icon("layout"),
+            "layout",
             self._build_window_layout_page(),
         )
         self._add_page(
             "Fade",
-            self._mono_icon("clock"),
+            "clock",
             self._build_delay_page(
                 fade_in_sec=fade_in_sec,
                 cross_fade_sec=cross_fade_sec,
@@ -889,7 +931,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Playback",
-            self._mono_icon("play"),
+            "play",
             self._build_playback_page(
                 max_multi_play_songs=max_multi_play_songs,
                 multi_play_limit_action=multi_play_limit_action,
@@ -907,7 +949,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Audio Device & Timecode",
-            self._mono_icon("speaker"),
+            "speaker",
             self._build_audio_device_page(
                 audio_output_device=audio_output_device,
                 available_audio_devices=available_audio_devices,
@@ -927,7 +969,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Audio Loading & Format",
-            self._mono_icon("ram"),
+            "ram",
             self._build_audio_preload_page(
                 preload_audio_enabled=preload_audio_enabled,
                 preload_current_page_audio=preload_current_page_audio,
@@ -947,7 +989,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Talk",
-            self._mono_icon("mic"),
+            "mic",
             self._build_talk_page(
                 talk_volume_level=talk_volume_level,
                 talk_fade_sec=talk_fade_sec,
@@ -957,7 +999,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Web Remote",
-            self._mono_icon("wireless"),
+            "wireless",
             self._build_web_remote_page(
                 web_remote_enabled=web_remote_enabled,
                 web_remote_port=web_remote_port,
@@ -966,7 +1008,7 @@ class OptionsDialog(
         )
         self._add_page(
             "Automation",
-            self._mono_icon("robot"),
+            "robot",
             self._build_companion_satellite_page(
                 host=self._companion_satellite_host,
                 port=self._companion_satellite_port,

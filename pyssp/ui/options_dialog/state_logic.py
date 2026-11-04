@@ -2,14 +2,60 @@ from __future__ import annotations
 
 from .shared import *
 from .widgets import *
+from pyssp.ui.theme import DARK_BUTTON_COLORS, effective_ui_theme
 
 
 class StateLogicMixin:
+    def _save_editing_palette(self) -> None:
+        palette = self._color_palettes[self._editing_palette]
+        palette.update(self.state_colors)
+        palette["active_group_color"] = self.active_group_color
+        palette["inactive_group_color"] = self.inactive_group_color
+        palette["sound_button_text_color"] = self.sound_button_text_color
+
+    def _load_editing_palette(self) -> None:
+        palette = self._color_palettes[self._editing_palette]
+        self.state_colors = {key: value for key, value in palette.items()
+                             if key not in {"active_group_color", "inactive_group_color", "sound_button_text_color"}}
+        self.active_group_color = palette["active_group_color"]
+        self.inactive_group_color = palette["inactive_group_color"]
+        self.sound_button_text_color = palette["sound_button_text_color"]
+        for key, button in getattr(self, "_state_color_buttons", {}).items():
+            self._refresh_color_button(button, self.state_colors[key])
+        for attr, color in (
+            ("active_color_btn", self.active_group_color),
+            ("inactive_color_btn", self.inactive_group_color),
+            ("sound_text_color_btn", self.sound_button_text_color),
+        ):
+            button = getattr(self, attr, None)
+            if button is not None:
+                self._refresh_color_button(button, color)
+
+    def _editing_palette_changed(self) -> None:
+        target = self.edit_palette_combo.currentData()
+        if target == self._editing_palette:
+            return
+        self._save_editing_palette()
+        self._editing_palette = target
+        self._load_editing_palette()
+
+    def _ui_theme_changed(self) -> None:
+        self.ui_theme = self.ui_theme_combo.currentData()
+        target = effective_ui_theme(self.ui_theme)
+        self.edit_palette_combo.setCurrentIndex(self.edit_palette_combo.findData(target))
+
+    def selected_color_palettes(self) -> Dict[str, Dict[str, str]]:
+        self._save_editing_palette()
+        return {name: dict(colors) for name, colors in self._color_palettes.items()}
+
     def _refresh_color_button(self, button: QPushButton, color_hex: str) -> None:
         button.setText(color_hex)
+        color = QColor(color_hex)
+        text_color = "#000000" if color.lightness() >= 145 else "#FFFFFF"
         button.setStyleSheet(
             "QPushButton{"
             f"background:{color_hex};"
+            f"color:{text_color};"
             "border:1px solid #6C6C6C;"
             "min-height:26px;"
             "}"
@@ -195,17 +241,15 @@ class StateLogicMixin:
 
     def _restore_color_defaults(self) -> None:
         d = self._DEFAULTS
-        self.active_group_color = str(d["active_group_color"])
-        self.inactive_group_color = str(d["inactive_group_color"])
-        self._refresh_color_button(self.active_color_btn, self.active_group_color)
-        self._refresh_color_button(self.inactive_color_btn, self.inactive_group_color)
-        for key, value in dict(d["state_colors"]).items():
-            self.state_colors[key] = value
-            btn = self._state_color_buttons.get(key)
-            if btn is not None:
-                self._refresh_color_button(btn, value)
-        self.sound_button_text_color = str(d["sound_button_text_color"])
-        self._refresh_color_button(self.sound_text_color_btn, self.sound_button_text_color)
+        self._color_palettes[self._editing_palette] = (
+            dict(DARK_BUTTON_COLORS) if self._editing_palette == "dark" else {
+                **dict(d["state_colors"]),
+                "active_group_color": str(d["active_group_color"]),
+                "inactive_group_color": str(d["inactive_group_color"]),
+                "sound_button_text_color": str(d["sound_button_text_color"]),
+            }
+        )
+        self._load_editing_palette()
 
     def _restore_display_defaults(self) -> None:
         d = self._DEFAULTS

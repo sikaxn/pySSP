@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+# Pi-specific defaults; shell overrides are retained for other audio devices.
+if [ -r /proc/device-tree/model ] && grep -aq 'Raspberry Pi' /proc/device-tree/model; then
+    export PYSSP_AUDIO_BLOCKSIZE="${PYSSP_AUDIO_BLOCKSIZE:-2048}"
+    export PYSSP_AUDIO_LATENCY="${PYSSP_AUDIO_LATENCY:-0.15}"
+fi
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+export ALSA_CONFIG_PATH="${ALSA_CONFIG_PATH:-/usr/share/alsa/alsa.conf}"
+export TF_NUM_INTRAOP_THREADS="${TF_NUM_INTRAOP_THREADS:-2}"
+export TF_NUM_INTEROP_THREADS="${TF_NUM_INTEROP_THREADS:-1}"
+exec /opt/pyssp/pySSP "$@"

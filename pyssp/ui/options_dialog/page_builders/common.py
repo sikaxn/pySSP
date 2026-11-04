@@ -5,7 +5,7 @@ from ..widgets import *
 
 
 class CommonPageBuilderMixin:
-    def _add_page(self, title: str, icon, page: QWidget) -> None:
+    def _add_page(self, title: str, icon_kind: str, page: QWidget) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -13,8 +13,15 @@ class CommonPageBuilderMixin:
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setWidget(page)
         self.stack.addWidget(scroll)
-        item = QListWidgetItem(icon, title)
+        item = QListWidgetItem(self._mono_icon(icon_kind), title)
+        item.setData(Qt.UserRole, icon_kind)
         self.page_list.addItem(item)
+
+    def _refresh_page_icons(self) -> None:
+        for index in range(self.page_list.count()):
+            item = self.page_list.item(index)
+            if item is not None:
+                item.setIcon(self._mono_icon(str(item.data(Qt.UserRole))))
 
     def _build_stage_lyric_display_page(self, stage_page: QWidget, lyric_page: QWidget) -> QWidget:
         page = QWidget()
@@ -50,19 +57,26 @@ class CommonPageBuilderMixin:
         return False
 
     def _mono_icon(self, kind: str) -> QIcon:
+        ink = "#F2F2F2" if self._dialog_theme == "dark" else "#20242A"
+        icon = QIcon(self._mono_icon_pixmap(kind, ink))
+        icon.addPixmap(self._mono_icon_pixmap(kind, "#FFFFFF"), QIcon.Selected)
+        return icon
+
+    @staticmethod
+    def _mono_icon_pixmap(kind: str, ink: str) -> QPixmap:
         size = 22
         pix = QPixmap(size, size)
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing, True)
-        pen = QPen(QColor("#000000"))
+        pen = QPen(QColor(ink))
         pen.setWidth(2)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
 
         if kind == "info":
             p.drawEllipse(QRectF(3, 3, 16, 16))
-            p.setBrush(QColor("#000000"))
+            p.setBrush(QColor(ink))
             p.drawEllipse(QRectF(10, 6, 2, 2))
             p.drawRoundedRect(QRectF(10, 9, 2, 7), 1, 1)
         elif kind == "keyboard":
@@ -156,7 +170,7 @@ class CommonPageBuilderMixin:
             p.drawLine(6, 4, 6, 18)
             p.drawLine(10, 4, 10, 18)
             p.drawLine(14, 4, 14, 18)
-            p.setBrush(QColor("#000000"))
+            p.setBrush(QColor(ink))
             p.drawRect(QRectF(5, 4, 2, 7))
             p.drawRect(QRectF(9, 4, 2, 7))
             p.drawRect(QRectF(13, 4, 2, 7))
@@ -165,4 +179,4 @@ class CommonPageBuilderMixin:
             p.drawArc(QRectF(7, 4, 8, 9), 0, 180 * 16)
 
         p.end()
-        return QIcon(pix)
+        return pix

@@ -120,8 +120,8 @@ def apply_ui_theme(app: QApplication, theme: str) -> None:
         palette.setColor(role, QColor(color))
     for role in (QPalette.Text, QPalette.ButtonText, QPalette.WindowText):
         palette.setColor(QPalette.Disabled, role, QColor("#858B94" if dark else "#777777"))
+    app.setProperty("_pyssp_applied_theme", theme)
     app.setPalette(palette)
     # Qt keeps an old palette on widgets that already have a local stylesheet.
     # An application rule supplies our text colour to those widgets as well.
     app.setStyleSheet(stylesheet)
-    app.setProperty("_pyssp_applied_theme", theme)

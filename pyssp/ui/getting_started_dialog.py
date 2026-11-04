@@ -4,7 +4,7 @@ import re
 from typing import Callable, Optional
 
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtGui import QFont, QPalette, QPixmap
+from PyQt5.QtGui import QColor, QFont, QPalette, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -66,7 +66,7 @@ class GettingStartedDialog(QDialog):
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
         self.resize(980, 760)
-        self.setStyleSheet("QDialog{background:#FFFDF7;}")
+        self.setAutoFillBackground(True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -123,7 +123,7 @@ class GettingStartedDialog(QDialog):
         root.addLayout(button_row)
         self.set_language(self._language)
         self._sync_buttons()
-        self._base_styles = {widget: widget.styleSheet() for widget in [self, *self.findChildren(QWidget)]
+        self._base_styles = {widget: widget.styleSheet() for widget in self.findChildren(QWidget)
                              if widget.styleSheet()}
         self._apply_theme_styles()
 
@@ -137,8 +137,17 @@ class GettingStartedDialog(QDialog):
             return
         self._applying_theme_styles = True
         app = QApplication.instance()
-        dark = bool(app is not None and app.palette().color(QPalette.Window).lightness() < 128)
+        mode = app.property("_pyssp_applied_theme") if app is not None else None
+        dark = mode == "dark" if mode in {"bright", "dark"} else bool(
+            app is not None and app.palette().color(QPalette.Window).lightness() < 128
+        )
         try:
+            palette = self.palette()
+            palette.setColor(QPalette.Window, QColor("#24272D" if dark else "#FFFDF7"))
+            foreground = QColor("#F1F2F4" if dark else "#2B221A")
+            for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+                palette.setColor(role, foreground)
+            self.setPalette(palette)
             for widget, original in self._base_styles.items():
                 style = original
                 if dark:

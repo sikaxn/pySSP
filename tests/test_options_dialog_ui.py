@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -992,3 +993,26 @@ def test_colour_page_omits_system_choice_on_linux(qapp, monkeypatch):
         assert dialog.ui_theme_combo.findData("dark") >= 0
     finally:
         dialog.close()
+
+
+def test_options_sidebar_icons_follow_theme_and_selection(qapp):
+    def painted_colors(icon, mode):
+        image = icon.pixmap(22, 22, mode).toImage()
+        return [image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())
+                if image.pixelColor(x, y).alpha() > 0]
+
+    dialog = _build_dialog(initial_page="Colour", ui_theme="dark")
+    original_theme = qapp.property("_pyssp_applied_theme")
+    try:
+        icon = dialog.page_list.item(0).icon()
+        assert painted_colors(icon, QIcon.Normal)
+        assert min(color.lightness() for color in painted_colors(icon, QIcon.Normal)) > 150
+        assert min(color.lightness() for color in painted_colors(icon, QIcon.Selected)) > 150
+
+        qapp.setProperty("_pyssp_applied_theme", "bright")
+        dialog._on_application_palette_changed()
+        icon = dialog.page_list.item(0).icon()
+        assert max(color.lightness() for color in painted_colors(icon, QIcon.Normal)) < 100
+    finally:
+        dialog.close()
+        qapp.setProperty("_pyssp_applied_theme", original_theme)

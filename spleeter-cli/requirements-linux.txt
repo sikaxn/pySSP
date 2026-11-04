@@ -1,0 +1,6 @@
+# Separate Python 3.11 runtime: TensorFlow 2.12 cannot use pySSP's NumPy 2.
+spleeter==2.4.2
+tensorflow==2.12.1
+numpy==1.24.3
+scipy==1.10.1
+pyinstaller==6.16.0

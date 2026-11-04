@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=pySSP
+Comment=Soundboard
+Exec=/usr/bin/pyssp
+Icon=pyssp
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=true

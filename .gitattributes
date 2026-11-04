@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+*.sh text eol=lf
+packaging/linux/pyssp-launcher text eol=lf

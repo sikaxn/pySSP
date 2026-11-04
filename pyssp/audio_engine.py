@@ -1146,6 +1146,26 @@ def _compute_waveform_peaks_from_path(file_path: str, sample_count: int = 1024) 
     return peaks
 
 
+def _output_stream_timing() -> Tuple[int, float | str]:
+    """Allow slower hosts to trade output latency for scheduling headroom."""
+    blocksize = 2048 if sys.platform == "darwin" else 1024
+    latency: float | str = "high" if sys.platform == "darwin" else "low"
+    try:
+        requested_blocksize = int(os.environ.get("PYSSP_AUDIO_BLOCKSIZE", ""))
+        if 64 <= requested_blocksize <= 16384:
+            blocksize = requested_blocksize
+    except ValueError:
+        pass
+    try:
+        requested_latency = float(os.environ.get("PYSSP_AUDIO_LATENCY", ""))
+        # This comparison also rejects NaN and infinity.
+        if 0.005 <= requested_latency <= 2.0:
+            latency = requested_latency
+    except ValueError:
+        pass
+    return blocksize, latency
+
+
 class ExternalMediaPlayer(QObject):
     StoppedState = 0
     PlayingState = 1
@@ -1550,14 +1570,15 @@ class ExternalMediaPlayer(QObject):
 
     def _create_stream(self):
         device_index = None
+        blocksize, latency = _output_stream_timing()
         stream_kwargs = {
             "samplerate": self._sample_rate,
             "channels": self._channels,
             "dtype": "float32",
             "callback": self._audio_callback,
             "device": device_index,
-            "blocksize": 1024,
-            "latency": "low",
+            "blocksize": blocksize,
+            "latency": latency,
         }
         if _REQUESTED_DEVICE:
             try:
@@ -1565,10 +1586,6 @@ class ExternalMediaPlayer(QObject):
             except Exception:
                 device_index = None
         stream_kwargs["device"] = device_index
-        if sys.platform == "darwin":
-            # CoreAudio is more stable with a less aggressive callback cadence here.
-            stream_kwargs["blocksize"] = 2048
-            stream_kwargs["latency"] = "high"
         try:
             return sd.OutputStream(**stream_kwargs)
         except Exception:

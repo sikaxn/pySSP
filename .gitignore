@@ -191,6 +191,7 @@ Pipfile.lock
 .DS_Store
 /companion-modules/pyssp
 .build_meta/
+.build-linux/
 #
 # Spleeter model location:
 #   keep the canonical bundled model under `spleeter-cli/models/2stems`

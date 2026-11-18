@@ -1,0 +1,179 @@
+/******************************************************************************
+ * Lyric overlay stage view for OBS / vMix
+ * Shows ONLY the current slide, centered on a transparent background.
+ ******************************************************************************/
+
+/* OPTIONAL: Local overlay font with full Latin + CJK support.
+ *
+ * 1. Download a font that supports English + Simplified + Traditional Chinese
+ *    (for example, a Noto Sans CJK or Source Han Sans variant).
+ * 2. Copy the .ttf/.otf file into this same folder.
+ * 3. Rename it to: OverlayLyric-Regular.otf
+ *    OR change the filename below to match your actual file name.
+ */
+@font-face {
+  font-family: "OverlayLyric";
+  src: url("NotoSansSC-VariableFont_wght.ttf") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* Fallback stack using common CJK system fonts */
+:root {
+  --lyric-horizontal-padding: 6vw;
+  --lyric-vertical-padding: 8vh;
+  --lyric-max-font-size: 220px;
+  --lyric-min-font-size: 12px;
+  --lyric-font-stack:
+    "OverlayLyric",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "Microsoft YaHei",       /* 简体中文 Windows */
+    "PingFang SC",           /* 简体中文 macOS */
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "Microsoft JhengHei",    /* 繁體中文 Windows */
+    "PingFang TC",           /* 繁體中文 macOS */
+    "Heiti TC",
+    "Source Han Sans SC",
+    "Source Han Sans TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "SimHei",
+    "SimSun",
+    sans-serif;
+}
+
+/* Full-screen overlay, transparent background for OBS Browser source
+ * (enable "Allow transparency" in OBS / set alpha in vMix if needed).
+ */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--lyric-font-stack);
+}
+
+/* Center the lyric area in the viewport */
+#overlay-container {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--lyric-vertical-padding) var(--lyric-horizontal-padding);
+  box-sizing: border-box;
+}
+
+/* Current lyric styling */
+#currentslide {
+  max-width: 80vw;
+  text-align: center;
+  font-size: clamp(32px, 4vw, 64px);
+  line-height: 1.2;
+  color: #ffffff;
+  word-wrap: break-word;
+  /* Make text readable over video using a soft outline/glow */
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 0.8),
+    0 0 8px rgba(0, 0, 0, 0.9),
+    0 0 16px rgba(0, 0, 0, 1);
+}
+
+/* Hide any images that might be part of the slide (we only want lyrics) */
+#currentslide img {
+  display: none;
+}
+
+/* Completely hide the other stage elements; they still get updated by stage.js */
+#right,
+#clock,
+#notes,
+#verseorder,
+#nextslide {
+  display: none !important;
+}
+
+/* Safety: if stage.js ever adds these classes, keep them invisible */
+.currenttag,
+.nextslide {
+  display: none !important;
+}
+
+/* If current lyric is empty, collapse completely */
+#currentslide:empty {
+  display: none;
+}
+
+/* If OpenLP sends only whitespace/newlines, also collapse */
+#currentslide:blank {
+  display: none;
+}
+
+#currentslide {
+  /* existing styles... */
+
+  opacity: 1;
+  transition: opacity 0.08s ease-in-out; /* < 0.1 sec */
+}
+
+/* NEW: container that replaces #currentslide */
+/* Container replacing #currentslide */
+#lyric-container {
+  position: relative;
+  width: 100%;
+  max-width: 88vw;
+  text-align: center;
+  display: block;
+  min-height: 1em;
+}
+
+/* TRUE overlay layers (fill entire container) */
+.lyric-layer {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+
+  width: 100%;
+  /* Respect OpenLP's line breaks; fit a long source line by size instead. */
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: var(--lyric-max-font-size);
+  line-height: 1.1;
+  color: #fff;
+
+  text-shadow:
+    0 0 4px rgba(0,0,0,.8),
+    0 0 8px rgba(0,0,0,.9),
+    0 0 16px rgba(0,0,0,1);
+
+  opacity: 0;
+  transition: opacity 0.08s linear;
+
+  display: block;
+}
+
+#lyric-measure {
+  position: absolute;
+  left: -99999px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: var(--lyric-max-font-size);
+  line-height: 1.1;
+  text-align: center;
+  color: #fff;
+}
+
+
+#lyricA { z-index: 1; }
+#lyricB { z-index: 2; }

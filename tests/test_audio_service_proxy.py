@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication
 import pytest
 
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController, AudioStateCache
+import pyssp.audio_service as audio_service
 
 
 class _FakeAudioController(QObject):
@@ -27,6 +28,10 @@ class _FakeAudioController(QObject):
     def call(self, player_id: str, command: str, payload: dict | None = None, timeout: float = 2.0):
         self.calls.append((str(player_id), str(command), payload, float(timeout)))
         raise AssertionError(f"Unexpected blocking call: {command}")
+
+
+class _FakeSampledController(_FakeAudioController):
+    positionSampled = pyqtSignal(str, int, float)
 
 
 def _app() -> QApplication:
@@ -84,6 +89,36 @@ def test_proxy_hot_state_reads_use_cache_without_blocking_call() -> None:
     assert player.enginePositionMs() == 1234
     assert player.meterLevels() == (0.0, 0.0)
     assert controller.calls == []
+
+
+def test_proxy_engine_clock_advances_between_worker_updates(monkeypatch) -> None:
+    _app()
+    now = [10.0]
+    monkeypatch.setattr(audio_service.time, "perf_counter", lambda: now[0])
+    controller = _FakeAudioController()
+    player = AudioPlayerProxy(controller, "player-clock")
+    player._on_position_changed("player-clock", 1000)
+    player._on_state_changed("player-clock", player.PlayingState)
+    now[0] += 0.05
+    assert player.enginePositionMs() == 1050
+    player.pause()
+    now[0] += 0.5
+    assert player.enginePositionMs() == 1050
+
+
+def test_delayed_worker_samples_keep_display_clock_current(monkeypatch) -> None:
+    _app()
+    now = [10.0]
+    monkeypatch.setattr(audio_service.time, "perf_counter", lambda: now[0])
+    controller = _FakeSampledController()
+    player = AudioPlayerProxy(controller, "player-clock")
+    player._on_state_changed("player-clock", player.PlayingState)
+
+    now[0] = 11.0
+    controller.positionSampled.emit("player-clock", 500, 10.5)
+    assert player.enginePositionMs() == 1000
+    controller.positionSampled.emit("player-clock", 900, 10.9)
+    assert 999 <= player.enginePositionMs() <= 1000
 
 
 def test_proxy_set_media_async_supports_structured_utility_source() -> None:

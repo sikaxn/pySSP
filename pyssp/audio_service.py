@@ -3,7 +3,9 @@ from __future__ import annotations
 from concurrent.futures import Future
 from dataclasses import dataclass
 import itertools
+import math
 import queue
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
@@ -333,11 +335,18 @@ class AudioPlayerProxy(QObject):
         self._player_id = str(player_id)
         self._state = self.StoppedState
         self._position_ms = 0
+        self._position_anchor_t = time.perf_counter()
+        self._tempo_ratio = 1.0
         self._duration_ms = 0
         self._volume = 100
+        self._volume_ramp = None
         self._meter_levels: Tuple[float, float] = (0.0, 0.0)
         self._media_request_counter = itertools.count(1_000_000)
-        controller.positionChanged.connect(self._on_position_changed)
+        sampled_position_signal = getattr(controller, "positionSampled", None)
+        if sampled_position_signal is not None:
+            sampled_position_signal.connect(self._on_position_sampled)
+        else:
+            controller.positionChanged.connect(self._on_position_changed)
         controller.durationChanged.connect(self._on_duration_changed)
         controller.stateChanged.connect(self._on_state_changed)
         controller.mediaLoadFinished.connect(self._on_media_load_finished)
@@ -362,6 +371,7 @@ class AudioPlayerProxy(QObject):
         request_id = int(next(self._media_request_counter))
         self._state = self.StoppedState
         self._position_ms = 0
+        self._position_anchor_t = time.perf_counter()
         self._duration_ms = 0
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
@@ -373,14 +383,18 @@ class AudioPlayerProxy(QObject):
         return request_id
 
     def setDSPConfig(self, dsp_config: DSPConfig) -> None:
+        self._tempo_ratio = max(0.7, min(1.3, 1.0 + float(dsp_config.tempo_pct) / 100.0))
         self._post("setDSPConfig", {"dsp_config": dsp_config})
 
     def play(self) -> None:
+        self._position_anchor_t = time.perf_counter()
         self._state = self.PlayingState
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._post("play")
 
     def pause(self) -> None:
+        self._position_ms = self.enginePositionMs()
+        self._position_anchor_t = time.perf_counter()
         self._state = self.PausedState
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._post("pause")
@@ -388,6 +402,8 @@ class AudioPlayerProxy(QObject):
     def stop(self) -> None:
         self._state = self.StoppedState
         self._position_ms = 0
+        self._position_anchor_t = time.perf_counter()
+        self._volume_ramp = None
         self._controller.state_cache.update_state(self._player_id, self._state)
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
         self._post("stop")
@@ -397,6 +413,7 @@ class AudioPlayerProxy(QObject):
 
     def setPosition(self, position_ms: int) -> None:
         self._position_ms = max(0, int(position_ms))
+        self._position_anchor_t = time.perf_counter()
         self._controller.state_cache.update_position(self._player_id, self._position_ms)
         self._post("setPosition", {"position_ms": self._position_ms})
 
@@ -404,20 +421,57 @@ class AudioPlayerProxy(QObject):
         return int(self._position_ms)
 
     def enginePositionMs(self) -> int:
-        return int(self._position_ms)
+        position = float(self._position_ms)
+        if self._state == self.PlayingState:
+            position += max(0.0, time.perf_counter() - self._position_anchor_t) * 1000.0 * self._tempo_ratio
+        if self._duration_ms > 0:
+            position = min(position, float(self._duration_ms))
+        return max(0, int(position))
 
     def duration(self) -> int:
         return int(self._duration_ms)
 
     def setVolume(self, volume: int) -> None:
         self._volume = max(0, min(100, int(volume)))
+        self._volume_ramp = None
         self._controller.state_cache.update_volume(self._player_id, self._volume)
         self._post("setVolume", {"volume": self._volume})
 
+    def setVolumeRamp(
+        self, target: int, seconds: float, *, curve: str = "linear", pause_on_complete: bool = False,
+    ) -> None:
+        start = self.volume()
+        end = max(0, min(100, int(target)))
+        duration = max(0.0, float(seconds))
+        self._volume = start
+        self._volume_ramp = (start, end, time.perf_counter(), duration, str(curve)) if duration > 0 else None
+        self._post("rampVolume", {
+            "target": end, "seconds": duration, "curve": str(curve),
+            "pause_on_complete": bool(pause_on_complete),
+        })
+
     def volume(self) -> int:
+        if self._volume_ramp is not None:
+            start, end, began, duration, curve = self._volume_ramp
+            ratio = min(1.0, max(0.0, (time.perf_counter() - began) / duration))
+            if curve == "equal_power":
+                value = (
+                    start + (end - start) * math.sin(ratio * math.pi / 2.0)
+                    if end >= start else
+                    end + (start - end) * math.cos(ratio * math.pi / 2.0)
+                )
+            else:
+                value = start + (end - start) * ratio
+            if ratio >= 1.0:
+                self._volume = end
+                self._volume_ramp = None
+            return max(0, min(100, int(round(value))))
         return int(self._volume)
 
     def meterLevels(self) -> Tuple[float, float]:
+        remote_levels = getattr(self._controller, "playerMeterLevels", None)
+        if callable(remote_levels):
+            return remote_levels(self._player_id)
         return float(self._meter_levels[0]), float(self._meter_levels[1])
 
     def waveformPeaks(self, sample_count: int = 1024):
@@ -468,6 +522,14 @@ class AudioPlayerProxy(QObject):
         if str(player_id) != self._player_id:
             return
         self._position_ms = max(0, int(value))
+        self._position_anchor_t = time.perf_counter()
+        self.positionChanged.emit(self._position_ms)
+
+    def _on_position_sampled(self, player_id: str, value: int, sampled_at: float) -> None:
+        if str(player_id) != self._player_id:
+            return
+        self._position_ms = max(0, int(value))
+        self._position_anchor_t = float(sampled_at)
         self.positionChanged.emit(self._position_ms)
 
     def _on_duration_changed(self, player_id: str, value: int) -> None:
@@ -479,7 +541,12 @@ class AudioPlayerProxy(QObject):
     def _on_state_changed(self, player_id: str, value: int) -> None:
         if str(player_id) != self._player_id:
             return
-        self._state = int(value)
+        state = int(value)
+        if state != self._state:
+            if state == self.PausedState:
+                self._position_ms = self.enginePositionMs()
+            self._position_anchor_t = time.perf_counter()
+        self._state = state
         self.stateChanged.emit(self._state)
 
     def _on_media_load_finished(self, player_id: str, request_id: int, ok: bool, error: str) -> None:

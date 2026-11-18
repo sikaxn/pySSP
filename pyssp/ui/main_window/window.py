@@ -115,8 +115,14 @@ class MainWindow(
         self._apply_theme_colors(refresh=True)
         self._save_settings()
 
-    def __init__(self, *, show_getting_started_on_startup: bool = False) -> None:
+    def __init__(self, *, show_getting_started_on_startup: bool = False, isolated_audio: Optional[bool] = None) -> None:
         super().__init__()
+        # Offscreen Qt is used by the widget tests. Native windows use a
+        # separate interpreter so widget work cannot starve PortAudio/MTC.
+        self._isolated_audio = (
+            QApplication.instance().platformName() != "offscreen"
+            if isolated_audio is None else bool(isolated_audio)
+        )
         self._suspend_settings_save = True
         self._show_getting_started_on_startup = bool(show_getting_started_on_startup)
         self.app_version_text = get_display_version()
@@ -758,7 +764,19 @@ class MainWindow(
         self._companion_satellite_api_version = ""
         self._companion_satellite_caps: Dict[str, bool] = {}
         self._main_thread_executor = MainThreadExecutor(self)
-        self._audio_service = AudioServiceController(self)
+        self._audio_service = (
+            ProcessAudioServiceController(self) if self._isolated_audio else AudioServiceController(self)
+        )
+        if self._isolated_audio:
+            self._audio_service.set_preload_policy(
+                self.preload_audio_enabled, self.preload_audio_memory_limit_mb,
+                self.preload_memory_pressure_enabled, self.preload_use_ffmpeg,
+            )
+            self._audio_service.set_waveform_limit(self.waveform_cache_limit_mb)
+            configure_audio_preload_cache_policy(
+                False, self.preload_audio_memory_limit_mb,
+                self.preload_memory_pressure_enabled, self.preload_use_ffmpeg,
+            )
 
         startup_audio_warning: Optional[str] = None
         configured_device = self.audio_output_device.strip()
@@ -771,11 +789,23 @@ class MainWindow(
             self.settings.audio_output_device = ""
         else:
             set_output_device(configured_device)
+        if self._isolated_audio:
+            self._audio_service.set_output_device(self.audio_output_device)
         try:
             ensure_audio_decoder_ready()
+            if self._isolated_audio:
+                self._audio_service.ensure_ready()
             self._init_audio_players()
         except Exception as exc:
             self._dispose_audio_players()
+            if self._isolated_audio:
+                self._audio_service.shutdown()
+                self._audio_service = AudioServiceController(self)
+                self._isolated_audio = False
+                startup_audio_warning = (
+                    "Isolated audio output failed to start. Running with the fallback audio service.\n\n"
+                    f"Details:\n{exc}"
+                )
             set_output_device("")
             self.audio_output_device = ""
             self.settings.audio_output_device = ""
@@ -913,8 +943,12 @@ class MainWindow(
         self._pre_mute_volume: Optional[int] = None
         self.timecode_dock: Optional[QDockWidget] = None
         self.timecode_panel: Optional[TimecodePanel] = None
-        self._mtc_sender = MtcMidiOutput(lambda: self.timecode_mtc_idle_behavior)
-        self._ltc_sender = LtcAudioOutput()
+        if self._isolated_audio:
+            self._mtc_sender = ProcessMtcMidiOutput(self._audio_service, lambda: self.timecode_mtc_idle_behavior)
+            self._ltc_sender = ProcessLtcAudioOutput(self._audio_service)
+        else:
+            self._mtc_sender = MtcMidiOutput(lambda: self.timecode_mtc_idle_behavior)
+            self._ltc_sender = LtcAudioOutput()
         self._timecode_follow_anchor_ms = 0.0
         self._timecode_follow_anchor_t = time.perf_counter()
         self._timecode_follow_playing = False
@@ -968,6 +1002,12 @@ class MainWindow(
         self._launchpad_layer_sensitivity = 2
 
         self._build_ui()
+        if self._isolated_audio:
+            self._audio_service.serviceFailed.connect(
+                lambda message: self._show_playback_warning_banner(
+                    f"{message}. Restart pySSP to restore playback and timecode.", timeout_ms=0,
+                )
+            )
         self._apply_theme_colors(refresh=True)
         self._system_theme_timer = QTimer(self)
         self._system_theme_timer.timeout.connect(self._check_system_theme)
@@ -1039,7 +1079,7 @@ class MainWindow(
         self.fade_timer.start(30)
 
         self._preload_trim_timer = QTimer(self)
-        self._preload_trim_timer.timeout.connect(enforce_audio_preload_limits)
+        self._preload_trim_timer.timeout.connect(self._trim_audio_preload)
         self._preload_trim_timer.start(2000)
 
         self._preload_status_timer = QTimer(self)
@@ -1079,6 +1119,14 @@ class MainWindow(
             QTimer.singleShot(0, lambda: self._open_tips_window(startup=True))
 
     def _shutdown_runtime_threads(self) -> None:
+        for name in (
+            "meter_timer", "timecode_mtc_timer", "fade_timer", "_preload_trim_timer",
+            "_preload_status_timer", "talk_blink_timer", "_system_theme_timer",
+            "_main_waveform_poll_timer",
+        ):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                timer.stop()
         try:
             self._ltc_sender.shutdown()
         except Exception:
@@ -1097,6 +1145,12 @@ class MainWindow(
             pass
         _stop_qthread_safely(getattr(self, "_midi_poll_thread", None))
         _shutdown_executor_safely(getattr(self, "_launchpad_feedback_executor", None))
+
+    def _trim_audio_preload(self) -> None:
+        if self._isolated_audio:
+            self._audio_service.post_runtime("preload_trim")
+        else:
+            enforce_audio_preload_limits()
 
     def close(self) -> bool:
         self._shutdown_runtime_threads()

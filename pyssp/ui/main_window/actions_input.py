@@ -503,6 +503,8 @@ class ActionsInputMixin:
         if not set_output_device(device_name):
             QMessageBox.warning(self, "Audio Device", "Could not switch to selected audio device.")
             return False
+        if self._isolated_audio:
+            self._audio_service.set_output_device(device_name)
         self._multi_players = []
         try:
             old_player.deleteLater()
@@ -516,6 +518,8 @@ class ActionsInputMixin:
         except Exception as exc:
             self._dispose_audio_players()
             set_output_device("")
+            if self._isolated_audio:
+                self._audio_service.set_output_device("")
             self.audio_output_device = ""
             try:
                 self._init_audio_players()
@@ -2155,6 +2159,8 @@ class ActionsInputMixin:
         self.waveform_cache_clear_on_launch = dialog.selected_waveform_cache_clear_on_launch()
         self._apply_audio_preload_cache_settings()
         configure_waveform_disk_cache(self.waveform_cache_limit_mb)
+        if self._isolated_audio:
+            self._audio_service.set_waveform_limit(self.waveform_cache_limit_mb)
         if selected_device != self.audio_output_device:
             if self._switch_audio_device(selected_device):
                 self.audio_output_device = selected_device

@@ -648,7 +648,7 @@ class PagesSlotsMixin:
                 button.setText("")
                 button.setToolTip("")
             else:
-                button.set_ram_loaded(ram_indicator_enabled and is_audio_preloaded(self._effective_slot_file_path(slot)))
+                button.set_ram_loaded(ram_indicator_enabled and self._is_audio_preloaded(self._effective_slot_file_path(slot)))
                 has_cue = self._slot_has_custom_cue(slot)
                 parts: List[str] = []
                 if slot.volume_override_pct is not None:

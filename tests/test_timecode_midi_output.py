@@ -1,8 +1,60 @@
 from __future__ import annotations
 
 import ctypes
+import numpy as np
 
 from pyssp import timecode
+
+
+def test_ltc_callback_matches_bitstream_across_output_buffers():
+    sender = timecode.LtcAudioOutput()
+    sender._stream = object()
+    sender._enabled = True
+    sender._samples_per_half_bit = 2
+    sender._samples_per_bit = 4
+    sender.update(12, 30.0, running=False)
+
+    expected = []
+    signal = 1
+    for bit in timecode.encode_ltc_bits(12, 30):
+        signal *= -1
+        expected.extend([signal * sender._amplitude] * 2)
+        if bit:
+            signal *= -1
+        expected.extend([signal * sender._amplitude] * 2)
+
+    chunks = []
+    for frames in (97, 123, 100):
+        out = np.empty((frames, 1), dtype=np.int16)
+        sender._audio_callback(out, frames, None, None)
+        chunks.extend(out[:, 0].tolist())
+    assert chunks == expected
+
+
+def test_ltc_and_mtc_anchor_can_freeze_during_ui_stall(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(timecode, "perf_counter", lambda: now[0])
+    sender = timecode.LtcAudioOutput()
+    sender._stream = object()
+    sender._enabled = True
+    sender.update(10, 30.0, running=True)
+    now[0] += 0.11
+    out = np.empty((1, 1), dtype=np.int16)
+    sender._audio_callback(out, 1, None, None)
+    assert sender._current_bits == timecode.encode_ltc_bits(13, 30)
+
+    sender.update(10, 30.0, running=False)
+    sender.request_resync()
+    now[0] += 0.5
+    sender._audio_callback(out, 1, None, None)
+    assert sender._current_bits == timecode.encode_ltc_bits(10, 30)
+
+    mtc = timecode.MtcMidiOutput()
+    try:
+        mtc.update(10, 30.0, 30.0, running=False)
+        assert mtc._source_running is False
+    finally:
+        mtc.shutdown()
 
 
 class _FakePygameMidi:

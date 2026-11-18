@@ -87,6 +87,7 @@ from pyssp.audio_engine import (
     shutdown_audio_preload,
 )
 from pyssp.audio_service import AudioPlayerProxy, AudioServiceController
+from pyssp.audio_process_service import ProcessAudioServiceController, ProcessLtcAudioOutput, ProcessMtcMidiOutput
 from pyssp.audio_runtime import PlaybackRuntimeTracker
 from pyssp.ffmpeg_support import get_ffmpeg_executable, media_has_audio_stream
 from pyssp.dsp import DSPConfig, normalize_config

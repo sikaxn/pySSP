@@ -20,6 +20,8 @@ For runtime navigation, use Lyric Navigator to jump to lines/positions quickly.
 
 ![Lyric Navigator](images/lyric_navigator.png)
 
+LRC, SRT, and automation script timestamps use positions in the original audio file. A cue-in changes where playback starts, but does not shift those timestamps. Seeking from a Lyric or Automation Script Navigator row outside the cue range follows the `When seeking outside cue area` Playback setting.
+
 ## Stage Display
 
 Stage Display can show live playback context (for example: song name, lyric, elapsed/remaining, progress, and alerts).
@@ -53,4 +55,4 @@ Core flow:
   - `SMPTE Timecode (LTC)` output target plus frame/audio format.
   - `MIDI Timecode (MTC)` MIDI output and frame rate.
 
-In live operation, this means lyric navigation, Stage Display, and timecode can all stay aligned to either cue-relative timing or absolute audio-file timing, based on your timeline settings.
+Stage Display time labels and timecode use their selected timeline references. Lyric and automation script matching continues to use the audio-file position.

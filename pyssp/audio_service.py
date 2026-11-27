@@ -528,6 +528,8 @@ class AudioPlayerProxy(QObject):
     def _on_position_sampled(self, player_id: str, value: int, sampled_at: float) -> None:
         if str(player_id) != self._player_id:
             return
+        if float(sampled_at) < self._position_anchor_t:
+            return
         self._position_ms = max(0, int(value))
         self._position_anchor_t = float(sampled_at)
         self.positionChanged.emit(self._position_ms)

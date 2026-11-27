@@ -598,8 +598,15 @@ class PlaybackMixin:
         self._track_started_at = time.monotonic()
         # Clear stale UI timing without wiping duration loaded by setMedia().
         self._last_ui_position_ms = -1
-        display_pos = self._transport_display_ms_for_absolute(0)
+        current_player = self._player_for_slot_key(self.current_playing) if self.current_playing is not None else None
+        try:
+            absolute_pos = max(0, int(current_player.position())) if current_player is not None else 0
+        except Exception:
+            absolute_pos = 0
+        display_pos = self._transport_display_ms_for_absolute(absolute_pos)
         total_ms = self._transport_total_ms()
+        self.seek_slider.setRange(0, total_ms)
+        self.total_time.setText(format_clock_time(total_ms))
         self.seek_slider.setValue(display_pos)
         self.elapsed_time.setText(format_clock_time(display_pos))
         self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))

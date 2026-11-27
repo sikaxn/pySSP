@@ -3367,16 +3367,19 @@ class PagesSlotsMixin:
         if start_ms > 0:
             player.setPosition(start_ms)
 
-    def _apply_main_jog_outside_cue_behavior(self, absolute_pos_ms: int) -> None:
-        self._clear_player_cue_behavior_override(self.player)
-        if self.main_transport_timeline_mode != "audio_file":
+    def _apply_main_jog_outside_cue_behavior(
+        self, absolute_pos_ms: int, *, allow_cue_region: bool = False, player: Optional[ExternalMediaPlayer] = None
+    ) -> None:
+        target_player = self.player if player is None else player
+        self._clear_player_cue_behavior_override(target_player)
+        if self.main_transport_timeline_mode != "audio_file" and not allow_cue_region:
             return
         if self.current_playing is None:
             return
         slot = self._slot_for_key(self.current_playing)
         if slot is None:
             return
-        duration_ms = max(0, int(self.player.duration()))
+        duration_ms = max(0, int(target_player.duration()))
         cue_start = self._cue_start_for_playback(slot, duration_ms)
         cue_end = self._cue_end_for_playback(slot, duration_ms)
         if cue_end is None and cue_start <= 0:
@@ -3389,25 +3392,28 @@ class PagesSlotsMixin:
 
         action = self.main_jog_outside_cue_action
         if action == "stop_immediately":
-            self._stop_playback()
+            if target_player is self.player:
+                self._stop_playback()
+            else:
+                self._stop_single_player(target_player)
             return
         if action == "ignore_cue":
-            self._player_ignore_cue_end.add(id(self.player))
+            self._player_ignore_cue_end.add(id(target_player))
             return
         if action == "next_cue_or_stop":
             if before_start:
-                self._player_end_override_ms[id(self.player)] = cue_start
+                self._player_end_override_ms[id(target_player)] = cue_start
             else:
-                self._player_ignore_cue_end.add(id(self.player))
+                self._player_ignore_cue_end.add(id(target_player))
             return
         if action == "stop_cue_or_end":
             if before_start:
                 if cue_end is None:
-                    self._player_ignore_cue_end.add(id(self.player))
+                    self._player_ignore_cue_end.add(id(target_player))
                 else:
-                    self._player_end_override_ms[id(self.player)] = cue_end
+                    self._player_end_override_ms[id(target_player)] = cue_end
             else:
-                self._player_ignore_cue_end.add(id(self.player))
+                self._player_ignore_cue_end.add(id(target_player))
             return
 
     def _enforce_cue_end_limits(self) -> None:

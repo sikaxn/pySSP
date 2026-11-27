@@ -998,7 +998,7 @@ _TRANSLATIONS = {
         "Main Player Timeline / Jog Display:": "主播放器时间线 / 拖动显示:",
         "Relative to Cue Set Points": "相对 Cue 设定点",
         "Relative to Actual Audio File": "相对实际音频文件",
-        "When jog is outside cue area (Audio File mode):": "拖动在 Cue 区域外时（音频文件模式）:",
+        "When seeking outside cue area:": "定位到 Cue 区域外时:",
         "Stop immediately": "立即停止",
         "Ignore cue and play until end or stopped": "忽略 Cue，播放到结束或手动停止",
         "Play to next cue or stop (before start: stop at start; after stop: play to end)": "播放到下一个 Cue 或停止（起点前：停在起点；终点后：播到结尾）",

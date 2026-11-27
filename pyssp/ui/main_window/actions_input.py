@@ -1080,12 +1080,28 @@ class ActionsInputMixin:
         total_ms = self._transport_total_ms()
         clamped_display = max(0, min(total_ms, int(display_ms)))
         absolute = max(0, int(self._transport_absolute_ms_for_display(clamped_display)))
-        self.player.setPosition(absolute)
-        self._sync_shadow_transport_from_primary(self.player)
-        self.seek_slider.setValue(clamped_display)
-        self._apply_main_jog_outside_cue_behavior(absolute)
+        return self._seek_transport_absolute_ms(absolute)
+
+    def _seek_transport_absolute_ms(
+        self, absolute_ms: int, *, allow_outside_cue: bool = False, player: Optional[ExternalMediaPlayer] = None
+    ) -> tuple[int, int]:
+        target_player = self.player if player is None else player
+        absolute = max(0, int(absolute_ms))
+        duration_ms = max(0, int(target_player.duration()))
+        if duration_ms > 0:
+            absolute = min(absolute, duration_ms)
+        if not allow_outside_cue:
+            low, high = self._main_transport_bounds()
+            absolute = max(low, min(high, absolute))
+        target_player.setPosition(absolute)
+        self._sync_shadow_transport_from_primary(target_player)
+        display = self._transport_display_ms_for_absolute(absolute)
+        self.seek_slider.setValue(display)
+        self._apply_main_jog_outside_cue_behavior(
+            absolute, allow_cue_region=allow_outside_cue, player=target_player
+        )
         self._mtc_sender.request_resync()
-        return clamped_display, absolute
+        return display, absolute
 
     def _on_seek_value_changed(self, value: int) -> None:
         if self._is_scrubbing:

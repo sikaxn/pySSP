@@ -159,7 +159,7 @@ class PlaybackPageMixin:
         cue_layout.addWidget(self.cue_timeline_audio_file_radio)
         layout.addWidget(cue_group)
 
-        self.jog_outside_group = QGroupBox("When jog is outside cue area (Audio File mode):")
+        self.jog_outside_group = QGroupBox("When seeking outside cue area:")
         jog_outside_layout = QVBoxLayout(self.jog_outside_group)
         self.jog_outside_stop_immediately_radio = QRadioButton("Stop immediately")
         self.jog_outside_ignore_cue_radio = QRadioButton("Ignore cue and play until end or stopped")
@@ -182,8 +182,6 @@ class PlaybackPageMixin:
         jog_outside_layout.addWidget(self.jog_outside_next_cue_or_stop_radio)
         jog_outside_layout.addWidget(self.jog_outside_stop_cue_or_end_radio)
         layout.addWidget(self.jog_outside_group)
-        self.cue_timeline_cue_region_radio.toggled.connect(self._sync_jog_outside_group_enabled)
-        self.cue_timeline_audio_file_radio.toggled.connect(self._sync_jog_outside_group_enabled)
         self._sync_jog_outside_group_enabled()
 
         layout.addStretch(1)

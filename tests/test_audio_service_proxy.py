@@ -121,6 +121,24 @@ def test_delayed_worker_samples_keep_display_clock_current(monkeypatch) -> None:
     assert 999 <= player.enginePositionMs() <= 1000
 
 
+def test_proxy_ignores_position_sample_from_before_cue_seek(monkeypatch) -> None:
+    _app()
+    now = [10.0]
+    monkeypatch.setattr(audio_service.time, "perf_counter", lambda: now[0])
+    controller = _FakeSampledController()
+    player = AudioPlayerProxy(controller, "player-cue")
+    player.setPosition(30_000)
+    player.play()
+
+    controller.positionSampled.emit("player-cue", 0, 9.9)
+    assert player.position() == 30_000
+
+    now[0] = 10.2
+    controller.positionSampled.emit("player-cue", 30_100, 10.1)
+    assert player.position() == 30_100
+    assert player.enginePositionMs() == 30_200
+
+
 def test_proxy_set_media_async_supports_structured_utility_source() -> None:
     _app()
     controller = _FakeAudioController()

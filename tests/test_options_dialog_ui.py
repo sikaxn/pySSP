@@ -453,10 +453,10 @@ def _cleanup_dialogs_after_test():
     _cleanup_top_level_dialogs()
 
 
-def test_playback_timeline_toggle_controls_jog_group(qapp):
+def test_outside_cue_seek_options_are_available_in_both_timeline_modes(qapp):
     dialog = _build_dialog(main_transport_timeline_mode="cue_region", main_jog_outside_cue_action="stop_immediately")
     assert dialog.selected_main_transport_timeline_mode() == "cue_region"
-    assert dialog.jog_outside_group.isEnabled() is False
+    assert dialog.jog_outside_group.isEnabled() is True
 
     dialog.cue_timeline_audio_file_radio.setChecked(True)
     dialog._sync_jog_outside_group_enabled()
@@ -479,7 +479,7 @@ def test_restore_defaults_playback_page_resets_controls(qapp):
     assert dialog.selected_main_transport_timeline_mode() == "cue_region"
     assert dialog.selected_main_jog_outside_cue_action() == "stop_immediately"
     assert dialog.selected_candidate_error_action() == "stop_playback"
-    assert dialog.jog_outside_group.isEnabled() is False
+    assert dialog.jog_outside_group.isEnabled() is True
 
 
 def test_web_remote_url_label_tracks_port_changes(qapp):

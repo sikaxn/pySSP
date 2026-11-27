@@ -244,7 +244,7 @@ Runtime behavior details:
   - `Stop playback` or `Keep playing`.
 - `Main Player Timeline / Jog Display`
   - `Relative to Cue Set Points` or `Relative to Actual Audio File`.
-- `When jog is outside cue area (Audio File mode)`
+- `When seeking outside cue area` (Audio-file timeline jog or Lyric/Automation Script Navigator seek)
   - `Stop immediately`
   - `Ignore cue and play until end or stopped`
   - `Play to next cue or stop`

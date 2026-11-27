@@ -70,7 +70,7 @@ Waveform mode example:
 - Timeline reference mode:
   - `Relative to Cue Set Points`
   - `Relative to Actual Audio File`
-- In Audio-file timeline mode, out-of-cue jog behavior follows Playback setting:
+- Out-of-cue seeking from Lyric or Automation Script Navigator follows the Playback setting in either timeline mode. Jogging outside the cue area in Audio-file timeline mode uses the same setting:
   - stop immediately / ignore cue / play to next cue or stop / play to stop cue or end
 
 ## Now Playing and Lyric Area

@@ -210,9 +210,12 @@ class LyricsStageMixin:
         if state not in {ExternalMediaPlayer.PlayingState, ExternalMediaPlayer.PausedState}:
             return 0
         try:
-            return max(0, int(player.position()))
+            return max(0, int(player.enginePositionMs()))
         except Exception:
-            return 0
+            try:
+                return max(0, int(player.position()))
+            except Exception:
+                return 0
 
     def _build_now_playing_text(self, slot: SoundButtonData) -> str:
         mode = str(self.now_playing_display_mode or "caption").strip().lower()
@@ -316,7 +319,11 @@ class LyricsStageMixin:
     def _seek_to_lyric_timestamp(self, position_ms: int) -> None:
         if self.current_playing is None:
             return
-        self._seek_transport_display_ms(max(0, int(position_ms)))
+        player = self._player_for_slot_key(self.current_playing)
+        if player is None:
+            return
+        absolute_ms = max(0, int(position_ms))
+        self._seek_transport_absolute_ms(absolute_ms, allow_outside_cue=True, player=player)
         self._refresh_lyric_display(force=True)
 
     def _refresh_lyric_display(self, force: bool = False) -> None:

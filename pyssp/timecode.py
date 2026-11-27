@@ -492,11 +492,16 @@ class LtcAudioOutput:
         self._samples_per_half_bit = max(1, int(self._sample_rate / (self._fps * 160.0)))
         self._samples_per_bit = self._samples_per_half_bit * 2
         self._current_frame = 0
+        self._frame_anchor_t = perf_counter()
+        self._running = False
         self._current_bits = encode_ltc_bits(0, self._nominal_fps)
         self._bit_index = 0
         self._sample_in_bit = 0
         self._signal = 1
         self._frame_boundary_requested = True
+        self._frame_samples = np.empty((0,), dtype=np.int16)
+        self._frame_signs = np.empty((0,), dtype=np.int8)
+        self._frame_sample_index = 0
 
     @staticmethod
     def _dtype_and_amplitude(bit_depth: int) -> tuple[str, int]:
@@ -566,6 +571,7 @@ class LtcAudioOutput:
             self._fps = new_fps
             self._apply_timing_locked()
             if cfg_changed:
+                self._frame_boundary_requested = True
                 if target:
                     try:
                         self._device_index = _find_output_device_index(target)
@@ -579,9 +585,11 @@ class LtcAudioOutput:
                 self._open_stream_locked()
             self._enabled = self._stream is not None
 
-    def update(self, current_frame: int, fps: float) -> None:
+    def update(self, current_frame: int, fps: float, *, running: bool = True) -> None:
         with self._lock:
             self._current_frame = max(0, int(current_frame))
+            self._frame_anchor_t = perf_counter()
+            self._running = bool(running)
             new_fps = max(1.0, float(fps))
             if abs(new_fps - self._fps) > 0.0001:
                 self._fps = new_fps
@@ -591,6 +599,7 @@ class LtcAudioOutput:
         with self._lock:
             self._bit_index = 0
             self._sample_in_bit = 0
+            self._frame_sample_index = 0
             self._frame_boundary_requested = True
 
     def shutdown(self) -> None:
@@ -601,34 +610,38 @@ class LtcAudioOutput:
     def _audio_callback(self, outdata, frames, _time_info, _status) -> None:
         with self._lock:
             if (not self._enabled) or self._stream is None:
-                outdata.fill(0)
+                outdata.fill(128 if self._dtype == "uint8" else 0)
                 return
-            if self._dtype == "uint8":
-                out = np.full((frames,), 128, dtype=np.uint8)
-            else:
-                out = np.zeros((frames,), dtype=outdata.dtype)
-            for i in range(frames):
+            written = 0
+            while written < frames:
                 if self._frame_boundary_requested:
-                    self._current_bits = encode_ltc_bits(self._current_frame, self._nominal_fps)
+                    frame = self._current_frame
+                    if self._running:
+                        frame += int(max(0.0, perf_counter() - self._frame_anchor_t) * self._fps)
+                    self._current_bits = encode_ltc_bits(frame, self._nominal_fps)
+                    bits = np.asarray(self._current_bits, dtype=np.int8)
+                    transitions = np.empty((len(bits) * 2,), dtype=np.int8)
+                    transitions[0::2] = 1
+                    transitions[1::2] = bits
+                    parity = np.cumsum(transitions, dtype=np.int32) & 1
+                    self._frame_signs = (self._signal * (1 - 2 * parity)).astype(np.int8)
+                    values = self._frame_signs.astype(np.int64) * self._amplitude
+                    if self._dtype == "uint8":
+                        values = np.clip(values + 128, 0, 255)
+                    self._frame_samples = np.repeat(
+                        values.astype(outdata.dtype), self._samples_per_half_bit,
+                    )
+                    self._frame_sample_index = 0
                     self._frame_boundary_requested = False
-                bit_value = self._current_bits[self._bit_index]
-                if self._sample_in_bit == 0:
-                    self._signal *= -1
-                if bit_value and self._sample_in_bit == self._samples_per_half_bit:
-                    self._signal *= -1
-                if self._dtype == "uint8":
-                    val = 128 + (self._amplitude if self._signal > 0 else -self._amplitude)
-                    out[i] = np.uint8(max(0, min(255, int(val))))
-                else:
-                    out[i] = self._amplitude if self._signal > 0 else -self._amplitude
-                self._sample_in_bit += 1
-                if self._sample_in_bit >= self._samples_per_bit:
-                    self._sample_in_bit = 0
-                    self._bit_index += 1
-                    if self._bit_index >= 80:
-                        self._bit_index = 0
-                        self._frame_boundary_requested = True
-            outdata[:, 0] = out
+                available = len(self._frame_samples) - self._frame_sample_index
+                take = min(frames - written, available)
+                end = self._frame_sample_index + take
+                outdata[written:written + take, 0] = self._frame_samples[self._frame_sample_index:end]
+                self._frame_sample_index = end
+                self._signal = int(self._frame_signs[(end - 1) // self._samples_per_half_bit])
+                written += take
+                if end >= len(self._frame_samples):
+                    self._frame_boundary_requested = True
 
 
 class MtcMidiOutput:
@@ -650,6 +663,7 @@ class MtcMidiOutput:
         self._latched_mtc_frame = 0
         self._source_anchor_frame = 0.0
         self._source_anchor_t = perf_counter()
+        self._source_running = False
         self._source_fps = 30.0
         self._mtc_fps = 30.0
         self._resync_requested = False
@@ -790,11 +804,12 @@ class MtcMidiOutput:
         self._midi.send_long(payload)
         self._last_full_frame_t = now
 
-    def update(self, current_frame: int, source_fps: float, mtc_fps: float) -> None:
+    def update(self, current_frame: int, source_fps: float, mtc_fps: float, *, running: bool = True) -> None:
         now = perf_counter()
         with self._lock:
             self._source_anchor_frame = max(0.0, float(current_frame))
             self._source_anchor_t = now
+            self._source_running = bool(running)
             self._source_fps = max(0.001, float(source_fps))
             self._mtc_fps = max(0.001, float(mtc_fps))
 
@@ -808,7 +823,10 @@ class MtcMidiOutput:
                 else:
                     elapsed = max(0.0, now - self._source_anchor_t)
                     source_fps = self._source_fps
-                    current_source_frame = int(max(0.0, self._source_anchor_frame + (elapsed * source_fps)))
+                    current_source_frame = int(max(
+                        0.0,
+                        self._source_anchor_frame + (elapsed * source_fps if self._source_running else 0.0),
+                    ))
                     mtc_speed_fps = self._coerce_mtc_speed_fps(float(self._mtc_fps))
                     fps = self._nominal_mtc_fps(mtc_speed_fps)
                     current_mtc_frame = int(((current_source_frame * mtc_speed_fps) / source_fps) + 1e-6)

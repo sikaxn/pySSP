@@ -598,8 +598,15 @@ class PlaybackMixin:
         self._track_started_at = time.monotonic()
         # Clear stale UI timing without wiping duration loaded by setMedia().
         self._last_ui_position_ms = -1
-        display_pos = self._transport_display_ms_for_absolute(0)
+        current_player = self._player_for_slot_key(self.current_playing) if self.current_playing is not None else None
+        try:
+            absolute_pos = max(0, int(current_player.position())) if current_player is not None else 0
+        except Exception:
+            absolute_pos = 0
+        display_pos = self._transport_display_ms_for_absolute(absolute_pos)
         total_ms = self._transport_total_ms()
+        self.seek_slider.setRange(0, total_ms)
+        self.total_time.setText(format_clock_time(total_ms))
         self.seek_slider.setValue(display_pos)
         self.elapsed_time.setText(format_clock_time(display_pos))
         self.remaining_time.setText(format_clock_time(max(0, total_ms - display_pos)))
@@ -667,14 +674,14 @@ class PlaybackMixin:
             slot.source_type == FILE_SOURCE_TYPE
             and allow_deferred
             and normalized_path
-            and (not is_audio_preloaded(normalized_path))
+            and (not self._is_audio_preloaded(normalized_path))
             and (not can_stream_now)
         ):
             try:
-                request_audio_preload([normalized_path], prioritize=True, force=True)
+                self._request_audio_preload([normalized_path], prioritize=True, force=True)
             except Exception:
                 pass
-            if not is_audio_preloaded(normalized_path):
+            if not self._is_audio_preloaded(normalized_path):
                 slot.load_failed = False
                 self._hide_playback_warning_banner()
                 if playing_key is not None:
@@ -1032,7 +1039,7 @@ class PlaybackMixin:
         dot_count = int(elapsed * 3.0) % 4
         self._set_now_playing_loading(loading_name, dot_count)
         self.statusBar().showMessage(f"{tr('Reading audio file...')} {loading_name}" + ("." * dot_count))
-        if is_audio_preloaded(path):
+        if self._is_audio_preloaded(path):
             self._pending_deferred_audio_request = None
             self.statusBar().clearMessage()
             if group_key == "Q":
@@ -1245,7 +1252,7 @@ class PlaybackMixin:
             self._ignore_state_changes = max(0, self._ignore_state_changes - 1)
 
     def _tick_preload_status_icon(self) -> None:
-        enabled, active_jobs = get_audio_preload_runtime_status()
+        enabled, active_jobs = self._preload_runtime_status()
         self._refresh_current_page_ram_loaded_indicators()
         if (not enabled) or active_jobs <= 0:
             self._preload_icon_blink_on = False
@@ -1298,7 +1305,10 @@ class PlaybackMixin:
         for extra in self._multi_players:
             if extra.state() == ExternalMediaPlayer.PlayingState:
                 any_playing = True
-        target_left, target_right = get_engine_output_meter_levels()
+        target_left, target_right = (
+            self._audio_service.meterLevels() if self._isolated_audio
+            else get_engine_output_meter_levels()
+        )
         target_left = min(1.0, max(0.0, float(target_left)))
         target_right = min(1.0, max(0.0, float(target_right)))
         attack = 0.92
@@ -1424,7 +1434,11 @@ class PlaybackMixin:
     def _cancel_vocal_toggle_fade_for_player(self, player: Optional[ExternalMediaPlayer]) -> None:
         if player is None:
             return
-        self._vocal_toggle_fade_jobs.pop(id(player), None)
+        job = self._vocal_toggle_fade_jobs.pop(id(player), None)
+        if job is not None and job.get("worker_ramp"):
+            for source in (job.get("player"), job.get("shadow")):
+                if isinstance(source, AudioPlayerProxy):
+                    source.setVolume(source.volume())
 
     def _start_vocal_toggle_fade(
         self,
@@ -1440,6 +1454,7 @@ class PlaybackMixin:
             player.setVolume(max(0, min(100, int(target_primary))))
             shadow.setVolume(max(0, min(100, int(target_shadow))))
             return
+        worker_ramp = self._isolated_audio and isinstance(player, AudioPlayerProxy) and isinstance(shadow, AudioPlayerProxy)
         self._vocal_toggle_fade_jobs[id(player)] = {
             "player": player,
             "shadow": shadow,
@@ -1449,7 +1464,11 @@ class PlaybackMixin:
             "end_shadow": max(0, min(100, int(target_shadow))),
             "started": time.monotonic(),
             "duration": max(0.01, float(seconds)),
+            "worker_ramp": worker_ramp,
         }
+        if worker_ramp:
+            player.setVolumeRamp(target_primary, seconds, curve="equal_power")
+            shadow.setVolumeRamp(target_shadow, seconds, curve="equal_power")
 
     def _vocal_removed_toggle_fade_seconds(self) -> float:
         mode = str(self.vocal_removed_toggle_fade_mode or "follow_cross_fade").strip().lower()
@@ -1692,13 +1711,47 @@ class PlaybackMixin:
 
     def _apply_audio_preload_cache_settings(self) -> None:
         configure_audio_preload_cache_policy(
-            self.preload_audio_enabled,
+            self.preload_audio_enabled and not self._isolated_audio,
             self.preload_audio_memory_limit_mb,
             self.preload_memory_pressure_enabled,
             self.preload_use_ffmpeg,
         )
+        if self._isolated_audio:
+            self._audio_service.set_preload_policy(
+                self.preload_audio_enabled, self.preload_audio_memory_limit_mb,
+                self.preload_memory_pressure_enabled, self.preload_use_ffmpeg,
+            )
         self._sync_preload_pause_state(self._is_playback_in_progress())
         self._queue_current_page_audio_preload()
+
+    def _is_audio_preloaded(self, path: str) -> bool:
+        return (
+            self._audio_service.is_audio_preloaded(path) if self._isolated_audio
+            else is_audio_preloaded(path)
+        )
+
+    def _request_audio_preload(self, paths: List[str], *, prioritize: bool = False, force: bool = False) -> None:
+        if self._isolated_audio:
+            self._audio_service.post_runtime("preload", {
+                "paths": paths, "prioritize": prioritize, "force": force,
+            })
+        else:
+            if force:
+                request_audio_preload(paths, prioritize=prioritize, force=True)
+            else:
+                request_audio_preload(paths, prioritize=prioritize)
+
+    def _preload_runtime_status(self) -> Tuple[bool, int]:
+        return (
+            self._audio_service.preload_runtime_status() if self._isolated_audio
+            else get_audio_preload_runtime_status()
+        )
+
+    def _preload_capacity_bytes(self) -> Tuple[int, int, int]:
+        return (
+            self._audio_service.preload_capacity_bytes() if self._isolated_audio
+            else get_audio_preload_capacity_bytes()
+        )
 
     def _clear_waveform_cache_now(self) -> None:
         if clear_waveform_disk_cache():
@@ -1723,14 +1776,14 @@ class PlaybackMixin:
                 continue
             if self._path_safety_reason(path):
                 continue
-            if is_audio_preloaded(path):
+            if self._is_audio_preloaded(path):
                 continue
             duration_ms = max(0, int(slot.duration_ms))
             estimated = int(duration_ms * bytes_per_ms) if duration_ms > 0 else fallback_bytes
             candidates.append((path, max(1, estimated)))
         if not candidates:
             return
-        remaining_bytes, _effective_limit, _used_bytes = get_audio_preload_capacity_bytes()
+        remaining_bytes, _effective_limit, _used_bytes = self._preload_capacity_bytes()
         total_estimated = sum(size for _path, size in candidates)
         if remaining_bytes < total_estimated:
             # Constrained RAM: prioritize first couple tracks on the page.
@@ -1738,7 +1791,7 @@ class PlaybackMixin:
         else:
             paths = [path for path, _size in candidates]
         if paths:
-            request_audio_preload(paths, prioritize=True)
+            self._request_audio_preload(paths, prioritize=True)
 
     def _refresh_current_page_ram_loaded_indicators(self) -> None:
         if self._is_button_drag_enabled():
@@ -1752,7 +1805,7 @@ class PlaybackMixin:
                 continue
             slot = page[i]
             if slot.assigned and not slot.marker and slot.source_type == FILE_SOURCE_TYPE:
-                button.set_ram_loaded(is_audio_preloaded(slot.file_path))
+                button.set_ram_loaded(self._is_audio_preloaded(slot.file_path))
             else:
                 button.set_ram_loaded(False)
 
@@ -1761,7 +1814,10 @@ class PlaybackMixin:
         if should_pause == self._preload_runtime_paused:
             return
         self._preload_runtime_paused = should_pause
-        set_audio_preload_paused(should_pause)
+        if self._isolated_audio:
+            self._audio_service.post_runtime("preload_paused", {"paused": should_pause})
+        else:
+            set_audio_preload_paused(should_pause)
         if not should_pause:
             self._queue_current_page_audio_preload()
 
@@ -2054,6 +2110,12 @@ class PlaybackMixin:
         self._apply_player_mix_volumes(player, volume)
 
     def _cancel_fade_for_player(self, player: ExternalMediaPlayer) -> None:
+        for job in self._fade_jobs:
+            if job["player"] is player and job.get("worker_ramp"):
+                player.setVolume(player.volume())
+                shadow = self._shadow_player_for(player)
+                if isinstance(shadow, AudioPlayerProxy):
+                    shadow.setVolume(shadow.volume())
         self._fade_jobs = [job for job in self._fade_jobs if job["player"] is not player]
         self._cancel_vocal_toggle_fade_for_player(player)
 
@@ -2098,6 +2160,7 @@ class PlaybackMixin:
             direction = "out"
         if automation_slot_key is not None and automation_start_events:
             self._trigger_sound_button_fade_events(automation_slot_key, *automation_start_events)
+        worker_ramp = self._isolated_audio and isinstance(player, AudioPlayerProxy)
         self._fade_jobs.append(
             {
                 "player": player,
@@ -2111,8 +2174,19 @@ class PlaybackMixin:
                 "pause_resume_volume": pause_resume_volume,
                 "automation_slot_key": automation_slot_key,
                 "automation_end_events": tuple(automation_end_events or ()),
+                "worker_ramp": worker_ramp,
             }
         )
+        if worker_ramp:
+            shadow = self._shadow_player_for(player)
+            shadow_ready = shadow is not None and id(shadow) not in self._vocal_shadow_pending_loads
+            if self.play_vocal_removed_tracks and shadow_ready:
+                primary_target, shadow_target = 0, target
+            else:
+                primary_target, shadow_target = target, 0
+            player.setVolumeRamp(primary_target, seconds, pause_on_complete=pause_on_complete)
+            if isinstance(shadow, AudioPlayerProxy):
+                shadow.setVolumeRamp(shadow_target, seconds, pause_on_complete=pause_on_complete)
 
     def _tick_fades(self) -> None:
         if not self._fade_jobs and not self._vocal_toggle_fade_jobs:
@@ -2145,8 +2219,9 @@ class PlaybackMixin:
                 job["end_shadow"],
                 ratio,
             )
-            player.setVolume(max(0, min(100, primary_volume)))
-            shadow.setVolume(max(0, min(100, shadow_volume)))
+            if not job.get("worker_ramp") or ratio >= 1.0:
+                player.setVolume(max(0, min(100, primary_volume)))
+                shadow.setVolume(max(0, min(100, shadow_volume)))
             if ratio < 1.0:
                 remaining_vocal_jobs[player_id] = job
         self._vocal_toggle_fade_jobs = remaining_vocal_jobs
@@ -2154,7 +2229,12 @@ class PlaybackMixin:
             elapsed = now - job["started"]
             ratio = max(0.0, min(1.0, elapsed / job["duration"]))
             volume = int(job["start"] + (job["end"] - job["start"]) * ratio)
-            self._set_player_volume(job["player"], volume)
+            if job.get("worker_ramp"):
+                self._player_mix_volume_map[id(job["player"])] = volume
+                if ratio >= 1.0:
+                    self._set_player_volume(job["player"], job["end"])
+            else:
+                self._set_player_volume(job["player"], volume)
             if ratio >= 1.0:
                 slot_key = job.get("automation_slot_key")
                 end_events = tuple(job.get("automation_end_events") or ())

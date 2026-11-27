@@ -379,3 +379,14 @@ def test_lyric_payload_fallback_includes_single_blank_slide():
     assert len(slides) == 1
     assert slides[0]["selected"] is True
     assert slides[0]["text"] == "\u200b"
+
+
+def test_external_stage_can_read_pyssp_lyric_status():
+    client = _make_client([])
+    for path in ("/api/health", "/api/v2/controller/live-items", "/api/v2/service/items"):
+        response = client.get(path, headers={"Origin": "http://openlp.example:4316"})
+        assert response.status_code == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "*"
+
+    response = client.get("/api/query", headers={"Origin": "http://openlp.example:4316"})
+    assert "Access-Control-Allow-Origin" not in response.headers

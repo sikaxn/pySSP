@@ -498,6 +498,22 @@ class WebRemoteServer:
     def _register_routes(self) -> None:
         app = self._app
 
+        @app.after_request
+        def allow_external_stage_reads(response):
+            # OpenLP-hosted stage views can select pySSP as a lyric source.
+            # Only these read-only endpoints need cross-origin access.
+            if request.method == "GET" and request.path in {
+                "/api/health",
+                "/api/v2/controller/live-items",
+                "/stage/api/v2/controller/live-items",
+                "/lyric/api/v2/controller/live-items",
+                "/api/v2/service/items",
+                "/stage/api/v2/service/items",
+                "/lyric/api/v2/service/items",
+            }:
+                response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+
         @app.get("/")
         def index():
             index_path = self._web_remote_assets_root / "index.html"

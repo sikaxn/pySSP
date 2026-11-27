@@ -725,7 +725,10 @@ class UiBuildMixin:
 
     def _audio_engine_insight_snapshot_data(self) -> dict:
         ref_player, ref_key = self._timecode_reference_context()
-        engine_left, engine_right = get_engine_output_meter_levels()
+        engine_left, engine_right = (
+            self._audio_service.meterLevels() if self._isolated_audio
+            else get_engine_output_meter_levels()
+        )
         summary = [
             ("audio_output_device", self.audio_output_device or "default"),
             ("timecode_audio_output_device", self.timecode_audio_output_device or "none"),

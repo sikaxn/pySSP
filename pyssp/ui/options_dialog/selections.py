@@ -629,5 +629,4 @@ class SelectionMixin:
         return bool(self.sound_button_go_to_playing_checkbox.isChecked())
 
     def _sync_jog_outside_group_enabled(self) -> None:
-        enabled = self.cue_timeline_audio_file_radio.isChecked()
-        self.jog_outside_group.setEnabled(enabled)
+        self.jog_outside_group.setEnabled(True)

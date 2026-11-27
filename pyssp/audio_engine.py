@@ -697,6 +697,16 @@ def get_audio_preload_runtime_status() -> Tuple[bool, int]:
         return bool(_PRELOAD_ENABLED), int(active)
 
 
+def get_audio_preload_snapshot() -> Tuple[bool, int, Tuple[int, int, int], List[str]]:
+    """Return the small state needed by a UI in another process."""
+    with _PRELOAD_LOCK:
+        active = sum(1 for future in _PRELOAD_TASKS.values() if not future.done())
+        effective_limit = _effective_limit_bytes_locked()
+        used = max(0, int(_PRELOAD_CACHE_BYTES))
+        paths = list(dict.fromkeys([*_PRELOAD_CACHE.keys(), *_FORCED_MEDIA_CACHE.keys()]))
+        return bool(_PRELOAD_ENABLED), active, (max(0, effective_limit - used), effective_limit, used), paths
+
+
 def get_audio_preload_capacity_bytes() -> Tuple[int, int, int]:
     with _PRELOAD_LOCK:
         effective_limit = _effective_limit_bytes_locked()
@@ -1460,6 +1470,24 @@ class ExternalMediaPlayer(QObject):
                     pos_samples = max(0.0, min(float(_utility_duration_frames(self._utility_spec, self._sample_rate)), pos_samples))
             pos_ms = int((pos_samples / float(self._sample_rate)) * 1000.0)
             return max(0, min(pos_ms, self._duration_ms))
+
+    def realtimeStatePositionMs(self) -> Tuple[int, int]:
+        """Read the audio clock without taking the callback's real-time lock.
+
+        The callback publishes its anchor fields under the GIL. A reader may
+        observe one buffer's worth of skew while they are being updated, which
+        is preferable to making the callback output silence on lock contention.
+        """
+        state = self._state
+        source_pos = self._source_pos
+        if state == self.PlayingState:
+            elapsed = max(0.0, time.perf_counter() - self._source_pos_anchor_t)
+            source_pos = self._source_pos_anchor + (elapsed * self._sample_rate * self._source_pos_anchor_tempo)
+        duration = self._duration_ms
+        position_ms = max(0, int((max(0.0, source_pos) / float(self._sample_rate)) * 1000.0))
+        if duration > 0:
+            position_ms = min(position_ms, duration)
+        return state, position_ms
 
     def duration(self) -> int:
         with self._lock:

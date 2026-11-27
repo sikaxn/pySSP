@@ -134,7 +134,8 @@ class CompanionSatelliteMixin:
         current_index = -1
         for idx, cue in enumerate(list(script.cues or [])):
             cue_time_ms = max(0, int(getattr(cue, "time_ms", 0)))
-            if cue_time_ms <= position_ms:
+            # A cue at the playback start is due, including a cue at 0 ms.
+            if cue_time_ms < position_ms:
                 current_index = idx
                 next_index = idx + 1
             else:
@@ -147,6 +148,7 @@ class CompanionSatelliteMixin:
             "current_index": current_index,
             "last_position_ms": position_ms,
         }
+        self._process_automation_script_player(player)
 
     def _resync_automation_script_player_for_position(self, player: ExternalMediaPlayer, position_ms: int) -> None:
         state = self._automation_script_runtime.get(id(player))

@@ -26,11 +26,10 @@ from PyQt5.QtWidgets import (
 
 from pyssp.audio_engine import (
     ExternalMediaPlayer,
-    is_audio_preloaded,
-    request_audio_preload,
 )
 from pyssp.i18n import localize_widget_tree, tr
 from pyssp.lyrics import parse_lyric_file
+from pyssp.ui.preview_preload import PreviewPreload
 from pyssp.ui.waveform_view import CueRangeIndicator, WaveformRefreshController
 
 
@@ -92,6 +91,7 @@ class LyricEditorDialog(QDialog):
         root.addWidget(self._path_label)
 
         audio_service = getattr(parent, "_audio_service", None)
+        self._preview_preload = PreviewPreload(audio_service)
         if audio_service is not None:
             self._player = audio_service.create_player(self)
         else:
@@ -275,10 +275,10 @@ class LyricEditorDialog(QDialog):
             self._finalize_media_load()
             return
         try:
-            request_audio_preload([self._audio_path], prioritize=True, force=True)
+            self._preview_preload.request(self._audio_path)
         except Exception:
             pass
-        if is_audio_preloaded(self._audio_path):
+        if self._preview_preload.is_ready(self._audio_path):
             self._finalize_media_load()
             return
         self._load_poll_timer.start()
@@ -290,7 +290,7 @@ class LyricEditorDialog(QDialog):
         elapsed = max(0.0, time.perf_counter() - self._load_wait_started)
         dot_count = int(elapsed * 3.0) % 4
         self._cue_indicator.set_loading(True, "Loading audio waveform" + ("." * dot_count))
-        if self._audio_path and is_audio_preloaded(self._audio_path):
+        if self._audio_path and self._preview_preload.is_ready(self._audio_path):
             self._load_poll_timer.stop()
             self._finalize_media_load()
             return

@@ -245,6 +245,39 @@ class TimecodeMixin:
             ltc_device = ""
         else:
             ltc_device = str(self.timecode_audio_output_device).strip()
+        if self._isolated_audio:
+            reference_player, reference_key = self._timecode_reference_context()
+            slot = self._slot_for_key(reference_key) if reference_key is not None else None
+            cue_start_ms = 0
+            offset_ms = 0
+            if slot is not None:
+                if self._effective_slot_timecode_timeline_mode(slot) == "cue_region":
+                    cue_start_ms = max(0, int(slot.cue_start_ms or 0))
+                if self.soundbutton_timecode_offset_enabled:
+                    offset_ms = max(0, int(slot.timecode_offset_ms or 0))
+            stop_at = next((
+                float(job["started"]) + float(job["duration"])
+                for job in getattr(self, "_fade_jobs", [])
+                if job["player"] is reference_player and job.get("stop")
+            ), 0.0)
+            self._audio_service.set_timecode_config({
+                "mode": self.timecode_mode,
+                "reference_player_id": (
+                    reference_player.player_id if isinstance(reference_player, AudioPlayerProxy) else ""
+                ),
+                "cue_start_ms": cue_start_ms,
+                "offset_ms": offset_ms,
+                "stop_at": stop_at,
+                "frozen_ms": max(0, int(self._timecode_follow_frozen_ms)),
+                "fps": max(1.0, float(self.timecode_fps)),
+                "mtc_fps": max(1.0, float(self.timecode_mtc_fps)),
+                "idle_behavior": self.timecode_mtc_idle_behavior,
+                "ltc_device": ltc_device,
+                "mtc_device": self.timecode_midi_output_device,
+                "sample_rate": int(self.timecode_sample_rate),
+                "bit_depth": int(self.timecode_bit_depth),
+            })
+            return
         self._ltc_sender.set_output(
             ltc_device,
             int(self.timecode_sample_rate),
@@ -254,14 +287,22 @@ class TimecodeMixin:
         self._mtc_sender.set_device(self.timecode_midi_output_device)
         output_ms = self._timecode_output_ms()
         current_frame = int((max(0, output_ms) / 1000.0) * max(1.0, float(self.timecode_fps)))
+        reference_player, _reference_key = self._timecode_reference_context()
+        running = self.timecode_mode == TIMECODE_MODE_SYSTEM or (
+            self.timecode_mode == TIMECODE_MODE_FOLLOW
+            and reference_player is not None
+            and reference_player.state() == ExternalMediaPlayer.PlayingState
+        )
         self._ltc_sender.update(
             current_frame=current_frame,
             fps=max(1.0, float(self.timecode_fps)),
+            running=running,
         )
         self._mtc_sender.update(
             current_frame=current_frame,
             source_fps=max(1.0, float(self.timecode_fps)),
             mtc_fps=max(1.0, float(self.timecode_mtc_fps)),
+            running=running,
         )
 
     def _timecode_on_playback_start(self, slot: Optional[SoundButtonData] = None) -> None:
@@ -285,6 +326,8 @@ class TimecodeMixin:
         )
         self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
+        if self._isolated_audio:
+            self._tick_timecode_mtc()
 
     def _timecode_on_playback_stop(self) -> None:
         now = time.perf_counter()
@@ -299,6 +342,8 @@ class TimecodeMixin:
         print(f"[TCDBG] {now:.6f} timecode_stop")
         self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
+        if self._isolated_audio:
+            self._tick_timecode_mtc()
 
     def _timecode_on_playback_pause(self) -> None:
         if time.perf_counter() < self._timecode_event_guard_until:
@@ -310,6 +355,8 @@ class TimecodeMixin:
         self._timecode_follow_intent_pending = False
         self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
+        if self._isolated_audio:
+            self._tick_timecode_mtc()
 
     def _timecode_on_playback_resume(self) -> None:
         if time.perf_counter() < self._timecode_event_guard_until:
@@ -321,6 +368,8 @@ class TimecodeMixin:
         self._timecode_follow_intent_pending = False
         self._ltc_sender.request_resync()
         self._mtc_sender.request_resync()
+        if self._isolated_audio:
+            self._tick_timecode_mtc()
 
     def _refresh_timecode_panel(self) -> None:
         self._update_timecode_status_label()
